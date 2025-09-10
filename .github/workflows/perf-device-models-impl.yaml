@@ -55,13 +55,13 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "non-civ2_tests"
           commands: |
@@ -73,7 +73,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov11 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov11"
           commands: |
@@ -82,7 +82,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov10x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov10x"
           commands: |
@@ -91,7 +91,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: stable_diffusion tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "stable_diffusion"
           commands: |
@@ -101,7 +101,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: distilbert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "distilbert"
           commands: |
@@ -111,7 +111,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vgg tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "vgg"
           commands: |
@@ -121,7 +121,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: bert_tiny tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "bert_tiny"
           commands: |
@@ -131,7 +131,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: squeezebert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "squeezebert"
           commands: |
@@ -140,7 +140,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: roberta tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "roberta"
           commands: |
@@ -149,7 +149,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: resnet50 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "resnet50"
           commands: |
@@ -158,7 +158,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: ufld_v2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "ufld_v2"
           commands: |
@@ -167,7 +167,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: sentence_bert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "sentence_bert"
           commands: |
@@ -176,7 +176,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: functional_unet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "functional_unet"
           commands: |
@@ -185,7 +185,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: mamba tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "mamba"
           commands: |
@@ -194,7 +194,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: metal_BERT_large_11 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "metal_BERT_large_11"
           commands: |
@@ -203,7 +203,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov4 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov4"
           commands: |
@@ -212,7 +212,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: mobilenetv2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "mobilenetv2"
           commands: |
@@ -221,7 +221,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov8 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov8"
           commands: |
@@ -233,7 +233,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov7 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov7"
           commands: |
@@ -242,7 +242,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vit tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "vit"
           commands: |
@@ -251,7 +251,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov6l tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov6l"
           commands: |
@@ -260,7 +260,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov9c tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov9c"
           commands: |
@@ -269,7 +269,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vanilla_unet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "vanilla_unet"
           commands: |
@@ -278,7 +278,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: swin_v2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "swin_v2"
           commands: |
@@ -287,7 +287,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: swin_s tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "swin_s"
           commands: |
@@ -296,7 +296,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov5x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov5x"
           commands: |
@@ -305,7 +305,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vovnet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "VoVNet"
           commands: |
@@ -314,7 +314,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov12x tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov12x"
           commands: |
@@ -323,7 +323,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: efficientnetb0 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@kkabilar-reorg-modelperf2
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "efficientnetb0"
           commands: |
@@ -364,11 +364,11 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@kkabilar-reorg-modelperf2
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@kkabilar-reorg-modelperf2
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
