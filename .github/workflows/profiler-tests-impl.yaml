@@ -45,7 +45,7 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
-    
+
     # Anchor the defaults block
     defaults: &defaults-config
       run:
