@@ -149,7 +149,9 @@ public:
     }
 
     void run_programs() {
+        log_info(tt::LogTest, "Enqueuing programs");
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
+        log_info(tt::LogTest, "Programs enqueued");
     }
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }

@@ -21,11 +21,17 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+    log_info(tt::LogTest, "Enqueuing programs in MeshWorkload");
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        log_info(tt::LogTest, "Fast dispatch is enabled");
         mesh_workload.impl().compile(mesh_cq.device());
+        log_info(tt::LogTest, "MeshWorkload compiled");
         mesh_workload.impl().load_binaries(mesh_cq);
+        log_info(tt::LogTest, "MeshWorkload binaries loaded");
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+        log_info(tt::LogTest, "MeshWorkload dispatch commands generated");
     }
+    log_info(tt::LogTest, "Submitting MeshWorkload to MeshCommandQueue");
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
 

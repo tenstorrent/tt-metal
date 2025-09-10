@@ -1,0 +1,44 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 1
+
+Tests:
+
+  - name: "SimpleUnicastWriteLinear"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: LowLatency
+
+    senders:
+      - device: [0, 2]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 512
+            num_packets: 1
+            destination:
+              device: [0, 0]
+
+  - name: "TorusXYLowLatencyEast2HopsNormal"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: LowLatency
+    #add back the parametrization after hang debugged.
+    defaults:
+      ntype: unicast_write
+      ftype: unicast
+      size: 512
+      num_packets: 1
+      destination:
+        hops:
+          E: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
