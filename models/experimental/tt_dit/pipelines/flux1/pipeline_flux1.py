@@ -491,9 +491,11 @@ class Flux1Pipeline:
 
                 tt_guidance = (
                     ttnn.from_torch(
-                        guidance,
+                        guidance.unsqueeze(-1),
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat16,
+                        # bfloat16 should be fine, but when tracing is enabled switching to bfloat16
+                        # gives images containing mostly noise.
+                        dtype=ttnn.float32,
                         device=submesh_device if not traced else None,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
                     )
@@ -590,7 +592,7 @@ class Flux1Pipeline:
                     tt_sigma_difference_list = []
                     for submesh_device in self._submesh_devices:
                         tt_timestep = ttnn.full(
-                            [1, 1, 1, 1],
+                            [1, 1],
                             fill_value=t,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.float32,

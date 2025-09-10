@@ -208,13 +208,21 @@ class CombinedTimestepGuidanceTextProjEmbeddings:
 
         return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
 
+    # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
+    # `timestep` and `guidance` tensors.
     def __call__(
         self,
         *,
         timestep: ttnn.Tensor,
-        guidance: ttnn.Tensor,
+        guidance: ttnn.Tensor | None = None,
         pooled_projection: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        batch_size = pooled_projection.shape[0]
+
+        assert len(pooled_projection.shape) == 2
+        assert timestep.shape == [batch_size, 1]
+        assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
+
         emb = timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
@@ -226,11 +234,15 @@ class CombinedTimestepGuidanceTextProjEmbeddings:
         if not self.with_guidance:
             return timesteps_emb + text_emb
 
+        assert guidance is not None
+        assert guidance.shape == [batch_size, 1]
+
         emb = guidance * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         guidances_proj = ttnn.concat([c, s], dim=-1)
         guidance_emb = self.guidance_embedder(guidances_proj)
+
         return timesteps_emb + guidance_emb + text_emb
 
 

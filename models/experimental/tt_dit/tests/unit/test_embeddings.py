@@ -302,7 +302,7 @@ def test_combined_timestep_text_proj_embeddings(
 @pytest.mark.parametrize(
     ("batch_size", "embedding_dim", "pooled_projection_dim"),
     [
-        (1, 3072, 768),  # Flux.1 [schnell]
+        (10, 3072, 768),  # Flux.1 [schnell]
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -312,11 +312,9 @@ def test_combined_timestep_guidance_text_proj_embeddings(
     embedding_dim: int,
     pooled_projection_dim: int,
 ) -> None:
-    # Create Torch model
     torch_model = TorchCombinedTimestepGuidanceTextProjEmbeddings(embedding_dim, pooled_projection_dim)
     torch_model.eval()
 
-    # Create TT model
     tt_model = CombinedTimestepGuidanceTextProjEmbeddings(
         embedding_dim=embedding_dim,
         pooled_projection_dim=pooled_projection_dim,
@@ -324,34 +322,27 @@ def test_combined_timestep_guidance_text_proj_embeddings(
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
-    # Create input tensors
     torch.manual_seed(0)
-    timestep_tensor = torch.full([batch_size], fill_value=500)
-    guidance_tensor = torch.full([batch_size], fill_value=3)
+    timestep = torch.full([batch_size], fill_value=500)
+    guidance = torch.full([batch_size], fill_value=3)
+    pooled = torch.randn([batch_size, pooled_projection_dim])
 
-    pooled_projection_tensor = torch.randn([batch_size, pooled_projection_dim])
+    torch_output = torch_model.forward(timestep, guidance, pooled)
 
-    # Run torch model
-    torch_output = torch_model.forward(timestep_tensor, guidance_tensor, pooled_projection_tensor)
+    tt_timestep = ttnn.from_torch(
+        timestep.unsqueeze(-1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    tt_guidance = bf16_tensor(guidance.unsqueeze(-1), device=mesh_device)
+    tt_pooled = bf16_tensor(pooled, device=mesh_device)
 
-    # Convert to TT tensors
-    timestep_4d = timestep_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-    guidance_4d = guidance_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-    pooled_4d = pooled_projection_tensor.unsqueeze(0).unsqueeze(0)
-    tt_timestep = bf16_tensor(timestep_4d, device=mesh_device)
-    tt_guidance = bf16_tensor(guidance_4d, device=mesh_device)
-    tt_pooled = bf16_tensor(pooled_4d, device=mesh_device)
-
-    # Run TT model
     tt_output = tt_model(
         timestep=tt_timestep,
         guidance=tt_guidance,
         pooled_projection=tt_pooled,
     )
 
-    # Convert back to torch and compare
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
-    assert_quality(torch_output, tt_output_torch, pcc=0.9924, relative_rmse=0.13)
+    tt_output_torch = ttnn.to_torch(tt_output)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9971, relative_rmse=0.076)
 
 
 @pytest.mark.parametrize(
