@@ -20,7 +20,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch DeepSeek model."""
+"""PyTorch DeepSeek model."""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
@@ -29,11 +29,11 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
+from transformers.generation.utils import GenerationMixin
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -730,7 +730,9 @@ class DeepseekV3Attention(nn.Module):
         key_states[:, :, :, self.kv_lora_rank :] = k_pe
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, _ = past_key_value.update(key_states, key_states, self.layer_idx, cache_kwargs)
+            key_states, _ = past_key_value.update(
+                key_states, torch.empty((*key_states.shape[:-1], 0)), self.layer_idx, cache_kwargs
+            )
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -1140,7 +1142,7 @@ DeepseekV3_START_DOCSTRING = r"""
     "The bare DeepseekV3 Model outputting raw hidden-states without any specific head on top.",
     DeepseekV3_START_DOCSTRING,
 )
-class DeepseekV3PreTrainedModel(PreTrainedModel):
+class DeepseekV3PreTrainedModel(PreTrainedModel, GenerationMixin):
     config_class = DeepseekV3Config
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
@@ -1149,16 +1151,16 @@ class DeepseekV3PreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_cache_class = True
 
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
+    # def _init_weights(self, module):
+    # std = self.config.initializer_range
+    # if isinstance(module, nn.Linear):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.bias is not None:
+    #         module.bias.data.zero_()
+    # elif isinstance(module, nn.Embedding):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.padding_idx is not None:
+    #         module.weight.data[module.padding_idx].zero_()
 
 
 DeepseekV3_INPUTS_DOCSTRING = r"""
@@ -1257,7 +1259,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
-        # self.post_init()
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.embed_tokens

@@ -100,7 +100,7 @@ The `run_config(model_config: ModelPrefillConfig | ModelDecodeConfig, weight_con
 - if all of them are either the same container (list, tuple, dict) or a None, these containers are unified, and the matching items in these containers are merged using the same procedure
   - `OpConfigBase` subclasses are treated as dicts here, and re-wrapped in the same dataclass for `RunConfig`
   - if the container type is a dict, the containers are merged by keys. Note that, for merging the model_state in, MESH_DEVICE_STATE_DICT_KEY key is omitted to avoid name clashes with op configs which specify it as their argument.
-  - if the container type is a list or a tuple, the containers have to be the same length
+  - if the container type is a list or a tuple, the containers have to be the same length. However, if one of the containers is of length 1, it will be broadcasted to that length
 - if the items are not containers, then it is required that only one of them is not None.
 - an exception to the above is when the items in the model config and `WeightConfig` are a `FromWeightConfig` and string path respectively. In that case, a tensor is loaded from the path stored in the `WeightConfig` onto the `ttnn.Device` specified by the model_state.
 - finally, if the model config item is a `MeshDeviceStub`, it is replaced with the `ttnn.Device` specified by the model_state. This is primarily used for the ops that produce a tensor and require a `device` or a `mesh_device` argument.
