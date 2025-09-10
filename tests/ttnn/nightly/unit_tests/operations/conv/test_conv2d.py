@@ -3466,12 +3466,12 @@ def test_conv2d_sdxl_refiner(
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth,  8,   32, 3),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth,  12,   32, 3),
         (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 16,   32, 0),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 16,  512, 0),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 16,  512, 3),
         (1, 256, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  4,  512, 0),
         (1, 512, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False,                  None,  1,  512, 0),
-        (1, 512, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  2,  256, 0),
+        (1, 512, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  2,  256, 3),
         (1, 512, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  8,  512, 0),
         (1, 512, 512,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  8,  256, 0),
         # output_channels 3,
