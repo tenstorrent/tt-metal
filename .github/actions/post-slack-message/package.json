@@ -1,0 +1,13 @@
+{
+  "name": "post-slack-message",
+  "version": "1.0.0",
+  "description": "GitHub Action to send messages to Slack",
+  "main": "post-slack-message.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "axios": "^1.6.2"
+  }
+}
