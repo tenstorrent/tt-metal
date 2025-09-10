@@ -359,7 +359,7 @@ run_t3000_sd35large_tests() {
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
   # Run test_model for sd35 large
-  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "t3k"; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py; fail+=$?
 
