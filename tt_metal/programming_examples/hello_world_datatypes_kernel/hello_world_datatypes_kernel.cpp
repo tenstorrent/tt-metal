@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -29,15 +30,19 @@ int main() {
 
     // Initialize Program and Device
     constexpr CoreCoord core = {0, 0};
-    IDevice* device = CreateDevice(0);
-    CommandQueue& cq = device->command_queue();
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Define and Create Buffer with Float Data Type
     constexpr uint32_t buffer_size = 2 * 1024;
-    tt_metal::BufferConfig buffer_config = {
-        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<tt::tt_metal::Buffer> dram_buffer = CreateBuffer(buffer_config);
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    std::shared_ptr<distributed::MeshBuffer> dram_buffer =
+        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Configure and Create Circular Buffer (to move data from DRAM to L1)
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -54,19 +59,20 @@ int main() {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Initialize Float Data for the DRAM Buffer
-    float init_data = 1.23;
-    EnqueueWriteBuffer(cq, dram_buffer, &init_data, false);
+    std::vector<float> init_data = {1.23};
+    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
 
     // Configure Program and Start Program Execution on Device
     SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
-    EnqueueProgram(cq, program, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     fmt::print("Hello, Core {{0, 0}} on Device 0, please handle the data.\n");
 
     // Wait Until Program Finishes, Print "Hello World!", and Close Device
-    Finish(cq);
+    distributed::Finish(cq);
     fmt::print("Thank you, Core {{0, 0}} on Device 0, for handling the data.\n");
-    CloseDevice(device);
+    mesh_device->close();
 
     return 0;
 }
