@@ -28,6 +28,7 @@ public:
             threads[i] = std::thread([it]() {
                 DeviceProfiler& profiler = it->second;
                 profiler.dumpDeviceResults();
+                profiler.destroyTracyContexts();
             });
             i++;
         }

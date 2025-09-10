@@ -137,7 +137,6 @@ void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::vector<uint32_t>& device_markers_chunk_offsets,
     ThreadPool* thread_pool) {
-    ZoneScoped;
     TT_ASSERT(thread_pool != nullptr);
 
     const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
@@ -1622,20 +1621,6 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 #endif
 }
 
-DeviceProfiler::~DeviceProfiler() {
-#if defined(TRACY_ENABLE)
-    ZoneScoped;
-    TT_ASSERT(this->thread_pool != nullptr);
-
-    for (auto& [device_core, _] : device_tracy_contexts) {
-        TT_ASSERT(device_tracy_contexts.at(device_core) != nullptr);
-        this->thread_pool->enqueue([this, device_core]() { TracyTTDestroy(device_tracy_contexts.at(device_core)); });
-    }
-
-    this->thread_pool->wait();
-#endif
-}
-
 void DeviceProfiler::freshDeviceLog() {
 #if defined(TRACY_ENABLE)
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
@@ -1788,7 +1773,6 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
-
     // If this device is root, it may have new sync info updated with syncDeviceHost
     for (auto& [core, info] : device_core_sync_info) {
         if (isSyncInfoNewer(device_sync_info, info)) {
@@ -1944,6 +1928,19 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
                 cpu_time);
         }
     }
+#endif
+}
+
+void DeviceProfiler::destroyTracyContexts() {
+#if defined(TRACY_ENABLE)
+    TT_ASSERT(this->thread_pool != nullptr);
+
+    for (const auto& [device_core, _] : device_tracy_contexts) {
+        TT_ASSERT(device_tracy_contexts.at(device_core) != nullptr);
+        this->thread_pool->enqueue([this, device_core]() { TracyTTDestroy(device_tracy_contexts.at(device_core)); });
+    }
+
+    this->thread_pool->wait();
 #endif
 }
 

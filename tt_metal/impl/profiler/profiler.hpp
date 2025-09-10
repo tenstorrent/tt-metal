@@ -199,7 +199,7 @@ public:
 
     DeviceProfiler() = delete;
 
-    ~DeviceProfiler();
+    ~DeviceProfiler() = default;
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
@@ -254,6 +254,9 @@ public:
 
     // Update sync info for this device
     void setSyncInfo(const SyncInfo& sync_info);
+
+    // Destroy tracy contexts
+    void destroyTracyContexts();
 
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
