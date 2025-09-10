@@ -10,9 +10,9 @@ import shutil
 from typing import Optional
 
 try:
-    from framework.sweeps_logger import sweeps_logger as logger  # type: ignore
+    from framework.sweeps_logger import sweeps_logger as logger
 except ModuleNotFoundError:
-    # Allow direct execution of this file: python tests/sweep_framework/framework/upload_sftp.py
+    # Allow direct execution of this file from root: python tests/sweep_framework/framework/upload_sftp.py
     import sys as _sys
 
     _sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -39,9 +39,9 @@ def upload_run_sftp(local_path: pathlib.Path) -> bool:
       - SFTP_REMOTE_DIR: remote directory to upload into (optional; defaults to user's home)
 
     Authentication order of preference:
-      1) SFTP_PRIVATE_KEY (inline key contents)
-      2) SFTP_PRIVATE_KEY_PATH (path to key file)
-      3) ssh-agent forwarding (if SSH_AUTH_SOCK is present)
+      1) ssh-agent forwarding (if SSH_AUTH_SOCK is present)
+      2) SFTP_PRIVATE_KEY (inline key contents)
+      3) SFTP_PRIVATE_KEY_PATH (path to key file)
 
     Returns True on success, False if configuration is missing or upload fails.
     """
@@ -61,7 +61,7 @@ def upload_run_sftp(local_path: pathlib.Path) -> bool:
         private_key = _read_env("SFTP_PRIVATE_KEY")
         private_key_path_env = _read_env("SFTP_PRIVATE_KEY_PATH")
         port = _read_env("SFTP_PORT") or "22"
-        remote_dir = _read_env("SFTP_REMOTE_DIR")  # May be None
+        remote_dir = _read_env("SFTP_REMOTE_DIR")
 
         if not username or not hostname:
             # Not configured in this environment; do not treat as error
@@ -70,12 +70,12 @@ def upload_run_sftp(local_path: pathlib.Path) -> bool:
 
         # Determine authentication method
         auth_mode = None
-        if private_key:
+        if os.getenv("SSH_AUTH_SOCK"):
+            auth_mode = "ssh_agent"
+        elif private_key:
             auth_mode = "inline_key"
         elif private_key_path_env:
             auth_mode = "key_path"
-        elif os.getenv("SSH_AUTH_SOCK"):
-            auth_mode = "ssh_agent"
         else:
             logger.info(
                 "SFTP auth not provided; set SFTP_PRIVATE_KEY, SFTP_PRIVATE_KEY_PATH, or use ssh-agent (SSH_AUTH_SOCK). Skipping upload."
