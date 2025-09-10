@@ -183,12 +183,14 @@ class Yolov6x_Conv_T_2D:
             enable_act_double_buffer=False,
             enable_split_reader=False,
             output_layout=ttnn.TILE_LAYOUT,
+            reshard_if_not_optimal=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
+            math_approx_mode=True,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
