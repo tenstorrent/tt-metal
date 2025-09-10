@@ -81,7 +81,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       }
     }
     // If we got fewer runs than requested, we've reached the end
-    // if (runs.workflow_runs.length < RUNS_PER_PAGE) break;
+    if (!runs.workflow_runs.length) break;
   }
   return allRuns;
 }
@@ -129,11 +129,9 @@ async function run() {
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 
-    // core.info('Fetching all runs...');
-    // const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
-    // core.info(`Fetched allRuns count: ${allRuns.length}`);
-
-    const allRuns = [];
+    core.info('Fetching all runs...');
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+    core.info(`Fetched allRuns count: ${allRuns.length}`);
 
     await delay(5000);
 
