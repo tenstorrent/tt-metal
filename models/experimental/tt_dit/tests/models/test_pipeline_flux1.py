@@ -129,6 +129,8 @@ def test_flux1_pipeline(
         filename_prefix += "_t5off"
     if use_torch_clip_text_encoder:
         filename_prefix += "_clipcpu"
+    if not traced:
+        filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
         images = pipeline(
