@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+      tag_type: ${{ steps.set-tag-type.outputs.tag_type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,6 +54,18 @@ jobs:
             exit 1
           fi
           echo "should-create-release is true, proceeding with release workflow."
+      - name: Set tag_type
+        id: set-tag-type
+        run: |
+          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
+            if [[ "${{ steps.get-is-release-candidate.outputs.is-release-candidate }}" == "true" ]]; then
+              echo "tag_type=rc" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag_type=" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "tag_type=dev" >> "$GITHUB_OUTPUT"
+          fi
 
   create-tag:
     needs: release-precheck
@@ -61,8 +74,8 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      # Set tag_type to 'rc' for release candidate, '' for release, and 'dev' for all other branches
-      tag_type: ${{ (github.ref == 'refs/heads/stable') && (needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '') || 'dev' }}
+      # tag_type is now set in release-precheck and passed as output
+      tag_type: ${{ needs.release-precheck.outputs.tag_type }}
       dry-run: ${{ inputs.dry-run }}
 
 
