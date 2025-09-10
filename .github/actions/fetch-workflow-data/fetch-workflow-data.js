@@ -60,7 +60,6 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      // created: createdDateFilter
     }
     if (eventType) {
       params.event = eventType;
@@ -133,7 +132,8 @@ async function run() {
     const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
     core.info(`Fetched allRuns count: ${allRuns.length}`);
 
-    await delay(5000);
+    // Wait for 1 second to avoid rate limiting
+    await delay(1000);
 
     core.info('Fetching scheduled runs...');
     const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
