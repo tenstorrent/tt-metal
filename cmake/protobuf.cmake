@@ -48,6 +48,14 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
         PARENT_SCOPE
     )
 
+    # Disable clang-tidy for generated protobuf files
+    set_source_files_properties(
+        ${GENERATED_CC}
+        PROPERTIES
+            CXX_CLANG_TIDY
+                ""
+    )
+
     # Add to all_generated_files target if it exists
     if(TARGET all_generated_files)
         # Use local variables for outputs; parent-scoped PROTO_SRCS is not visible here
