@@ -171,11 +171,15 @@ run_t3000_qwen25_perplexity_tests() {
   fail=0
   start_time=$(date +%s)
 
+  export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
+
   echo "LOG_METAL: Running run_t3000_qwen25_perplexity_tests"
-  qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  qwen72b=Qwen/Qwen2.5-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-72B-Instruct
 
-  HF_MODEL=$qwen72b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
-
+  HF_MODEL=$qwen72b TT_CACHE_PATH=$tt_cache_72b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
+  
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
