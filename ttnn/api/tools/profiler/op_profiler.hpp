@@ -212,22 +212,6 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
 
-    auto kernel_meta = detail::collect_kernel_meta(program, device);
-    for (const auto& kernel : kernel_meta) {
-        json kernelObj;
-        kernelObj["source"] = kernel.source;
-        kernelObj["name"] = kernel.name;
-
-        auto processor_class = kernel.processor_class;
-        if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = kernel.math_fidelity.value();
-            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
-            computeKernels.push_back(std::move(kernelObj));
-        } else {
-            datamovementKernels.push_back(std::move(kernelObj));
-        }
-    }
-
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
     // currently HAL does not correctly report the number of processors under DM.
@@ -243,7 +227,20 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (const auto& kernel : kernel_meta) {
+    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
+        json kernelObj;
+        kernelObj["source"] = kernel.source;
+        kernelObj["name"] = kernel.name;
+
+        auto processor_class = kernel.processor_class;
+        if (processor_class == HalProcessorClassType::COMPUTE) {
+            MathFidelity mathFidelity = kernel.math_fidelity.value();
+            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
+            computeKernels.push_back(std::move(kernelObj));
+        } else {
+            datamovementKernels.push_back(std::move(kernelObj));
+        }
+
         auto core_type = kernel.programmable_core_type;
         auto core_type_name = enchantum::to_string(core_type);
         auto processor_class_name = enchantum::to_string(kernel.processor_class);
