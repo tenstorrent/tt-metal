@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -167,8 +168,13 @@ void RunDelayTestOnCore(
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         msg.data(), msg.size(), {device->id(), virtual_core}, read_addr);
 
-    uint32_t msg_u32_value = *(reinterpret_cast<const uint32_t*>(msg.data()));
-    log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", msg_u32_value);
+    log_info(
+        tt::LogTest,
+        "Read back debug_insert_delays: {:x},{:x},{:x},{:x}",
+        msg.view().read_delay_processor_mask(),
+        msg.view().write_delay_processor_mask(),
+        msg.view().atomic_delay_processor_mask(),
+        msg.view().feedback());
     EXPECT_TRUE(msg.view().feedback() == 0x3);
 }
 

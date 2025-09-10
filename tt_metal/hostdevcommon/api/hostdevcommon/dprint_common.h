@@ -24,28 +24,6 @@ using CommonDataFormat = DataFormat;
 #include <cstddef>
 
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there
-// DPRINT_BUFFERS_COUNT should be less for eth cores but this file doesn't use compile time defines on host
-// and we need the addresses to be the same between host and device
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
-
-// Used to index into the DPRINT buffers. Erisc is separate because it only has one buffer.
-enum DebugPrintHartIndex : unsigned int {
-    DPRINT_RISCV_INDEX_NC = 0,
-    DPRINT_RISCV_INDEX_TR0 = 1,
-    DPRINT_RISCV_INDEX_TR1 = 2,
-    DPRINT_RISCV_INDEX_TR2 = 3,
-    DPRINT_RISCV_INDEX_BR = 4,
-    DPRINT_RISCV_INDEX_ER = 0,
-    DPRINT_RISCV_INDEX_ER1 = 1,
-};
-#define DPRINT_NRISCVS 5
-#ifdef ARCH_BLACKHOLE
-#define DPRINT_NRISCVS_ETH 2
-#else
-#define DPRINT_NRISCVS_ETH 1
-#endif
 
 #define DPRINT_TYPES            \
     DPRINT_PREFIX(CSTR)         \

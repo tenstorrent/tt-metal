@@ -34,6 +34,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
+#include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
@@ -395,29 +396,15 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
 
     // Initialize Debug Delay feature
     std::map<CoreCoord, debug_insert_delays_msg_t> debug_delays_val;
-    for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
-         (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
-         delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
-        bool this_chip_enabled = rtoptions.get_feature_all_chips(delay_feature) ||
-                                 std::find(chip_ids.begin(), chip_ids.end(), device_id) != chip_ids.end();
+    constexpr tt::llrt::RunTimeDebugFeatures debug_delay_features[] = {
+        tt::llrt::RunTimeDebugFeatureReadDebugDelay,
+        tt::llrt::RunTimeDebugFeatureWriteDebugDelay,
+        tt::llrt::RunTimeDebugFeatureAtomicDebugDelay};
+    for (auto delay_feature : debug_delay_features) {
+        const std::vector<chip_id_t>& chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
+        bool this_chip_enabled =
+            rtoptions.get_feature_all_chips(delay_feature) || std::ranges::find(chip_ids, device_id) != chip_ids.end();
         if (this_chip_enabled) {
-            static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-            debug_insert_delays_msg_t delay_setup;
-
-            // Create the mask based on the feature
-            uint32_t hart_mask = rtoptions.get_feature_riscv_mask(delay_feature);
-            switch (delay_feature) {
-                case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
-                case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
-                    delay_setup.write_delay_riscv_mask = hart_mask;
-                    break;
-                case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
-                    delay_setup.atomic_delay_riscv_mask = hart_mask;
-                    break;
-                default: break;
-            }
-
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
                 const auto& delayed_cores = rtoptions.get_feature_cores(delay_feature);
                 if (delayed_cores.count(core_type) == 0) {
@@ -435,14 +422,23 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
+                        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+                        // Create the mask based on the feature
+                        uint32_t processor_mask =
+                            rtoptions.get_feature_processors(delay_feature).get_processor_mask(programmable_core_type);
                         // Update the masks for the core
-                        if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
-                            debug_delays_val[virtual_core].read_delay_riscv_mask |= delay_setup.read_delay_riscv_mask;
-                            debug_delays_val[virtual_core].write_delay_riscv_mask |= delay_setup.write_delay_riscv_mask;
-                            debug_delays_val[virtual_core].atomic_delay_riscv_mask |=
-                                delay_setup.atomic_delay_riscv_mask;
-                        } else {
-                            debug_delays_val.insert({virtual_core, delay_setup});
+                        auto& delay_setup = debug_delays_val[virtual_core];
+                        switch (delay_feature) {
+                            case tt::llrt::RunTimeDebugFeatureReadDebugDelay:
+                                delay_setup.read_delay_processor_mask |= processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
+                                delay_setup.write_delay_processor_mask |= processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
+                                delay_setup.atomic_delay_processor_mask |= processor_mask;
+                                break;
+                            default: TT_THROW("Unexpected debug delay feature");
                         }
                     } else {
                         log_warning(
@@ -469,9 +465,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}. Delay cycles: {}",
             device_id,
             delay.first.str().c_str(),
-            delay.second.read_delay_riscv_mask,
-            delay.second.write_delay_riscv_mask,
-            delay.second.atomic_delay_riscv_mask,
+            delay.second.read_delay_processor_mask,
+            delay.second.write_delay_processor_mask,
+            delay.second.atomic_delay_processor_mask,
             rtoptions.get_watcher_debug_delay());
     }
 

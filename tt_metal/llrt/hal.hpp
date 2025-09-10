@@ -48,6 +48,34 @@ std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 
+// A set of processors distinguishing programmable core type and index within that core type.
+// See get_processor_index and get_processor_class_and_type_from_index.
+class HalProcessorSet {
+private:
+    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
+
+public:
+    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
+        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
+    }
+    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
+        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
+    }
+    bool empty() const {
+        for (const auto& mask : masks_) {
+            if (mask != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Returns the bitmask of processors for the given core type.
+    // Bit i set <=> processor index i is in the set.
+    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
+        return masks_[static_cast<size_t>(core_type)];
+    }
+};
+
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
@@ -380,6 +408,8 @@ public:
     // Inverse function of get_processor_index.
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
+    // Parses a string representation of a set of processor names (used by env vars).
+    HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
 
