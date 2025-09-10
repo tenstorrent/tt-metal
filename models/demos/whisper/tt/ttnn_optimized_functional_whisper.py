@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import transformers
 from loguru import logger
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
 from models.common.utility_functions import nearest_32
@@ -25,7 +26,7 @@ def dropout(hidden_states, p, training):
     return hidden_states
 
 
-def init_kv_cache(config, device, max_batch_size, max_seq_len, n_layers=None, weights_mesh_mapper=None):
+def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
     Generates empty KV cache and sends to device
     """
@@ -447,16 +448,16 @@ def get_conv_configs(device):
     return conv1d_config, conv1d_compute_config
 
 
-def prepare_conv_weights(config, parameters, weights_mapper=None):
+def prepare_conv_weights(config, parameters, weights_mesh_mapper):
     conv2_out_channel_splits = 4
     conv2_out_channels = config.d_model // conv2_out_channel_splits
     if isinstance(parameters.conv1.weight, torch.Tensor):
         parameters.conv1.weight = ttnn.from_torch(
-            parameters.conv1.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=weights_mapper
+            parameters.conv1.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=weights_mesh_mapper
         )
     if isinstance(parameters.conv2.weight, torch.Tensor):
         parameters.conv2.weight = ttnn.from_torch(
-            parameters.conv2.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=weights_mapper
+            parameters.conv2.weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=weights_mesh_mapper
         )
         # Split output channels to avoid running out of L1 memory
         weight_splits = []
@@ -466,13 +467,11 @@ def prepare_conv_weights(config, parameters, weights_mapper=None):
     return conv2_out_channel_splits, conv2_out_channels
 
 
-def preprocess_encoder_inputs(
-    config, input_features, *, parameters, device, inputs_mesh_mapper=None, weights_mesh_mapper=None
-):
+def preprocess_encoder_inputs(config, input_features, *, parameters, device, input_mesh_mapper, weights_mesh_mapper):
     input_length = input_features.shape[-1]
 
     input_features = ttnn.from_torch(
-        input_features, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=inputs_mesh_mapper, device=device
+        input_features, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=input_mesh_mapper, device=device
     )
     input_features = ttnn.transpose(input_features, 1, 2)
 
@@ -480,7 +479,7 @@ def preprocess_encoder_inputs(
 
     # First time convs are runs, weights are on host (convs will return weights on device)
     conv2_out_channel_splits, conv2_out_channels = prepare_conv_weights(
-        config, parameters, weights_mapper=weights_mesh_mapper
+        config, parameters, weights_mesh_mapper=weights_mesh_mapper
     )
 
     input_embeds, [weights_device, _] = ttnn.conv1d(
@@ -543,14 +542,14 @@ def preprocess_decoder_inputs(
     *,
     parameters,
     device,
+    input_mesh_mapper,
     decode_pos=None,
     create_attention_mask=True,
-    mesh_mapper=None,
 ):
     input_shape = input_ids.size()
     input_ids = torch.reshape(input_ids, (-1, input_shape[-1]))
     tt_input_ids = ttnn.from_torch(
-        input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=mesh_mapper
+        input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=input_mesh_mapper
     )
     inputs_embeds = ttnn.embedding(
         tt_input_ids, parameters.embed_tokens.weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -561,7 +560,7 @@ def preprocess_decoder_inputs(
         # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
         attention_mask = attention_mask.expand(-1, config.decoder_attention_heads, -1, -1)
         attention_mask = ttnn.from_torch(
-            attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+            attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=input_mesh_mapper
         )
 
     if decode_pos is None:
@@ -583,15 +582,15 @@ def preprocess_inputs(
     parameters,
     device,
     create_attention_mask=True,
-    inputs_mesh_mapper=None,
-    weights_mesh_mapper=None,
+    input_mesh_mapper,
+    weights_mesh_mapper,
 ):
     input_embeds = preprocess_encoder_inputs(
         config,
         input_features,
         parameters=parameters.encoder,
         device=device,
-        inputs_mesh_mapper=inputs_mesh_mapper,
+        input_mesh_mapper=input_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
     )
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
@@ -601,7 +600,7 @@ def preprocess_inputs(
         parameters=parameters.decoder,
         device=device,
         create_attention_mask=create_attention_mask,
-        mesh_mapper=inputs_mesh_mapper,
+        input_mesh_mapper=input_mesh_mapper,
     )
     return input_embeds, decoder_hidden_states, attention_mask
 
@@ -629,14 +628,14 @@ def whisper(
     return last_hidden_state
 
 
-def create_custom_mesh_preprocessor(mesh_mapper=None):
-    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
-        return custom_preprocessor(model, name, mesh_mapper)
+def create_custom_mesh_preprocessor(weights_mesh_mapper):
+    def custom_mesh_preprocessor(model, name):
+        return custom_preprocessor(model, name, weights_mesh_mapper)
 
     return custom_mesh_preprocessor
 
 
-def custom_preprocessor(torch_model, name, weights_mapper=None):
+def custom_preprocessor(torch_model, name, weights_mesh_mapper):
     parameters = {}
     if isinstance(torch_model, transformers.models.whisper.modeling_whisper.WhisperAttention):
         height, width = torch_model.k_proj.weight.shape
@@ -646,16 +645,16 @@ def custom_preprocessor(torch_model, name, weights_mapper=None):
             preprocessed_weight = torch.cat([torch_model.k_proj.weight, torch_model.v_proj.weight], dim=0)
             preprocessed_bias = torch.cat([torch.zeros(height), torch_model.v_proj.bias], dim=0)
             parameters["key_value"]["weight"] = preprocess_linear_weight(
-                preprocessed_weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                preprocessed_weight, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
             parameters["key_value"]["bias"] = preprocess_linear_bias(
-                preprocessed_bias, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                preprocessed_bias, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
             parameters["q_proj"]["weight"] = preprocess_linear_weight(
-                torch_model.q_proj.weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                torch_model.q_proj.weight, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
             parameters["q_proj"]["bias"] = preprocess_linear_bias(
-                torch_model.q_proj.bias, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                torch_model.q_proj.bias, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
         else:
             parameters = {"query_key_value": {}, "out_proj": {}}
@@ -666,32 +665,20 @@ def custom_preprocessor(torch_model, name, weights_mapper=None):
                 [torch_model.q_proj.bias, torch.zeros(height), torch_model.v_proj.bias], dim=0
             )
             parameters["query_key_value"]["weight"] = preprocess_linear_weight(
-                preprocessed_weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                preprocessed_weight, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
             parameters["query_key_value"]["bias"] = preprocess_linear_bias(
-                preprocessed_bias, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+                preprocessed_bias, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
             )
 
         parameters["out_proj"]["weight"] = preprocess_linear_weight(
-            torch_model.out_proj.weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+            torch_model.out_proj.weight, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
         )
         parameters["out_proj"]["bias"] = preprocess_linear_bias(
-            torch_model.out_proj.bias, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper
+            torch_model.out_proj.bias, dtype=ttnn.bfloat16, weights_mesh_mapper=weights_mesh_mapper
         )
     elif name == "encoder.embed_positions" and isinstance(torch_model, torch.nn.Embedding):
-        embeddings = ttnn.from_torch(torch_model.weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mapper)
+        embeddings = ttnn.from_torch(torch_model.weight, dtype=ttnn.bfloat16, mesh_mapper=weights_mesh_mapper)
         embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
         parameters["weight"] = embeddings
     return parameters
-
-
-def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
-    weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
-    return weight
-
-
-def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
-    bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
-    return bias
