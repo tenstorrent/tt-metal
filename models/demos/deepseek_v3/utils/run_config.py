@@ -174,7 +174,7 @@ def _merge_run_config(
     )
 
 
-def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None) -> Any:
+def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None, __progress_update=None) -> Any:
     if cfg1 is None:
         return cfg2
     if cfg2 is None:

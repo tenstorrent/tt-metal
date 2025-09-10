@@ -312,6 +312,68 @@ class DeepseekGenerator:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         self._trace_id = trace_id
 
+    # Align with tt_transformers: provide decode_forward_text and compatible helpers
+    def read_decode_output(self, tt_out: ttnn.Tensor, async_read: bool = False):
+        if not async_read:
+            return self._read_logits_host(tt_out)
+        # Async path: best-effort stub (returns host tensor, event None)
+        return self._read_logits_host(tt_out), None
+
+    def process_decode_output_host(self, to_host: torch.Tensor, is_tokens: bool = False):
+        # Our host tensors are already [B, V] logits; return as-is
+        return to_host
+
+    def decode_forward_text(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
+        sampling_params: SamplingParams | None = None,
+    ):
+        # Delegate to our decode_forward; ignore page_table/kv_cache which are not used in Model1D path
+        logits_or_tt = self.decode_forward(
+            tokens, start_pos, enable_trace=enable_trace, read_from_device=read_from_device
+        )
+        if read_from_device:
+            # If requested tokens on device (temperature==0), return tokens instead of logits
+            if sampling_params is not None and getattr(sampling_params, "temperature", 0) == 0:
+                return torch.argmax(logits_or_tt, dim=-1)
+            return logits_or_tt
+        return logits_or_tt
+
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots=None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Emulate prefill by iterating decode steps over the prompt tokens.
+
+        tokens: [B, S]
+        prompt_lens: optional [B] lengths; if None, uses full S
+        Returns logits for the last token: [B, V]
+        """
+        B, S = tokens.shape
+        positions = torch.zeros(B, dtype=torch.int32)
+        last_logits = None
+        if prompt_lens is None:
+            prompt_lens = torch.full((B,), S, dtype=torch.int32)
+
+        max_len = int(prompt_lens.max().item())
+        for step in range(max_len):
+            # Use token at 'step' for all users; if step exceeds S-1, clamp to last column
+            step_tokens = tokens[:, min(step, S - 1)]
+            last_logits = self.decode_forward(step_tokens, positions, enable_trace=False, read_from_device=True)
+            positions += 1
+        assert last_logits is not None
+        return last_logits
+
     def decode_forward(
         self,
         tokens_step: torch.Tensor,
@@ -380,6 +442,8 @@ class DeepseekGenerator:
         max_new_tokens: int = 32,
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
+        enable_trace: bool = False,
+        profiler=None,
     ) -> List[List[int]]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -392,14 +456,31 @@ class DeepseekGenerator:
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded)  # [MAX_BATCH_SIZE, S]
 
-        # Prefill via repeated decode steps over prompt tokens
+        # Prefill via repeated decode steps over prompt tokens (do not trace prefill)
+        if profiler is not None:
+            # Placeholders to keep summary uniform with traced path
+            try:
+                profiler.start("compile_prefill")
+                profiler.end("compile_prefill")
+            except Exception:
+                pass
+            try:
+                profiler.start("inference_prefill")
+            except Exception:
+                pass
         B = MAX_BATCH_SIZE
         positions = torch.zeros(B, dtype=torch.int32)
         last_logits = None
         for step in range(tokens_batched.shape[1]):
             step_tokens = tokens_batched[:, step]  # [B]
-            last_logits = self._decode_step(step_tokens, positions)
+            # Always avoid tracing for the prefill emulation
+            last_logits = self.decode_forward(step_tokens, positions, enable_trace=False, read_from_device=True)
             positions += 1
+        if profiler is not None:
+            try:
+                profiler.end("inference_prefill")
+            except Exception:
+                pass
 
         assert last_logits is not None
         # First sampled token after prompt
@@ -412,9 +493,30 @@ class DeepseekGenerator:
 
         generations: List[List[int]] = [[] for _ in range(len(prompts))]
         logger.info("Generating: ")
+        if profiler is not None:
+            try:
+                profiler.start("inference_decode")
+            except Exception:
+                pass
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
-            logits = self._decode_step(next_tokens, positions)
+            if profiler is not None:
+                try:
+                    if enable_trace and gen_idx == 0:
+                        profiler.start("compile_decode")
+                    else:
+                        profiler.start(f"inference_decode_time_{gen_idx + 1}")
+                except Exception:
+                    pass
+            logits = self.decode_forward(next_tokens, positions, enable_trace=enable_trace, read_from_device=True)
+            if profiler is not None:
+                try:
+                    if enable_trace and gen_idx == 0:
+                        profiler.end("compile_decode")
+                    else:
+                        profiler.end(f"inference_decode_time_{gen_idx + 1}")
+                except Exception:
+                    pass
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -428,6 +530,11 @@ class DeepseekGenerator:
                 print(self.tokenizer.decode(int(next_tokens[i].item()), skip_special_tokens=True), end="", flush=True)
 
         print("\n", flush=True)
+        if profiler is not None:
+            try:
+                profiler.end("inference_decode")
+            except Exception:
+                pass
         logger.info("Done generating tokens")
         return generations
 

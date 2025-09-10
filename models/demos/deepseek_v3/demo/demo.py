@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def _default_mesh_shape() -> ttnn.MeshShape:
@@ -59,20 +60,15 @@ def create_parser() -> argparse.ArgumentParser:
     )
     # Tracing / performance options
     p.add_argument(
-        "--trace-decode",
+        "--trace",
         action="store_true",
-        help=(
-            "Run a traced decode benchmark that captures one decode iteration and measures trace execution only. "
-            "Prefill is not implemented for DeepSeek demo; this measures decode only."
-        ),
+        help=("Enable tracing for decode. No separate code path; tracing is passed to the generator."),
     )
     p.add_argument(
         "--batch-size",
         type=int,
         default=None,
-        help=(
-            "Batch size for traced decode benchmark (defaults to DeepSeek MAX_BATCH_SIZE)."
-        ),
+        help=("Batch size for traced decode benchmark (defaults to DeepSeek MAX_BATCH_SIZE)."),
     )
     return p
 
@@ -125,7 +121,7 @@ def run_demo(
     random_weights: bool = False,
     single_layer: str | None = None,
     token_accuracy: bool = False,
-    trace_decode: bool = False,
+    trace: bool = False,
     batch_size: int | None = None,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
@@ -202,105 +198,6 @@ def run_demo(
                 f"Continuing with generator batch_size={gen.batch_size}."
             )
 
-        # Traced decode benchmark path (skip full prompt prefill; measures decode only)
-        if trace_decode:
-            from models.perf.benchmarking_utils import BenchmarkProfiler
-            import torch
-
-            profiler = BenchmarkProfiler()
-            profiler.start("run")
-
-            # Seed token: BOS if tokenizer is present; else 1
-            bos_id = 1
-            if gen.tokenizer is not None:
-                try:
-                    bos_id = gen.tokenizer.bos_token_id or 1
-                except Exception:
-                    pass
-
-            B = gen.batch_size
-            tokens_step = torch.full((B,), int(bos_id), dtype=torch.int32)
-            positions = torch.zeros((B,), dtype=torch.int32)
-
-            # First call lazily captures and runs the trace; measure as compile time
-            logger.info("Capturing decode trace...")
-            profiler.start("compile_decode")
-            logits = gen.decode_forward(tokens_step, positions, enable_trace=True, read_from_device=True)
-            profiler.end("compile_decode")
-            logger.info("Done capturing decode trace")
-
-            # Prefill timings placeholders (not implemented here)
-            profiler.start("compile_prefill"); profiler.end("compile_prefill")
-            profiler.start("inference_prefill"); profiler.end("inference_prefill")
-
-            # Sample next token from first output
-            next_token_ids = torch.argmax(logits, dim=-1).to(torch.int32)
-
-            total_decode_time = 0.0
-            profiler.start("inference_decode")
-            num_measured = 0
-            for it in range(1, max_new_tokens):
-                positions.add_(1)
-                profiler.start(f"inference_decode_time_{it}")
-                logits = gen.decode_forward(next_token_ids, positions, enable_trace=True, read_from_device=True)
-                profiler.end(f"inference_decode_time_{it}")
-
-                t = profiler.get_duration(f"inference_decode_time_{it}")
-                total_decode_time += t
-                num_measured += 1
-
-                tps_user = 1.0 / t if t > 0 else 0.0
-                logger.debug(
-                    f"Iteration {it}: {1000*t:.0f}ms @ {tps_user:.1f} tok/s/user ({B*tps_user:.1f} tok/s throughput)"
-                )
-
-                next_token_ids = torch.argmax(logits, dim=-1).to(torch.int32)
-
-            profiler.end("inference_decode")
-            profiler.end("run")
-
-            # Summarize metrics similar to tt_transformers
-            avg_decode_it = total_decode_time / max(1, num_measured)
-            decode_tok_s_u = (num_measured / total_decode_time) if total_decode_time > 0 else 0.0
-            decode_tok_s = decode_tok_s_u * B
-
-            compile_prefill_time = profiler.get_duration("compile_prefill")
-            compile_decode_time = profiler.get_duration("compile_decode")
-            total_inference_prefill_time = profiler.get_duration("inference_prefill")
-            total_inference_decode_time = total_decode_time
-
-            tok_1 = profiler.get_duration("inference_decode_time_1") if profiler.contains_step("inference_decode_time_1") else 0
-            tok_128 = profiler.get_duration("inference_decode_time_127") if profiler.contains_step("inference_decode_time_127") else 0
-            tok_1024 = profiler.get_duration("inference_decode_time_1023") if profiler.contains_step("inference_decode_time_1023") else 0
-
-            logger.info("")
-            logger.info("=== Performance metrics (decode) ===")
-            if tok_1 > 0:
-                logger.info(f"1st token decode time: {tok_1*1000:.2f}ms [{round(1/tok_1, 2)} t/s/u, {round((1/tok_1)*B, 2)} t/s]")
-            if tok_128 > 0:
-                logger.info(f"128th token decode time: {tok_128*1000:.2f}ms [{round(1/tok_128, 2)} t/s/u, {round((1/tok_128)*B, 2)} t/s]")
-            if tok_1024 > 0:
-                logger.info(f"1024th token decode time: {tok_1024*1000:.2f}ms [{round(1/tok_1024, 2)} t/s/u, {round((1/tok_1024)*B, 2)} t/s]")
-            logger.info("==")
-            logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s (prefill not implemented)")
-            logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
-            logger.info("")
-            logger.info(
-                f"Average speed: {round(avg_decode_it * 1000, 2)}ms @ {round(decode_tok_s_u, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
-            )
-
-            return {
-                "tokens": [],
-                "text": None,
-                "measurements": {
-                    "compile_prefill": compile_prefill_time,
-                    "compile_decode": compile_decode_time,
-                    "inference_prefill": total_inference_prefill_time,
-                    "inference_decode": total_inference_decode_time,
-                    "decode_t/s/u": decode_tok_s_u,
-                    "decode_t/s": decode_tok_s,
-                },
-            }
         # Build the prompt list
         if random_weights:
             prompts = [""]
@@ -316,17 +213,25 @@ def run_demo(
                 prompts = [prompt]
 
         # Single-prompt generation
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
         generations = gen.generate(
             prompts,
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
+            enable_trace=trace,
+            profiler=profiler,
         )
+        profiler.end("run")
         result = {"tokens": generations[0], "text": None}
         if gen.tokenizer is not None:
             result["text"] = gen.tokenizer.decode(generations[0], skip_special_tokens=True)
         if token_acc is not None:
             acc = token_acc.compute_accuracy()
             result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
+        # Log performance in normal mode too
+        measurements = _summarize_and_log_perf(profiler, gen.batch_size, max_new_tokens)
+        result["measurements"] = measurements
         return result
     finally:
         # Clean up mesh device(s)
@@ -340,7 +245,7 @@ def run_demo(
 def main() -> None:
     args = create_parser().parse_args()
 
-    if not args.trace_decode and (not args.random_weights and not args.prompt):
+    if not args.trace and (not args.random_weights and not args.prompt):
         raise SystemExit("A prompt is required unless --random-weights is used.")
 
     result = run_demo(
@@ -351,7 +256,7 @@ def main() -> None:
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
         token_accuracy=bool(args.token_accuracy),
-        trace_decode=bool(args.trace_decode),
+        trace=bool(args.trace),
         batch_size=args.batch_size,
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
@@ -364,6 +269,77 @@ def main() -> None:
     #     print("[random-weights mode] token IDs:")
     #     print(result["tokens"])  # type: ignore
     # print("\n=====================\n")
+
+
+def _summarize_and_log_perf(profiler: BenchmarkProfiler, B: int, max_new_tokens: int) -> dict:
+    """Summarize decode performance from a BenchmarkProfiler and log nicely.
+
+    Returns a dict with compile/inference timing summaries and throughput.
+    """
+    # Aggregate decode iterations that exist
+    decode_durations = []
+    for i in range(1, max_new_tokens + 1):
+        step = f"inference_decode_time_{i}"
+        if profiler.contains_step(step):
+            decode_durations.append(profiler.get_duration(step))
+
+    total_decode_time = sum(decode_durations)
+    num_measured = len(decode_durations)
+    avg_decode_it = (total_decode_time / num_measured) if num_measured > 0 else 0.0
+    decode_tok_s_u = (num_measured / total_decode_time) if total_decode_time > 0 else 0.0
+    decode_tok_s = decode_tok_s_u * B
+
+    compile_prefill_time = (
+        profiler.get_duration("compile_prefill") if profiler.contains_step("compile_prefill") else 0.0
+    )
+    compile_decode_time = profiler.get_duration("compile_decode") if profiler.contains_step("compile_decode") else 0.0
+    total_inference_prefill_time = (
+        profiler.get_duration("inference_prefill") if profiler.contains_step("inference_prefill") else 0.0
+    )
+    total_inference_decode_time = (
+        profiler.get_duration("inference_decode") if profiler.contains_step("inference_decode") else total_decode_time
+    )
+
+    tok_1 = profiler.get_duration("inference_decode_time_1") if profiler.contains_step("inference_decode_time_1") else 0
+    tok_128 = (
+        profiler.get_duration("inference_decode_time_127") if profiler.contains_step("inference_decode_time_127") else 0
+    )
+    tok_1024 = (
+        profiler.get_duration("inference_decode_time_1023")
+        if profiler.contains_step("inference_decode_time_1023")
+        else 0
+    )
+
+    logger.info("")
+    logger.info("=== Performance metrics (decode) ===")
+    if tok_1 > 0:
+        logger.info(
+            f"1st token decode time: {tok_1*1000:.2f}ms [{round(1/tok_1, 2)} t/s/u, {round((1/tok_1)*B, 2)} t/s]"
+        )
+    if tok_128 > 0:
+        logger.info(
+            f"128th token decode time: {tok_128*1000:.2f}ms [{round(1/tok_128, 2)} t/s/u, {round((1/tok_128)*B, 2)} t/s]"
+        )
+    if tok_1024 > 0:
+        logger.info(
+            f"1024th token decode time: {tok_1024*1000:.2f}ms [{round(1/tok_1024, 2)} t/s/u, {round((1/tok_1024)*B, 2)} t/s]"
+        )
+    logger.info("==")
+    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
+    logger.info("")
+    logger.info(
+        f"Average speed: {round(avg_decode_it * 1000, 2)}ms @ {round(decode_tok_s_u, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
+    )
+
+    return {
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
+        "inference_prefill": total_inference_prefill_time,
+        "inference_decode": total_inference_decode_time,
+        "decode_t/s/u": decode_tok_s_u,
+        "decode_t/s": decode_tok_s,
+    }
 
 
 if __name__ == "__main__":
