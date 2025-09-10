@@ -155,12 +155,13 @@ async function run() {
 
     core.info('Fetching all runs...');
     const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+    core.info(`Fetched allRuns count: ${allRuns.length}`);
 
     await delay(5000);
 
     core.info('Fetching scheduled runs...');
     const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
-
+    core.info(`Fetched scheduledRuns count: ${scheduledRuns.length}`);
 
     // 2. Combine all the results into a single array
     const newRuns = [...scheduledRuns, ...allRuns];
