@@ -55,6 +55,7 @@ static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     return ss.str();
 }
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 static void print_stack_trace() {
     void* array[15];
 
@@ -67,8 +68,9 @@ static void print_stack_trace() {
         }
     }
 
-    free(strings);
+    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 static void watcher_sanitize_host_noc(
     const char* what,

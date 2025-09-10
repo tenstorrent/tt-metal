@@ -25,15 +25,10 @@ void kernel_main() {
 
     uint32_t num_tiles = src0_num_tiles > src1_num_tiles ? src0_num_tiles : src1_num_tiles;
 
-    const InterleavedPow2AddrGen<true> s0 = {
-        .bank_base_address = src0_addr,
-
-        .log_base_2_of_page_size = 11};
-
-    const InterleavedPow2AddrGen<true> s1 = {
-        .bank_base_address = src1_addr,
-
-        .log_base_2_of_page_size = 11};
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    const auto s0 = TensorAccessor(src0_args, src0_addr, ublock_size_bytes_0);
+    const auto s1 = TensorAccessor(src1_args, src1_addr, ublock_size_bytes_1);
 
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

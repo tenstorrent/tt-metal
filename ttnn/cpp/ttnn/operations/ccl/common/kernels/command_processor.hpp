@@ -10,7 +10,7 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
-#include "api/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/layout/layout.hpp"
 
 #include "dataflow_api.h"  // for interleaved addrgen
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"

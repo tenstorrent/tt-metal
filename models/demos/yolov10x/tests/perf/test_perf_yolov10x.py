@@ -14,7 +14,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 46.5],
+        [1, 50.3],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

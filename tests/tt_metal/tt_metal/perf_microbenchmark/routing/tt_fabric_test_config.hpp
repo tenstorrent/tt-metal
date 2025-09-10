@@ -450,6 +450,13 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
     TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
     test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
 
+    if (test_yaml["top_level_iterations"]) {
+        test_config.num_top_level_iterations = parse_scalar<uint32_t>(test_yaml["top_level_iterations"]);
+        if (test_config.num_top_level_iterations == 0) {
+            TT_THROW("top_level_iterations must be greater than 0");
+        }
+    }
+
     if (test_yaml["parametrization_params"]) {
         test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
     }

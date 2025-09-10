@@ -178,6 +178,19 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
 
+    // Validate storage type for input tensors
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE,
+        "Input tensor A must be on device, got storage type: {}",
+        input_tensor_a.storage_type());
+
+    if (input_tensor_b.has_value()) {
+        TT_FATAL(
+            input_tensor_b->storage_type() == StorageType::DEVICE,
+            "Input tensor B must be on device, got storage type: {}",
+            input_tensor_b->storage_type());
+    }
+
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
@@ -453,6 +466,17 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
+    // Validate storage type for input tensors
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE,
+        "Input tensor A must be on device, got storage type: {}",
+        input_tensor_a.storage_type());
+
+    TT_FATAL(
+        input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Input tensor B must be on device, got storage type: {}",
+        input_tensor_b.storage_type());
+
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
         input_tensor_a.logical_shape()[-1],

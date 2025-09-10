@@ -22,10 +22,8 @@ auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
 
 namespace tt::tt_fabric {
 
-FabricNodeId::FabricNodeId(MeshId mesh_id, std::uint32_t chip_id) {
-    this->mesh_id = mesh_id;
-    this->chip_id = chip_id;
-}
+FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
+    mesh_id(mesh_id_val), chip_id(chip_id_val) {}
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs) {
     return lhs.mesh_id == rhs.mesh_id && lhs.chip_id == rhs.chip_id;
@@ -121,7 +119,6 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
                 auto src_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, src_chip_id);
                 auto dst_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, dst_chip_id);
-                uint32_t next_chip_id;
                 // X first routing, traverse rows first
                 if (src_mesh_coord[0] != dst_mesh_coord[0]) {
                     // If source and destination are in different rows, we need to move in the X direction first

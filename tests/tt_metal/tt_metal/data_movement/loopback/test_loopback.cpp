@@ -178,7 +178,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
 
     uint32_t test_id = 55;
 

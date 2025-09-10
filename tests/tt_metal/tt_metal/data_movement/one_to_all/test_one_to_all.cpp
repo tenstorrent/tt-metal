@@ -456,7 +456,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -473,7 +473,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -511,7 +511,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
 
@@ -529,7 +529,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSiz
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
 
@@ -568,7 +568,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes)
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
 
@@ -586,7 +586,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2Pac
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
 

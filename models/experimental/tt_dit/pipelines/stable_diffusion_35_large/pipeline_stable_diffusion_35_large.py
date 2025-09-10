@@ -86,22 +86,93 @@ class PipelineTrace:
     tid: int
 
 
+def create_pipeline(
+    mesh_device,
+    batch_size=1,
+    image_w=1024,
+    image_h=1024,
+    guidance_scale=3.5,
+    num_images_per_prompt=1,
+    max_t5_sequence_length=256,
+    prompt_sequence_length=333,
+    spatial_sequence_length=4096,
+    cfg_config=None,
+    sp_config=None,
+    tp_config=None,
+    num_links=None,
+    model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
+    use_cache=False,
+):
+    # defatult config per mesh shape
+    default_config = {
+        (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
+        (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
+    }
+
+    # get config from user or default if not provided
+    cfg_factor, cfg_axis = cfg_config or default_config[tuple(mesh_device.shape)]["cfg_config"]
+    sp_factor, sp_axis = sp_config or default_config[tuple(mesh_device.shape)]["sp_config"]
+    tp_factor, tp_axis = tp_config or default_config[tuple(mesh_device.shape)]["tp_config"]
+    num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    guidance_cond = 2 if (guidance_scale > 1 and cfg_factor == 1) else 1
+
+    # Enable T5 based on device configuration
+    # T5 is disabled if mesh needs reshaping for CLIP encoder
+    submesh_shape = list(mesh_device.shape)
+    submesh_shape[cfg_axis] //= cfg_factor
+    enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
+
+    logger.info(f"Mesh device shape: {mesh_device.shape}")
+    logger.info(f"Submesh shape: {submesh_shape}")
+    logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+    # Create pipeline
+    pipeline = StableDiffusion3Pipeline(
+        mesh_device=mesh_device,
+        enable_t5_text_encoder=enable_t5_text_encoder,
+        guidance_cond=guidance_cond,
+        parallel_config=parallel_config,
+        num_links=num_links,
+        height=image_h,
+        width=image_w,
+        model_checkpoint_path=model_checkpoint_path,
+        use_cache=use_cache,
+    )
+
+    pipeline.prepare(
+        batch_size=batch_size,
+        num_images_per_prompt=num_images_per_prompt,
+        width=image_w,
+        height=image_h,
+        guidance_scale=guidance_scale,
+        max_t5_sequence_length=max_t5_sequence_length,
+        prompt_sequence_length=prompt_sequence_length,
+        spatial_sequence_length=spatial_sequence_length,
+    )
+
+    return pipeline
+
+
 class StableDiffusion3Pipeline:
     def __init__(
         self,
         *,
-        checkpoint_name: str,
         mesh_device: ttnn.MeshDevice,
         enable_t5_text_encoder: bool = True,
         guidance_cond: int,
         parallel_config: DiTParallelConfig,
         num_links: int,
-        # ccl_manager: CCLManager,
-        # encoder_parallel_config: EncoderParallelConfig,
-        # vae_parallel_manager: VAEParallelConfig,
         height: int,
         width: int,
-        model_location_generator,
+        model_checkpoint_path: str,
         use_cache=False,
     ) -> None:
         self._mesh_device = mesh_device
@@ -157,25 +228,23 @@ class StableDiffusion3Pipeline:
         self.vae_device = vae_device
         self.vae_submesh_idx = vae_submesh_idx
 
-        model_name_checkpoint = model_location_generator(checkpoint_name, model_subdir="StableDiffusion_35_Large")
-
         logger.info("loading models...")
-        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer")
-        self._tokenizer_2 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer_2")
-        self._tokenizer_3 = T5TokenizerFast.from_pretrained(model_name_checkpoint, subfolder="tokenizer_3")
+        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer")
+        self._tokenizer_2 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer_2")
+        self._tokenizer_3 = T5TokenizerFast.from_pretrained(model_checkpoint_path, subfolder="tokenizer_3")
         self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(
-            model_name_checkpoint, subfolder="text_encoder"
+            model_checkpoint_path, subfolder="text_encoder"
         )
         self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-            model_name_checkpoint, subfolder="text_encoder_2"
+            model_checkpoint_path, subfolder="text_encoder_2"
         )
         if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder_3")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name_checkpoint, subfolder="scheduler")
-        self._torch_vae = AutoencoderKL.from_pretrained(model_name_checkpoint, subfolder="vae")
+            torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_checkpoint_path, subfolder="text_encoder_3")
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_checkpoint_path, subfolder="scheduler")
+        self._torch_vae = AutoencoderKL.from_pretrained(model_checkpoint_path, subfolder="vae")
 
         torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
-            model_name_checkpoint,
+            model_checkpoint_path,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
@@ -192,7 +261,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert checkpoint_name == "stabilityai/stable-diffusion-3.5-large"
+        assert "stabilityai/stable-diffusion-3.5-large" in model_checkpoint_path
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -469,6 +538,19 @@ class StableDiffusion3Pipeline:
             spatial_sequence_length=spatial_sequence_length,
         )
         """
+
+    def run_single_prompt(self, prompt, negative_prompt, num_inference_steps, seed):
+        return self.__call__(
+            prompt_1=[prompt],
+            prompt_2=[prompt],
+            prompt_3=[prompt],
+            negative_prompt_1=[negative_prompt],
+            negative_prompt_2=[negative_prompt],
+            negative_prompt_3=[negative_prompt],
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            traced=True,
+        )
 
     def __call__(
         self,
@@ -979,6 +1061,9 @@ class StableDiffusion3Pipeline:
         pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
 
         return prompt_embeds, pooled_prompt_embeds
+
+    def t5_enabled(self):
+        return self._text_encoder_3 is not None
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/pipelines/stable_diffusion_3/pipeline_stable_diffusion_3.py

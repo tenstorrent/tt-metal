@@ -12,9 +12,10 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: "0 */6 * * 1,2,3,4,5"
-    - cron: "0 */4 * * 0,6"
+    - cron: "0 5 * * 1,2,3,4,5" # frequency of functional models
+    - cron: "0 */4 * * 0,6" # frequency of perf models
 
+run-name: "(Single-card) Demo tests${{ (inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 */4 * * 0,6')) && ' (with perf runs)' || ' (no perf)' }}"
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -37,4 +38,4 @@ jobs:
       # Using || true after is dangerous since that will always be passed in if first value is falsy
       # which it can be if inputs.run-perf-tests isn't clicked. So, scope the default true to only
       # when we're not using workflow_dispatch and can't possibly have an input anyway
-      run-perf-tests: ${{ inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && true) }}
+      run-perf-tests: ${{ inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 */4 * * 0,6') }}

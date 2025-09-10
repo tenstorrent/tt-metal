@@ -129,6 +129,7 @@ struct ParsedTestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
+    uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
 
 struct TestConfig {
@@ -240,9 +241,8 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
-    PhysicalMeshConfig() {
-        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        eth_coord_mapping = {};
+    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+        // Default path to the mesh descriptor.
     }
 };
 

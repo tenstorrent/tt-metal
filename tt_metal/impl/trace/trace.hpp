@@ -22,7 +22,7 @@ class CommandQueue;
 }  // namespace tt
 
 namespace tt::tt_metal {
-class TraceBuffer;
+struct TraceBuffer;
 
 class Trace {
 private:

@@ -10,6 +10,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -17,6 +18,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -32,7 +34,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
@@ -174,12 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const auto& weights_shape = input_tensor_b.padded_shape();
 
-    std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
-
-    if (!activation.empty()) {
-        fused_activation = unary::utils::string_to_unary_with_param(activation);
-    }
-
     // Factory selection logic - choose the appropriate implementation based on memory layout
     tt::tt_metal::operation::ProgramWithCallbacks program_with_cbs;
 
@@ -211,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             groups,
             untilize_out,
             has_bias,
-            fused_activation,
+            activation,
             parallelization_config,
             block_config,
             output_tensor,
@@ -246,7 +242,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             groups,
             untilize_out,
             has_bias,
-            fused_activation,
+            activation,
             parallelization_config,
             block_config,
             input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
@@ -260,7 +256,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+
+    auto actual_cb_size = calculate_total_cb_size(program_with_cbs.program);
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});

@@ -94,19 +94,10 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  galaxy-4u-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   galaxy-6u-demos:
     needs: [build-artifact, get-params]
     if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -267,7 +258,7 @@ jobs:
     if: github.ref != 'refs/heads/main'
     with:
       version: ${{ needs.create-tag.outputs.version }}
-      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
+      tag-latest:  ${{ needs.get-params.outputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   release-docs:
     needs: [

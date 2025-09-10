@@ -36,6 +36,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -150,19 +151,27 @@ void run_single_core_transpose(
             .set_page_size(ouput_cb_index, test_config.single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_cta);
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_cta});
 
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_cta);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_cta});
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
 

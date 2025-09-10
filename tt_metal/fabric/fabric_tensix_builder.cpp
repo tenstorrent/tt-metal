@@ -21,6 +21,15 @@
 
 namespace tt::tt_fabric {
 
+static bool device_has_dispatch_tunnel(chip_id_t device_id) {
+    auto mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    auto tunnels_from_mmio =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    // results are inclusive of the mmio_device_id so they will never be zero
+    TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
+    return (tunnels_from_mmio.size() - 1) > 0;
+}
+
 // Helper function to find the maximum number of ethernet channels across all devices
 static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices) {
     size_t max_eth_channels = 0;
@@ -28,15 +37,7 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    const auto device_has_dispatch_tunnel = [&]() -> bool {
-        auto mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
-        // results are inclusive of the mmio_device_id so they will never be zero
-        TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
-        return (tunnels_from_mmio.size() - 1) > 0;
-    }();
+    const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
@@ -72,7 +73,7 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
 
-                if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                if (!(has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
                     non_dispatch_active_channels.push_back(eth_chan);
                 }
             }
@@ -95,7 +96,6 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
 
 void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
@@ -122,10 +122,12 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
         translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
+        translated_fabric_mux_cores_.insert(translated_core);
     }
     for (const auto& logical_core : logical_dispatch_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
         translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
+        translated_dispatch_mux_cores_.insert(translated_core);
     }
 
     // Get maximum number of active ethernet channels from control plane across all devices
@@ -193,16 +195,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
+        case tt::tt_fabric::Topology::Ring:
             num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
             break;
         case tt::tt_fabric::Topology::Mesh:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
-            break;
-        case tt::tt_fabric::Topology::Ring:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_ring;
-            break;
         case tt::tt_fabric::Topology::Torus:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
+            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
             break;
         default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
@@ -450,11 +448,29 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
 }
 
 std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
-    // Get base compile time args without stream IDs from the underlying mux config
-    auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args();
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device->id());
+    uint32_t dispatch_link_idx =
+        tt_metal::RelayMux::get_dispatch_link_index(local_fabric_node_id_, remote_fabric_node_id_, device);
+    bool is_dispatch_link = has_dispatch_tunnel && link_idx_ == dispatch_link_idx;
+
+    // use normal router config for dispatch link, since it doesn't have tensix extension
+    const auto& fabric_router_config = [&]() {
+        if (is_dispatch_link) {
+            return fabric_context.get_fabric_router_config();
+        } else {
+            return fabric_context.get_fabric_router_config(
+                tt::tt_fabric::FabricEriscDatamoverType::Default,
+                tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+                fabric_tensix_config);
+        }
+    }();
+
+    auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
 
     // Get topology-specific fabric router stream IDs based on topology
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
@@ -467,32 +483,18 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
     std::vector<uint32_t> fabric_stream_ids_check_by_local;
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
+        case tt::tt_fabric::Topology::Ring:
             fabric_stream_ids_check_by_local = {
                 worker_stream_id,                                                             // default 17
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
             break;
-        case tt::tt_fabric::Topology::Ring:
-            fabric_stream_ids_check_by_local = {
-                worker_stream_id,                                                            // default 17
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id   // 19
-            };
-            break;
         case tt::tt_fabric::Topology::Mesh:
+        case tt::tt_fabric::Topology::Torus:
             fabric_stream_ids_check_by_local = {
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
                 tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
                 tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
                 tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
-            };
-            break;
-        case tt::tt_fabric::Topology::Torus:
-            fabric_stream_ids_check_by_local = {
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,   // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,   // 19
-                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,   // 20
-                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id,   // 21
-                tt::tt_fabric::StreamRegAssignments::vc1_sender_channel_free_slots_stream_id  // 22
             };
             break;
         default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;

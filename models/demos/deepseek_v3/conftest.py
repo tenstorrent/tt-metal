@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,14 @@ def hf_config(model_path):
     """Load DeepSeek config for testing"""
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return config
+
+
+@pytest.fixture(scope="session")
+def hf_config_short(request, hf_config):
+    hf_config_out = deepcopy(hf_config)
+    hf_config_out.num_hidden_layers = getattr(request, "param", 1)
+    hf_config_out.max_seq_len = 3 * 1024
+    return hf_config_out
 
 
 @pytest.fixture

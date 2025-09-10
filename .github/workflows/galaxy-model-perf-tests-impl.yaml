@@ -1,0 +1,214 @@
+name: "[internal] Galaxy model perf tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "topology-6u"
+
+jobs:
+  galaxy-model-perf-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "Galaxy CNN model perf tests",
+            model-type: "CNN",
+            arch: wormhole_b0,
+            save-perf-data: false,
+            timeout: 60,
+            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
+          },  # Pavle Josipovic
+          {
+            name: "Galaxy Llama 70B model perf tests", #see GH issue #26295
+            model-type: "Llama-70B",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
+            owner_id: U053W15B6JF # Djordje Ivanovic
+          },
+          {
+            name: "Llama Galaxy Perf Unit Tests",
+            arch: wormhole_b0,
+            cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests',
+            timeout: 100,
+            tracy: true,
+            save-perf-data: true,
+            owner_id: U053W15B6JF # Djordje Ivanovic
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests",
+            model-type: "Llama-70B",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode ""',
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy DiT SD3.5 model perf tests",
+            model-type: "SD3.5",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "tg_cfg2_sp4_tp4"',
+            owner_id: U03FJB5TM5Y # Colman Glagovich
+          },
+          {
+            name: "Galaxy Sentence Bert tests",
+            arch: wormhole_b0,
+            model-type: "sentence_bert",
+            save-perf-data: false,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode ""',
+            timeout: 30,
+            owner_id: U088413NP0Q, # Ashai Reddy
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      TT_METAL_HOME: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}
+    runs-on:
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - ${{ inputs.extra-tag }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Enable performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name || 'build artifact not specified' }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
+      - name: Run model perf regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          install_wheel: true
+          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - name: Check perf report exists
+        id: check-perf-report
+        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
+        run: |
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
+          if [ "${{ matrix.test-group.tracy }}" == "true" ]; then
+            found_reports=false
+            if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
+              echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
+              echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
+              echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
+              echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ "$found_reports" = false ]; then
+              echo "No CCL perf report found for today."
+              exit 1
+            fi
+          else
+            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+            else
+              echo "No Models perf report found for today."
+              exit 1
+            fi
+          fi
+      - name: Upload Models perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
+          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Upload CCL perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          path:
+            ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

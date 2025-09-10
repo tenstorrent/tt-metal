@@ -364,7 +364,7 @@ std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(const std::vec
         bool edge_needs_tunneling =
             !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
-        std::size_t conn = (edge_needs_tunneling ? 0 : 0) + n_edge_visits[edge];
+        std::size_t conn = n_edge_visits[edge];
         std::unordered_map<uint64_t, int> edge_link_idx;
         auto const& active_eth_cores = curr_device->get_active_ethernet_cores(true);
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

@@ -69,6 +69,7 @@ void sort_noc_exchange_Wt_tiles(
 
         // Handshake for tile exchange
         noc_semaphore_inc(sem_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_ptr, sem_counter);
 
         // Send local indices and values to peer
@@ -88,6 +89,7 @@ void sort_noc_exchange_Wt_tiles(
 
         // Indicate finish reading and wait for other core to finish
         noc_semaphore_inc(sem_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_ptr, sem_counter + 1);
 
         // Push incoming tiles to compute buffers
@@ -183,6 +185,7 @@ void sort_barrier(
             uint64_t sem_barrier_noc_addr =
                 get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
             noc_semaphore_inc(sem_barrier_noc_addr, 1);
+            noc_async_atomic_barrier();
         }
     } else {
         // Indicate finish reading and wait for leader core to signal
@@ -191,6 +194,7 @@ void sort_barrier(
         uint64_t sem_barrier_noc_addr =
             get_noc_addr(remote_core_physical.first, remote_core_physical.second, sem_barrier_addr);
         noc_semaphore_inc(sem_barrier_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(sem_self_barrier_ptr, 1);
         noc_semaphore_set(sem_self_barrier_ptr, 0);
     }

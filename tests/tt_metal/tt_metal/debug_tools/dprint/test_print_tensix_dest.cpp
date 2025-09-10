@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -235,7 +236,7 @@ private:
 };
 
 // Type alias for a shared pointer to a Buffer in DRAM
-using DramBuffer = std::shared_ptr<Buffer>;
+using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
 // Generates the runtime arguments for the DRAM kernel
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
@@ -248,37 +249,45 @@ static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer&
 
 // Creates a circular buffer (L1 cache) for the specified core and data format
 static CBHandle create_circular_buffer(
-    tt_metal::Program& program,
+    distributed::MeshWorkload& workload,
     const tt_metal::CoreCoord& core_coord,
     uint32_t cb_index,
     tt::DataFormat data_format,
     uint32_t buffer_size) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::CircularBufferConfig circular_buffer_config =
         tt_metal::CircularBufferConfig(buffer_size, {{cb_index, data_format}})
             .set_page_size(cb_index, tile_size(data_format));
-    return tt_metal::CreateCircularBuffer(program, core_coord, circular_buffer_config);
+    return tt_metal::CreateCircularBuffer(workload.get_programs().at(device_range), core_coord, circular_buffer_config);
 }
 
 // Creates a DRAM interleaved buffer configuration
-static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::IDevice* device, size_t byte_size) {
-    return {.device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+static DramBuffer create_dram_mesh_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t byte_size) {
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config = {.size = byte_size};
+    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 }
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_reader(tt_metal::IDevice* device,
-                                 tt_metal::Program& program,
-                                 const DestPrintTestConfig& config) {
+static DramBuffer prepare_reader(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const DestPrintTestConfig& config) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program_ = workload.get_programs().at(device_range);
     // Create input DRAM buffer
-    auto input_dram_buffer =
-        tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_input_buffer_size()));
+    auto input_dram_buffer = create_dram_mesh_buffer(mesh_device, config.get_input_buffer_size());
 
     // Create input circular buffer
     create_circular_buffer(
-        program, config.core, DEFAULT_INPUT_CB_INDEX, config.data_format, config.get_input_buffer_size());
+        workload, config.core, DEFAULT_INPUT_CB_INDEX, config.data_format, config.get_input_buffer_size());
 
     // Create reader kernel
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         config.reader_kernel,
         config.core,
         tt_metal::DataMovementConfig{
@@ -288,24 +297,29 @@ static DramBuffer prepare_reader(tt_metal::IDevice* device,
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
-        program, reader_kernel, config.core, get_dram_kernel_runtime_arguments(input_dram_buffer, config.num_tiles));
+        program_, reader_kernel, config.core, get_dram_kernel_runtime_arguments(input_dram_buffer, config.num_tiles));
 
     return input_dram_buffer;
 }
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_writer(tt_metal::IDevice* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_writer(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const DestPrintTestConfig& config) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program_ = workload.get_programs().at(device_range);
     // Create output DRAM buffer
-    auto output_dram_buffer =
-        tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
+    auto output_dram_buffer = create_dram_mesh_buffer(mesh_device, config.get_output_buffer_size());
 
     // Create output circular buffer
     create_circular_buffer(
-        program, config.core, DEFAULT_OUTPUT_CB_INDEX, config.data_format, config.get_output_buffer_size());
+        workload, config.core, DEFAULT_OUTPUT_CB_INDEX, config.data_format, config.get_output_buffer_size());
 
     // Create writer kernel
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         config.writer_kernel,
         config.core,
         tt_metal::DataMovementConfig{
@@ -315,14 +329,17 @@ static DramBuffer prepare_writer(tt_metal::IDevice* device, tt_metal::Program& p
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(
-        program, writer_kernel, config.core, get_dram_kernel_runtime_arguments(output_dram_buffer, config.num_tiles));
+        program_, writer_kernel, config.core, get_dram_kernel_runtime_arguments(output_dram_buffer, config.num_tiles));
     return output_dram_buffer;
 }
 
 // Prepares the compute kernel with the specified program and test configuration
-static KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintTestConfig& config) {
+static KernelHandle prepare_compute(distributed::MeshWorkload& workload, const DestPrintTestConfig& config) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program_ = workload.get_programs().at(device_range);
     return tt_metal::CreateKernel(
-        program,
+        program_,
         config.compute_kernel,
         config.core,
         tt_metal::ComputeConfig{
@@ -362,44 +379,54 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
 
 // Performs DRAM --> Reader --> CB --> Datacopy --> CB --> Writer --> DRAM on a single core
 static bool reader_datacopy_writer(
-    DPrintFixture* fixture, tt_metal::IDevice* device, const DestPrintTestConfig& config) {
+    DPrintMeshFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const DestPrintTestConfig& config) {
     // Create program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& cq = mesh_device->mesh_command_queue();
 
     // Prepare reader kernel and get input DRAM buffer
-    auto input_dram_buffer = prepare_reader(device, program, config);
+    auto input_dram_buffer = prepare_reader(mesh_device, workload, config);
 
     // Prepare writer kernel and get output DRAM buffer
-    auto output_dram_buffer = prepare_writer(device, program, config);
+    auto output_dram_buffer = prepare_writer(mesh_device, workload, config);
 
     // Prepare compute kernel
-    [[maybe_unused]] auto compute_kernel = prepare_compute(program, config);
+    [[maybe_unused]] auto compute_kernel = prepare_compute(workload, config);
 
     // Generate input data
     auto input_data = generate_inputs(config);
 
     // Write input data to input DRAM buffer
-    tt_metal::detail::WriteToBuffer(input_dram_buffer, input_data);
+    distributed::WriteShard(cq, input_dram_buffer, input_data, zero_coord);
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Read output data from output DRAM buffer
     std::vector<uint32_t> output_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, output_data);
+    distributed::ReadShard(cq, output_data, output_dram_buffer, zero_coord);
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
     // Check the print log against golden output.
-    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 
     // Compare input and output data
     return input_data == output_data;
 }
 
 // Helper function to run tests with proper error handling
-static void run_test_with_config(DPrintFixture* fixture, IDevice* device, const DestPrintTestConfig& config) {
+static void run_test_with_config(
+    DPrintMeshFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const DestPrintTestConfig& config) {
     try {
-        reader_datacopy_writer(fixture, device, config);
+        reader_datacopy_writer(fixture, mesh_device, config);
     } catch (const std::exception& e) {
         FAIL() << "Test failed with error: " << e.what();
     }
@@ -415,15 +442,11 @@ struct TestParams {
 };
 
 // Parameterized test fixture
-class DestPrintTest : public DPrintFixture, public ::testing::WithParamInterface<TestParams> {
+class DestPrintTest : public DPrintMeshFixture, public ::testing::WithParamInterface<TestParams> {
 protected:
-    void SetUp() override {
-        DPrintFixture::SetUp();
-    }
+    void SetUp() override { DPrintMeshFixture::SetUp(); }
 
-    void TearDown() override {
-        DPrintFixture::TearDown();
-    }
+    void TearDown() override { DPrintMeshFixture::TearDown(); }
 
     void RunDestPrintTest(const DestPrintTestConfig& config) {
         if (config.data_format == tt::DataFormat::Float32 && this->arch_ == ARCH::GRAYSKULL) {
@@ -435,7 +458,9 @@ protected:
         }
 
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { run_test_with_config(fixture, device, config); },
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                run_test_with_config(fixture, mesh_device, config);
+            },
             this->devices_[0]);
     }
 

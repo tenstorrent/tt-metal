@@ -264,8 +264,9 @@ void kernel_main() {
     const uint32_t num_reads_of_input = 3;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = block_h % num_out_blocks;
+	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required = num_out_blocks_padded * num_mcast_cores * 16 / single_tile_size_bytes;
@@ -335,7 +336,7 @@ void kernel_main() {
                             uint32_t read_size = (cb_ex_external_bytes_written % single_tile_size_bytes > 0)
                                                      ? num_bytes_read
                                                      : single_tile_size_bytes;
-                            noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
+			    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
                             l1_write_addr_external += 16;
                             cb_ex_external_bytes_written += 16;
                             noc_async_read_barrier();

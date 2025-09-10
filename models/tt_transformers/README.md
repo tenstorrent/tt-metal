@@ -3,7 +3,7 @@
 This code can run large language models such as the Llama3 family, Qwen2.5, Mistral, DeepSeek-R1-Distill variants and similar. Tensor-parallelism automatically distributes workloads across all available chips.
 
 The current version is verified to work with the following models:
-| Model                                                                                            | Hardware                    | <org/name>                                      |
+| Model                                                                                            | Hardware                    | <org/model>                                      |
 |--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
 | [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
 | [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
@@ -14,49 +14,141 @@ The current version is verified to work with the following models:
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
-| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                          |
+| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
 | [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
+| [Phi-3-mini-128k-instruct](https://huggingface.co/microsoft/Phi-3-mini-128k-instruct)            | n150 / n300                 | ```microsoft/Phi-3-mini-128k-instruct```        |
 
-## Dependencies
+<details>
+<summary>  Explore an extended list of compatible models (experimental) </summary>
+
+| Model                                                                                                                     | Hardware | <org/model>.                                                 |
+|---------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------|
+| [Bellatrix-Tiny-0.5B](https://huggingface.co/prithivMLmods/Bellatrix-Tiny-0.5B)                                           | N150     | `prithivMLmods/Bellatrix-Tiny-0.5B`                         |
+| [Bellatrix-Tiny-1B](https://huggingface.co/prithivMLmods/Bellatrix-Tiny-1B)                                               | N150     | `prithivMLmods/Bellatrix-Tiny-1B`                           |
+| [Bellatrix-Tiny-1B-R1](https://huggingface.co/prithivMLmods/Bellatrix-Tiny-1B-R1)                                         | N150     | `prithivMLmods/Bellatrix-Tiny-1B-R1`                        |
+| [deepseek-coder-6.7b-instruct](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct)                           | N300     | `deepseek-ai/deepseek-coder-6.7b-instruct`                  |
+| [deepseek-llm-7b-base](https://huggingface.co/deepseek-ai/deepseek-llm-7b-base)                                           | N300     | `deepseek-ai/deepseek-llm-7b-base`                          |
+| [deepseek-llm-7b-chat](https://huggingface.co/deepseek-ai/deepseek-llm-7b-chat)                                           | N300     | `deepseek-ai/deepseek-llm-7b-chat`                          |
+| [DeepSeek-R1-Distill-Llama-8B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B)                           | N300     | `deepseek-ai/DeepSeek-R1-Distill-Llama-8B`                  |
+| [DeepSeek-R1-Distill-Llama-8B](https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-8B)                               | N300     | `unsloth/DeepSeek-R1-Distill-Llama-8B`                      |
+| [DeepSeek-R1-Distill-Llama-8B-abliterated](https://huggingface.co/huihui-ai/DeepSeek-R1-Distill-Llama-8B-abliterated)     | N300     | `huihui-ai/DeepSeek-R1-Distill-Llama-8B-abliterated`        |
+| [DeepSeek-R1-Distill-Qwen-1.5B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B)                         | N150     | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`                 |
+| [DeepSeek-R1-Distill-Qwen-32B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B)                           | T3K      | `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B`                  |
+| [DeepSeek-R1-Distill-Qwen-32B-Japanese](https://huggingface.co/cyberagent/DeepSeek-R1-Distill-Qwen-32B-Japanese)          | T3K      | `cyberagent/DeepSeek-R1-Distill-Qwen-32B-Japanese`          |
+| [DeepSeek-R1-Distill-Qwen-32B-abliterated](https://huggingface.co/huihui-ai/DeepSeek-R1-Distill-Qwen-32B-abliterated)     | T3K      | `huihui-ai/DeepSeek-R1-Distill-Qwen-32B-abliterated`        |
+| [DeepSeek-R1-Distill-Qwen-7B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B)                             | N300     | `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B`                   |
+| [DeepSeek-R1-Distill-Qwen-7B-abliterated-v2](https://huggingface.co/huihui-ai/DeepSeek-R1-Distill-Qwen-7B-abliterated-v2) | N300     | `huihui-ai/DeepSeek-R1-Distill-Qwen-7B-abliterated-v2`      |
+| [DeepSeek-R1-Distill-Qwen-7B-Japanese](https://huggingface.co/lightblue/DeepSeek-R1-Distill-Qwen-7B-Japanese)             | N300     | `lightblue/DeepSeek-R1-Distill-Qwen-7B-Japanese`            |
+| [Dobby-Mini-Leashed-Llama-3.1-8B](https://huggingface.co/SentientAGI/Dobby-Mini-Leashed-Llama-3.1-8B)                     | N300     | `SentientAGI/Dobby-Mini-Leashed-Llama-3.1-8B`               |
+| [Dobby-Mini-Unhinged-Llama-3.1-8B](https://huggingface.co/SentientAGI/Dobby-Mini-Unhinged-Llama-3.1-8B)                   | N300     | `SentientAGI/Dobby-Mini-Unhinged-Llama-3.1-8B`              |
+| [Dolphin3.0-Mistral-24B](https://huggingface.co/cognitivecomputations/Dolphin3.0-Mistral-24B)                             | T3K      | `cognitivecomputations/Dolphin3.0-Mistral-24B`              |
+| [Dolphin3.0-R1-Mistral-24B](https://huggingface.co/cognitivecomputations/Dolphin3.0-R1-Mistral-24B)                       | T3K      | `cognitivecomputations/Dolphin3.0-R1-Mistral-24B`           |
+| [EuroLLM-9B-Instruct](https://huggingface.co/utter-project/EuroLLM-9B-Instruct)                                           | N300     | `utter-project/EuroLLM-9B-Instruct`                         |
+| [GPT4chan-24B](https://huggingface.co/v2ray/GPT4chan-24B)                                                                 | T3K      | `v2ray/GPT4chan-24B`                                        |
+| [Llama-2-7b-chat-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf)                                                     | N300     | `meta-llama/Llama-2-7b-hf`                                  |
+| [Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf)                                                          | N300     | `meta-llama/Llama-2-7b-hf`                                  |
+| [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)                                          | N300     | `meta-llama/Llama-3.1-8B-Instruct`                          |
+| [Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct)                                          | N150     | `meta-llama/Llama-3.2-1B-Instruct`                          |
+| [Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)                                          | N150     | `meta-llama/Llama-3.2-3B-Instruct`                          |
+| [Llama-3.2-6B-AlgoCode](https://huggingface.co/prithivMLmods/Llama-3.2-6B-AlgoCode)                                       | N150     | `prithivMLmods/Llama-3.2-6B-AlgoCode`                       |
+| [Llama-Krikri-8B-Base](https://huggingface.co/ilsp/Llama-Krikri-8B-Base)                                                  | N150     | `ilsp/Llama-Krikri-8B-Base`                                 |
+| [Llama-Krikri-8B-Instruct](https://huggingface.co/ilsp/Llama-Krikri-8B-Instruct)                                          | N300     | `ilsp/Llama-Krikri-8B-Instruct`                             |
+| [LwQ-10B-Instruct](https://huggingface.co/prithivMLmods/LwQ-10B-Instruct)                                                 | N300     | `prithivMLmods/LwQ-10B-Instruct`                            |
+| [Magnum-v4-Cydonia-vXXX-22B](https://huggingface.co/Kaoeiri/Magnum-v4-Cydonia-vXXX-22B)                                   | T3K      | `Kaoeiri/Magnum-v4-Cydonia-vXXX-22B`                        |
+| [Megatron-Opus-7B-Exp](https://huggingface.co/prithivMLmods/Megatron-Opus-7B-Exp)                                         | N300     | `prithivMLmods/Megatron-Opus-7B-Exp`                        |
+| [Meta-Llama-3-8B](https://huggingface.co/meta-llama/Meta-Llama-3-8B)                                                      | N300     | `meta-llama/Meta-Llama-3-8B`                                |
+| [Meta-Llama-3-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)                                    | N300     | `meta-llama/Meta-Llama-3-8B-Instruct`                       |
+| [Mistral-7B-Instruct-v0.1](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1)                                     | N150     | `mistralai/Mistral-7B-Instruct-v0.1`                        |
+| [Mistral-7B-Instruct-v0.2](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2)                                     | N150     | `mistralai/Mistral-7B-Instruct-v0.2`                        |
+| [Mistral-7B-v0.1](https://huggingface.co/mistralai/Mistral-7B-v0.1)                                                       | N150     | `mistralai/Mistral-7B-v0.1`                                 |
+| [Mistral-Small-24B-Base-2501](https://huggingface.co/mistralai/Mistral-Small-24B-Base-2501)                               | T3K      | `mistralai/Mistral-Small-24B-Base-2501`                     |
+| [Mistral-Small-24B-Instruct-2501](https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501)                       | T3K      | `mistralai/Mistral-Small-24B-Instruct-2501`                 |
+| [NuminaMath-7B-TIR](https://huggingface.co/AI-MO/NuminaMath-7B-TIR)                                                       | N300     | `AI-MO/NuminaMath-7B-TIR`                                   |
+| [OpenThinker-7B](https://huggingface.co/open-thoughts/OpenThinker-7B)                                                     | N300     | `open-thoughts/OpenThinker-7B`                              |
+| [Primal-Mini-3B-Exp](https://huggingface.co/prithivMLmods/Primal-Mini-3B-Exp)                                             | N150     | `prithivMLmods/Primal-Mini-3B-Exp`                          |
+| [Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B)                                                                  | N150     | `Qwen/Qwen2.5-0.5B`                                         |
+| [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)                                                | N150     | `Qwen/Qwen2.5-0.5B-Instruct`                                |
+| [Qwen2.5-1.5B](https://huggingface.co/Qwen/Qwen2.5-1.5B)                                                                  | N150     | `Qwen/Qwen2.5-1.5B`                                         |
+| [Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)                                                | N150     | `Qwen/Qwen2.5-1.5B-Instruct`                                |
+| [Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct)                                                    | N150     | `Qwen/Qwen2.5-3B-Instruct`                                  |
+| [Qwen2.5-32B](https://huggingface.co/Qwen/Qwen2.5-32B)                                                                    | T3K      | `Qwen/Qwen2.5-32B`                                          |
+| [Qwen2.5-Coder-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct)                                        | N300     | `Qwen/Qwen2.5-Coder-7B-Instruct`                            |
+| [Qwen2.5-Math-1.5B](https://huggingface.co/Qwen/Qwen2.5-Math-1.5B)                                                        | N150     | `Qwen/Qwen2.5-Math-1.5B`                                    |
+| [Qwen2.5-Math-7B](https://huggingface.co/Qwen/Qwen2.5-Math-7B)                                                            | N300     | `Qwen/Qwen2.5-Math-7B`                                      |
+| [Reasoning-Distilled-ta-7B](https://huggingface.co/prithivMLmods/Reasoning-Distilled-ta-7B)                               | N300     | `prithivMLmods/Reasoning-Distilled-ta-7B`                   |
+| [s1-32B](https://huggingface.co/simplescaling/s1-32B)                                                                     | T3K      | `simplescaling/s1-32B`                                      |
+| [Selene-1-Mini-Llama-3.1-8B](https://huggingface.co/AtlaAI/Selene-1-Mini-Llama-3.1-8B)                                    | N300     | `AtlaAI/Selene-1-Mini-Llama-3.1-8B`                         |
+| [Sky-T1-32B-Preview](https://huggingface.co/NovaSky-AI/Sky-T1-32B-Preview)                                                | T3K      | `NovaSky-AI/Sky-T1-32B-Preview`                             |
+| [SmallThinker-3B-Preview](https://huggingface.co/PowerInfer/SmallThinker-3B-Preview)                                      | N150     | `PowerInfer/SmallThinker-3B-Preview`                        |
+| [SmolLM2-1.7B-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct)                                       | N150     | `HuggingFaceTB/SmolLM2-1.7B-Instruct`                       |
+| [Sqweeks-7B-Instruct](https://huggingface.co/prithivMLmods/Sqweeks-7B-Instruct)                                           | N300     | `prithivMLmods/Sqweeks-7B-Instruct`                         |
+| [TinyLlama-1.1B-Chat-v1.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0)                                     | N150     | `TinyLlama/TinyLlama-1.1B-Chat-v1.0`                        |
+| [TinySwallow-1.5B](https://huggingface.co/SakanaAI/TinySwallow-1.5B)                                                      | N150     | `SakanaAI/TinySwallow-1.5B`                                 |
+| [TinySwallow-1.5B-Instruct](https://huggingface.co/SakanaAI/TinySwallow-1.5B-Instruct)                                    | N150     | `SakanaAI/TinySwallow-1.5B-Instruct`                        |
+| [Triangulum-v2-10B](https://huggingface.co/prithivMLmods/Triangulum-v2-10B)                                               | N300     | `prithivMLmods/Triangulum-v2-10B`                           |
+| [WebMind-7B-v0.1](https://huggingface.co/prithivMLmods/WebMind-7B-v0.1)                                                   | N300     | `prithivMLmods/WebMind-7B-v0.1`                             |
+| [WizardLM-7B-Uncensored](https://huggingface.co/cognitivecomputations/WizardLM-7B-Uncensored)                             | N300     | `cognitivecomputations/WizardLM-7B-Uncensored`              |
+| [Xwen-7B-Chat](https://huggingface.co/xwen-team/Xwen-7B-Chat)                                                             | N300     | `xwen-team/Xwen-7B-Chat`                                    |
+| [YuE-s1-7B-anneal-en-cot](https://huggingface.co/m-a-p/YuE-s1-7B-anneal-en-cot)                                           | N300     | `m-a-p/YuE-s1-7B-anneal-en-cot`                             |
+| [YuE-s2-1B-general](https://huggingface.co/m-a-p/YuE-s2-1B-general)                                                       | N150     | `m-a-p/YuE-s2-1B-general`                                   |
+
+</details>
+
+## Prerequisites
 
 1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
 2. Install additional python dependencies:
+    ```
+    pip install -r models/tt_transformers/requirements.txt
+    ```
 
+## How to Run
+
+To configure the weights and run a demo, choose [Automatic Download](#automatic-download) for a quick setup or [Manual Download](#manual-download) for more control over the files.
+
+---
+
+### Automatic Setup
+
+#### Login to HuggingFace using your token
+
+Use `huggingface-cli login` or set the token with the command `export HF_TOKEN=<token>`
+- To obtain a HuggingFace token visit: https://huggingface.co/docs/hub/security-tokens
+
+#### Choose your Model
+
+Set the `HF_MODEL` environment variable to the HuggingFace org/name of the model to be run.
+
+This will automatically download the weights into your HuggingFace cache directory and run the model directly.
+
+- Check the models chart on the top of the page and substitute the `<org/model>` on the following command:
 ```
-pip install -r models/tt_transformers/requirements.txt
+export HF_MODEL=<org/name>
 ```
 
-## Run a demo
+#### You are all set!
 
-To run a demo, choose one of the methods below for downloading the model weights:
+- Skip to section: [Run the Demo](#run-the-demo)
 
-### 1. Automatic download
+---
 
-Set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run, This will automatically download the weights into your HuggingFace cache directory and run the model directly.
+### Manual Setup
 
-Check the models chart on the top of the page and substitue the <org/name> on the following command:
-```
-export HF_MODEL=deepseek-ai/<org/name>
-```
+If you wish, you can manually download the weights either [from Meta](#option-1-download-llama-weights-from-meta) or [from HuggingFace](#option-2-download-weights-from-huggingface) as described by the two following sections:
 
-### 2. Manual download
-
-If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
-
-#### Option 1: download Llama weights from Meta
+#### Option 1: Download Llama Weights from Meta
 
 You can download Llama models [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
 
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
-If using Meta-provided weights you should set `LLAMA_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
-
+- If using Meta-provided weights you should set `LLAMA_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
 ```
 export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
-##### Repack weights (Llama3.1-70B and Llama3.2-90B from Meta only)
+##### Repack Weights (Llama3.1-70B and Llama3.2-90B from Meta only)
 Meta's Llama3.1-70B and Llama3.2-90B requires repacked weights. We provide scripts to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py` and `models/tt_transformers/scripts/repack_weights_90b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
@@ -79,23 +171,65 @@ If providing a different output directory, please copy the `params.json` and the
 >```
 > will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
 
-#### Option 2: download weights from HuggingFace
+#### You are all set!
 
-If you wish to download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B) ensure your model directory has the following structure:
+- Skip to section: [Run the Demo](#run-the-demo)
 
+---
+
+#### Option 2: Download Weights from HuggingFace
+
+Navigate to [HuggingFace](https://huggingface.co) and download the weights of the model you wish to run (check [models chart](#tt-transformers) for compatibility and direct links to HuggingFace models).
+
+- Ensure your model directory has the following structure:
 ```
-/path/to/deepseek-ai/DeepSeek-R1-Distill-Llama-70B/
+/path_to/org/model/
     config.json
     generation_config.json
     model-00001-of-00062.safetensors
     ...
 ```
 
-Set `HF_MODEL` to the directory of the downloaded weights:
-
+- Set `HF_MODEL` to the directory of the downloaded weights:
 ```
 export HF_MODEL=<path_to_downloaded_directory>
 ```
+
+#### You are all set!
+
+- Skip to section: [Run the Demo](#run-the-demo)
+
+---
+
+### Run the Demo
+
+- Make sure either `HF_MODEL` or `LLAMA_DIR` has been set:
+
+`export HF_MODEL=<hf_model_name or hf_downloaded_directory>`
+
+`export LLAMA_DIR=<path_to_meta_downloaded_model_directory>`
+
+- Run the Demo
+
+These are some example commands on how to run the demo. For more information about the parameters, check [parameters description.](#parameters-description)
+
+```
+# Batch-1
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+
+# Batch-32
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
+
+# Long context with custom parameters
+pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
+
+# Long-context
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
+```
+
+The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
+
+## Details
 
 ### Extra compatibility settings for non-Llama models
 
@@ -118,21 +252,10 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 
 At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
 
-### 2. Set environment variables
+---
 
-For completeness by now you should have set either `HF_MODEL` or `LLAMA_DIR` as decribed above:
+### Environment Variables Description
 
-```
-export HF_MODEL=<hf_model_name or hf_downlaoded_directory>
-```
-
-or
-
-```
-export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
-```
-
-Description of these environment variables:
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
 - `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
 - `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
@@ -156,7 +279,9 @@ By default tensor parallelism is used to run the model over all available chips.
 
 Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a multi-chip system.
 
-### 3. Run the demo
+---
+
+### Parameters Description
 
 The `simple_text_demo.py` script includes the following main modes of operation and is parametrized to support other configurations.
 
@@ -182,30 +307,16 @@ If you want to provide your own demo configuration, please take a look at the py
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
-```
-# Examples of how to run the demo:
+---
 
-# Batch-1
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
-
-# Batch-32
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
-
-# Long context with custom parameters
-pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
-
-# Long-context
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
-```
-
-The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
-
-#### Optimization overrides
+### Optimization overrides
 Some models require a unique set of optimizations defined in `models/tt_transformers/model_params/<model-name>`. To override the default optimizations, you can define files named `models/tt_transformers/tt/model_config/PERFORMANCE_DECODER_CONFIG_FILENAME` and `models/tt_transformers/tt/model_config/ACCURACY_DECODER_CONFIG_FILENAME` in the appropriate `models/tt_transformers/model_params/<model-name>` directory to override the `ModelOptimizations.performance` and `ModelOptimizations.accuracy` optimizations respectively. For example, to override the default "performance" optimizations for Llama3.1-8B-Instruct, a file named `performance_decoder_config.json` has been created in the `models/tt_transformers/model_params/Llama3.1-8B-Instruct` directory. The content to write in override files is described in [the custom optimizations section](#custom-optimizations). Optimizations are applied with the following prioritization:
 1. from override config (if it exists)
 2. from the `optimizations` argument
 
-#### Custom input arguments
+---
+
+### Custom input arguments
 To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/tt_transformers/demo/conftest.py`.
 
 An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
@@ -214,7 +325,9 @@ An example usage where the `batch-1` test is modified to run with 16 users and k
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
 ```
 
-#### Custom optimizations
+---
+
+### Custom optimizations
 To apply the same settings across all decoders, the `optimizations` argument can be used. `optimizations` offers a wide range of configurations for precision and math fidelity. The user can override the configurations of the data types of the weight tensors and activation tensors and the math fidelity of the kernels that works on those tensors, using the `--optimizations` argument on the command line. For example:
 
 ```
@@ -233,6 +346,8 @@ When a component is not specified (e.g., FF2 is missing for decoder 2 in `models
 
 Using the lt tool (`models/tt_transformers/lt`), the user can also provide multiple JSON configurations in the `models/tt_transformers/tests/configurations` folder and run a Pareto analysis on them using the `pareto_from_json` command.
 
+---
+
 ### Expected performance and accuracy
 
 See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
@@ -241,6 +356,8 @@ Accuracy of the network architectures is measured by exact token matching using 
 ```
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
 ```
+
+---
 
 ### Implementation notes
 
@@ -261,9 +378,11 @@ Max Prefill Chunk Sizes (text-only):
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
 
-## Memory Optimization
+---
 
-### HuggingFace Model Caching Control
+### Memory Optimization
+
+#### HuggingFace Model Caching Control
 
 To help manage memory usage, you can control whether the HuggingFace model is cached in memory using the `cache_hf` parameter via command line or code:
 

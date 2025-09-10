@@ -28,6 +28,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -148,7 +149,9 @@ void add_reader_writer_kernels(
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
             uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-            std::vector<uint32_t> reader_compile_args = {(std::uint32_t)true, packed_scaler_value};
+            std::vector<uint32_t> reader_compile_args = {};
+            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
+            reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
@@ -161,13 +164,18 @@ void add_reader_writer_kernels(
                     .compile_args = reader_compile_args,
                     .defines = reader_defines});
 
+            std::vector<uint32_t> writer_compile_args = {};
+            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
+
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
                                                                                          // output since output Ht=1
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = writer_compile_args});
 
             tt_metal::SetRuntimeArgs(
                 program, unary_reader_kernel, logical_core, {src_dram_buffer->address(), N, Ht, Wt, Ht * Wt});
@@ -188,19 +196,29 @@ void add_reader_writer_kernels(
             scaler = std::sqrt(scaler);
         }  // Needed because AVG pool multiplies twice by the scaler
         case ReduceDim::W: {
+            std::vector<uint32_t> reader_compile_args = {};
+            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
+
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .compile_args = reader_compile_args});
+
+            std::vector<uint32_t> writer_compile_args = {};
+            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = writer_compile_args});
 
             tt_metal::SetRuntimeArgs(
                 program,

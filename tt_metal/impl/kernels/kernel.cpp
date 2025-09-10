@@ -91,15 +91,18 @@ Kernel::Kernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
-    const std::map<std::string, std::string>& defines) :
+    const std::map<std::string, std::string>& defines,
+    const std::unordered_map<std::string, uint32_t>& named_compile_args) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
+    common_runtime_args_count_(0),
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
-    defines_(defines) {
+    defines_(defines),
+    named_compile_time_args_(named_compile_args) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -123,7 +126,6 @@ Kernel::Kernel(
             runtime_args_data.rt_args_count = 0;
         }
     }
-    this->common_runtime_args_count_ = 0;
 }
 
 void Kernel::register_kernel_with_watcher() {
@@ -223,6 +225,11 @@ std::string_view EthernetKernel::get_linker_opt_level() const { return this->get
 void KernelImpl::process_compile_time_args(
     const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
+}
+
+void KernelImpl::process_named_compile_time_args(
+    const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
+    callback(this->named_compile_time_args());
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
@@ -556,12 +563,13 @@ void EthernetKernel::read_binaries(IDevice* device) {
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    constexpr auto k_EthDmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
+        device->build_id(), erisc_core_type, erisc_id, k_EthDmClassIndex);
     // TODO: fix when active eth supports relo
-    auto load_type = MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, 0).memory_load;
+    auto load_type =
+        MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, k_EthDmClassIndex).memory_load;
     const ll_api::memory& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
@@ -670,15 +678,17 @@ bool EthernetKernel::configure(
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
 
-    if (this->config_.eth_mode == Eth::IDLE) {
+    if (tt::tt_metal::MetalContext::instance().hal().get_core_kernel_stored_in_config_buffer(
+            this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
-        uint32_t erisc_core_type =
+        const auto erisc_core_index =
             MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
         uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         int erisc_id = enchantum::to_underlying(this->config_.processor);
-        tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
+        tt::llrt::test_load_write_read_risc_binary(
+            binary_mem, device_id, ethernet_core, erisc_core_index, dm_class_idx, erisc_id);
     }
 
     return true;

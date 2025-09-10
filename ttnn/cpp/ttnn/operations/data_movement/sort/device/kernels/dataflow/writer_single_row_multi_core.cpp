@@ -103,6 +103,7 @@ void kernel_main() {
 
                             // Signalize readiness to the coordinator
                             noc_semaphore_inc(coordinator_core_addr, 1);
+                            noc_async_atomic_barrier();
 
                             processing_pair_id += number_of_available_cores;
                         }  // if pair_id == processing_pair_id
@@ -112,4 +113,5 @@ void kernel_main() {
             }  // sub loop
         }  // stage loop
     }  // h loop
+    noc_async_atomic_barrier();
 }

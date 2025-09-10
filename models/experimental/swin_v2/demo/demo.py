@@ -6,7 +6,7 @@
 import pytest
 import torch
 import ttnn
-from models.experimental.swin_v2.demo.demo_utils import get_batch, get_data_loader
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.experimental.swin_v2.runner.performant_runner import SwinV2PerformantRunner
 from tqdm import tqdm
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
@@ -37,13 +37,13 @@ def run_swin_v2_trace_2cqs_inference(
             model_location_generator=model_location_generator,
         )
         logger.info("ImageNet-1k validation Dataset")
-        input_loc = str(model_location_generator("ImageNet_data"))
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations)
 
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader)
+            inputs, labels = get_batch(data_loader, resolution[0])
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
         logger.info("Processed ImageNet-1k validation Dataset")

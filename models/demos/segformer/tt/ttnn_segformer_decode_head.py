@@ -34,7 +34,12 @@ class TtSegformerDecodeHead:
             mlps.append(mlp)
         self.linear_c = mlps
 
-        self.linear_fuse = Conv([1, 1, 0, 0], parameters=parameters["linear_fuse"], activation="relu", deallocate=False)
+        self.linear_fuse = Conv(
+            [1, 1, 0, 0],
+            parameters=parameters["linear_fuse"],
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            deallocate=False,
+        )
 
         self.classifier = Conv(
             [1, 1, 0, 0],

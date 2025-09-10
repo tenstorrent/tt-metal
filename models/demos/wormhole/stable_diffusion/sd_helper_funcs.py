@@ -231,3 +231,40 @@ def compile_trace_sd(
     ttnn.synchronize_device(device)
 
     return ttnn_text_embeddings_device, output, tid
+
+
+def reshard_for_output_channels_divisibility(hidden_states, out_channels):
+    """
+    Reshard tensor to ensure output channels/32 are divisible by x dimension of shard grid.
+
+    Args:
+        hidden_states: Input tensor with block sharded memory layout
+        out_channels: Number of output channels for the convolution
+
+    Returns:
+        Resharded tensor if needed, otherwise original tensor
+    """
+    is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    if is_bs:
+        out_channels_tiles = out_channels // ttnn.TILE_SIZE
+        current_grid = hidden_states.memory_config().shard_spec.grid
+        max_x = current_grid.bounding_box().grid_size().x
+        max_y = current_grid.bounding_box().grid_size().y
+
+        if out_channels_tiles % max_x != 0:
+            # Find the largest divisor of out_channels_tiles that is <= max_x
+            new_x = None
+            for candidate_x in range(min(out_channels_tiles, max_x), 0, -1):
+                if out_channels_tiles % candidate_x == 0:
+                    new_x = candidate_x
+                    break
+
+            if new_x is not None and new_x != max_x:
+                # Keep the original y dimension, only change x dimension
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    hidden_states.shape, ttnn.CoreGrid(x=new_x, y=max_y), ttnn.ShardStrategy.BLOCK
+                )
+                hidden_states = ttnn.reshard(hidden_states, mem_cfg)
+
+    return hidden_states

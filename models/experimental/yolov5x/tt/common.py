@@ -31,7 +31,7 @@ class TtYOLOv5xConv2D:
         device,
         conv,
         conv_pth,
-        activation="",
+        activation=None,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -152,14 +152,14 @@ class TtnnBottleneck:
             device,
             parameters.cv1.conv,
             self.conv_pt.cv1.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
         self.cv2 = TtYOLOv5xConv2D(
             device,
             parameters.cv2.conv,
             self.conv_pt.cv2.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=shard_layout,
         )
 

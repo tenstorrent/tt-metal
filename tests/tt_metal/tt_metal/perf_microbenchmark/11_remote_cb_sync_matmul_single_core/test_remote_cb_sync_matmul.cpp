@@ -57,6 +57,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -209,7 +210,7 @@ create_programs(
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_buffer->get_backing_buffer());
-    auto in0_reader_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
     uint32_t in1_receiver_cb_index = 31;
@@ -229,7 +230,7 @@ create_programs(
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_buffer->get_backing_buffer());
-    auto output_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB
     uint32_t sync_cb_index = 2;
@@ -773,7 +774,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp8.get_values(), k, n);
                 std::vector<uint32_t> packed_input_vec_tile_layout =
-                    pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    pack_as_bfp8_tiles(tt::stl::make_const_span(input_vec_tilized), true, false);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
                     device.get(),
                     packed_input_vec_tile_layout,
@@ -787,7 +788,7 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp8.get_values(), m, k * num_receivers);
-            std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
+            std::vector<uint32_t> activations = pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 activations,
@@ -799,7 +800,7 @@ int main(int argc, char** argv) {
                 num_receivers);
 
             // output
-            vector<uint32_t> outputs = create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
+            vector<uint32_t> outputs = test_utils::create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
             output_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 outputs,

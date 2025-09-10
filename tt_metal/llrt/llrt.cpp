@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
@@ -42,7 +43,7 @@ using std::uint32_t;
 using std::uint64_t;
 
 const ll_api::memory& get_risc_binary(
-    std::string_view path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
+    const std::string& path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -50,7 +51,7 @@ const ll_api::memory& get_risc_binary(
     } cache;
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(std::string(path));
+    auto [slot, inserted] = cache.map.try_emplace(path);
     const ll_api::memory* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
@@ -172,9 +173,16 @@ bool test_load_write_read_risc_binary(
                                    .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
                                    .local_init_addr;
 
+    auto core_type = get_core_type(chip_id, core);
+    // Depending on the arch, active ethernet may be shared local memory with the base firmware
+    // Primary risc is shared
+    // TODO: Move this query into the HAL
+    bool local_mem_offset = processor_class_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr =
+            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
@@ -244,7 +252,6 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -260,12 +267,14 @@ void wait_until_cores_done(
             }
         }
 
+#ifdef DEBUG
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
+#endif
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;
@@ -294,63 +303,62 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
     bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
         is_eth_core,
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    uint32_t mailbox_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX);
+    const auto max_args = hal.get_eth_fw_mailbox_arg_count();
+    const auto mailbox_addr = hal.get_eth_fw_mailbox_address(mailbox_index);
+    const auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
+    const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
 
-    // Mailbox not supported
-    if (mailbox_addr == 0) {
-        return;
-    }
-
-    auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
-    auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
-
-    auto wait_for_mailbox = [&](std::function<bool(uint32_t)> cond) {
-        constexpr auto k_sleep_time = std::chrono::milliseconds{500};
-        const auto start = std::chrono::high_resolution_clock::now();
-
-        while (true) {
-            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+    // Check mailbox is empty/ready
+    uint32_t msg_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                              device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] &
+                          status_mask;
+    {
+        const auto start_time = std::chrono::steady_clock::now();
+        while (msg_status != done_message && msg_status != 0) {
             uint32_t mailbox_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
-            log_debug(tt::LogLLRuntime, "Device {}: Eth {} Mailbox {:#x}", device_id, virtual_core.str(), mailbox_val);
-
-            const auto timenow = std::chrono::high_resolution_clock::now();
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start).count();
+            msg_status = mailbox_val & status_mask;
+            const auto timenow = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
-                TT_THROW(
-                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}",
+                log_debug(
+                    tt::LogMetal,
+                    "Device {}: Timed out while waiting for ack when trying to launch Metal ethernet firmware on "
+                    "ethernet core {}. Last message status: {:#x}",
                     device_id,
-                    timeout_ms,
                     virtual_core.str(),
                     mailbox_val);
-            }
 
-            if (cond(mailbox_val)) {
-                break;
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         }
-    };
-    wait_for_mailbox([=](uint32_t mailbox_val) { return (mailbox_val & status_mask) != call; });
+    }
 
     // Must write args first.
-    const auto max_args = hal.get_eth_fw_mailbox_arg_count();
-    TT_ASSERT(args.size() <= max_args, "Too many args provided {} max args {}", args.size(), max_args);
+    // Pad remaining args to zero
     args.resize(max_args, 0);
-    uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(0);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-        device_id, virtual_core, args, first_arg_addr);
+    uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        args.data(), tt_cxy_pair(device_id, virtual_core), first_arg_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
@@ -362,13 +370,68 @@ void send_msg_to_eth_mailbox(
         virtual_core.str(),
         mailbox_addr,
         msg);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-        device_id, virtual_core, std::vector<uint32_t>{msg}, mailbox_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
     if (wait_for_ack) {
-        auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
-        wait_for_mailbox([=](uint32_t mailbox_val) { return (mailbox_val & status_mask) == done_message; });
+        const auto start_time = std::chrono::steady_clock::now();
+        do {
+            uint32_t mailbox_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            msg_status = mailbox_val & status_mask;
+            const auto timenow = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
+            if (elapsed > timeout_ms) {
+                log_debug(
+                    tt::LogMetal,
+                    "Device {}: Timed out while waiting for ack when trying to launch Metal ethernet firmware on "
+                    "ethernet core {}. Last message status: {:#x}",
+                    device_id,
+                    virtual_core.str(),
+                    mailbox_val);
+
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
+            }
+            std::this_thread::sleep_for(k_sleep_time);
+        } while (msg_status != done_message);
+    }
+}
+
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
+    }
+
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
+
+    uint32_t heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+    uint32_t previous_heartbeat_val = heartbeat_val;
+    const auto start = std::chrono::steady_clock::now();
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+
+    while (heartbeat_val == previous_heartbeat_val) {
+        std::this_thread::sleep_for(k_sleep_time);
+        previous_heartbeat_val = heartbeat_val;
+        heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+        if (timeout_ms > 0) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+            if (elapsed > timeout_ms) {
+                auto core_type_idx =
+                    hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+                TT_THROW(
+                    "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
+                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.8.0",
+                    device_id,
+                    virtual_core.str());
+            }
+        }
     }
 }
 
