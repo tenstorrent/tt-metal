@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn {
 
@@ -107,7 +108,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 

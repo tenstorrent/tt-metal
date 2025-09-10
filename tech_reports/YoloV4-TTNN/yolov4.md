@@ -190,7 +190,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         fused_op=True,
         width_sharding=False,
     ) -> None:

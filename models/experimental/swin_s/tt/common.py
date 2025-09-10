@@ -15,7 +15,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         groups=1,
         dtype=ttnn.bfloat16,
         use_shallow_conv_variant=False,

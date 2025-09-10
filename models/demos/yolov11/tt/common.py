@@ -14,7 +14,7 @@ class Yolov11Conv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
@@ -203,12 +203,12 @@ class TtnnConv:
         enable_act=True,
         is_detect=False,
         reshard=False,
-        activation="",
+        activation=None,
         deallocate_activation=False,
     ):
         self.enable_act = enable_act
         if self.enable_act:
-            activation = "silu"
+            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         self.conv = Yolov11Conv2D(
             parameter.conv,
             conv_pt.conv,
