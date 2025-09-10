@@ -133,6 +133,7 @@ void kernel_main() {
             while (*poll_ptr != expected_val) {
                 invalidate_l1_cache();
             }
+            { DeviceZoneScopedN("RECEIVED-PACKET"); }
 
             // check for data correctness
             match = check_packet_data(

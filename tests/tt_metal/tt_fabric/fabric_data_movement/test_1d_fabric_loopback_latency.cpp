@@ -57,6 +57,15 @@ static std::vector<IDevice*> get_test_devices_impl(
                 mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
                 mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
                 mesh_device_or_view.get_device(MeshCoordinate(0, 3))};
+        } else if (line_size == 7) {
+            devices_ = {
+                mesh_device_or_view.get_device(MeshCoordinate(0, 0)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(0, 3)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 3)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 2)),
+                mesh_device_or_view.get_device(MeshCoordinate(1, 1))};
         } else {
             devices_ = {
                 mesh_device_or_view.get_device(MeshCoordinate(0, 0)),
@@ -405,7 +414,9 @@ inline void RunPersistent1dFabricLatencyTest(
             rt_args.push_back(congestion_writers_ready_semaphore_address);
             rt_args.push_back(std::abs(static_cast<int>(i) - static_cast<int>(latency_writer_index)));
         }
-
+        
+        log_info(tt::LogTest, "connecting {} and {}", tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id()), 
+            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device->id()));
         build_connection_args(
             device,
             forward_device,
@@ -415,6 +426,8 @@ inline void RunPersistent1dFabricLatencyTest(
             has_forward_connection,
             tt::tt_fabric::EdmLineFabricOpInterface::FORWARD,
             rt_args);
+        //log_info(tt::LogTest, "connecting {} and {}", tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id()), 
+        //    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device->id()));
         build_connection_args(
             device,
             forward_device,
@@ -434,6 +447,7 @@ inline void RunPersistent1dFabricLatencyTest(
     // "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/1D_fabric_latency_test_ack_writer.cpp"
     if (!is_ring) {
         auto my_device = devices[line_size - 1];
+        log_info(tt::LogTest, "receiver on Device {}", devices[line_size - 1]->id());
         auto backward_device = devices[line_size - 2];
         size_t num_hops_upstream_to_writer = line_size - 1 - latency_writer_index;
         auto& ack_writer_program = programs.back();
@@ -455,7 +469,9 @@ inline void RunPersistent1dFabricLatencyTest(
             packet_header_cb_index,
             packet_header_cb_size_in_headers,
             num_hops_upstream_to_writer};
-
+        
+        log_info(tt::LogTest, "connecting {} and {}", tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(my_device->id()), 
+            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device->id()));
         build_connection_args(
             my_device,
             nullptr,

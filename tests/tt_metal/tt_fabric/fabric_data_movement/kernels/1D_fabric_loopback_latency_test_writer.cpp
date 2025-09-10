@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
+#include "tools/profiler/fabric_event_profiler.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -110,20 +111,26 @@ void kernel_main() {
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         // print_pkt_header(sem_inc_packet_header);
+        //{ DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES-START"); }
+        //RECORD_FABRIC_HEADER(sem_inc_packet_header);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+        //{ DeviceZoneScopedN("BARRIER-END"); }
     };
     auto send_payload_packet =
         [&fabric_connection, payload_packet_header, dest_dummy_payload_buffer_address, payload_size_bytes]() {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            { DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES-START"); }
+            //RECORD_FABRIC_HEADER(payload_packet_header);
             fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                 dest_dummy_payload_buffer_address, payload_size_bytes);
             fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+            //{ DeviceZoneScopedN("BARRIER-END"); }
         };
     // Flush the datapath
     {
-        DeviceZoneScopedN("Flush");
+        //DeviceZoneScopedN("Flush");
         send_seminc_packet();
         wait_for_semaphore_then_reset(1);
     }
@@ -145,7 +152,7 @@ void kernel_main() {
 
             // Burst
             {
-                DeviceZoneScopedN("BURST-WRITE");
+                //DeviceZoneScopedN("BURST-WRITE");
                 for (size_t j = 0; j < burst_size; j++) {
                     if constexpr (enable_fused_payload_with_sync) {
                         send_payload_packet();
@@ -163,9 +170,9 @@ void kernel_main() {
                     // TODO: add separate src buffer -- technically a race but in practice this will never hit.
                     *payload_l1_ptr = 0;
                 }
+                //{ DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES-START2"); }
 
                 {
-                    DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES");
                     if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                         noc_semaphore_wait_min(payload_l1_ptr, i + 1);
                     } else {
@@ -173,6 +180,7 @@ void kernel_main() {
                             noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
                         }
                     }
+                    { DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES-END"); }
                 }
                 *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
             }

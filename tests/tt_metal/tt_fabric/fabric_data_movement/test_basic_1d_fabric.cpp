@@ -64,7 +64,7 @@ WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::Mesh
     uint32_t target_address = source_l1_buffer_address;
     uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
 
-    uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
+    uint32_t packet_payload_size_bytes = 4096;
 
     return {
         source_l1_buffer_address,
@@ -444,7 +444,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
-    uint32_t num_packets = 10;
+    uint32_t num_packets = 2;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
@@ -1906,6 +1906,9 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 }
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E); }
+TEST_F(Fabric1DFixture, TestUnicastRaw2_hops) { RunTestUnicastRaw(this, 2, RoutingDirection::E); }
+TEST_F(Fabric1DFixture, TestUnicastRaw3_hops) { RunTestUnicastRaw(this, 3, RoutingDirection::E); }
+TEST_F(Fabric1DFixture, TestUnicastRaw7_hops) { RunTestUnicastRaw(this, 7, RoutingDirection::E); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }

@@ -113,6 +113,7 @@ FORCE_INLINE void fabric_async_write(
     uint32_t source_payload_address,
     uint32_t packet_payload_size_bytes) {
     connection_handle.wait_for_empty_write_slot();
+    { DeviceZoneScopedN("SENT-PACKET"); }
     RECORD_FABRIC_HEADER(packet_header);
     connection_handle.send_payload_without_header_non_blocking_from_address(
         source_payload_address, packet_payload_size_bytes);

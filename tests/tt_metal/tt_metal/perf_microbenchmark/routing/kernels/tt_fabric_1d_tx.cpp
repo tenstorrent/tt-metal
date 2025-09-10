@@ -145,10 +145,12 @@ inline void send_packet(
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
     connection.wait_for_empty_write_slot();
+    { DeviceZoneScopedN("SENT-PACKET"); }
     RECORD_FABRIC_HEADER(packet_header);
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    //{ DeviceZoneScopedN("TRANSFER-SENT-TO-ROUTER"); }
 }
 
 // connect to edm

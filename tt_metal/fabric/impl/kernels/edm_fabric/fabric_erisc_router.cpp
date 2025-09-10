@@ -2963,6 +2963,8 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+    //{ DeviceZoneScopedN("FABRIC_ROUTER"); }
+    //kernel_profiler::quick_push();
     run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS>(
         local_receiver_channels,
         local_sender_channels,

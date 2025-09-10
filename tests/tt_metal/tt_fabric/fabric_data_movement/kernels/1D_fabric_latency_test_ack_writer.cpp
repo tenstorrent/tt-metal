@@ -74,6 +74,7 @@ void kernel_main() {
     auto send_payload_packet =
         [&fabric_connection, payload_packet_header, dest_dummy_payload_buffer_address, payload_size_bytes]() {
             fabric_connection.wait_for_empty_write_slot();
+            //{ DeviceZoneScopedN("RECEIVER-RETURN"); }
             fabric_connection.send_payload_without_header_non_blocking_from_address(
                 dest_dummy_payload_buffer_address, payload_size_bytes);
             fabric_connection.send_payload_flush_non_blocking_from_address(
@@ -98,6 +99,7 @@ void kernel_main() {
         } else {
             noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), i + 1);
         }
+        //{ DeviceZoneScopedN("RECEIVED-PACKET"); }
 
         if constexpr (enable_fused_payload_with_sync) {
             send_payload_packet();
