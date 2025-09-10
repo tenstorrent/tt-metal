@@ -359,6 +359,7 @@ void validate_fsd_against_gsd(
                         host.aisle(),
                         host.rack(),
                         host.shelf_u(),
+                        conn.first.tray_id,
                         port_a.port_type,
                         port_a.port_id};
                     break;
@@ -373,6 +374,7 @@ void validate_fsd_against_gsd(
                         host.aisle(),
                         host.rack(),
                         host.shelf_u(),
+                        conn.second.tray_id,
                         port_b.port_type,
                         port_b.port_id};
                     break;

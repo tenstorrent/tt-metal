@@ -574,8 +574,8 @@ std::ostream& operator<<(std::ostream& os, const PhysicalChannelEndpoint& conn) 
 
 std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn) {
     os << "PhysicalPortEndpoint{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
-       << ", shelf_u=" << conn.shelf_u << ", port_type=" << enchantum::to_string(conn.port_type)
-       << ", port_id=" << *conn.port_id << "}";
+       << ", shelf_u=" << conn.shelf_u << ", tray_id=" << *conn.tray_id
+       << ", port_type=" << enchantum::to_string(conn.port_type) << ", port_id=" << *conn.port_id << "}";
     return os;
 }
 
@@ -603,7 +603,7 @@ template <>
 struct hash<tt::scaleout_tools::PhysicalPortEndpoint> {
     std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, conn.port_type, *conn.port_id);
+            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, *conn.tray_id, conn.port_type, *conn.port_id);
     }
 };
 
