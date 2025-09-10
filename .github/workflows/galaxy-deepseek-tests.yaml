@@ -1,4 +1,4 @@
-name: "Galaxy DeepSeek tests"
+name: "(Galaxy) DeepSeek tests"
 
 on:
   workflow_dispatch:

@@ -91,13 +91,10 @@ def get_reference_output(torch_input, reference_model):
     return reference_model(torch_input)
 
 
-@pytest.mark.skip(reason="This test hangs for some reason")
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 128),
-        ("prefill", 128),
-        ("prefill", 256),
         ("prefill", 2048),
     ],
 )

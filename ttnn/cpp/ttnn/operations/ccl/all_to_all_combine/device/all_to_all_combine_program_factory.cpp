@@ -97,9 +97,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& metadata_spec = metadata_tensor.tensor_spec();
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == BufferType::DRAM;
 
     const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
