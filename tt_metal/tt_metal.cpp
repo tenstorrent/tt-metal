@@ -23,7 +23,6 @@
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -51,7 +50,6 @@
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
-#include "trace/trace.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
@@ -170,8 +168,9 @@ void ConfigureKernelGroup(
         MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto kernel_id : kernel_group->kernel_ids) {
         // Need the individual offsets of each bin
+        // TODO: make configure take a std::span
         program.impl().get_kernel(kernel_id)->configure(
-            device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
+            device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
 }
 
@@ -1269,7 +1268,7 @@ void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<const uint32_t> runtime_args) {
+    std::initializer_list<uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
@@ -1303,7 +1302,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
 }
 
 void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
+    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
