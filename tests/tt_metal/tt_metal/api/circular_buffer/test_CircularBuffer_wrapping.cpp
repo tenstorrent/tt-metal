@@ -128,19 +128,13 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
         WORKER_CORE,
         CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
-    // distributed::DeviceLocalBufferConfig local_config{
-    //     .page_size = RESULT_BUFFER_PAGE_SIZE, .buffer_type = RESULT_BUFFER_TYPE};
-    // distributed::ReplicatedBufferConfig buffer_config{.size = RESULT_BUFFER_SIZE};
-    // auto result_buffer = create_result_buffer(mesh_device);
-    // auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    // distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
     detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
@@ -177,22 +171,21 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
         WORKER_CORE,
         CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    // distributed::DeviceLocalBufferConfig local_config{
-    //     .page_size = RESULT_BUFFER_PAGE_SIZE,
-    //     .buffer_type = RESULT_BUFFER_TYPE,
-    // };
-    // distributed::ReplicatedBufferConfig buffer_config{
-    //     .size = RESULT_BUFFER_SIZE,
-    // };
-    // auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = RESULT_BUFFER_PAGE_SIZE,
+        .buffer_type = RESULT_BUFFER_TYPE,
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = RESULT_BUFFER_SIZE,
+    };
+    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+
     SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    // distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
     detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
@@ -248,8 +241,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
         WORKER_CORE,
         CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    // auto result_buffer = create_result_buffer(mesh_device);
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
+    auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -306,8 +298,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
         WORKER_CORE,
         CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    // auto result_buffer = create_result_buffer(mesh_device);
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
+    auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program_, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -315,7 +306,6 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
 
-    // distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
     detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Writer should have detected that the CB is full.";
 }
