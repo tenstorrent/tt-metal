@@ -4,7 +4,7 @@
 
 // this programing example is based on the vecadd single core example in the
 // contributed folder it illustarted using multiple cores to perform vector
-// addition the program will use 4 cores to perform the vector addition
+// addition the program will use 2 cores to perform the vector addition with block sharding for tensor A
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -78,7 +78,8 @@ std::string next_arg(int& i, int argc, char** argv) {
 
 void help(std::string_view program_name) {
     fmt::print("Usage: {} [options]\n", program_name);
-    fmt::print("This program demonstrates how to add two vectors using tt-Metalium.\n\n");
+    fmt::print(
+        "This program demonstrates how to add two vectors using tt-Metalium with block sharding for tensor A.\n\n");
     fmt::print("Options:\n");
     fmt::print("  --device, -d <device_id>  Specify the device to run the program on. Default is 0.\n");
     fmt::print("  --seed, -s <seed>         Specify the seed for the random number generator. Default is random.\n");
@@ -86,6 +87,7 @@ void help(std::string_view program_name) {
 }
 
 int main(int argc, char** argv) {
+    fmt::print("=== DEBUG: Starting vecadd_multi_core with sharding debug ===\n");
     int seed = 0x1234567;
     int device_id = 0;
 
@@ -145,13 +147,9 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
     MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
 
-    // Calculate the work distribution across the cores. The work is split into 2 groups of cores. Primary and
-    // secondary. The primary group will process more tiles pre core than the secondary group, in case the number of
-    // work is not evenly divisible by the number of available cores. This function guarantees that the work is exactly
-    // split across the cores. No more, no less.
-    constexpr bool row_major =
-        true;  // Distribute the work in row-major order (across the grid of cores). For this application, it doesn't
-               // matter much But it may for kernels with more complex data access patterns.
+    // Calculate the work distribution across the 2 cores
+    fmt::print("About to call split_work_to_cores with grid {}x{}, n_tiles={}\n", num_cores_x, num_cores_y, n_tiles);
+    constexpr bool row_major = true;
     auto
         [num_cores,                   // number of cores utilized
          all_cores,                   // set of all cores used
@@ -159,32 +157,18 @@ int main(int argc, char** argv) {
          core_group_2,                // Secondary core group
          num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
          num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
-    ] = tt::tt_metal::split_work_to_cores(core_grid, n_tiles, row_major);
+    ] = tt::tt_metal::split_work_to_cores({num_cores_x, num_cores_y}, n_tiles, row_major);
+    fmt::print("split_work_to_cores completed successfully\n");
 
-    // A Tensix core is made up with 5 processors. 2 data movement processors,
-    // and 3 compute processors. The 2 data movement processors act independent
-    // to other cores. And the 3 compute processors act together (hence 1 kerenl
-    // for compute). There is no need to explicitly parallelize the compute
-    // kernels. Unlike traditional CPU/GPU style SPMD programming, the 3 compute
-    // processors moves data from SRAM into the FPU(tensor engine)/SFPU(SIMD
-    // engine), operates on the data, and move it back to SRAM. The data
-    // movement processors moves data from the NoC, or in our case, the DRAM,
-    // into the SRAM.
-    //
-    // Though the multi-Tensix parallelization strategy is SPMD for this example
-    //
-    // The vector add example consists of 3 kernels. `interleaved_tile_read`
-    // reads tiles from the input buffers A and B into 2 circular buffers. `add`
-    // reads tiles from the circular buffers, adds them together, and dumps the
-    // result into a third circular buffer. `tile_write` reads tiles from the
-    // third circular buffer and writes them to the output buffer C.
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"c_0", (std::uint32_t)tt::CBIndex::c_0}, {"c_1", (std::uint32_t)tt::CBIndex::c_1}};
     TensorAccessorArgs(*a).append_to(reader_compile_time_args);
     TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
-    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
+    TensorAccessorArgs tensor_c_args(*c);  // Default config for DRAM tensor C
+    tensor_c_args.append_to(writer_compile_time_args);
+
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
@@ -228,18 +212,26 @@ int main(int argc, char** argv) {
     // Set the runtime arguments for each core in the work groups. Give them a different starting and ending point to
     // achieve SPMD
     uint32_t start_tile_id = 0;
+    uint32_t core_count = 0;
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
+                fmt::print(
+                    "Setting runtime args for core {}: work_per_core={}, start_tile_id={}\n",
+                    core,
+                    work_per_core,
+                    start_tile_id);
                 SetRuntimeArgs(program, reader, core, {a->address(), b->address(), work_per_core, start_tile_id});
                 SetRuntimeArgs(program, writer, core, {c->address(), work_per_core, start_tile_id});
                 SetRuntimeArgs(program, compute, core, {work_per_core, start_tile_id});
                 core_tile_idx[core] = start_tile_id;  // Save the mapping so we can print the results later.
 
                 start_tile_id += work_per_core;
+                core_count++;
             }
         }
     }
+    fmt::print("Total cores configured: {}\n\n", core_count);
 
     EnqueueWriteMeshBuffer(cq, a, a_data, false);
     EnqueueWriteMeshBuffer(cq, b, b_data, false);
@@ -257,6 +249,7 @@ int main(int argc, char** argv) {
     // some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going "
                  "to be less accurate)\n";
+    std::cout << "Tensor A is block sharded across 2 cores, tensors B and C are in DRAM.\n";
     // Print some results from some of the cores to illustrate the computation
     for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
         CoreCoord core(0, core_y);
