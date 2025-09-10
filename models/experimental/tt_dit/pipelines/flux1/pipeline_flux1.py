@@ -643,7 +643,9 @@ class Flux1Pipeline:
 
                 # not in SD3:
                 torch_latents = _unpack_latents(torch_latents, height, width, self._vae_scale_factor)
-                torch_latents = torch_latents.permute(0, 2, 3, 1)
+
+                # with torch.no_grad():
+                #     decoded_output = self._torch_vae.decode(torch_latents.to(torch.float32)).sample
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
@@ -651,19 +653,20 @@ class Flux1Pipeline:
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
                 tt_latents = ttnn.from_torch(
-                    torch_latents,
+                    torch_latents.permute(0, 2, 3, 1),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=self.vae_device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
                 )
-                decoded_output = self._vae_decoder(tt_latents)
-                # decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
-                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
-                # HACK: reshape submesh device 0 from 1D to 2D
+                tt_decoded_output = self._vae_decoder(tt_latents)
+                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
+
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                    # HACK: reshape submesh device 0 from 1D to 2D
                     # If reshaping, vae device is same as encoder device
                     self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
 
