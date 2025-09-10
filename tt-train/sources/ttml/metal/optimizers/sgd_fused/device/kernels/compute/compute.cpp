@@ -35,6 +35,8 @@ void MAIN {
             tile_regs_commit();
             pack_and_push_block(kUpdateCbIndex, block_size);
 
+            cb_pop_front(kGradCbIndex, block_size);
+
             cb_wait_front(kParamInCbIndex, block_size);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -45,9 +47,9 @@ void MAIN {
             pack_and_push_block(kOutputCbIndex, block_size);
 
             cb_pop_front(kParamInCbIndex, block_size);
-            cb_pop_front(kGradCbIndex, block_size);
+            cb_pop_front(kUpdateCbIndex, block_size);
         }
     }
-    cb_pop_front(kUpdateCbIndex, 1U);
+    cb_pop_front(kLrCbIndex, 1U);
 }
 }  // namespace NAMESPACE
