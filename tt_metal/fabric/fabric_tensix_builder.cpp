@@ -471,6 +471,8 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
         }
     }();
 
+    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+    fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
 
     // Get topology-specific fabric router stream IDs based on topology
