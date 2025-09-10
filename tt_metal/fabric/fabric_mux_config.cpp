@@ -176,6 +176,7 @@ FabricMuxConfig::FabricMuxConfig(
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
     const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
+    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -190,20 +191,29 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         full_size_channels_region_.get_address(),
         local_fabric_router_status_region_.get_address(),
         fabric_router_config.edm_status_address,
-        fabric_router_config.sender_channels_num_buffers[0],
+        fabric_endpoint_channel_num_buffers_,
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
-        core_type_index_};
-}
-
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() const {
-    const auto& fabric_router_config =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
-    return get_fabric_mux_compile_time_main_args(fabric_router_config);
+        core_type_index_,
+        (uint32_t)wait_for_fabric_endpoint_ready_};
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
-    auto ct_args = get_fabric_mux_compile_time_main_args();
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+
+    bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+    // current mux will connect to the fabric mux extension
+    if (tensix_config_enabled) {
+        const auto& fabric_tensix_config =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_tensix_config();
+        set_fabric_endpoint_channel_num_buffers(fabric_tensix_config.get_num_buffers_per_channel());
+    } else {
+        set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+    }
+
+    auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
 
     // Add stream IDs for all channels (full size + header only)
     // Full size channels first
@@ -311,6 +321,14 @@ void FabricMuxConfig::set_num_full_size_channel_iters(size_t new_val) {
 void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
     TT_FATAL(new_val > 0, "Setting num iters b/w teardown checks to 0 will result in no data being sent over fabric");
     num_iters_between_teardown_checks_ = new_val;
+}
+
+void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
+    wait_for_fabric_endpoint_ready_ = wait_for_ready;
+}
+
+void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) const {
+    fabric_endpoint_channel_num_buffers_ = num_buffers;
 }
 
 size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }

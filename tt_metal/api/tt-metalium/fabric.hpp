@@ -153,7 +153,6 @@ public:
     // Returns the base compile time args without stream IDs (for custom stream ID override)
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
-    std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     std::vector<uint32_t> get_fabric_mux_run_time_args(
@@ -176,6 +175,8 @@ public:
     size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void set_num_full_size_channel_iters(size_t new_val);
     void set_num_iters_between_teardown_checks(size_t new_val);
+    void set_wait_for_fabric_endpoint_ready(bool wait_for_ready);
+    void set_fabric_endpoint_channel_num_buffers(size_t num_buffers) const;
 
     size_t get_memory_map_end_address() const;
 
@@ -217,6 +218,8 @@ private:
 
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
+    bool wait_for_fabric_endpoint_ready_ = false;
+    mutable size_t fabric_endpoint_channel_num_buffers_ = 1;  // Default to 1 to avoid assertion failure
 
     // memory regions
     MemoryRegion status_region_{};

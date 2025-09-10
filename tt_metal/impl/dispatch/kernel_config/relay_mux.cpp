@@ -80,6 +80,7 @@ void RelayMux::GenerateStaticConfigs() {
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         mux_config_core);
+    mux_kernel_config_->set_wait_for_fabric_endpoint_ready(true);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
