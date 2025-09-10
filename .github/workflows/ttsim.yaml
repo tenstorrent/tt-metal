@@ -15,7 +15,7 @@ on:
 
 jobs:
   ttsim-integration:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
