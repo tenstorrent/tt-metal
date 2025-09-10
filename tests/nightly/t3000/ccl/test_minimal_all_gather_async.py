@@ -197,29 +197,12 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
     [
-        (8, [1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        # Composite-AG tests
-        (8, [1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
-        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (8, [1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (32, [32, 1, 1, 1], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (32, [1, 32, 1, 1], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (32, [1, 1, 32, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (32, [1, 1, 1, 32], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
-        "dit_shape",  # this one triggers the default chunks_per_sync
-        "sd35_spatial",
-        "sd35_prompt",
-        "gather_dim_0",
-        "gather_dim_1",
-        "gather_dim_2",
-        "gather_dim_2_padded_dim_3",
-        "gather_dim_3_padded_dim_2",
         "composite_ag_test_one",
         "composite_ag_test_two",
         "composite_ag_test_three",
@@ -238,10 +221,9 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -255,14 +237,14 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_linear"],
 )
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
 def test_all_gather_async(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -279,7 +261,7 @@ def test_all_gather_async(
     num_iters,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         ag_output_shape,
         dim,

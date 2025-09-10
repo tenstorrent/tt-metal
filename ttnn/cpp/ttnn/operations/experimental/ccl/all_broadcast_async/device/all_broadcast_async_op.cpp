@@ -48,32 +48,14 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mes
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
-    auto sub_device_id = this->sub_device_id;
-
-    auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
-    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
-    auto subdevices = {subdevice};
-
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
-
     return ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(
-                coord, input_tensors, output_tensors, init_barrier_semaphore, final_barrier_semaphore);
+            return create_program_at(coord, input_tensors, output_tensors);
         });
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_at(
-    const MeshCoordinate& coord,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const GlobalSemaphore& init_barrier_semaphore,
-    const GlobalSemaphore& final_barrier_semaphore) const {
+    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
@@ -118,9 +100,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         target_ring_size,
         device_index,
         this->topology,
-        final_barrier_semaphore,
-        init_barrier_semaphore,
-        this->sub_device_id);
+        this->semaphore,
+        this->barrier_semaphore,
+        this->sub_device_id,
+        this->using_persistent_buffers);
 }
 
 tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -135,6 +118,7 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->using_persistent_buffers,
         this->sub_device_id.has_value(),
         this->sub_device_id.has_value()
             ? input_tensors[0].device()->worker_cores(
@@ -150,6 +134,8 @@ namespace operations::experimental::ccl {
 
 std::vector<Tensor> all_broadcast_async_impl(
     const Tensor& input_tensor,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -187,13 +173,18 @@ std::vector<Tensor> all_broadcast_async_impl(
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
             ccl_topology,
+            multi_device_global_semaphore,
+            barrier_semaphore,
             sub_device_id,
-            cluster_axis),
+            cluster_axis,
+            false),
         {input_tensor});
 }
 
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -201,6 +192,8 @@ std::vector<Tensor> all_broadcast_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     return all_broadcast_async_impl(
         input_tensor,
+        multi_device_global_semaphore,
+        barrier_semaphore,
         num_links,
         memory_config,
         topology,

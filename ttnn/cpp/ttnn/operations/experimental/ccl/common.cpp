@@ -7,9 +7,15 @@
 namespace composite_common {
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_width = tile_shape[1];
+    if (!barrier_semaphore.has_value()) {
+        return false;
+    }
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
@@ -129,7 +135,10 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
 }
 
 bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -139,6 +148,9 @@ bool use_composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
+    if (!barrier_semaphore.has_value()) {
+        return false;
+    }
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
@@ -166,6 +178,8 @@ bool use_composite_all_gather(
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     const int32_t dim,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
+    const ttnn::GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -174,6 +188,7 @@ ttnn::Tensor composite_all_gather(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
+    printf("running composite all_gather\n");
     auto input_shape = input_tensor.logical_shape();
 
     int32_t rank = input_tensor.logical_shape().rank();
@@ -199,7 +214,14 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor,
+        multi_device_global_semaphore[0],
+        barrier_semaphore,
+        num_links,
+        memory_config,
+        ttnn::ccl::Topology::Linear,
+        cluster_axis,
+        subdevice_id);
 
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
     // Convert back to tiled
@@ -215,7 +237,7 @@ ttnn::Tensor composite_all_gather(
     if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
-
+    printf("after to mem config\n");
     return all_gather_output_tensor;
 }
 

@@ -23,13 +23,22 @@
 
 namespace composite_common {
 
-bool use_composite_reduce_scatter(const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis);
+bool use_composite_reduce_scatter(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore);
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config);
 bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config);
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore);
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     int32_t dim,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
+    const ttnn::GlobalSemaphore& barrier_semaphore,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

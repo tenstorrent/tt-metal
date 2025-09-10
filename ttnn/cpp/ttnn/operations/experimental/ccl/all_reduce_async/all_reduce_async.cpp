@@ -132,16 +132,18 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         input_tensor.layout(),
         ttnn::ccl::get_active_physical_devices(input_tensor).size());
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? dim - 1 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
-    bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
+    bool composite_all_gather = composite_common::use_composite_all_gather(
+        input_tensor, composite_dim, out_memory_config, barrier_semaphores[1]);
+    bool composite_reduce_scatter = composite_common::use_composite_reduce_scatter(
+        input_tensor, composite_dim, std::nullopt, barrier_semaphores[0]);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
         auto gather_tensor = composite_common::composite_all_gather(
             input_tensor,
             composite_dim,
+            ag_global_semaphores,
+            barrier_semaphores[1],
             num_preferred_links.value_or(1),
             out_memory_config,
             worker_subdevice_id_opt,
@@ -194,16 +196,18 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
     uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), devices.size());
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? dim - 1 : dim;
-    bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
-    bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
+    bool composite_all_gather = composite_common::use_composite_all_gather(
+        input_tensor, composite_dim, out_memory_config, barrier_semaphores[1]);
+    bool composite_reduce_scatter = composite_common::use_composite_reduce_scatter(
+        input_tensor, composite_dim, cluster_axis, barrier_semaphores[0]);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
         auto gather_tensor = composite_common::composite_all_gather(
             input_tensor,
             composite_dim,
+            ag_global_semaphores,
+            barrier_semaphores[1],
             num_preferred_links.value_or(1),
             out_memory_config,
             worker_subdevice_id_opt,
