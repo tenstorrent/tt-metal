@@ -156,27 +156,6 @@ def test_reduce_scatter_chunks_per_sync(
     else:
         pytest.skip("Unsupported number of devices")
 
-    if num_workers_per_link == "OPTIMIZED":
-        elements = math.prod(rs_input_shape)
-        total_bytes = elements * 2
-
-        data_moved_MB = (
-            total_bytes * ((num_devices - 1) / num_devices) / num_links / (2 if rs_topology == "ring" else 1)
-        )
-
-        if rs_topology == "ring":
-            if data_moved_MB > 50:
-                num_workers_per_link = 8
-            elif data_moved_MB < 1:
-                num_workers_per_link = 2
-            else:
-                num_workers_per_link = 4
-        else:
-            if data_moved_MB > 4:
-                num_workers_per_link = 8
-            else:
-                num_workers_per_link = 4
-
     for _ in range(num_outer_iters):
         run_reduce_scatter_impl(
             submesh_device,
