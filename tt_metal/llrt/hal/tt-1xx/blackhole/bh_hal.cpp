@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define HAL_BUILD
-#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
@@ -11,6 +9,7 @@
 #include <string>
 
 #include "blackhole/bh_hal.hpp"
+#include "core_config.h"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
@@ -36,7 +35,7 @@ constexpr static std::uint32_t NUM_DRAM_CHANNELS = 8;
 constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
     (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
 constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
       DRAM_ALIGNMENT - 1) /
      DRAM_ALIGNMENT) *
     DRAM_ALIGNMENT;
@@ -202,8 +201,6 @@ void Hal::initialize_bh() {
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
-    static_assert(MaxProcessorsPerCoreType <= MAX_RISCV_PER_CORE);
-
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
@@ -303,6 +300,7 @@ void Hal::initialize_bh() {
         }
     };
 
+    this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;

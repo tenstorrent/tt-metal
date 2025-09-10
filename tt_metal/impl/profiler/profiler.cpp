@@ -1126,8 +1126,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
-    // TODO: why is this a constant MAX_RISCV_PER_CORE?
-    const uint32_t startIndex = coreFlatID * dev_msgs::MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+    const uint32_t startIndex = coreFlatID * MetalContext::instance().hal().get_max_processors_per_core() *
+                                PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     // translate worker core virtual coord to phys coordinates
     const CoreCoord phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);
