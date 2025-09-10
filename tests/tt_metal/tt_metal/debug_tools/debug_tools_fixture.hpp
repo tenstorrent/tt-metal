@@ -5,7 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {

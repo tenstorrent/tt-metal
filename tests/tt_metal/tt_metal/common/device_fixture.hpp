@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
