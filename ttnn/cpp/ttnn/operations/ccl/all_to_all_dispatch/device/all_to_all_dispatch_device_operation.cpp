@@ -69,13 +69,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             input_shape[i],
             indices_shape[i]);
     }
-
-    TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
-    TT_FATAL(
-        operation_attributes.cross_device_semaphore.has_value(),
-        "Cross device semaphore must be specified at the moment");
-
-    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
@@ -88,7 +81,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto indices_shape = tensor_args.expert_indices_tensor.tensor_spec().logical_shape();
     auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     // experts are expert parallel across devices
@@ -168,17 +161,15 @@ AllToAllDispatchDeviceOperation::invoke(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    tt::tt_metal::SubDeviceId subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore,
+    const CoreRangeSet& worker_core_range_set,
     AllToAllTransferType impl) {
     return {
         operation_attributes_t{
-            .subdevice_id = std::move(subdevice_id),
+            .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore,
             .impl = impl},
         tensor_args_t{
             .input_tensor = input_tensor,

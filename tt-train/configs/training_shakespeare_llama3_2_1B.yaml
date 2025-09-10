@@ -1,7 +1,7 @@
 training_config:
   project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
   model_type: "llama"
-  model_path: "data/llama3_2_1B_exported.msgpack"
+  #model_path: "data/llama3_2_1B_exported.msgpack"
   seed: 5489
   model_save_interval: 1
   batch_size: 1

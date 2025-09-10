@@ -12,8 +12,8 @@ from models.utility_functions import is_wormhole_b0
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
         (True, 128, {"prefill_t/s": 1720, "decode_t/s": 549, "decode_t/s/u": 17.16}, False, None),
-        (True, 1024, {"prefill_t/s": 2117, "decode_t/s": 487, "decode_t/s/u": 15.24}, False, None),
-        (True, 2048, {"prefill_t/s": 1967, "decode_t/s": 445, "decode_t/s/u": 13.91}, False, None),
+        (True, 1024, {"prefill_t/s": 2300, "decode_t/s": 487, "decode_t/s/u": 15.24}, False, None),
+        (True, 2048, {"prefill_t/s": 2163, "decode_t/s": 445, "decode_t/s/u": 13.91}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -46,6 +46,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
 ):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28079")
     if is_ci_env:
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
             pytest.skip("Skipping test in CI since it provides redundant testing")

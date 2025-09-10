@@ -1,13 +1,19 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "common_test_utils.hpp"
+
 #include <stdexcept>
 #include <cmath>
-
 #include <vector>
 
-namespace test_utils {
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
+namespace ttnn::test_utils {
+
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {
         throw std::invalid_argument("Vectors must be of the same length.");
@@ -37,4 +43,21 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 
     return numerator / denominator;
 }
-}  // namespace test_utils
+
+Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
+    using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
+
+    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
+    for (int i = 0; i < 3; i++) {
+        output_tensor = ttnn::neg(cq_id, output_tensor);
+        output_tensor = ttnn::neg(cq_id, output_tensor);
+        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
+    }
+    output_tensor = ttnn::neg(cq_id, output_tensor);
+    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
+    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 128);
+    return output_tensor;
+}
+
+}  // namespace ttnn::test_utils

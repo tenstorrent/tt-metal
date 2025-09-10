@@ -9,6 +9,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_fabric {
 
@@ -158,7 +159,7 @@ FabricMuxConfig::FabricMuxConfig(
     } else if (core_type_ == CoreType::IDLE_ETH) {
         hal_core_type = tt_metal::HalProgrammableCoreType::IDLE_ETH;
     } else {
-        TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(core_type));
+        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(core_type));
     }
 
     core_type_index_ = hal.get_programmable_core_type_index(hal_core_type);
@@ -173,9 +174,8 @@ FabricMuxConfig::FabricMuxConfig(
         l1_end_address);
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
-    const auto& fabric_router_config =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
+    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -194,6 +194,37 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
         core_type_index_};
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() const {
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+    return get_fabric_mux_compile_time_main_args(fabric_router_config);
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
+    auto ct_args = get_fabric_mux_compile_time_main_args();
+
+    // Add stream IDs for all channels (full size + header only)
+    // Full size channels first
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::FULL_SIZE_CHANNEL, i));
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::HEADER_ONLY_CHANNEL, i));
+    }
+
+    // Add persistent channel flags - all false by default
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(0);
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(0);
+    }
+
+    return ct_args;
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
@@ -293,7 +324,7 @@ void FabricMuxConfig::validate_channel_id(FabricMuxChannelType channel_type, uin
     TT_FATAL(
         channel_id < get_num_channels(channel_type),
         "Invalid channel id for channel type: {}. Requested channel id: {} but maximum is {}",
-        magic_enum::enum_name(channel_type),
+        enchantum::to_string(channel_type),
         channel_id,
         get_num_channels(channel_type));
 }

@@ -1,5 +1,4 @@
 set(UNIT_TESTS_INTEGRATION_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_autonomous_relay_streams.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_basic_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flatten.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp

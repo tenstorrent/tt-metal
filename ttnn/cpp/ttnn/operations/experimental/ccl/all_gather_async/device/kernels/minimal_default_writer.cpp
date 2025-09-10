@@ -3,19 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -25,31 +24,37 @@ using ttnn::ccl::Topology;
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(5);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
-constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
-constexpr bool direction = get_compile_time_arg_val(12);  // 1 is forward, 0 is backward
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(13);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(4);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool fuse_op = get_compile_time_arg_val(8);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(9));
+constexpr bool direction = get_compile_time_arg_val(10);  // 1 is forward, 0 is backward
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(14);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(15);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(16);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
+constexpr bool is_termination_master = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
+
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
+constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_unicast_args>();
+
+inline constexpr uint32_t sharded_args_start_idx =
+    25 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -74,8 +79,8 @@ void kernel_main() {
 
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -89,13 +94,13 @@ void kernel_main() {
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(27),   // Memory layout
-        get_compile_time_arg_val(28),   // The number of sharding cores
-        get_compile_time_arg_val(29),   // The page size we offset each write to
-        get_compile_time_arg_val(30),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(31),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(32),   // pages_per_shard_x
-        get_compile_time_arg_val(33)>;  // pages_per_shard_y
+        get_compile_time_arg_val(sharded_args_start_idx),   // Memory layout
+        get_compile_time_arg_val(sharded_args_start_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(sharded_args_start_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(sharded_args_start_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(sharded_args_start_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(sharded_args_start_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
@@ -104,11 +109,8 @@ void kernel_main() {
 
     arg_idx += rt_increment;
 #else
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<output_is_dram> output_addrgen = {
-        .bank_base_address = output_address,
-        .page_size = output_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
@@ -141,7 +143,9 @@ void kernel_main() {
 
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
+    uint32_t self_write_done_semaphore_addr;
     if constexpr (fuse_op) {
+        self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
@@ -154,7 +158,7 @@ void kernel_main() {
     cb_push_back(reserved_packet_header_cb_id, 1);
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
@@ -162,21 +166,39 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
     }
 
-    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
-    // and backward writers will signal to forward writers
-    bool signal_on_barrier_semaphore = use_barrier_sem && ((direction == 1 && num_targets_backward_direction) ||
-                                                           (direction == 0 && num_targets_forward_direction));
-    bool wait_on_barrier_semaphore = use_barrier_sem && ((direction == 1 && num_targets_backward_direction) ||
-                                                         (direction == 0 && num_targets_forward_direction));
-    if (signal_on_barrier_semaphore) {
-        uint64_t sync_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-	pkt_hdr_sem_inc->to_chip_unicast(1);
-	tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
-    }
-    if (wait_on_barrier_semaphore) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+    if (use_barrier_sem) {
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
+        if (topology == Topology::Linear) {
+            // multicast to both the forward and backward worker on all devices that you write to
+            bool signal_on_barrier_semaphore =
+                (direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction);
+            if (signal_on_barrier_semaphore) {
+                // device going in the same direction
+                uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+                pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    same_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+
+                // device going in the opposite direction
+                uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
+                pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    opposite_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+                tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+            }
+        } else if (topology == Topology::Ring) {
+            // multicast to entire ring of workers going in the same direction
+            uint64_t barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+        } else {
+            ASSERT(false);
+        }
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -202,7 +224,7 @@ void kernel_main() {
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
-    pkt_hdr_sem_inc->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
 
     uint32_t chunk_count = 0;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
@@ -216,7 +238,6 @@ void kernel_main() {
 
             // Will have more cases once scatter-write supports more than 2 distinct addresses
             switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                 case 2: {
                     uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
@@ -232,20 +253,15 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                    uint64_t remote_noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
-                                output_page_size,
                                 output_page_size);
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
@@ -257,20 +273,19 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
-                                output_page_size,
                                 output_page_size);
                         }
                     }
                     tiles_read += 2;
                     break;
                 }
-#endif
                 case 1:
                 default: {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -280,20 +295,28 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                         uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen);
                         noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                     }
                     tiles_read++;
@@ -332,6 +355,9 @@ void kernel_main() {
     if (fuse_op && direction == 1) {
         // Synchronize and signal that the local tensor slice is available
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+        uint64_t self_write_done_semaphore_noc_addr =
+            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, self_write_done_semaphore_addr, 0);
+        noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
     }
 
     uint32_t writes_expected = 0;
@@ -395,7 +421,6 @@ void kernel_main() {
 
                 // Will have more cases once scatter-write supports more than 2 distinct addresses
                 switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                     case 2: {
                         uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
@@ -411,23 +436,17 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                        uint64_t remote_noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                        scatter_write_for_fabric_write(
-                            remote_noc0_dest_noc_addr_tile_one,
-                            remote_noc0_dest_noc_addr_tile_two,
+                        scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen,
+                            tile_one_id,
+                            tile_two_id,
                             pkt_hdr,
                             *mux_connection_handle,
                             l1_read_addr,
-                            output_page_size,
                             output_page_size);
-			tiles_read += 2;
+                        tiles_read += 2;
                         break;
                     }
-#endif
                     case 1:
                     default: {
                         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -437,10 +456,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr =
-                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-			write_for_fabric_write(
-                            remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                        write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
                         tiles_read++;
                         break;
                     }
@@ -466,9 +483,11 @@ void kernel_main() {
             row_offset = start_row_offset;
             pages_read_in_row = start_pages_read_in_row;
         }
-
         slice_writes++;
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

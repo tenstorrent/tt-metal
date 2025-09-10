@@ -1,0 +1,2 @@
+InheritParentConfig: true
+Checks: -bugprone-reserved-identifier,-cppcoreguidelines-prefer-member-initializer, -misc-redundant-expression

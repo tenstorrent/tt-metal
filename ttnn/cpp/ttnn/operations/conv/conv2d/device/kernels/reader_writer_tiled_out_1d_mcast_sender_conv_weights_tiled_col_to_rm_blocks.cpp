@@ -4,13 +4,11 @@
 
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
-#include "debug/debug.h"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
@@ -29,16 +27,18 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
 
     // Split reader args
-    constexpr bool split_reader = get_compile_time_arg_val(17);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr bool split_reader = get_compile_time_arg_val(18);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(25);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(26);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr auto s_weight_args = TensorAccessorArgs<28>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
@@ -47,11 +47,6 @@ void kernel_main() {
 
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     if constexpr (split_reader && needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_second_reader>();
@@ -98,16 +93,12 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 
     constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
-    constexpr DataFormat bias_df = get_dataformat(bias_cb_id);
-    const InterleavedAddrGenFast<bias_in_dram> s_bias = {
-        .bank_base_address = bias_addr, .page_size = bias_pagesize, .data_format = bias_df};
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
 
     bool load_bias = true;
 #endif
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    constexpr DataFormat weight_df = get_dataformat(cb_id_weight);
-    const InterleavedAddrGenFast<true> s_weight = {
-        .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr uint32_t coalesced_read_bytes =

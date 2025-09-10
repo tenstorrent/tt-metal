@@ -90,18 +90,21 @@ enum class RoutingType {
 };
 
 enum class HighLevelTrafficPattern {
-    AllToAllUnicast,
+    AllToAll,
+    OneToAll,
     FullDeviceRandomPairing,
-    AllToAllMulticast,
-    UnidirectionalLinearMulticast,
-    FullRingMulticast,
-    HalfRingMulticast,
+    UnidirectionalLinear,
+    FullRing,
+    HalfRing,
+    AllDevicesUniformPattern,
 };
 
 struct TestFabricSetup {
-    tt::tt_fabric::Topology topology;
+    tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
-    uint32_t num_links;
+    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    uint32_t num_links{};
+    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
 
 struct HighLevelPatternConfig {
@@ -125,7 +128,8 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
+    uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
 
 struct TestConfig {
@@ -144,7 +148,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 // ======================================================================================
@@ -237,9 +241,8 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
-    PhysicalMeshConfig() {
-        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        eth_coord_mapping = {};
+    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+        // Default path to the mesh descriptor.
     }
 };
 

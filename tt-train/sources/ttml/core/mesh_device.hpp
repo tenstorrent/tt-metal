@@ -20,6 +20,7 @@ public:
     ~MeshDevice();
 
     [[nodiscard]] ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> get_device_ptr() const;
 
 private:
     std::shared_ptr<ttnn::distributed::MeshDevice> m_mesh_device;

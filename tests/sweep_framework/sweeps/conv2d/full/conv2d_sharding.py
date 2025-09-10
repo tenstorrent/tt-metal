@@ -27,7 +27,6 @@ TIMEOUT = 30
 # has_bias
 # enable_act_double_buffer
 # enable_split_reader
-# enable_subblock_padding
 
 # Keeping rest of the params constant as they do not affect sharding
 # Batches
@@ -63,7 +62,6 @@ parameters = {
         "has_bias": [True, False],
         "enable_act_double_buffer": [True, False],
         "enable_split_reader": [True, False],
-        "enable_subblock_padding": [True, False],
         # Parameters-to-check ends
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
@@ -94,7 +92,6 @@ def run(
     has_bias,
     enable_act_double_buffer,
     enable_split_reader,
-    enable_subblock_padding,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -118,7 +115,6 @@ def run(
         has_bias,
         enable_act_double_buffer,
         enable_split_reader,
-        enable_subblock_padding,
         activations_dtype,
         weights_dtype,
         math_fidelity,

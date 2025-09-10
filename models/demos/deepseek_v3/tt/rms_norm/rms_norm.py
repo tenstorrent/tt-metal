@@ -10,7 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI2, save_and_get_path
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, get_state_dicts, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -25,20 +25,25 @@ class RMSNorm(RMSNormBase):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        assert cls.is_device_supported(mesh_device)
+        assert mesh_device.shape[0] > 0, "RMSNorm does not support 0D devices"
 
-        torch_weight = state_dict["weight"]
+        torch_metaweight = get_state_dicts(state_dicts, "weight", dtype=torch.bfloat16)
+        num_shards = torch_metaweight.shape[0]
+        assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
+
         tt_weight = ttnn.as_tensor(
-            torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),  # Reshape to tile width sticks for optimal performance
+            torch_metaweight.reshape(
+                (num_shards, 1, -1, ttnn.TILE_SIZE)
+            ),  # Reshape to tile width sticks for optimal performance
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
         )
 
         # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config
@@ -52,7 +57,7 @@ class RMSNorm(RMSNormBase):
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -61,7 +66,7 @@ class RMSNorm(RMSNormBase):
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
         )
 
     @classmethod

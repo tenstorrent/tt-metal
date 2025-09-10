@@ -89,15 +89,6 @@ TEST(CclHelpers, EriscDatamoverConfig_GetBuffersBaseAddress_GT_0) {
     }
 }
 
-TEST(CclHelpers, EriscDatamoverConfig_ComputeBufferSize_GT_0) {
-    ttnn::ccl::EriscDatamoverConfig config;
-    for (std::size_t i = 0; i < 8; i++) {
-        ASSERT_TRUE(
-            config.get_buffers_base_address(i) >= (config.get_edm_handshake_address() + config.handshake_location_size +
-                                                   config.edm_receiver_first_level_ack_source_word_size));
-    }
-}
-
 /////////////////////////////////////////
 // TEST AdvanceSliceRowMajor
 /////////////////////////////////////////
@@ -220,7 +211,6 @@ TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__OuterShape
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::ccl::coord_t(1, 1);
     const auto outer_shape = ttnn::ccl::coord_t(2, 2);
     const auto inner_offset = ttnn::ccl::coord_t(1, 1);
     const auto inner_shape = ttnn::ccl::coord_t(1, 1);
@@ -346,7 +336,6 @@ TEST(CclHelper_AdvanceWrappedSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__Out
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceWrappedSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::ccl::coord_t(1, 1);
     const auto outer_shape = ttnn::ccl::coord_t(2, 2);
     const auto inner_offset = ttnn::ccl::coord_t(1, 1);
     const auto inner_shape = ttnn::ccl::coord_t(1, 1);

@@ -5,7 +5,6 @@
 import pytest
 
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import is_grayskull
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -19,7 +18,7 @@ def test_perf_device_bare_metal(batch_size, test):
     subdir = "ttnn_roberta"
     num_iterations = 1
     margin = 0.03
-    expected_perf = 154.94 if is_grayskull() else 153.9
+    expected_perf = 181
 
     command = f"pytest tests/ttnn/integration_tests/roberta/test_ttnn_optimized_roberta.py::test_roberta_for_question_answering[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

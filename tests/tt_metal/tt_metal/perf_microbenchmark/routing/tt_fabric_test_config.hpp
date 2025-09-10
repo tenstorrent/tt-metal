@@ -78,6 +78,7 @@ static const StringEnumMapper<NocSendType> noc_send_type_mapper({
     {"unicast_write", NocSendType::NOC_UNICAST_WRITE},
     {"atomic_inc", NocSendType::NOC_UNICAST_ATOMIC_INC},
     {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
+    {"unicast_scatter_write", NocSendType::NOC_UNICAST_SCATTER_WRITE},
 });
 
 static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
@@ -91,11 +92,17 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Ring", Topology::Ring},
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
+    {"Torus", Topology::Torus},
 });
 
 static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"Low Latency", RoutingType::LowLatency},
+    {"LowLatency", RoutingType::LowLatency},
     {"Dynamic", RoutingType::Dynamic},
+});
+
+static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
+    {"Default", FabricTensixConfig::DISABLED},
+    {"Mux", FabricTensixConfig::MUX},
 });
 
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
@@ -104,12 +111,13 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 });
 
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
-    {"all_to_all_unicast", HighLevelTrafficPattern::AllToAllUnicast},
+    {"all_to_all", HighLevelTrafficPattern::AllToAll},
+    {"one_to_all", HighLevelTrafficPattern::OneToAll},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
-    {"all_to_all_multicast", HighLevelTrafficPattern::AllToAllMulticast},
-    {"unidirectional_linear_multicast", HighLevelTrafficPattern::UnidirectionalLinearMulticast},
-    {"full_ring_multicast", HighLevelTrafficPattern::FullRingMulticast},
-    {"half_ring_multicast", HighLevelTrafficPattern::HalfRingMulticast},
+    {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
+    {"full_ring", HighLevelTrafficPattern::FullRing},
+    {"half_ring", HighLevelTrafficPattern::HalfRing},
+    {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -264,9 +272,10 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
+    CmdlineParser(const std::vector<std::string>& input_args);
 
     std::optional<std::string> get_yaml_config_path();
+    bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
@@ -277,17 +286,30 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
+    std::optional<std::string> filter_type;
+    std::optional<std::string> filter_value;
 };
+
+CmdlineParser::CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {
+    if (test_args::has_command_option(input_args_, "--filter")) {
+        auto filter = test_args::get_command_option(input_args_, "--filter", "");
+        auto splitter = filter.find('.');
+        filter_type = filter.substr(0, splitter);
+        filter_value = filter.substr(splitter + 1);
+    }
+}
 
 const std::string no_default_test_yaml_config = "";
 
-const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all_unicast",
-    "full_device_random_pairing",
-    "all_to_all_multicast",
-    "unidirectional_linear_multicast",
-    "full_ring_multicast",
-    "half_ring_multicast"};
+// Helper function to get supported pattern names from the mapper
+inline std::vector<std::string> get_supported_high_level_patterns() {
+    std::vector<std::string> patterns;
+    patterns.reserve(detail::high_level_traffic_pattern_mapper.to_enum.size());
+    for (const auto& [pattern_name, _] : detail::high_level_traffic_pattern_mapper.to_enum) {
+        patterns.push_back(pattern_name);
+    }
+    return patterns;
+}
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -428,6 +450,13 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
     TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
     test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
 
+    if (test_yaml["top_level_iterations"]) {
+        test_config.num_top_level_iterations = parse_scalar<uint32_t>(test_yaml["top_level_iterations"]);
+        if (test_config.num_top_level_iterations == 0) {
+            TT_THROW("top_level_iterations must be greater than 0");
+        }
+    }
+
     if (test_yaml["parametrization_params"]) {
         test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
     }
@@ -533,10 +562,36 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
         fabric_setup.routing_type = RoutingType::LowLatency;
     }
 
+    if (fabric_setup_yaml["fabric_tensix_config"]) {
+        auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
+        fabric_setup.fabric_tensix_config =
+            detail::fabric_tensix_type_mapper.from_string(fabric_type_str, "FabricTensixConfig");
+    } else {
+        log_info(tt::LogTest, "No fabric tensix config specified, defaulting to DISABLED");
+        fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
+    }
+
     if (fabric_setup_yaml["num_links"]) {
         fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
     } else {
         fabric_setup.num_links = 1;
+    }
+
+    // Handle torus_config for Torus topology
+    if (fabric_setup.topology == Topology::Torus) {
+        if (fabric_setup_yaml["torus_config"]) {
+            fabric_setup.torus_config = parse_scalar<std::string>(fabric_setup_yaml["torus_config"]);
+        } else {
+            // Default to "XY" when topology is Torus but no torus_config is specified
+            fabric_setup.torus_config = "XY";
+        }
+
+        // Validate torus_config value
+        const auto& config = fabric_setup.torus_config.value();
+        TT_FATAL(
+            config == "X" || config == "Y" || config == "XY",
+            "Invalid torus_config '{}'. Supported values are: 'X', 'Y', 'XY'",
+            config);
     }
 
     return fabric_setup;
@@ -571,6 +626,288 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     }
 
     return std::nullopt;
+}
+
+inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
+    if (filter_type.has_value()) {
+        if (filter_type.value() == "name" || filter_type.value() == "Name") {
+            return test_config.name == filter_value;
+        } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
+            auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+            if (filter_value == "Ring") {
+                topo = tt::tt_fabric::Topology::Ring;
+            } else if (filter_value == "Linear") {
+                topo = tt::tt_fabric::Topology::Linear;
+            } else if (filter_value == "Mesh") {
+                topo = tt::tt_fabric::Topology::Mesh;
+            } else if (filter_value == "Torus") {
+                topo = tt::tt_fabric::Topology::Torus;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.topology == topo;
+        } else if (filter_type.value() == "routing_type" || filter_type.value() == "Routing_Type") {
+            auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
+            if (filter_value == "LowLatency") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
+            } else if (filter_value == "Dynamic") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.routing_type == r_type;
+        } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
+            if (filter_value == "true") {
+                return test_config.benchmark_mode == true;
+            } else if (filter_value == "false") {
+                return test_config.benchmark_mode == false;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
+        } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
+            if (filter_value == "true") {
+                return test_config.global_sync == true;
+            } else if (filter_value == "false") {
+                return test_config.global_sync == false;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported sync filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
+        } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_links");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_links_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_links : num_links_vec) {
+                            if (num_links == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return test_config.fabric_setup.num_links == stoi(filter_value.value());
+        } else if (filter_type.value() == "ntype") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ntype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ntype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ntype : ntype_vec) {
+                            if (ntype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // soft filter
+            std::optional<tt::tt_fabric::NocSendType> ntype;
+            ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ntype.has_value()) {
+                        if (pattern.ntype.value() == ntype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ntype.has_value() && pattern.ntype.value() != ntype;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
+                checker = test_config.defaults.value().ntype.value() == ntype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "ftype") {
+            // soft filter
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ftype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ftype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ftype : ftype_vec) {
+                            if (ftype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            std::optional<tt::tt_fabric::ChipSendType> ftype;
+            ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ftype.has_value()) {
+                        if (pattern.ftype.value() == ftype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ftype.has_value() && pattern.ftype.value() != ftype.value();
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
+                checker = test_config.defaults.value().ftype.value() == ftype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "num_packets") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_packets");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_packets_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_packets : num_packets_vec) {
+                            if (num_packets == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // soft filter
+            uint32_t num_packets = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.num_packets.has_value()) {
+                        if (pattern.num_packets.value() == num_packets) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.num_packets.has_value() && pattern.num_packets.value() != num_packets;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
+                checker = test_config.defaults.value().num_packets.value() == num_packets;
+            }
+            return checker;
+        } else if (filter_type.value() == "size") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("size");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& size_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& size : size_vec) {
+                            if (size == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            uint32_t size = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.size.has_value()) {
+                        if (pattern.size.value() == size) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.size.has_value() && pattern.size.value() != size;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
+                checker = test_config.defaults.value().size.value() == size;
+            }
+            return checker;
+        } else if (filter_type.value() == "pattern") {
+            bool checker = false;
+            if (test_config.patterns.has_value()) {
+                for (auto& high_level_pattern : test_config.patterns.value()) {
+                    if (high_level_pattern.type == filter_value.value()) {
+                        checker = true;
+                        break;
+                    }
+                }
+            }
+            return checker;
+        } else {
+            log_info(
+                tt::LogTest,
+                "Unsupported filter type: '{}'. Supported types are: name, topology, routing_type, benchmark_mode, "
+                "sync, num_links, ntype, ftype, num_packets, size, pattern",
+                filter_type.value());
+            return false;
+        }
+    }
+    return true;
 }
 
 inline void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
@@ -631,11 +968,11 @@ inline std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
         log_info(LogTest, "Generating a high-level pattern test from command line.");
         std::string pattern_type = test_args::get_command_option(input_args_, "--pattern", "");
         TT_FATAL(
-            std::find(supported_high_level_patterns.begin(), supported_high_level_patterns.end(), pattern_type) !=
-                supported_high_level_patterns.end(),
+            detail::high_level_traffic_pattern_mapper.to_enum.find(pattern_type) !=
+                detail::high_level_traffic_pattern_mapper.to_enum.end(),
             "Unsupported pattern type from command line: '{}'. Supported types are: {}",
             pattern_type,
-            supported_high_level_patterns);
+            get_supported_high_level_patterns());
 
         HighLevelPatternConfig hlp_config;
         hlp_config.type = pattern_type;
@@ -706,15 +1043,15 @@ inline void CmdlineParser::print_help() {
         "reproducibility.");
     log_info(LogTest, "");
     log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
-    log_info(LogTest, "  --topology <Linear|Ring|Mesh>                Specify the fabric topology. Default: Linear.");
+    log_info(LogTest, "  --topology <Linear|Ring|Mesh|Torus>          Specify the fabric topology. Default: Linear.");
     log_info(
         LogTest,
         "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
         "simple unicast test is run.");
     log_info(
         LogTest,
-        "                                               Supported types: all_to_all_unicast, "
-        "full_device_random_pairing, all_to_all_multicast.");
+        "                                               Supported types: {}",
+        get_supported_high_level_patterns());
     log_info(
         LogTest,
         "  --src-device <id>                            Source device for simple unicast test. "
@@ -746,6 +1083,7 @@ inline void CmdlineParser::print_help() {
         LogTest,
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
+    log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
 }
 
 // YamlConfigParser private helpers
@@ -866,11 +1204,11 @@ inline HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(
     config.type = parse_scalar<std::string>(pattern_yaml["type"]);
 
     TT_FATAL(
-        std::find(supported_high_level_patterns.begin(), supported_high_level_patterns.end(), config.type) !=
-            supported_high_level_patterns.end(),
+        detail::high_level_traffic_pattern_mapper.to_enum.find(config.type) !=
+            detail::high_level_traffic_pattern_mapper.to_enum.end(),
         "Unsupported pattern type: '{}'. Supported types are: {}",
         config.type,
-        supported_high_level_patterns);
+        get_supported_high_level_patterns());
 
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
@@ -883,7 +1221,8 @@ public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
         device_info_provider_(device_info_provider), route_manager_(route_manager), gen_(gen) {}
 
-    std::vector<TestConfig> build_tests(const std::vector<ParsedTestConfig>& raw_configs) {
+    std::vector<TestConfig> build_tests(
+        const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser) {
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
@@ -891,6 +1230,10 @@ public:
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
+                if (!cmdline_parser.check_filter(p_config, false)) {
+                    log_info(LogTest, "Skipping part of test '{}' due to filter criteria.", p_config.name);
+                    continue;
+                }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
                 built_tests.insert(
                     built_tests.end(),
@@ -1042,7 +1385,7 @@ private:
             resolve_missing_params(iteration_test);
 
             // After expansion and resolution, apply universal transformations like mcast splitting.
-            split_all_multicast_patterns(iteration_test);
+            split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
             TestConfig resolved_test = resolve_test_config(iteration_test);
@@ -1081,8 +1424,6 @@ private:
                             auto& next_config = next_level_configs.back();
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
-                            // Use optimized string concatenation utility
-                            detail::append_with_separator(next_config.name, "_", param_name, value);
 
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {
@@ -1169,15 +1510,20 @@ private:
     void validate_chip_unicast(
         const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
         TT_FATAL(
-            pattern.destination.has_value() && pattern.destination->device.has_value(),
-            "Test '{}': Unicast pattern for sender on device {} is missing a destination device.",
+            pattern.destination.has_value() &&
+                (pattern.destination->device.has_value() || pattern.destination->hops.has_value()),
+            "Test '{}': Unicast pattern for sender on device {} is missing a destination device or hops.",
             test.name,
             sender.device);
-        TT_FATAL(
-            sender.device != pattern.destination->device.value(),
-            "Test '{}': Sender on device {} cannot have itself as a destination.",
-            test.name,
-            sender.device);
+
+        if (pattern.destination->device.has_value()) {
+            TT_FATAL(
+                sender.device != pattern.destination->device.value(),
+                "Test '{}': Sender on device {} cannot have itself as a destination.",
+                test.name,
+                sender.device);
+        }
+
         TT_FATAL(
             !pattern.mcast_start_hops.has_value(),
             "Test '{}': 'mcast_start_hops' cannot be specified for a 'unicast' ftype pattern.",
@@ -1273,28 +1619,58 @@ private:
                 continue;
             }
 
-            if (pattern.type == "all_to_all_unicast") {
-                expand_all_to_all_unicast(test, defaults);
+            if (pattern.type == "all_to_all") {
+                if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
+                    expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::AllToAll);
+                } else {
+                    expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::AllToAll);
+                }
+            } else if (pattern.type == "one_to_all") {
+                if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
+                    expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::OneToAll);
+                } else {
+                    expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
+                }
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
-            } else if (pattern.type == "all_to_all_multicast") {
-                expand_all_to_all_multicast(test, defaults);
-            } else if (pattern.type == "unidirectional_linear_multicast") {
-                expand_unidirectional_linear_multicast(test, defaults);
-            } else if (pattern.type == "full_ring_multicast" || pattern.type == "half_ring_multicast") {
+            } else if (pattern.type == "unidirectional_linear") {
+                expand_unidirectional_linear_unicast_or_multicast(test, defaults);
+            } else if (pattern.type == "full_ring" || pattern.type == "half_ring") {
                 HighLevelTrafficPattern pattern_type =
                     detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
-                expand_full_or_half_ring_multicast(test, defaults, pattern_type);
+                expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
+            } else if (pattern.type == "all_devices_uniform_pattern") {
+                expand_all_devices_uniform_pattern(test, defaults);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
         }
     }
 
-    void expand_all_to_all_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_all_unicast pattern for test: {}", test.name);
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs = this->route_manager_.get_all_to_all_unicast_pairs();
-        add_senders_from_pairs(test, pairs, base_pattern);
+    void expand_one_or_all_to_all_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
+        log_info(LogTest, "Expanding {}_unicast pattern for test: {}", pattern_name, test.name);
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
+            this->route_manager_.get_all_to_all_unicast_pairs();
+
+        if (pattern_type == HighLevelTrafficPattern::OneToAll) {
+            TT_FATAL(!all_pairs.empty(), "Cannot expand one_to_all_unicast because no device pairs were found.");
+
+            // Get the first device as the single sender
+            FabricNodeId first_device = all_pairs[0].first;
+
+            // Filter pairs to only include those with the first device as sender
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+            for (const auto& pair : all_pairs) {
+                if (pair.first == first_device) {
+                    filtered_pairs.push_back(pair);
+                }
+            }
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        } else {
+            add_senders_from_pairs(test, all_pairs, base_pattern);
+        }
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1303,12 +1679,33 @@ private:
         add_senders_from_pairs(test, random_pairs, base_pattern);
     }
 
-    void expand_all_to_all_multicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
+    void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
         for (const auto& src_node : devices) {
+            // Apply the base pattern (from defaults) to each device
+            test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = {base_pattern}});
+        }
+    }
+
+    void expand_one_or_all_to_all_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
+        log_info(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
+
+        // Determine which devices should be senders
+        std::vector<FabricNodeId> sender_devices;
+        if (pattern_type == HighLevelTrafficPattern::OneToAll) {
+            sender_devices = {devices[0]};  // Only first device
+        } else {
+            sender_devices = devices;  // All devices
+        }
+
+        for (const auto& src_node : sender_devices) {
             auto hops = this->route_manager_.get_full_mcast_hops(src_node);
 
             ParsedTrafficPatternConfig specific_pattern;
@@ -1333,14 +1730,14 @@ private:
         }
     }
 
-    void expand_unidirectional_linear_multicast(
+    void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding unidirectional_linear_multicast pattern for test: {}", test.name);
+        log_info(LogTest, "Expanding unidirectional_linear pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear because no devices were found.");
 
         for (const auto& src_node : devices) {
-            // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
+            // instantiate N/S E/W traffic on separate senders to avoid bottlenecking on sender.
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
                 // Skip dimensions with only one device
                 if (this->route_manager_.get_mesh_shape()[dim] < 2) {
@@ -1351,7 +1748,6 @@ private:
 
                 ParsedTrafficPatternConfig specific_pattern;
                 specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
@@ -1359,11 +1755,11 @@ private:
         }
     }
 
-    void expand_full_or_half_ring_multicast(
+    void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
-        log_info(LogTest, "Expanding full_or_half_ring_multicast pattern for test: {}", test.name);
+        log_info(LogTest, "Expanding full_or_half_ring pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring_multicast because no devices were found.");
+        TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring because no devices were found.");
 
         bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
 
@@ -1388,7 +1784,6 @@ private:
 
                 ParsedTrafficPatternConfig specific_pattern;
                 specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
 
@@ -1416,7 +1811,6 @@ private:
 
                     ParsedTrafficPatternConfig specific_pattern;
                     specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                    specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                     auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                     test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
@@ -1521,7 +1915,7 @@ private:
         }
     }
 
-    void split_all_multicast_patterns(ParsedTestConfig& test) {
+    void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
         // multicast hops.
         for (auto& sender : test.senders) {
@@ -1534,8 +1928,7 @@ private:
                 // Determine if this specific pattern needs to be split.
                 bool needs_split = false;
                 std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops_vec;
-                if (pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST &&
-                    pattern.destination.has_value() && pattern.destination.value().hops.has_value()) {
+                if (pattern.destination.has_value() && pattern.destination.value().hops.has_value()) {
                     const auto& hops = pattern.destination.value().hops.value();
                     split_hops_vec = this->route_manager_.split_multicast_hops(hops);
                     if (split_hops_vec.size() > 1) {
@@ -1657,7 +2050,6 @@ private:
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;
-
     // Randomization helpers
     template <typename T>
     T get_random_choice(const std::vector<T>& choices) {
@@ -1785,6 +2177,10 @@ private:
 
     static std::string to_string(RoutingType rtype) {
         return detail::routing_type_mapper.to_string(rtype, "RoutingType");
+    }
+
+    static std::string to_string(FabricTensixConfig ftype) {
+        return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
 
     static std::string to_string(tt::tt_fabric::Topology topology) {
@@ -1956,6 +2352,16 @@ private:
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
         }
+        if (config.fabric_tensix_config.has_value()) {
+            out << YAML::Key << "fabric_tensix_config";
+            out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.topology == Topology::Torus && config.torus_config.has_value()) {
+            out << YAML::Key << "torus_config";
+            out << YAML::Value << config.torus_config.value();
+        }
+        out << YAML::Key << "num_links";
+        out << YAML::Value << config.num_links;
         out << YAML::EndMap;
     }
 };

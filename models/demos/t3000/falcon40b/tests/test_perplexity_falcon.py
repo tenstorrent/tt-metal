@@ -259,7 +259,7 @@ def test_perplexity_huggingface(
         ("prefill", 1, 128, "BFLOAT8_B-DRAM", 64, 12.74, 0.47, 0.71),
         ("prefill", 1, 1024, "BFLOAT8_B-DRAM", 64, 7.25, 0.55, 0.78),
         ("prefill", 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
-        ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.90, 0.45, 0.71),
+        ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.95, 0.45, 0.71),
         ("decode", 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
         ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
     ),
@@ -272,6 +272,7 @@ def test_perplexity_huggingface(
         "decode_2048",
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_perplexity(
     llm_mode,
     batch_size,

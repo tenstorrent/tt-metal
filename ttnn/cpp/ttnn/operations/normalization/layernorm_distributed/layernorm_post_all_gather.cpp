@@ -45,7 +45,8 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
                        .eps = epsilon,
                        .memory_config = memory_config.value_or(input_tensor.memory_config()),
                        .compute_kernel_config = kernel_config_val,
-                       .dtype = dtype},
+                       .dtype = dtype,
+                       .use_2d_core_grid = std::nullopt},  // LayerNorm doesn't expose this parameter
                    {input_tensor, stats},
                    {weight, bias})
             .at(0);

@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import csv
 import pathlib
+import pickle
 import os
 from datetime import datetime
 from typing import Optional, Union
@@ -152,26 +151,29 @@ def get_failure_signature_and_description_from_annotations(
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
 
+        # First, look for test failures (prioritize these over infrastructure failures)
         for _annot in annotation_info:
-            if _annot["annotation_level"] == "failure":
-                # Unit test failure: a failure exists where the annotation path is not .github
-                if _annot["path"] != ".github":
-                    failure_description = _annot["path"]
-                    if ".py" in failure_description:
-                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
-                    elif ".cpp" in failure_description:
-                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
-                    else:
-                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
-                    return failure_signature, failure_description
+            # Unit test failure: a failure exists where the annotation path is not .github
+            if _annot["annotation_level"] == "failure" and _annot["path"] != ".github":
+                failure_description = _annot["path"]
+                if ".py" in failure_description:
+                    failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                elif ".cpp" in failure_description:
+                    failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
                 else:
-                    # Infrastructure error
-                    failure_description = _annot.get("message")
-                    if failure_description:
-                        failure_signature = get_job_failure_signature_(
-                            github_job, failure_description, workflow_outputs_dir
-                        )
-                        return failure_signature, failure_description
+                    failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                return failure_signature, failure_description
+
+        # If no test failures found, fall back to infrastructure failures
+        for _annot in annotation_info:
+            # Infrastructure error
+            if _annot["annotation_level"] == "failure" and _annot["path"] == ".github":
+                failure_description = _annot.get("message")
+                if failure_description:
+                    failure_signature = get_job_failure_signature_(
+                        github_job, failure_description, workflow_outputs_dir
+                    )
+                    return failure_signature, failure_description
     return failure_signature, failure_description
 
 
@@ -209,14 +211,20 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         ubuntu_version = None
 
     # Clean up ephemeral runner names
-    if host_name and host_name.startswith("tt-beta"):
+    if host_name and (host_name.startswith("tt-beta") or host_name.startswith("tt-ubuntu")):
         parts = host_name.split("-")
         # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
-        # Remove non-constant ephemeral runner suffix from tt-beta runner names only if the second last part is "runner"
-        # We don't want to remove the suffix for non-ephemeral tt-beta runners (e.g. tt-beta-ubuntu-2204-xlarge)
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/26445
+        # Remove non-constant ephemeral runner suffix from tt-beta/tt-ubuntu runner names only if the second last part is "runner"
+        # We don't want to remove the suffix for non-ephemeral runners (e.g. tt-beta-ubuntu-2204-xlarge)
         # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
         if len(parts) >= 2 and parts[-2] == "runner":
             host_name = "-".join(parts[:-1])
+
+    # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
+    # and clogs up the data with 1000s of hosts
+    if host_name and location == "github":
+        host_name = "GitHub Actions"
 
     os = ubuntu_version
 
@@ -340,7 +348,7 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
     return [x for x in job_rows if x is not None]
 
 
-def get_github_partial_benchmark_json_filenames():
+def get_github_partial_benchmark_data_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
     current_utils_path = pathlib.Path(__file__)
@@ -348,15 +356,15 @@ def get_github_partial_benchmark_json_filenames():
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
-    benchmark_json_paths = list(benchmark_data_dir.glob("partial_run_*.json"))
+    benchmark_data_paths = list(benchmark_data_dir.glob("partial_run_*.pkl"))
     assert len(
-        benchmark_json_paths
-    ), f"There needs to be at least one benchmark data json since we're completing the environment data for each one"
+        benchmark_data_paths
+    ), f"There needs to be at least one benchmark data pkl since we're completing the environment data for each one"
 
     logger.info(
-        f"The following partial benchmark data JSONs should be completed with environment data: {benchmark_json_paths}"
+        f"The following partial benchmark data PKLs should be completed with environment data: {benchmark_data_paths}"
     )
-    return benchmark_json_paths
+    return benchmark_data_paths
 
 
 def get_github_runner_environment():
@@ -368,7 +376,7 @@ def get_github_runner_environment():
     }
 
 
-def create_json_with_github_benchmark_environment(github_partial_benchmark_json_filename):
+def create_json_with_github_benchmark_environment(github_partial_benchmark_data_filename):
     assert "GITHUB_REPOSITORY" in os.environ
     git_repo_name = os.environ["GITHUB_REPOSITORY"]
 
@@ -410,30 +418,36 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
 
     device_info = {"card_type": device_type, "dram_size": device_memory_size}
 
-    with open(github_partial_benchmark_json_filename, "r") as f:
-        partial_benchmark_data = json.load(f)
+    with open(github_partial_benchmark_data_filename, "rb") as f:
+        partial_benchmark_data = pickle.load(f)
 
-    partial_benchmark_data["git_repo_name"] = git_repo_name
-    partial_benchmark_data["git_commit_hash"] = git_commit_hash
-    partial_benchmark_data["git_commit_ts"] = git_commit_ts
-    partial_benchmark_data["git_branch_name"] = git_branch_name
-    partial_benchmark_data["github_pipeline_id"] = github_pipeline_id
-    partial_benchmark_data["github_pipeline_link"] = github_pipeline_link
-    partial_benchmark_data["github_job_id"] = github_job_id
-    partial_benchmark_data["user_name"] = user_name
-    partial_benchmark_data["docker_image"] = docker_image
-    partial_benchmark_data["device_hostname"] = device_hostname
-    partial_benchmark_data["device_ip"] = device_ip
-    partial_benchmark_data["device_info"] = device_info
+    partial_benchmark_data = partial_benchmark_data.model_copy(
+        update={
+            "git_repo_name": git_repo_name,
+            "git_commit_hash": git_commit_hash,
+            "git_commit_ts": git_commit_ts,
+            "git_branch_name": git_branch_name,
+            "github_pipeline_id": github_pipeline_id,
+            "github_pipeline_link": github_pipeline_link,
+            "github_job_id": github_job_id,
+            "user_name": user_name,
+            "docker_image": docker_image,
+            "device_hostname": device_hostname,
+            "device_ip": device_ip,
+            "device_info": device_info,
+        }
+    )
 
-    complete_benchmark_run = CompleteBenchmarkRun(**partial_benchmark_data)
+    complete_benchmark_run = CompleteBenchmarkRun(**partial_benchmark_data.model_dump())
 
     json_data = complete_benchmark_run.model_dump_json()
 
     # Save complete run json
-    output_path = pathlib.Path(str(github_partial_benchmark_json_filename).replace("partial_run_", "complete_run_"))
+    output_path = pathlib.Path(
+        str(github_partial_benchmark_data_filename).replace("partial_run_", "complete_run_")
+    ).with_suffix(".json")
     with open(output_path, "w") as f:
         f.write(json_data)
 
-    # Delete partial run json
-    os.remove(github_partial_benchmark_json_filename)
+    # Delete partial run pkl
+    os.remove(github_partial_benchmark_data_filename)

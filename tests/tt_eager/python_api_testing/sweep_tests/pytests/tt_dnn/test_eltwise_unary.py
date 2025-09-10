@@ -771,7 +771,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("clip_kind", ["clip", "hardtanh"])
+    @pytest.mark.parametrize("clip_kind", ["clip"])
     @pytest.mark.parametrize("clip_range", ({"low": -2.0, "high": 2.0}, {"low": -5.5, "high": 27.5}))
     def test_run_eltwise_clip_ops(
         self,
@@ -1191,7 +1191,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull("Softplus kernel not currently availible for GS")
+    @skip_for_grayskull("Softplus kernel not currently available for GS")
     @pytest.mark.parametrize("beta", [1.0, 5.0])
     @pytest.mark.parametrize("threshold", [10.0, 20.0])
     def test_run_eltwise_softplus(

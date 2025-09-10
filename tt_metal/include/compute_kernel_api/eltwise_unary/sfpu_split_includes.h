@@ -140,6 +140,22 @@
 #include "compute_kernel_api/eltwise_unary/activations.h"
 #endif
 
+#if SFPU_OP_THRESHOLD_INCLUDE
+#include "compute_kernel_api/eltwise_unary/threshold.h"
+#endif
+
+#if SFPU_OP_WHERE_INCLUDE
+#include "compute_kernel_api/eltwise_unary/where.h"
+#endif
+
+#if SFPU_OP_CLAMP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/clamp.h"
+#endif
+
+#if SFPU_OP_HARDTANH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardtanh.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif

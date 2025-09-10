@@ -9,6 +9,7 @@ import ttnn
 import tempfile
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import (
     ShardTensorToMesh,
@@ -1201,6 +1202,7 @@ def test_device_submesh(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_1x4(mesh_device):
     rows, cols, tile_size = 1, 4, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
@@ -1209,7 +1211,8 @@ def test_device_line_all_gather_1x4(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1, topology=ttnn.Topology.Linear)
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
     for index, device_tensor in enumerate(device_tensors):
@@ -1219,6 +1222,7 @@ def test_device_line_all_gather_1x4(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x1(mesh_device):
     rows, cols, tile_size = 8, 1, 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
@@ -1227,9 +1231,10 @@ def test_device_line_all_gather_8x1(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(
-        ttnn_tensor, dim=2, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
-    )
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # ttnn_tensor = ttnn.all_gather(
+    #     ttnn_tensor, dim=2, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
+    # )
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
     for index, device_tensor in enumerate(device_tensors):
@@ -1240,6 +1245,7 @@ def test_device_line_all_gather_8x1(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (0, 1))
 @pytest.mark.parametrize("dim", (2, 3))
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
@@ -1269,14 +1275,15 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(
-        ttnn_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
-    )
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # ttnn_tensor = ttnn.all_gather(
+    #     ttnn_tensor,
+    #     dim=dim,
+    #     cluster_axis=cluster_axis,
+    #     mesh_device=mesh_device,
+    #     num_links=1,
+    #     topology=ttnn.Topology.Linear,
+    # )
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
 
@@ -1392,6 +1399,7 @@ def test_shard_and_concat_2d_non_divisible(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_line_all_gather_column_major(mesh_device):
     """
     The input tensor is size [1, 1, 32, 32*8] and it will get sharded onto an 8-row (8x1) device-mesh as follows:
@@ -1416,9 +1424,10 @@ def test_line_all_gather_column_major(mesh_device):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    ttnn_tensor = ttnn.all_gather(
-        ttnn_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
-    )
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # ttnn_tensor = ttnn.all_gather(
+    #     ttnn_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
+    # )
     tt_outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_tensor.cpu())]
     for output in tt_outputs[1:]:
         assert output.shape == (1, 1, 32, 32 * 8)
@@ -1428,6 +1437,7 @@ def test_line_all_gather_column_major(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (1,))
 @pytest.mark.parametrize("dim", (0,))
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
@@ -1453,38 +1463,89 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(
-        ttnn_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
-    )
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # ttnn_tensor = ttnn.all_gather(
+    #     ttnn_tensor,
+    #     dim=dim,
+    #     cluster_axis=cluster_axis,
+    #     mesh_device=mesh_device,
+    #     num_links=1,
+    #     topology=ttnn.Topology.Linear,
+    # )
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_visualize_mesh_device_with_tensor_row_major(mesh_device):
-    rows, cols, tile_size = 4, 4, 32
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((4, 8), id="4x8_grid"),
+        pytest.param((1, 32), id="1x32_grid"),
+    ],
+    indirect=True,
+)
+def test_visualize_tensor_col_sharded(mesh_device):
+    rows, cols = mesh_device.shape
+    tile_size = 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
-
-    ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementReplicate(),
+                ttnn.PlacementShard(3),
+            ],
+        ),
     )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=mesh_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn.visualize_tensor(ttnn_tensor)
+    ttnn_tensor = ttnn_tensor.to(mesh_device)
+    ttnn.visualize_tensor(ttnn_tensor)
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_visualize_mesh_device_with_tensor_col_major(mesh_device):
-    rows, cols, tile_size = 8, 2, 32
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((4, 8), id="4x8_grid"),
+        pytest.param((1, 32), id="1x32_grid"),
+    ],
+    indirect=True,
+)
+def test_visualize_tensor_row_sharded(mesh_device):
+    rows, cols = mesh_device.shape
+    tile_size = 32
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
-
-    ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementShard(3),
+                ttnn.PlacementReplicate(),
+            ],
+        ),
     )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=mesh_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn.visualize_tensor(ttnn_tensor)
+    ttnn_tensor = ttnn_tensor.to(mesh_device)
+    ttnn.visualize_tensor(ttnn_tensor)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+def test_visualize_tensor_2d_sharded(mesh_device):
+    rows, cols = mesh_device.shape
+    tile_size = 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementShard(2),
+                ttnn.PlacementShard(3),
+            ],
+        ),
+    )
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=mesh_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn.visualize_tensor(ttnn_tensor)
+    ttnn_tensor = ttnn_tensor.to(mesh_device)
+    ttnn.visualize_tensor(ttnn_tensor)
 
 
 def rms_norm(x, gamma, eps):
@@ -1496,6 +1557,7 @@ def rms_norm(x, gamma, eps):
 @pytest.mark.parametrize("eps", [1e-5])
 @pytest.mark.parametrize("core_grid", [(4, 8)])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, core_grid, eps):
     rows, cols = mesh_device.shape
     input_shape = (1, 1, input_height, input_width)
@@ -1545,15 +1607,16 @@ def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, c
         strategy=ttnn.ShardStrategy.WIDTH,
     )
 
-    tt_stats = ttnn.all_gather(
-        tt_stats,
-        3,
-        num_links=1,
-        cluster_axis=1,
-        mesh_device=mesh_device,
-        memory_config=gathered_stats_sharded_memory_config,
-        topology=ttnn.Topology.Linear,
-    )
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # tt_stats = ttnn.all_gather(
+    #     tt_stats,
+    #     3,
+    #     num_links=1,
+    #     cluster_axis=1,
+    #     mesh_device=mesh_device,
+    #     memory_config=gathered_stats_sharded_memory_config,
+    #     topology=ttnn.Topology.Linear,
+    # )
 
     tt_output_tensor = ttnn.rms_norm_post_all_gather(
         tt_input_tensor,

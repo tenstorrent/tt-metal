@@ -36,11 +36,15 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "AllGatherMatmulAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& all_gather_output_tensor = output_tensors.at(0).value();
-    // All Gather validate
-    this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
-    // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        // All Gather validate
+        this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
+        // Matmul validate.
+        this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+    }
+
     // All Gather Matmul validate
     TT_FATAL(
         this->all_gather_async_struct.dim == 3, "AllGatherMatmulAsync requires dim=3 for the AllGather operaitons.");
@@ -61,16 +65,16 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         },
         this->matmul_struct.program_config.value());
 
-    const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
-    if (all_gather_output_tensor_shard_spec.has_value()) {
-        const auto& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
-        const auto& shard_grid_start = shard_grid.start_coord;
-        const auto& shard_grid_end = shard_grid.end_coord;
-        const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
-        TT_FATAL(
-            this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
-            "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
-            "all_gather.");
+    if (output_tensors[0].has_value()) {
+        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
+        if (all_gather_output_tensor_shard_spec.has_value()) {
+            const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
+            TT_FATAL(
+                this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
+                "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
+                "all_gather.");
+        }
     }
 }
 
@@ -116,8 +120,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
-    ttnn::ccl::SenderRecieverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
+    auto mesh_device = input_tensors[0].device();
+    ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->all_gather_async_struct.devices,
         this->all_gather_async_struct.topology);
@@ -163,6 +167,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.semaphore,
         this->all_gather_async_struct.barrier_semaphore,
+        this->all_gather_async_struct.using_persistent_buffers,
         this->all_gather_async_struct.sub_device_id,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,
@@ -185,7 +190,6 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->all_gather_async_struct.semaphore.at(0).address();
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsync>(
         this->all_gather_async_struct.dim,
@@ -193,13 +197,22 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
         this->all_gather_async_struct.ring_size,
         this->all_gather_async_struct.output_mem_config,
         this->all_gather_async_struct.topology,
-        this->all_gather_async_struct.sub_device_id,
+        this->all_gather_async_struct.sub_device_id.has_value(),
+        this->all_gather_async_struct.sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  shard_builder::HalProgrammableCoreType::TENSIX, this->all_gather_async_struct.sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        this->all_gather_async_struct.cluster_axis,
+        this->all_gather_async_struct.barrier_semaphore.has_value(),
+        this->all_gather_async_struct.using_persistent_buffers,
+        this->all_gather_async_struct.chunks_per_sync,
+        this->all_gather_async_struct.num_workers_per_link,
+        this->all_gather_async_struct.num_buffers_per_channel,
         this->all_gather_core_grid_offset,
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
@@ -243,6 +256,8 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_input_tensors.push_back(std::nullopt);
     }
 
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */
@@ -257,7 +272,9 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
         false,
+        false,
         barrier_semaphore,
+        using_persistent_buffers,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel);

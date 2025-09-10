@@ -21,10 +21,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         [&input_tensor](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    return storage.mesh_buffer.use_count() == 1;
-                }
-                return storage.buffer.use_count() == 1;
+                return storage.mesh_buffer.use_count() == 1;
             } else {
                 return false;
             }
@@ -129,7 +126,7 @@ static inline Tensor move_sharded(
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
-    auto input_address = input_tensor.buffer()->address();
+    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
     auto output_mem_config = mem_config.value_or(input_mem_config);
     TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
     if (not can_deallocate(input_tensor)) {
@@ -141,7 +138,6 @@ static inline Tensor move_sharded(
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
     auto input_dtype = input_tensor.dtype();
     auto input_layout = input_tensor.layout();
@@ -184,11 +180,6 @@ ttnn::Tensor MoveOperation::invoke(
         return move_sharded(queue_id, input_tensor, output_mem_config);
     }
     return move(queue_id, input_tensor, output_mem_config);
-}
-
-ttnn::Tensor MoveOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

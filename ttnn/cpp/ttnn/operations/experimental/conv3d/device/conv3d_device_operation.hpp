@@ -21,6 +21,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t H_in,
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
+    const std::array<uint32_t, 3>& stride,
     const std::array<uint32_t, 3>& kernel_size);
 }  // namespace detail
 

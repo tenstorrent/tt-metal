@@ -15,6 +15,7 @@ from loguru import logger
 from models.demos.t3000.llama2_70b.demo.demo import build_generator, construct_arg
 from models.demos.t3000.llama2_70b.demo.eval import calculate_perplexity, wikitext_detokenizer
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @dataclass
@@ -167,6 +168,9 @@ def test_LlamaModel_demo(
     llama_version,
 ):
     logger.info("Running LlamaModel perplexity test")
+
+    if implementation == "tt" and n_devices > 1:
+        pytest.skip(LEGACY_CCL_SKIP)
     ## Get model config
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,

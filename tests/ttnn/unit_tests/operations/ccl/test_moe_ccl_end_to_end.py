@@ -128,7 +128,9 @@ def test_integration(mesh_device, mesh_shape):
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     global_semaphore1 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    init_semaphore1 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
     global_semaphore2 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    init_semaphore2 = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     ## INPUTS TO DISPATCH ##
     # [batch(/devices),1,1,hidden]
@@ -161,7 +163,6 @@ def test_integration(mesh_device, mesh_shape):
     )
 
     num_links = 1
-    topology = ttnn.Topology.Linear
     ## OUTPUTS FROM DISPATCH ##
     # [devices (/devices), batch, seq, hidden], [devices(/devices),1,experts, devices]
     tt_output_tensor, tt_metadata_tensor = ttnn.all_to_all_dispatch(
@@ -169,10 +170,8 @@ def test_integration(mesh_device, mesh_shape):
         tt_expert_indices,
         tt_expert_mapping,
         num_links=num_links,
-        topology=topology,
         cluster_axis=axis,
         memory_config=output_memory_config,
-        global_semaphore=global_semaphore1,
         subdevice_id=worker_sub_device_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -191,9 +190,7 @@ def test_integration(mesh_device, mesh_shape):
         tt_expert_mapping,
         tt_metadata_tensor,
         num_links=num_links,
-        topology=topology,
         memory_config=output_memory_config,
-        global_semaphore=global_semaphore2,
         axis=axis,
         subdevice_id=worker_sub_device_id,
     )

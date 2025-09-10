@@ -7,13 +7,9 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-template <bool DRAM, uint32_t tile_hw = 1024>
+template <typename T>
 void read_row_to_cb(
-    const uint32_t cb_id,
-    const InterleavedAddrGenFast<DRAM, tile_hw>& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const uint32_t blk) {
+    const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const uint32_t blk) {
     cb_reserve_back(cb_id, blk);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
     for (uint32_t r = 0; r < blk; r++) {
@@ -38,33 +34,25 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(4);  // needed for correctness of softmax/LN kernels
+    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
+    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const DataFormat gamma_data_format = get_dataformat(cb_id_gamma);
-    const InterleavedAddrGenFast<gamma_is_dram> addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const DataFormat beta_data_format = get_dataformat(cb_id_beta);
-    const InterleavedAddrGenFast<beta_is_dram> addrb = {
-        .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
+    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat src1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<src1_is_dram> src_b = {
-        .bank_base_address = b_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format};
+    const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
 #endif
 
     // Generate constant tiles for layernorm compute

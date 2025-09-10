@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
@@ -26,6 +27,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_transformer_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.79
@@ -45,8 +47,10 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     reference_model = llama_reference_mod.CrossAttentionTransformerVision(model_args)
     reference_model.load_state_dict(partial_state_dict, strict=True)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttentionTransformerVision(
         mesh_device,
+        tt_ccl,
         state_dict,
         first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

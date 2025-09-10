@@ -11,7 +11,8 @@ from loguru import logger
 from models.utility_functions import skip_for_blackhole
 
 
-def _test_eltwise_exp(device):
+@skip_for_blackhole("Not tested / built for Blackhole")
+def test_eltwise_exp(device):
     num_tiles = 4
     src_bank_id = 0
     dst_bank_id = 0
@@ -68,9 +69,9 @@ def _test_eltwise_exp(device):
         format_descriptors=[out_cb_format],
     )
 
-    is_dram_input = 1
-    reader_compile_time_args = [is_dram_input]
-    writer_compile_time_args = [out_cb, is_dram_input]
+    reader_compile_time_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    writer_compile_time_args = [out_cb]
+    writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_compile_time_args = [num_tiles, 1]
     reader_rt_args = [input_tensor.buffer_address(), num_tiles, 0]
     writer_rt_args = [output_tensor.buffer_address(), num_tiles, 0]
@@ -118,14 +119,3 @@ def _test_eltwise_exp(device):
     matching = torch.allclose(torch_golden, torch_output)
     logger.info(f"Tensors are matching: {matching}")
     assert matching
-
-
-@skip_for_blackhole("Not tested / built for Blackhole")
-def test_generic_op():
-    # Choose not to parametrize the input tensors
-    # this was chosen to highlight the operation of the Generic Op instead of testing Eltwise Op's func
-    device = ttnn.open_device(device_id=0)
-
-    _test_eltwise_exp(device)
-
-    ttnn.close_device(device)

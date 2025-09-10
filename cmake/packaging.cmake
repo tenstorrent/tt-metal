@@ -15,22 +15,29 @@ set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
-set(CPACK_DEB_COMPONENT_INSTALL YES)
-set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
-set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+# Add descriptions for protobuf components
+set(CPACK_DEBIAN_LIBPROTOBUF_DESCRIPTION "Protocol Buffers - C++ runtime library")
+set(CPACK_DEBIAN_LIBPROTOBUF-LITE_DESCRIPTION "Protocol Buffers - C++ lite runtime library")
+set(CPACK_DEBIAN_LIBPROTOC_DESCRIPTION "Protocol Buffers - C++ compiler library")
+set(CPACK_DEBIAN_PROTOBUF-EXPORT_DESCRIPTION "Protocol Buffers - CMake export files")
+set(CPACK_DEBIAN_PROTOBUF-HEADERS_DESCRIPTION "Protocol Buffers - header files")
+set(CPACK_DEBIAN_PROTOBUF-PROTOS_DESCRIPTION "Protocol Buffers - protobuf files")
+set(CPACK_DEBIAN_PROTOC_DESCRIPTION "Protocol Buffers - compiler")
 
+set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 
-string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWER)
-if(CMAKE_BUILD_TYPE_LOWER STREQUAL "asan" OR CMAKE_BUILD_TYPE_LOWER STREQUAL "tsan")
-    set(CPACK_DEBIAN_DEBUGINFO_PACKAGE FALSE)
-else()
-    set(CPACK_DEBIAN_METALIUM_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-VALIDATION_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-DEV_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-EXAMPLES_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_JIT-BUILD_DEBUGINFO_PACKAGE FALSE) # Some binaries don't have a Build ID; we cannot split dbgsyms
-endif()
+# Use project config file to defer build-type-specific configuration to packaging time
+# This is necessary for multi-config generators.
+configure_file(
+    "${CMAKE_CURRENT_LIST_DIR}/packaging.d/cpack-project-config.cmake.in"
+    "${PROJECT_BINARY_DIR}/cpack-project-config.cmake"
+    @ONLY
+)
+set(CPACK_PROJECT_CONFIG_FILE "${PROJECT_BINARY_DIR}/cpack-project-config.cmake")
+
+set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 
 set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     OWNER_READ
@@ -47,8 +54,8 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
-# FIXME(afuller): Sucks for Ubuntu 22.04, but I'm not about to start packaging Boost.
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost1.81-dev")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
@@ -97,6 +104,7 @@ list(
     msgpack-cxx
     Headers
     Library
+    json-dev
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -113,8 +121,7 @@ cpack_add_component(tracy GROUP metalium)
 cpack_add_component_group(metalium-dev)
 cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
 cpack_add_component(fmt-core GROUP metalium-dev)
-cpack_add_component(json-dev GROUP metalium-dev)
-cpack_add_component(magic-enum-dev GROUP metalium-dev)
+cpack_add_component(enchantum GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component(spdlog-dev GROUP metalium-dev)
 cpack_add_component(tt-logger-dev GROUP metalium-dev)

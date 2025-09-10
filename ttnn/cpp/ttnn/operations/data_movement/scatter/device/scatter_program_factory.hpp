@@ -28,8 +28,8 @@ using namespace tt::tt_metal;
 
 struct ScatterProgramFactory {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
-        KernelHandle writer_kernel_id;
+        KernelHandle reader_kernel_id{};
+        KernelHandle writer_kernel_id{};
         std::vector<CoreCoord> cores;
     };
 

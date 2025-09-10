@@ -4,7 +4,7 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
@@ -27,11 +27,9 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
@@ -62,7 +60,7 @@ std::string get_latest_kernel_binary_path(
     std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
     std::string latest_hash;
-    for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+    for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
         auto kbtime = std::filesystem::last_write_time(dir_entry.path());
         if (kbtime > ftime) {
             ftime = kbtime;
@@ -86,10 +84,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         .buffer_type = tt_metal::BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(buff_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     auto dst_dram_buffer = CreateBuffer(buff_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the
     // input CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to
@@ -99,7 +94,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -107,16 +102,16 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto unary_writer_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
@@ -127,7 +122,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         uint(num_tiles)  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
@@ -148,14 +143,12 @@ int main(int argc, char** argv) {
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(
-            ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, tt_metal::DispatchCoreConfig{});
-        auto devices = tt::DevicePool::instance().get_all_active_devices();
+        auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> ncrisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> compute_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> brisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -176,17 +169,25 @@ int main(int argc, char** argv) {
                 tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
                     tt_metal::HalProgrammableCoreType::TENSIX);
             const tt_metal::KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
-            TT_FATAL(
-                kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
-                    kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                    kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
-                "Error");
-            auto compute_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            TT_FATAL(kernel_group != nullptr, "Error");
+            std::shared_ptr<tt_metal::Kernel> compute_kernel = nullptr;
+            std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
+            std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
+            for (auto kernel_id : kernel_group->kernel_ids) {
+                auto kernel = program.impl().get_kernel(kernel_id);
+                switch (kernel->get_kernel_processor_class()) {
+                    case tt_metal::HalProcessorClassType::DM:
+                        switch (kernel->get_kernel_processor_type(0)) {
+                            case 0: riscv0_kernel = kernel; break;
+                            case 1: riscv1_kernel = kernel; break;
+                            default: TT_THROW("Error");
+                        }
+                        break;
+                    case tt_metal::HalProcessorClassType::COMPUTE: compute_kernel = kernel; break;
+                    default: TT_THROW("Error");
+                }
+            }
+            TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
             // Run iteration to get golden
             uint32_t mask =
@@ -223,8 +224,8 @@ int main(int argc, char** argv) {
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
-            uint32_t dm_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::DM);
-            uint32_t compute_class_idx = magic_enum::enum_integer(tt_metal::HalProcessorClassType::COMPUTE);
+            uint32_t dm_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::DM);
+            uint32_t compute_class_idx = enchantum::to_underlying(tt_metal::HalProcessorClassType::COMPUTE);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
                 auto& program = new_programs[i];
@@ -239,12 +240,25 @@ int main(int argc, char** argv) {
                                 tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.impl().kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        std::shared_ptr<tt_metal::Kernel> compute_kernel = nullptr;
+                        std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
+                        std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
+                        for (auto kernel_id : kernel_group->kernel_ids) {
+                            auto kernel = program.impl().get_kernel(kernel_id);
+                            switch (kernel->get_kernel_processor_class()) {
+                                case tt_metal::HalProcessorClassType::DM:
+                                    switch (kernel->get_kernel_processor_type(0)) {
+                                        case 0: riscv0_kernel = kernel; break;
+                                        case 1: riscv1_kernel = kernel; break;
+                                        default: TT_THROW("Error");
+                                    }
+                                    break;
+                                case tt_metal::HalProcessorClassType::COMPUTE: compute_kernel = kernel; break;
+                                default: TT_THROW("Error");
+                            }
+                        }
+                        TT_FATAL(
+                            compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
                         TT_FATAL(
                             tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
                             "Error");
@@ -312,10 +326,7 @@ int main(int argc, char** argv) {
                 th.join();
             }
         }
-        for (auto dev : devices) {
-            pass &= tt_metal::CloseDevice(dev);
-        }
-
+        tt::tt_metal::detail::CloseDevices(devices);
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

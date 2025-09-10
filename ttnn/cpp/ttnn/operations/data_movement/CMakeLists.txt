@@ -13,11 +13,19 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    bcast/device/kernels/*
+    concat/device/kernels/*
     common/kernels/*
+    copy/device/kernels/*
     move/device/kernels/*
     permute/device/kernels/*
+    repeat/device/device/*
+    reshape_view/device/device/*
     sharded/device/kernels/*
+    slice/device/kernels/*
+    tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
+    untilize/device/kernels/*
 )
 target_sources(
     ttnn_op_data_movement
@@ -26,12 +34,23 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            sharded/reshard/device/reshard_op.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            bcast/bcast.hpp
+            bcast/bcast_types.hpp
+            concat/concat.hpp
             copy/device/copy_device_operation.hpp
+            permute/permute.hpp
+            repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/reshard/device/reshard_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            slice/slice.hpp
+            tilize_with_val_padding/tilize_with_val_padding.hpp
+            tilize_with_val_padding/tilize_with_val_padding_common.hpp
+            tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
+            transpose/transpose.hpp
+            untilize/untilize.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -41,6 +60,18 @@ target_sources(
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
+            untilize/device/kernels/compute/pack_untilize.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -75,6 +106,9 @@ target_sources(
         indexed_fill/device/indexed_fill_op.cpp
         indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
         indexed_fill/indexed_fill.cpp
+        moe_expert_token_remap/moe_expert_token_remap.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp

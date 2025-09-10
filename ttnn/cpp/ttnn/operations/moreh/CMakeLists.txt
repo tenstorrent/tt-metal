@@ -11,10 +11,21 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    moreh_dot/device/kernels/*
+    moreh_getitem/device/moreh_getitem_kernels/*
+    moreh_getitem/device/moreh_getitem_tilized_kernels/*
+    moreh_group_norm/device/kernels/*
+    moreh_matmul/device/kernels/*
+)
 target_sources(
     ttnn_op_moreh
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES moreh_group_norm/moreh_group_norm.hpp moreh_matmul/moreh_matmul.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -163,6 +174,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_moreh
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/moreh

@@ -18,7 +18,7 @@ from models.demos.sentence_bert.reference.sentence_bert import custom_extended_m
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
 
-def compute_ttnn_embeddings(sentences, model_name, device, batch_size=64):
+def compute_ttnn_embeddings(sentences, model_name, device, batch_size=64, model_location_generator=None):
     logger.info("Loading tokenizer...")
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     all_embeddings = []
@@ -50,6 +50,7 @@ def compute_ttnn_embeddings(sentences, model_name, device, batch_size=64):
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
+                model_location_generator=model_location_generator,
             )
             sentence_bert_module._capture_sentencebert_trace_2cqs()
 
@@ -100,13 +101,15 @@ def load_knowledge_base(kb_file="knowledge_base.txt"):
     "model_name, sequence_length, device_batch_size, kb_file",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
 )
-def test_interactive_demo_inference(mesh_device, model_name, sequence_length, device_batch_size, kb_file):
+def test_interactive_demo_inference(
+    mesh_device, model_name, sequence_length, device_batch_size, kb_file, model_location_generator
+):
     logger.info(f"Loading knowledge base from {kb_file}...")
     batch_size = device_batch_size * mesh_device.get_num_devices()
     logger.info(f"Batch size: {batch_size}")
     kb_sentences = load_knowledge_base(kb_file)
     kb_embeddings, kb_sentences, model_instance = compute_ttnn_embeddings(
-        kb_sentences, model_name, mesh_device, batch_size
+        kb_sentences, model_name, mesh_device, batch_size, model_location_generator
     )
     # Example query (in Turkish): "Siparişim ne zaman teslim edilir?"
     # English translation: "When will my order be delivered?"

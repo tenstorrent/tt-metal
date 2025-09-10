@@ -9,10 +9,17 @@
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
+#include "shard_pages_address_iterator.h"
+#include "pages_address_iterator.h"
+#include "compile_time_args.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
 #endif
+
+// Forward declared from dataflow_api.h
+template <typename T>
+T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
@@ -40,8 +47,11 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  *
  * @tparam DSpec        DistributionSpec type.
  */
-template <typename DSpec>
+template <typename DSpecT>
 struct TensorAccessor {
+    using DSpec = DSpecT;
+    static constexpr bool is_dram = DSpec::is_dram;
+
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = tensor_accessor::detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
@@ -65,9 +75,17 @@ public:
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        TensorAccessor(tensor_accessor::make_dspec_from_args(args), bank_base_address_in, page_size_in) {}
+        dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
-    constexpr auto& dspec() const {
+    constexpr const auto& dspec() const {
+        if constexpr (DSpec::is_static) {
+            return StaticDspec::instance;
+        } else {
+            return dspec_instance.value;
+        }
+    }
+
+    constexpr auto& dspec() {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
         } else {
@@ -198,6 +216,18 @@ public:
         return is_local_bank(bank_x, bank_y, noc);
     }
 
+    // Returns a proxy for shard pages iterator
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(
+        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
+        return tensor_accessor::ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
+    }
+
+    // Returns a proxy for pages iterator (iterates over all pages in the tensor)
+    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, noc);
+    }
+
 private:
     // NOC APIs
     FORCE_INLINE
@@ -241,6 +271,9 @@ private:
 public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
+
+    friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIterator<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -259,15 +292,194 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     BankCoordsWrapper,
     /* IsInterleaved */ true,
     IsDram>> : public InterleavedAddrGen<IsDram> {
+    using DSpec = tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        /* IsInterleaved */ true,
+        IsDram>;
+
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
         InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+
+    template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
+    constexpr explicit TensorAccessor(
+        DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+
+    // Locality APIs
+    FORCE_INLINE
+    bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_bank is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_addr(const uint64_t noc_addr, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_addr is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_page(const uint32_t page_id, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_page is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    FORCE_INLINE
+    bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::is_local_shard is not supported by the interleaved tensor accessor");
+        return false;
+    }
+
+    // Returns a proxy for shard pages iterator
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(
+        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::shard_pages is not supported by the interleaved tensor accessor");
+        return {};
+    }
+
+    // Returns a proxy for pages iterator (iterates over all pages in the tensor)
+    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::pages is not supported by the interleaved tensor accessor");
+        return {};
+    }
 };
 #endif
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
-    -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
+        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT,
+        /* TensorShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::tensor_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
+        /* ShardShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::shard_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::ShardShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
+        /* BankCoordsWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::bank_coords_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::BankCoordsCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
+        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
+
+template <
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsInterleaved,
+    bool IsDram>
+TensorAccessor(
+    tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>,
+    size_t,
+    uint32_t)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>>;
+
+namespace tensor_accessor::detail {
+template <typename... Args, uint32_t... Indexes>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args,
+    uint32_t address_rt_arg_index_start,
+    uint32_t page_size_ct_arg_index_start,
+    std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(TensorAccessor(
+        std::get<Indexes>(args),
+        get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes),
+        kernel_compile_time_args[page_size_ct_arg_index_start + Indexes])...);
+}
+}  // namespace tensor_accessor::detail
+
+template <typename... Args>
+auto make_tensor_accessor_tuple(
+    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, uint32_t page_size_ct_arg_index_start) {
+    return tensor_accessor::detail::make_tensor_accessor_tuple(
+        args,
+        address_rt_arg_index_start,
+        page_size_ct_arg_index_start,
+        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
+
+/**
+ * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
+ *
+ * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
+ */
+class AbstractTensorAccessorWrapper {
+public:
+    AbstractTensorAccessorWrapper() = default;
+
+    template <typename Accessor>
+    AbstractTensorAccessorWrapper(const Accessor& accessor) :
+        accessor_ptr(&accessor),
+        get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+            return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
+        }) {}
+
+    uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
+        return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
+    }
+
+private:
+    using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+
+    const void* accessor_ptr = nullptr;
+    GetNocAddrFn get_noc_addr_fn = nullptr;
+};
+
+namespace tensor_accessor::detail {
+template <typename... Accessors, uint32_t... Indexes>
+auto make_abstract_tensor_accessor_wrappers(
+    const std::tuple<Accessors...>& accessors, std::integer_sequence<uint32_t, Indexes...>)
+    -> std::array<AbstractTensorAccessorWrapper, sizeof...(Accessors)> {
+    return {AbstractTensorAccessorWrapper(std::get<Indexes>(accessors))...};
+}
+}  // namespace tensor_accessor::detail
+
+// Wraps a tuple of templated tensor accessors into an array of AbstractTensorAccessorWrapper,
+// allowing for easy iteration and runtime dispatch.
+template <typename... Accessors>
+auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
+    return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(
+        accessors, std::make_integer_sequence<uint32_t, sizeof...(Accessors)>());
+}

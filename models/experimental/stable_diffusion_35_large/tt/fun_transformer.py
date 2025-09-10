@@ -164,26 +164,30 @@ def sd_transformer(
     if parallel_manager.is_sequence_parallel:
         spatial_B1NDt = ttnn.experimental.all_gather_async(
             spatial,
-            dim=-2,
-            cluster_axis=parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
-            mesh_device=spatial.device(),
-            topology=parallel_manager.dit_parallel_config.topology,
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_seq_gather_buffer"),
+            dim=2,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
-            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_seq_gather_buffer"),
             num_links=parallel_manager.num_links,
+            topology=parallel_manager.dit_parallel_config.topology,
+            cluster_axis=parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
+            chunks_per_sync=16,
+            num_workers_per_link=3,
+            num_buffers_per_channel=2,
         )
         spatial = spatial_B1NDt
 
     if parallel_manager.is_tensor_parallel:
         spatial_B1ND = ttnn.experimental.all_gather_async(
             spatial,
-            dim=-1,
-            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=spatial.device(),
-            topology=parallel_manager.dit_parallel_config.topology,
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_tensor_gather_buffer"),
+            dim=3,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
-            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_tensor_gather_buffer"),
             num_links=parallel_manager.num_links,
+            topology=parallel_manager.dit_parallel_config.topology,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         spatial = spatial_B1ND
     spatial_B1ND = spatial

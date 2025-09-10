@@ -33,7 +33,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto padded_hidden_embedding_dim = mutable_weight.padded_shape()[-1];
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
     // If indices tensor is 1 dimensional, batch size is 1
@@ -73,26 +72,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     return embeddings;
-}
-ttnn::Tensor EmbeddingOperation::invoke(
-    const Tensor& input_tensor_arg,
-    const Tensor& weight_arg,
-    const std::optional<int>& pad_token,
-    const std::optional<ttnn::Layout>& layout,
-    EmbeddingsType embeddings_type,
-    const std::optional<const DataType> dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_arg,
-        weight_arg,
-        pad_token,
-        layout,
-        embeddings_type,
-        dtype,
-        memory_config,
-        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::embedding

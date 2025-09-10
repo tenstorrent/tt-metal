@@ -32,6 +32,8 @@
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
@@ -110,18 +112,20 @@ tt_metal::IDevice* find_device_with_id(const std::vector<tt_metal::IDevice*>& de
     return nullptr;
 }
 
+// NOLINTBEGIN(cppcoreguidelines-prefer-member-initializer)
 class ConnectedDevicesHelper {
+private:
+    std::map<chip_id_t, tt_metal::IDevice*> devices_map;
+
 public:
-    ConnectedDevicesHelper(const TestParams& params) : device_open_(false) {
+    ConnectedDevicesHelper(const TestParams& params) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        this->devices_map = tt::tt_metal::detail::CreateDevices(ids);
         this->devices = tt::DevicePool::instance().get_all_active_devices();
 
         this->initialize_sender_receiver_pairs(params);
@@ -137,9 +141,8 @@ public:
     void TearDown() {
         device_open_ = false;
         tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-        for (unsigned int id = 0; id < this->devices.size(); id++) {
-            tt::tt_metal::CloseDevice(this->devices.at(id));
-        }
+        tt::tt_metal::detail::CloseDevices(this->devices_map);
+        this->devices.clear();
     }
 
     std::vector<tt_metal::IDevice*> devices;
@@ -292,14 +295,15 @@ private:
         }
     }
 
-    bool device_open_;
+    bool device_open_ = false;
 };
+// NOLINTEND(cppcoreguidelines-prefer-member-initializer)
 
 std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
     std::vector<tt_metal::Program> programs(device_helper.num_devices);
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
-    uint32_t benchmark_type_val = magic_enum::enum_integer(params.benchmark_type);
+    uint32_t benchmark_type_val = enchantum::to_underlying(params.benchmark_type);
 
     // eth core ct args
     const std::vector<uint32_t>& eth_ct_args = {
@@ -582,8 +586,8 @@ void run(
     }
 
     for (const auto& link : device_helper.unique_links) {
-        // Only dump profile results from sender
-        tt_metal::detail::DumpDeviceProfileResults(device_helper.devices.at(link.sender.chip));
+        // Only read profiler results from sender
+        tt_metal::detail::ReadDeviceProfilerResults(device_helper.devices.at(link.sender.chip));
 
         switch (params.benchmark_type) {
             case BenchmarkType::EthOnlyUniDir:
@@ -617,7 +621,7 @@ int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
     uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
 
-    auto benchmark_type_enum = magic_enum::enum_cast<BenchmarkType>(benchmark_type);
+    auto benchmark_type_enum = enchantum::cast<BenchmarkType>(benchmark_type);
     TT_FATAL(
         benchmark_type_enum.has_value(),
         "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
@@ -656,8 +660,8 @@ int main(int argc, char** argv) {
         log_info(
             tt::LogTest,
             "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
-            magic_enum::enum_name(benchmark_type_enum.value()),
-            magic_enum::enum_name(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
+            enchantum::to_string(benchmark_type_enum.value()),
+            enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
             num_packets,
             packet_size,
             num_buffer_slots);

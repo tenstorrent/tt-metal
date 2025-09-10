@@ -10,7 +10,6 @@
 #include <host_api.hpp>
 #include <initializer_list>
 #include <limits>
-#include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -71,6 +70,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -282,13 +282,12 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    command_queue_program.finalize_offsets(this);
+    command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
 
 void Device::init_command_queue_host() {
-    using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -318,6 +317,21 @@ void Device::init_command_queue_device() {
         MetalContext::instance().get_cluster().write_core(
             &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
     };
+    auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            id_, logical_core, core_type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core);
+        uint32_t go_message_addr =
+            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint32_t zero = 0;
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(id_);
+        uint32_t go_message_index_addr =
+            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
+    };
     const auto& storage_only_cores = tt::get_logical_storage_cores(
         id_, num_hw_cqs_, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
@@ -330,6 +344,7 @@ void Device::init_command_queue_device() {
             CoreCoord logical_core(x, y);
             if (!storage_only_cores_set.count(logical_core)) {
                 reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
+                reset_go_message_index(logical_core, CoreType::WORKER);
             }
         }
     }
@@ -343,8 +358,7 @@ void Device::init_command_queue_device() {
         watcher_lock.value().unlock();
     }
 
-    // TODO: should get a const ref
-    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
@@ -366,7 +380,7 @@ void Device::init_command_queue_device() {
 }
 
 bool Device::compile_fabric() {
-    fabric_program_ = create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
     return fabric_program_ != nullptr;
 }
 
@@ -375,17 +389,17 @@ void Device::configure_fabric() {
         return;
     }
 
-    configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(this);
 
-    fabric_program_->finalize_offsets(this);
+    fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
-    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -431,10 +445,8 @@ bool Device::initialize(
         num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS,
         "num_hw_cqs can be between 1 and {}",
         dispatch_core_manager::MAX_NUM_HW_CQS);
-    this->using_fast_dispatch_ = false;
-    // Trying to preserve logic that was in device_pool.cpp
-    // However, I honestly don't understand it
-    this->num_hw_cqs_ = num_hw_cqs;
+    using_fast_dispatch_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    num_hw_cqs_ = num_hw_cqs;
     const auto& hal = MetalContext::instance().hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -668,111 +680,6 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *command_queues_[cq_id];
 }
 
-bool Device::using_slow_dispatch() const { return !using_fast_dispatch(); }
-
-bool Device::using_fast_dispatch() const { return using_fast_dispatch_; }
-
-void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-
-    TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(
-        !this->command_queues_[cq_id]->tid().has_value(),
-        "CQ {} is already being used for tracing tid {}",
-        (uint32_t)cq_id,
-        tid);
-    this->mark_allocations_safe();
-    // Create an empty trace buffer here. This will get initialized in end_trace
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    TT_FATAL(
-        active_sub_device_manager->get_trace(tid) == nullptr,
-        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    auto& trace_buffer = active_sub_device_manager->create_trace(tid);
-    this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
-}
-
-void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalEndTrace(this->id(), tid);
-    TT_FATAL(
-        this->command_queues_[cq_id]->tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    auto trace_buffer = active_sub_device_manager->get_trace(tid);
-    TT_FATAL(
-        trace_buffer != nullptr,
-        "Trace instance {} must exist on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    this->command_queues_[cq_id]->record_end();
-
-    // Capture Trace if light metal trace capturing is enabled.
-    auto& lm_capture_ctx = LightMetalCaptureContext::get();
-    if (lm_capture_ctx.is_tracing()) {
-        lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
-    }
-
-    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
-    this->mark_allocations_unsafe();
-}
-
-// Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
-void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
-    this->mark_allocations_safe();
-
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    TT_FATAL(
-        active_sub_device_manager->get_trace(trace_id) == nullptr,
-        "Trace already exists for trace_id {} on device {}'s active sub-device manager {}",
-        trace_id,
-        this->id_,
-        active_sub_device_manager->id());
-
-    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
-    *trace_buffer->desc = trace_desc;
-    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
-    this->mark_allocations_unsafe();
-}
-
-void Device::replay_trace(
-    const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
-    // If blocking, ensure that worker thread blocks until trace is completed
-    ZoneScoped;
-    TracyTTMetalReplayTrace(this->id(), tid);
-    constexpr bool check = false;
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
-    TT_FATAL(
-        trace_buffer != nullptr,
-        "Trace instance {} must exist on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    if constexpr (check) {
-        trace_buffer->validate();
-    }
-    EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
-}
-
-void Device::release_trace(const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalReleaseTrace(this->id(), tid);
-
-    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
-
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size_ == 0) {
-        this->mark_allocations_safe();
-    }
-}
-
-std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(tid);
-}
-
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
@@ -795,18 +702,16 @@ void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_uns
 
 void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
 
-uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    if (mcast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
-    } else if (unicast_data) {
+uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+    if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
     } else {
@@ -827,7 +732,7 @@ SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 
@@ -879,8 +784,12 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
+        bool noc_translation_enabled =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
         bool dram_is_virtualized =
-            hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
+            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                        hal.get_virtualized_core_types().end());
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;

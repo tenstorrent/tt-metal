@@ -34,7 +34,8 @@ void kernel_main() {
     // Set the semaphore to indicate that the writer can proceed
     noc_semaphore_set(sem_ptr, 1);
 
+    DeviceTimestampedData("Test id", test_id);
+
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
-    DeviceTimestampedData("Test id", test_id);
 }

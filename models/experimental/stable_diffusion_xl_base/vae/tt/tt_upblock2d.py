@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import TtUpsample2D
 
 
-class TtUpDecoderBlock2D(nn.Module):
+class TtUpDecoderBlock2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False):
         super().__init__()
 
@@ -42,9 +42,7 @@ class TtUpDecoderBlock2D(nn.Module):
 
         ttnn.deallocate(input_tensor)
         if self.upsamplers is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         return hidden_states, [C, H, W]

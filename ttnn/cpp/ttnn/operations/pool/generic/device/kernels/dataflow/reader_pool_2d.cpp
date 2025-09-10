@@ -17,6 +17,8 @@
 
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
+#define FACE_WIDTH 16
+#define FACE_HEIGHT 16
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -64,10 +66,13 @@ ALWI void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
+    uint32_t in_idx_cb_id,
+    uint32_t tile_tmp_cb_id,
+    uint32_t tile_idx_tmp_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_c,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -75,35 +80,51 @@ template <
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
-    bool is_large_kernel>
-ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t in_nbytes_c,
+    bool is_large_kernel,
+    bool last_tile_is_partial,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    bool return_indices>
+ALWI void read_window_with_top_left_index(
+    uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
-    static_assert(in_c % TILE_WIDTH == 0 || in_c == 16, "in_c must be a multiple of TILE_WIDTH or 16");
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
-    constexpr bool tilize_reconfig =
-        in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && (window_h * window_w) <= 16;
-    constexpr uint32_t max_write_inc =
-        wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_BYTES_PER_REDUCTION for wide reductions
+    constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
+                                     (window_h * window_w) <= 16 && !last_tile_is_partial;
+    uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+    if constexpr (return_indices) {
+        static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+    }
+#ifdef ARCH_BLACKHOLE
+    if constexpr (return_indices) {
+        if (in_c <= FACE_WIDTH) {
+            max_write_inc = FACE_WIDTH * BYTES_PER_ELEM;
+        }
+    }
+#endif
 
-    uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes;
+        uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
-            const bool last_c_block = c_i == in_nblocks_c - 1;
-            read_bytes = !last_c_block ? MAX_BYTES_PER_REDUCTION : in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION;
-        } else {
-            read_bytes = in_nbytes_c;
+            read_bytes =
+                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-        uint32_t processed_sticks = 0;
         cb_reserve_back(in_cb_id, 1);
+        uint32_t in_idx_l1_write_addr = 0;
+        if constexpr (return_indices) {
+            in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
+            cb_reserve_back(in_idx_cb_id, 1);
+        }
+        uint32_t processed_sticks = 0;
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
+                const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
@@ -113,6 +134,17 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     in_l1_write_addr += read_bytes * w_multiple;
                 } else {
                     in_l1_write_addr += max_write_inc * w_multiple;
+                }
+                if constexpr (return_indices) {
+                    const uint32_t idx_read_offset =
+                        in_idx_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                    noc_async_read_one_packet(
+                        get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
+                    if constexpr (tilize_reconfig) {
+                        in_idx_l1_write_addr += read_bytes * w_multiple;
+                    } else {
+                        in_idx_l1_write_addr += max_write_inc * w_multiple;
+                    }
                 }
                 processed_sticks += w_multiple;
                 if constexpr (is_large_kernel) {
@@ -140,23 +172,33 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 }
             };
 
-            bool use_contiguous_read = !wide_reduction;
+            // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
+            // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
+            // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
+            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
+            // not compliant.
+            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
+                                       dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
             if constexpr (is_large_kernel) {
                 bool whole_row_remaining =
                     window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
                 use_contiguous_read &= whole_row_remaining;
             }
-            if (use_contiguous_read) {  // read entire row as one chunk
+
+            if (use_contiguous_read) {
                 process_h(0, window_w);
-            } else {  // read rows stick by stick
+            } else {  // read rows stick by stick with dilation
                 for (uint32_t w = 0; w < window_w; ++w) {
-                    process_h(w, 1);
+                    process_h(w * dilation_w, 1);
                 }
             }
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
             cb_push_back(in_cb_id, 1);
+            if constexpr (return_indices) {
+                cb_push_back(in_idx_cb_id, 1);
+            }
         }
     }
 }
@@ -204,7 +246,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -224,15 +266,30 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t in_idx_cb_id = (reader_id == 1) ? get_compile_time_arg_val(19) : get_compile_time_arg_val(18);
+    constexpr uint32_t in_shard_idx_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
+    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
+    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(31);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(33);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+
+    // TODO this should go in the initialization condition below
+    if constexpr (last_tile_is_partial) {
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    }
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -243,19 +300,18 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
-    constexpr bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                           ? 1
-                                                 : (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
-                                                                                                           : 4;
-    constexpr bool is_large_kernel = (window_h * window_w) > max_sticks_for_reduction;
+    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
+    constexpr uint32_t num_faces_in_input_tile =
+        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
+    constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb = remaining_elems && face_r_dim == 16 &&
-                                              (num_faces_in_input_tile == 4 || is_partial_tile) &&
-                                              interm_reduction_chunks <= multi_buffering_factor;
+    constexpr bool need_to_initialize_in_cb =
+        return_indices ||
+        (remaining_elems && face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
+         interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
@@ -268,9 +324,13 @@ void kernel_main() {
             cb_wait_front(clear_value_cb_id, 1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool || !is_large_kernel) {
+        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
+            if constexpr (return_indices) {
+                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
+            }
         }
+        // we don't need to clear the idx CB since the data CB is the one being sorted
     }
 
     // initialize the scalar CB
@@ -280,6 +340,10 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+    uint32_t in_idx_l1_read_base_addr = 0;
+    if constexpr (return_indices) {
+        in_idx_l1_read_base_addr = get_read_ptr(in_shard_idx_cb_id);
+    }
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
@@ -337,10 +401,13 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
+                in_idx_cb_id,
+                tile_tmp_cb_id,
+                tile_idx_tmp_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
-                in_nbytes_c,
+                in_aligned_nbytes_c,
                 in_c,
                 max_sticks_for_reduction,
                 total_elems_to_reduce,
@@ -348,7 +415,12 @@ void kernel_main() {
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
-                is_large_kernel>(ind, in_l1_read_base_addr);
+                in_nbytes_padded_c,
+                is_large_kernel,
+                last_tile_is_partial,
+                dilation_h,
+                dilation_w,
+                return_indices>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -363,10 +435,13 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
+            in_idx_cb_id,
+            tile_tmp_cb_id,
+            tile_idx_tmp_cb_id,
             window_h,
             window_w,
             in_w_padded,
-            in_nbytes_c,
+            in_aligned_nbytes_c,
             in_c,
             max_sticks_for_reduction,
             total_elems_to_reduce,
@@ -374,6 +449,11 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            is_large_kernel>(0, in_l1_read_base_addr);
+            in_nbytes_padded_c,
+            is_large_kernel,
+            last_tile_is_partial,
+            dilation_h,
+            dilation_w,
+            return_indices>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
     }
 }  // kernel_main()

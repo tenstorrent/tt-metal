@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_dst_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{dst_cb_index, data_format}})
                 .set_page_size(dst_cb_index, single_tile_size);
-        auto cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
         uint32_t activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
         uint32_t total_tiles_size_bytes = Nt * single_tile_size;
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read local to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

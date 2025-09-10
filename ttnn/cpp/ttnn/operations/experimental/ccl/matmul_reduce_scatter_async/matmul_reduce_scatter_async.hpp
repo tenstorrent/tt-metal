@@ -25,6 +25,7 @@ struct ExecuteMatmulReduceScatterAsync {
         const std::optional<const Tensor>& bias = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,

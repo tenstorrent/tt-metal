@@ -40,13 +40,13 @@ struct CBInfo {
     // Index of CB that will be passed in to the kernel.
     uint32_t index = kInvalidCBIndex;
     // CB handle
-    tt::tt_metal::CBHandle handle;
+    tt::tt_metal::CBHandle handle{};
     // Type of the CB
-    Conv2dCb name;
+    Conv2dCb name{Conv2dCb::COUNT};
     // Number of pages in the circular buffer.
-    uint32_t num_pages;
+    uint32_t num_pages{};
     // Size of each page in the circular buffer.
-    uint32_t page_size;
+    uint32_t page_size{};
     // Whether this CB is globally allocated (true for sharded tensors).
     bool is_globally_allocated = false;
     // Data format of the circular buffer.
@@ -80,7 +80,7 @@ std::vector<CBInfo> get_cb_info(
 void allocate_cbs(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::Program& program,
-    const CoreRange& all_cores,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const Tensor& l1_indices_tensor);

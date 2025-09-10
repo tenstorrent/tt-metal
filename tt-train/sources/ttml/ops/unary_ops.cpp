@@ -14,6 +14,7 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -37,23 +38,22 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::gelu(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
         static const std::string approx_mode = "none";
-        auto res = ttnn::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode, mem_config);
-        assert(res.size() == 1U && "Gelu backward should return only one gradient");
-        tensor->add_grad(res.front().value());
+        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
+        tensor->add_grad(dL_dt);
     };
 
     std::vector<autograd::NodeId> links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
     return out;
 }
 
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {
     auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
+    autograd::GradFunction grad = [tensor, out, use_composite_bw]() {
+        auto res = use_composite_bw ? ttnn::silu_bw(out->get_grad(), tensor->get_value())
+                                    : std::vector<std::optional<ttnn::Tensor>>(
+                                          {ttml::metal::silu_bw(tensor->get_value(), out->get_grad())});
         assert(res.size() == 1U && "Silu backward should return only one gradient");
         tensor->add_grad(res.front().value());
     };

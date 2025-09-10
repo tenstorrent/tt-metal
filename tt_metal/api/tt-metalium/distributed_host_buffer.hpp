@@ -9,6 +9,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <functional>
 #include <vector>
@@ -34,7 +35,8 @@ public:
     static DistributedHostBuffer create(
         const distributed::MeshShape& global_shape,
         const distributed::MeshShape& local_shape,
-        const distributed::MeshCoordinate& local_offset);
+        const distributed::MeshCoordinate& local_offset,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& context);
 
     // Creates a multi-host distributed buffer that matches shape and multi-host distribution of the mesh device view.
     static DistributedHostBuffer create(const distributed::MeshDeviceView& mesh_device_view);
@@ -50,7 +52,11 @@ public:
     // Emplaces the shard at the specified `coord`, calling `produce_buffer` to create the buffer only when needed.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
+    using ProduceBufferFn = std::function<HostBuffer(const distributed::MeshCoordinate&)>;
     void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
+
+    // Returns true if the shard at the specified `coord` is local, false if remote.
+    bool is_local(const distributed::MeshCoordinate& coord) const;
 
     // Specifies the execution policy for the `transform` and `apply` functions.
     enum class ProcessShardExecutionPolicy {
@@ -67,11 +73,21 @@ public:
     using ApplyFn = std::function<void(const HostBuffer& buffer)>;
     void apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL) const;
 
+    // NOTE: `coords` are global, so this will skip non local shards.
+    // Calls emplace_shard for each coordinate in `coords` using the specified execution policy.
+    void emplace_shards(
+        const std::vector<distributed::MeshCoordinate>& coords,
+        const ProduceBufferFn& produce_buffer,
+        ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL);
+
     // Returns the global shape of the buffer.
     const distributed::MeshShape& shape() const;
 
     // Returns the coordinates of populated shards in the buffer.
     const std::set<distributed::MeshCoordinate>& shard_coords() const;
+
+    // Returns the distributed context for the buffer.
+    const std::shared_ptr<distributed::multihost::DistributedContext>& context() const;
 
 private:
     // Converts a global coordinate to a local coordinate.
@@ -87,8 +103,10 @@ private:
     };
 
     DistributedHostBuffer(
-        distributed::DistributedMeshContainer<Shard> shards, std::set<distributed::MeshCoordinate> populated_shards) :
-        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)) {}
+        distributed::DistributedMeshContainer<Shard> shards,
+        std::set<distributed::MeshCoordinate> populated_shards,
+        std::shared_ptr<distributed::multihost::DistributedContext> context) :
+        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)), context_(std::move(context)) {}
 
     // The shards of the buffer.
     // Remote shards are never materialized, but not all of the local shards are necessarily populated.
@@ -96,6 +114,9 @@ private:
 
     // Keeps track of global shards that were attempted to be written to.
     std::set<distributed::MeshCoordinate> shard_coords_;
+
+    // The distributed context for the buffer.
+    std::shared_ptr<distributed::multihost::DistributedContext> context_;
 };
 
 }  // namespace tt::tt_metal

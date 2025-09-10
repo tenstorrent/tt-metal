@@ -42,10 +42,9 @@ using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:
-    N300TestDevice() : device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -96,20 +95,9 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     tt_metal::Program program0;
     tt_metal::Program program1;
 
-    std::vector<uint32_t> const& ct_args = {};
-    constexpr std::size_t num_links = 0;
+    const std::vector<uint32_t>& ct_args = {};
 
     // Kernel Setup
-
-    auto rt_args = [&](bool send_channels_at_offset_0) -> std::vector<uint32_t> {
-        return std::vector<uint32_t>{
-            static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)),
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size),
-            static_cast<uint32_t>(max_channels_per_direction),
-            static_cast<uint32_t>(send_channels_at_offset_0)};
-    };
 
     local_kernel = tt_metal::CreateKernel(
         program0,
@@ -175,8 +163,8 @@ void run(
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(device0);
-    tt::tt_metal::detail::DumpDeviceProfileResults(device1);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device0);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device1);
 }
 
 int main(int argc, char** argv) {

@@ -24,25 +24,25 @@ void kernel_main() {
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t index_addr = get_arg_val<uint32_t>(1);
     uint32_t fill_value = get_arg_val<uint32_t>(2);
-    uint32_t input_page_size = get_arg_val<uint32_t>(3);
-    uint32_t index_page_size = get_arg_val<uint32_t>(4);
-    uint32_t start_row_id = get_arg_val<uint32_t>(5);
-    uint32_t num_rows_per_core = get_arg_val<uint32_t>(6);
-    uint32_t num_rows_to_fill_per_index = get_arg_val<uint32_t>(7);
-    uint32_t dim = get_arg_val<uint32_t>(8);
+    uint32_t start_row_id = get_arg_val<uint32_t>(3);
+    uint32_t num_rows_per_core = get_arg_val<uint32_t>(4);
+    uint32_t num_rows_to_fill_per_index = get_arg_val<uint32_t>(5);
+    uint32_t dim = get_arg_val<uint32_t>(6);
 
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool index_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t index_cb_id = get_compile_time_arg_val(3);
-    constexpr bool is_last_dim = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t index_size = get_compile_time_arg_val(5);
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t index_cb_id = get_compile_time_arg_val(1);
+    constexpr bool is_last_dim = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t index_size = get_compile_time_arg_val(3);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t index_page_size = get_compile_time_arg_val(5);
+    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1;
 
-    const InterleavedAddrGen<input_is_dram> s0 = {.bank_base_address = input_addr, .page_size = input_page_size};
+    const auto s0 = TensorAccessor(input_args, input_addr, input_page_size);
 
-    const InterleavedAddrGen<index_is_dram> s1 = {.bank_base_address = index_addr, .page_size = index_page_size};
+    const auto s1 = TensorAccessor(index_args, index_addr, index_page_size);
 
     value val;
     val.u = fill_value;

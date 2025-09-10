@@ -6,6 +6,7 @@
 
 #include "moreh_matmul_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -301,8 +302,6 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(other)),
         Kt,
         static_cast<uint32_t>(transpose_input),
         static_cast<uint32_t>(transpose_other),
@@ -311,15 +310,18 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_h,
         other_mask_w,
     };
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(other.buffer()).append_to(reader_compile_time_args);
 
     if (bias.has_value()) {
         reader_defines["FUSE_BIAS"] = "1";
-        reader_compile_time_args.push_back(static_cast<uint32_t>(is_dram(bias)));
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
+        TensorAccessorArgs(bias->buffer()).append_to(reader_compile_time_args);
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
-    const std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";

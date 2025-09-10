@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/vit/test_ttnn_optimized_sharded_vit_wh.py
+../../../../models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_wh.py

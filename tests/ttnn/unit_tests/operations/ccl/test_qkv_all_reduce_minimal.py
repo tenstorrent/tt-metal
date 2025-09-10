@@ -21,10 +21,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     round_up,
 )
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
+from models.demos.llama3_70b_galaxy.tt.model_config import set_tg_attention_config
 
 
 RING_CRS = ttnn.CoreRangeSet(

@@ -13,19 +13,19 @@ import os
 
 from conftest import is_6u
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 import random
 import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 

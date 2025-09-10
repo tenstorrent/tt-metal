@@ -15,7 +15,6 @@ namespace ttnn::operations::data_movement {
 
 void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::Buffer* in0_buffer = input_tensor.buffer();
 
     TT_FATAL(this->dim == 3 || this->dim == 2, "Split is possible along dim 2 or 3 only");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");

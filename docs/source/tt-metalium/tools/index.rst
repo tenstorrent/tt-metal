@@ -24,7 +24,7 @@ debug.
 
     tracy_profiler
 
-Tracy profiler is for profiling device-side RISCV code and host-side python and C++ code,
+Tracy profiler is for profiling device-side RISCV code and host-side python and C++ code.
 
 .. toctree::
     :maxdepth: 1

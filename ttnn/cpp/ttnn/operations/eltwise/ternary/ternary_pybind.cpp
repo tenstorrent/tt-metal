@@ -12,7 +12,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::ternary {

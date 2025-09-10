@@ -22,11 +22,11 @@
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xstrides.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
+#include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn::distributed {
 namespace {
@@ -136,64 +136,18 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
 
 }  // namespace
 
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
-    std::visit(
-        tt::stl::overloaded{
-            [&](const MeshMapperConfig::Replicate& replicate) { os << "PlacementReplicate()"; },
-            [&](const MeshMapperConfig::Shard& shard) { os << "PlacementShard(" << shard.dim << ")"; },
-        },
-        placement);
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
-    os << "MeshMapperConfig(";
-    os << "placements: [";
-    for (int i = 0; i < config.placements.size(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << config.placements[i];
-    }
-    os << "]";
-    if (config.mesh_shape_override.has_value()) {
-        os << ", mesh_shape_override=" << *config.mesh_shape_override;
-    }
-    os << ")";
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
-    os << "MeshComposerConfig(";
-    os << "dims: [";
-    for (int i = 0; i < config.dims.size(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << config.dims[i];
-    }
-    os << "]";
-    if (config.mesh_shape_override.has_value()) {
-        os << ", mesh_shape_override=" << *config.mesh_shape_override;
-    }
-    os << ")";
-    return os;
-}
-
 class TensorToMesh::Impl {
 public:
     Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
         const MeshShape& distribution_shape,
-        const MeshMapperConfig& config,
-        const tt::tt_metal::DistributedTensorConfig& distributed_tensor_config) :
+        const MeshMapperConfig& config) :
         mesh_device_view_(mesh_device.get_view()),
         global_range_(mesh_device_view_.shape()),
         distribution_mode_(distribution_mode),
         distribution_shape_(distribution_shape),
-        config_(config),
-        distributed_tensor_config_(distributed_tensor_config) {}
+        config_(config) {}
 
     Tensor operator()(const Tensor& tensor) const {
         auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
@@ -265,10 +219,10 @@ public:
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
-            const auto tensor_topology = tt::tt_metal::TensorTopology(distribution_shape_, buffer_coords);
+            const auto tensor_topology =
+                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(
-                tt::tt_metal::HostStorage(std::move(distributed_buffer)), tensor_spec, config(), tensor_topology);
+            return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), tensor_spec, tensor_topology);
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -330,8 +284,6 @@ public:
         return create_tensor<T>(sharded_xtensor_views, layout, pad_value);
     }
 
-    tt::tt_metal::DistributedTensorConfig config() const { return distributed_tensor_config_; }
-
 private:
     template <typename T>
     Tensor create_tensor(
@@ -381,9 +333,10 @@ private:
         const auto actual_distribution_shape =
             (distribution_shape_.dims() == 1) ? MeshShape(num_views_with_value) : distribution_shape_;
 
-        const auto tensor_topology = tt::tt_metal::TensorTopology(actual_distribution_shape, buffer_coords);
+        const auto tensor_topology =
+            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), shard_spec, config(), tensor_topology);
+        return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), shard_spec, tensor_topology);
     }
 
     // MeshDevice parameters.
@@ -394,7 +347,6 @@ private:
     // Distribution parameters.
     MeshShape distribution_shape_;
     MeshMapperConfig config_;
-    tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
 };
 
 class MeshToTensor::Impl {
@@ -412,7 +364,8 @@ public:
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
         const auto cpu_tensor = tensor.cpu();
-        const auto& src_buffer = cpu_tensor.host_storage().buffer();
+        auto all_gather_tensor = host_ccl::all_gather(cpu_tensor);
+        const auto& src_buffer = all_gather_tensor.host_storage().buffer();
 
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
         auto dst_buffer = tt::tt_metal::DistributedHostBuffer::create(distribution_shape_);
@@ -507,8 +460,6 @@ Tensor TensorToMesh::operator()(
     return (*impl_).template operator()<T>(buffer, shape, buffer_pin, layout, pad_value);
 }
 
-tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const { return impl_->config(); }
-
 TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
@@ -523,27 +474,11 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         distributed_shape,
         config);
 
-    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
-    // in Tensor storage.
-    const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
-        if (std::all_of(config.placements.begin(), config.placements.end(), [](const auto& p) {
-                return std::holds_alternative<MeshMapperConfig::Replicate>(p);
-            })) {
-            return tt::tt_metal::ReplicateTensor{};
-        } else if (distributed_shape.dims() == 2) {
-            return tt::tt_metal::ShardTensor2D{
-                tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}};
-        } else {
-            return tt::tt_metal::AllGatherTensor{};
-        }
-    }();
-
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device,
         compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
         distributed_shape,
-        config,
-        distributed_tensor_config));
+        config));
 }
 
 MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}

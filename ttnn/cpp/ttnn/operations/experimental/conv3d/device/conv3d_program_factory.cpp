@@ -7,7 +7,9 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
@@ -33,7 +35,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
+    auto [T_out, H_out, W_out] =
+        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
     uint32_t C_out = config.output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -207,7 +210,10 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         out_row_size_bytes,
         is_padding_zeros,
         semaphore_id,
-    };
+        config.stride[0],
+        config.stride[1],
+        config.stride[2]};
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -305,6 +311,10 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id};
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     auto writer_kernels_id = CreateKernel(
         program,

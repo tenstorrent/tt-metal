@@ -26,11 +26,11 @@ repos:
   hooks:
     - id: isort
       files: ^models/
-      exclude: ^models/(demos/llama3_subdevices|experimental)/
+      exclude: ^models/(demos/llama3_70b_galaxy|experimental)/
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:
-  - id: gersemi
+    - id: gersemi
 - repo: https://github.com/adrienverge/yamllint.git
   rev: v1.35.1
   hooks:

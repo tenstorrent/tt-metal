@@ -31,7 +31,7 @@ class TtPatchEmbedParameters:
         out_channels: int,
     ) -> TtPatchEmbedParameters:
         pos_embed_param = state["pos_embed"]
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if os.environ.get("MESH_DEVICE", "") == "T3K":
             pos_embed_param = torch.nn.functional.pad(
                 pos_embed_param, pad=(0, hidden_dim_padding), mode="constant", value=0
             )

@@ -131,6 +131,8 @@ def split_conv_and_run(
             else:
                 in_channel_slice_output = results
 
+            in_channel_slice_output = ttnn.move(in_channel_slice_output)
+
             if in_channel_slice_id == 0:
                 if in_channel_slice_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                     out_channel_slice_output = ttnn.to_memory_config(in_channel_slice_output, ttnn.DRAM_MEMORY_CONFIG)

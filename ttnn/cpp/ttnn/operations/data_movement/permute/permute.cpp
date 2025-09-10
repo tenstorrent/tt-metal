@@ -25,7 +25,6 @@ ttnn::Tensor permute_impl(
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     // Get the device
-    IDevice* device = a.device();
     uint32_t rank = a.logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
@@ -206,16 +205,8 @@ ttnn::Tensor ExecutePermute::invoke(
 }
 
 ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<float>& pad_value) {
-    return invoke(DefaultQueueId, input_tensor, dims, memory_config, pad_value);
-}
-
-ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
-    return invoke(input_tensor, dims, std::nullopt, pad_value);
+    return invoke(DefaultQueueId, input_tensor, dims, std::nullopt, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -19,11 +19,14 @@
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
+#include <tt-metalium/mesh_trace_id.hpp>
 
+namespace tt::tt_metal::distributed {
+struct MeshTraceBuffer;
+}
 namespace tt::tt_metal {
 
 class IDevice;
-class TraceBuffer;
 
 class SubDeviceManager {
 public:
@@ -47,17 +50,18 @@ public:
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
     const vector_aligned<uint32_t>& noc_mcast_unicast_data() const;
-    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_mcast_data_start_index(SubDeviceId sub_device_id) const;
     uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
+
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& get_core_go_message_mapping() const;
 
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
 
-    std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);
-    void release_trace(uint32_t tid);
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
+    std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
+    void release_trace(const distributed::MeshTraceId& trace_id);
+    std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
@@ -90,14 +94,14 @@ private:
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
-    // mcast txn data followed by unicast txn data
     vector_aligned<uint32_t> noc_mcast_unicast_data_;
-    std::vector<uint8_t> num_noc_mcast_txns_;
+    std::vector<bool> has_noc_mcast_txns_;
     std::vector<uint8_t> num_noc_unicast_txns_;
-    std::vector<uint8_t> noc_mcast_data_start_index_;
     std::vector<uint8_t> noc_unicast_data_start_index_;
 
-    std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
+    std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping_;
+
+    std::unordered_map<distributed::MeshTraceId, std::shared_ptr<distributed::MeshTraceBuffer>> trace_buffer_pool_;
 
     // TODO #15944: Temporary until migration to actual fabric is complete
     std::optional<SubDeviceId> fabric_sub_device_id_ = std::nullopt;

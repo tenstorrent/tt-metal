@@ -14,6 +14,8 @@ usage()
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
+    echo "[--sfpi]                    Install only SFPI package (minimal installation)"
+    echo "[--source-only]             Loads functions into shell"
     exit 1
 }
 
@@ -188,7 +190,6 @@ init_packages() {
                 "cmake"
                 "ninja-build"
                 "pkg-config"
-                "cargo"
                 "$gpp_package"
                 "pandoc"
                 "xz-utils"
@@ -205,6 +206,7 @@ init_packages() {
                 "libc++-17-dev"
                 "libc++abi-17-dev"
                 "wget"
+                "curl"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -220,7 +222,6 @@ init_packages() {
                 "cmake"
                 "ninja-build"
                 "pkgconf-pkg-config"
-                "cargo"
                 "xz"
                 "python3-devel"
                 "python3-pip"
@@ -232,6 +233,7 @@ init_packages() {
                 "tbb-devel"
                 "capstone-devel"
                 "wget"
+                "curl"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
@@ -360,6 +362,27 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
+install_sfpi_only() {
+    echo "[INFO] Installing only SFPI package for $OS_ID..."
+
+    # Check packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1; then
+        pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1; then
+        pkg=rpm
+    else
+        echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
+        exit 1
+    fi
+    echo "[INFO] Detected packaging system: $pkg"
+
+    # Install SFPI using existing function
+    install_sfpi
+
+    echo "[INFO] SFPI installation completed successfully!"
+}
+
 install_mpi_ulfm() {
     # Only install if distributed flag is set
     if [ "$distributed" -ne 1 ]; then
@@ -399,6 +422,15 @@ install_mpi_ulfm() {
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
+install_rust() {
+    INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 --profile minimal -y"
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" /bin/bash -c "$INSTALL_CMD"
+    else
+        /bin/bash -c "$INSTALL_CMD"
+    fi
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -410,7 +442,7 @@ configure_hugepages() {
         return
     fi
 
-    # Fetch the lastest tt-tools release link and name of package
+    # Fetch the latest tt-tools release link and name of package
     TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
     TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
 
@@ -439,6 +471,7 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
+    install_rust
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
@@ -452,65 +485,82 @@ cleanup() {
     fi
 }
 
-# Alright, lets run some things!
+main() {
+    # Alright, lets run some things!
 
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please use sudo."
-    usage
+    if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run as root. Please use sudo."
+        usage
+    fi
+
+    VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+
+    # Initialize OS detection and validation
+    detect_os
+
+    if ! is_supported_os; then
+        echo "Error: $OS_ID is not currently supported."
+        echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
+        exit 1
+    fi
+
+    validate=0
+    docker=0
+    distributed=1
+    hugepages=0
+    sfpi_only=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                usage
+                ;;
+            --validate|-v)
+                validate=1
+                shift
+                ;;
+            --docker|-d)
+                docker=1
+                shift
+                ;;
+            --no-distributed)
+                distributed=0
+                shift
+                ;;
+            --hugepages)
+                hugepages=1
+                shift
+                ;;
+            --sfpi)
+                sfpi_only=1
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                ;;
+        esac
+    done
+
+    init_packages
+
+    if [ "$sfpi_only" -eq 1 ]; then
+        install_sfpi_only
+    elif [ "$validate" -eq 1 ]; then
+        validate_packages
+    else
+        install
+    fi
+
+    cleanup
+
+    if [ "$sfpi_only" -eq 1 ]; then
+        echo "[INFO] SFPI installation completed successfully!"
+    else
+        echo "[INFO] TT-Metalium dependencies installed successfully!"
+    fi
+}
+
+if [ "${1}" != "--source-only" ]; then
+    main "${@}"
 fi
-
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-
-# Initialize OS detection and validation
-detect_os
-
-if ! is_supported_os; then
-    echo "Error: $OS_ID is not currently supported."
-    echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
-    exit 1
-fi
-
-validate=0
-docker=0
-distributed=1
-hugepages=0
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --help|-h)
-            usage
-            ;;
-        --validate|-v)
-            validate=1
-            shift
-            ;;
-        --docker|-d)
-            docker=1
-            shift
-            ;;
-        --no-distributed)
-            distributed=0
-            shift
-            ;;
-        --hugepages)
-            hugepages=1
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
-    esac
-done
-
-init_packages
-
-if [ "$validate" -eq 1 ]; then
-    validate_packages
-else
-    install
-fi
-
-cleanup
-
-echo "[INFO] TT-Metalium dependencies installed successfully!"

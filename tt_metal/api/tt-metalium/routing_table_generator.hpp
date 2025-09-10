@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <magic_enum/magic_enum.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -24,7 +23,7 @@ using RoutingTable =
 // Need to update the usage in routing table generator
 class FabricNodeId {
 public:
-    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
+    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
     MeshId mesh_id{0};
     std::uint32_t chip_id = 0;
 };

@@ -166,8 +166,8 @@ The compute kernel is the most interesting and different one. The flow is genera
 
 * Initialize the SFPU with the ``init_sfpu`` function
 * Call the specific SFPU operation initialization function, such as ``exp_tile_init`` for exponential
-* Acquire tile registers using ``tile_regs_acquire``
 * Wait for data to be available in the circular buffer using ``cb_wait_front`` (same as the FPU)
+* Acquire tile registers using ``tile_regs_acquire``
 * Copy the tile from the circular buffer to the registers using ``copy_tile``
 * Perform the SFPU operation using ``exp_tile`` (or other SFPU operations)
 * Wait for the result to be written back using ``tile_regs_commit`` and ``tile_regs_wait``
@@ -194,9 +194,9 @@ The compute kernel is the most interesting and different one. The flow is genera
         // Setup the SFPU for exponential operation
         exp_tile_init();
         for (uint32_t i = 0; i < n_tiles; i++) {
+            cb_wait_front(tt::CBIndex::c_0, 1);
             // Make sure and acquire data before running the SFPU operation
             tile_regs_acquire();
-            cb_wait_front(tt::CBIndex::c_0, 1);
             // Copy the tile from the circular buffer offset 0 to the tile registers 0
             copy_tile(tt::CBIndex::c_0, /*offset*/ 0, /*register_offset*/ 0);
 

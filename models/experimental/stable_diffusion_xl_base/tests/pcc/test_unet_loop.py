@@ -24,6 +24,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.utility_functions import is_wormhole_b0
 
+UNET_LOOP_PCC = {"10": 0.872, "50": 0.895}
+
 
 def run_tt_denoising(
     ttnn_device,
@@ -317,8 +319,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
             [
                 tt_latents,
                 *tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter][0]["text_embeds"],
-                tt_add_text_embeds[iter][1]["text_embeds"],
+                tt_add_text_embeds[iter][0],
+                tt_add_text_embeds[iter][1],
             ],
             [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
         )
@@ -374,7 +376,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, 0.858)
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 

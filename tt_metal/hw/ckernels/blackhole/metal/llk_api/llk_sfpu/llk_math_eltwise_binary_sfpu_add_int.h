@@ -22,11 +22,12 @@ template <
     InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
     bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_add_int(
-    uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_add_int_<APPROXIMATE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
+        odst,
         vector_mode);
 }
 

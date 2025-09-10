@@ -5,38 +5,34 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_sfpu_unary_max_min.h"
 
-using namespace sfpi;
+namespace ckernel::sfpu {
 
-namespace ckernel {
-namespace sfpu {
+enum { Max = true, Min = false };  // Clamp Mode
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_clamp(uint param0, uint param1, uint param2) {
-    // All params are in FP16 format
-    // param0 = min
-    // param1 = max
-
-    // uint format = (param0 >> 16)&0x1;
-    s2vFloat16::Format format = s2vFloat16::fp16a;
-
+// out = min(max(x, min_val), max_val)
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_clamp(uint min_val, uint max_val) {
     // SFPU microcode
-    vFloat min = s2vFloat16(param0, format);
-    vFloat max = s2vFloat16(param1, format);
-#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-
-        v_if(val < min) { val = s2vFloat16(param0, format); }
-        v_elseif(val >= max) { val = s2vFloat16(param1, format); }
-        v_endif;
-
-        dst_reg[0] = val + s2vFloat16b(param2);  // 12 bits
-
-        dst_reg++;
+        load_value_param_float(min_val);
+        calculate_unary_max_min_float_body<Max>();
+        load_value_param_float(max_val);
+        calculate_unary_max_min_float_body<Min>();
+        sfpi::dst_reg++;
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_clamp_int32(uint min_val, uint max_val) {
+    for (int d = 0; d < ITERATIONS; d++) {
+        load_value_param_int(min_val);
+        calculate_unary_max_min_int32_body<Max>();
+        load_value_param_int(max_val);
+        calculate_unary_max_min_int32_body<Min>();
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu

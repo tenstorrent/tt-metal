@@ -67,7 +67,6 @@ class TtMobileNetV2Conv2D:
             enable_split_reader=True
             if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             else self.enable_split_reader,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -178,6 +177,8 @@ class TtInvertedResidual:
         out, h, w = self.conv2(x)
         out, h, w = self.conv3(out)
         if self.use_res_connect:
+            if identity.memory_config() != out.memory_config():
+                identity = ttnn.to_memory_config(identity, out.memory_config())
             tmp = ttnn.add(identity, out)
             ttnn.deallocate(identity)
             ttnn.deallocate(out)

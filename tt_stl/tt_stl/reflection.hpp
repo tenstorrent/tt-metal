@@ -24,14 +24,17 @@
 
 #include <tt_stl/concepts.hpp>
 #include <nlohmann/json.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/scoped.hpp>
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
+
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
 
 namespace ttsl {
 
 template <typename T>
 constexpr std::string_view get_type_name() {
+    // TODO: use enchantum::type_name
     return short_type_name<std::decay_t<T>>;
 }
 
@@ -200,6 +203,13 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
+    Attribute(Attribute&& other) :
+        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        implementations{other.implementations} {}
+
     Attribute& operator=(const Attribute& other) {
         if (other.pointer != this->pointer) {
             this->destruct();
@@ -214,13 +224,6 @@ struct Attribute final {
         }
         return *this;
     }
-
-    Attribute(Attribute&& other) :
-        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
-        delete_storage{other.delete_storage},
-        copy_storage{other.copy_storage},
-        move_storage{other.move_storage},
-        implementations{other.implementations} {}
 
     Attribute& operator=(Attribute&& other) {
         if (other.pointer != this->pointer) {
@@ -240,8 +243,8 @@ struct Attribute final {
     ~Attribute() { this->destruct(); }
 
 private:
-    alignas(ALIGNMENT) void* pointer = nullptr;
-    alignas(ALIGNMENT) storage_t type_erased_storage;
+    alignas(ALIGNMENT) storage_t type_erased_storage{};
+    void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
@@ -369,7 +372,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
 
 template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << magic_enum::enum_type_name<T>() << "::" << magic_enum::enum_name(value);
+    os << enchantum::scoped::to_string(value);
     return os;
 }
 
@@ -1313,7 +1316,7 @@ struct to_json_t<std::array<T, N>> {
 template <typename T, std::size_t N>
 struct from_json_t<std::array<T, N>> {
     std::array<T, N> operator()(const nlohmann::json& json_object) noexcept {
-        std::array<T, N> array;
+        std::array<T, N> array{};
         [&array, &json_object]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_object] {
@@ -1577,3 +1580,5 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

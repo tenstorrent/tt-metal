@@ -7,7 +7,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -36,28 +36,16 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t index_rank{index_shape.rank()};
 
     TT_FATAL(
-        index_shape == src_shape,
-        "index_shape must be the same as src_shape (index_shape: {}, src_shape: {}).",
-        index_shape,
-        src_shape);
-
-    TT_FATAL(
-        input_rank == index_rank,
-        "input_rank must equal index_rank (input_rank: {}, index_rank: {}).",
-        input_rank,
-        index_rank);
-
-    TT_FATAL(
         input_dtype == src_dtype,
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
-        magic_enum::enum_name(input_dtype),
-        magic_enum::enum_name(src_dtype));
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(src_dtype));
 
     TT_FATAL(
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT8 || index_dtype == DataType::UINT16 ||
             index_dtype == DataType::UINT32,
         "index_dtype is not integer, it is {}.",
-        magic_enum::enum_name(index_dtype));
+        enchantum::to_string(index_dtype));
 
     TT_FATAL(!input_tensor.is_sharded(), "Sharded tensors are not supported - input_tensor is sharded.");
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
@@ -106,27 +94,6 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     return {
         operation_attributes_t{dim, output_memory_config, opt_reduction},
         tensor_args_t{input_tensor, index_tensor, source_tensor}};
-}
-
-operation::Hash ScatterDeviceOperation::compute_program_hash(
-    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<ScatterDeviceOperation>(
-        select_program_factory(op_args, tensor_args).index(),
-        op_args.dim,
-        op_args.opt_reduction,
-        op_args.output_memory_config,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.index_tensor.logical_shape(),
-        tensor_args.src_tensor.logical_shape(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.index_tensor.dtype(),
-        tensor_args.src_tensor.dtype(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.index_tensor.memory_config(),
-        tensor_args.src_tensor.memory_config(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.index_tensor.layout(),
-        tensor_args.src_tensor.layout());
 }
 
 }  // namespace ttnn::operations::data_movement::scatter

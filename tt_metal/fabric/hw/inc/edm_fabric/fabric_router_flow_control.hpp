@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
@@ -46,16 +46,22 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {}
+    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
+        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+            sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+        }
+    }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_completed_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_acked_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
+
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
 };
 
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
@@ -211,4 +217,15 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
     -> std::enable_if_t<multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
+}
+
+// MUST CHECK !is_eth_txq_busy() before calling
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_completion_ack(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (CHECK_BUSY) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+    }
+    receiver_channel_response_credit_sender.send_completion_credit(src_id);
 }

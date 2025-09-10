@@ -82,12 +82,12 @@ def runctx(cmd, globals, locals, partialProfile):
         finish_all_zones()
 
 
-def run_report_setup(verbose, outputFolder, port):
+def run_report_setup(verbose, outputFolder, binFolder, port):
     toolsReady = True
 
     logger.info("Verifying tracy profiling tools")
-    toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL)
-    toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL)
+    toolsReady &= os.path.exists(binFolder / TRACY_CAPTURE_TOOL)
+    toolsReady &= os.path.exists(binFolder / TRACY_CSVEXPROT_TOOL)
 
     logsFolder = generate_logs_folder(outputFolder)
     captureProcess = None
@@ -103,7 +103,7 @@ def run_report_setup(verbose, outputFolder, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
+        captureCommand = (f"{binFolder / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -120,7 +120,9 @@ def run_report_setup(verbose, outputFolder, port):
     return toolsReady, captureProcess
 
 
-def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]):
+def generate_report(
+    outputFolder, binFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]
+):
     logsFolder = generate_logs_folder(outputFolder)
     tracyOutFile = logsFolder / TRACY_FILE_NAME
     timeOut = 15
@@ -144,7 +146,7 @@ def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=Fal
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{binFolder / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -155,7 +157,7 @@ def generate_report(outputFolder, nameAppend, childCalls, collect_noc_traces=Fal
 
     with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
+            f'{binFolder / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,

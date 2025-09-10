@@ -183,9 +183,9 @@ Tests:
   - name: "MulticastHops"
     fabric_setup:
       topology: Mesh
-      # You can explicitly set the routing type. Options are "Low Latency" and "Dynamic".
-      # If not specified, it defaults to "Low Latency".
-      routing_type: "Low Latency"
+      # You can explicitly set the routing type. Options are "LowLatency" and "Dynamic".
+      # If not specified, it defaults to "LowLatency".
+      routing_type: "LowLatency"
 
     defaults:
       ntype: unicast_write

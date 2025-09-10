@@ -20,19 +20,27 @@
 
 #define DEBUG_PRINT 0
 
-inline void tilize_in(
-    uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        for (uint32_t h = 0; h < in_subblock_h; ++h) {
-            cb_wait_front(in_cb_id, in_block_w);
-            cb_reserve_back(out_cb_id, in_block_w);
-            fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-            cb_push_back(out_cb_id, in_block_w);
-            cb_pop_front(in_cb_id, in_block_w);
-        }
+#ifdef SPLIT_READER
+template <bool init_tilize = true, bool uninit_tilize = true>
+__attribute__((noinline)) void tilize_in(
+#else
+template <bool init_tilize = true, bool uninit_tilize = true>
+void tilize_in(
+#endif
+    uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
+    if constexpr (init_tilize) {
+        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
     }
-    fast_tilize_uninit(in_cb_id, out_cb_id);
+    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
+        cb_wait_front(in_cb_id, in_block_w);
+        cb_reserve_back(out_cb_id, in_block_w);
+        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+        cb_push_back(out_cb_id, in_block_w);
+        cb_pop_front(in_cb_id, in_block_w);
+    }
+    if constexpr (uninit_tilize) {
+        fast_tilize_uninit(in_cb_id, out_cb_id);
+    }
 }  // tilize_in()
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -73,7 +81,7 @@ void MAIN {
     constexpr uint32_t in0_block_num_tiles =
         get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
     constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-    constexpr uint32_t in0_subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t reader_num_h_subblocks = get_compile_time_arg_val(4);
     constexpr uint32_t in1_num_subblocks =
         get_compile_time_arg_val(5);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
@@ -97,6 +105,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
     constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -116,11 +125,22 @@ void MAIN {
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
 #ifdef SPLIT_READER
-    constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
-    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks - in0_num_subblocks_read_last;
+    constexpr bool split_reader = true;
+    constexpr uint32_t in0_num_subblocks_read_last = reader_num_h_subblocks / 2;
+    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
 #else
-    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
+    constexpr bool split_reader = false;
+    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
 #endif
+
+    // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
+    // operations (input grid) while actual matmul occurs on different cores (output grid).
+    // Skip dummy compute operations when possible to reduce di/dt issues, but allow dummy
+    // tilize operations on cores without input data for code simplicity.
+    bool skip_compute = false;
+    if constexpr (check_skip_compute) {
+        skip_compute = (bool)get_arg_val<uint32_t>(0);
+    }
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -158,8 +178,7 @@ void MAIN {
                         pack_reconfig_l1_acc(0);
 #endif
 
-                        tilize_in(
-                            in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+                        tilize_in(in0_pretilize_cb_id, in0_block_w, reader_num_h_subblocks, tilized_in0_cb_id);
 
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -182,14 +201,10 @@ void MAIN {
                     pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                     pack_reconfig_l1_acc(0);
 #endif
-                    tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                    tilize_in<true, !split_reader>(in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 #ifdef SPLIT_READER
-                    tilize_in(
-                        in0_cb_second_reader_id,
-                        in0_subblock_h,
-                        in0_block_w,
-                        in0_num_subblocks_read_last,
-                        tilized_in0_cb_id);
+                    tilize_in<false, true>(
+                        in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
 #endif
 
                     mm_block_init_short_with_both_dt(
@@ -204,6 +219,15 @@ void MAIN {
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
+
+                uint32_t in0_index_subblock_offset = 0;
+                if constexpr (check_skip_compute) {
+                    if (skip_compute) {
+                        cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
+                        continue;
+                    }
+                }
+
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
                 if (last_out) {
@@ -219,7 +243,6 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                 pack_reconfig_data_format(curr_matmul_out_cb);
 #endif
-                uint32_t in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -372,6 +395,11 @@ void MAIN {
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+            }
+            if constexpr (check_skip_compute) {
+                if (skip_compute) {
+                    continue;
+                }
             }
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU

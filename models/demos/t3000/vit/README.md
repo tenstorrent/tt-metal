@@ -1,15 +1,38 @@
-# ViT on T3000
+# ViT
 
-This demo shows how ViT Base patch16-224 runs on T3000 using data parallel execution across multiple devices.
+## Platforms:
+    LoudBox, QuietBox (WH)
 
-## Setup
+## Introduction
+This demo shows how Vision Transformer Base patch16-224 runs using data parallel execution across multiple devices.
 
-Ensure you have the required dependencies and have followed the setup instructions.
+The Vision Transformer (ViT) model was proposed in "An Image is Worth 16x16 Words, Transformers for Image Recognition at Scale".
+It’s the first paper that successfully trains a Transformer encoder on ImageNet, attaining very good results compared to familiar convolutional architectures.
+https://huggingface.co/docs/transformers/en/model_doc/vit
 
-## Tests Overview
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- Login to huggingface with your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+   - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
+## How to Run
 This demo includes two performance tests:
 
+#### Full ImageNet Inference Test
+```bash
+# Run with ImageNet validation data (requires ImageNet dataset)
+pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+```
+
+#### Performance Benchmark Test
+```bash
+# Run with random inputs for performance measurement
+pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
+```
+
+## Testing
+Understand the tests:
 ### 1. Full ImageNet Inference Test (`test_run_vit_trace_2cqs_inference`)
 - **Purpose**: Complete end-to-end inference on ImageNet-1k validation dataset
 - **Features**:
@@ -28,33 +51,16 @@ This demo includes two performance tests:
   - Optimized for performance measurement
 - **Use Case**: Performance benchmarking and optimization
 
-## Running the Tests
-
-### Full ImageNet Inference Test
-```bash
-# Run with ImageNet validation data (requires ImageNet dataset)
-pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
-```
-
-### Performance Benchmark Test
-```bash
-# Run with random inputs for performance measurement
-pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
-```
-
-
-## Data Parallel Implementation
-
+## Details
+### Data Parallel Implementation
 This implementation uses data parallel execution across T3000 devices:
-
 - `device_batch_size`: The batch size per device = 8
 - `batch_size = device_batch_size * num_devices`: Total batch size across all devices (64 for 8 devices)
 - Images are distributed across devices for parallel processing
 - Results are aggregated for final output
 - Performance metrics account for the total system throughput across all devices
 
-## Performance Metrics
-
+### Performance Metrics
 Both tests report:
 - **Inference Time**: Average time per iteration (wall-clock time)
 - **FPS**: Frames per second (total samples processed per second)

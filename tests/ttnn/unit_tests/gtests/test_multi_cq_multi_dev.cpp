@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "common_test_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -25,7 +26,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -49,22 +49,6 @@ struct UnaryWithParam;
 using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
-
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) {
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    for (int i = 0; i < 3; i++) {
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    }
-    output_tensor = ttnn::neg(cq_id, output_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 500);
-    return output_tensor;
-}
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -94,7 +78,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(0));
                 ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto output_tensor = ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::QueueId(1));
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(0), workload_event);
 
@@ -111,7 +95,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
+                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -147,7 +131,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(0), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::DefaultQueueId);
+                auto output_tensor = ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::DefaultQueueId);
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(0));
                 ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -164,7 +148,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
+                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -198,7 +182,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto output_tensor = ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::QueueId(1));
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 ttnn::read_buffer(
@@ -214,7 +198,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
+                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }

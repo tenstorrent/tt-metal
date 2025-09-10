@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -483,22 +484,23 @@ def base_model_name(hf_config):
 
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
+    assert tensor.ndim == inv_scale.ndim
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
     for i, block_dim in enumerate(block_shape):
         inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.bfloat16() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].bfloat16()
+    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
     del inv_scale
     return tensor
 
 
 def get_state_dicts(
-    key: Any,
     dicts: Sequence[dict[str, torch.Tensor] | None],
-    concat_dim: int = 0,
+    key: Any,
     shape: Sequence[int] | None = None,
+    dtype: torch.dtype | None = None,
+    concat_dim: int = 0,
     concat: bool = False,
 ) -> torch.Tensor:
     """Get a weight from a list of state dictionaries and combine them into a single tensor.
@@ -519,12 +521,20 @@ def get_state_dicts(
     )
     assert expected_shape is not None, "At least one dictionary must be non-empty, or a shape must be provided"
 
+    expected_dtype = (
+        next(map(lambda d: d[key].dtype, filter(lambda d: d is not None, dicts)), None) if dtype is None else dtype
+    )
+    assert expected_dtype is not None, "At least one dictionary must be non-empty, or a dtype must be provided"
+
     assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
     assert all(
         d[key].shape == expected_shape for d in dicts if d is not None
-    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries"
+    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
+    assert all(
+        d[key].dtype == expected_dtype for d in dicts if d is not None
+    ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
 
-    tensors = [torch.zeros(expected_shape) if d is None else d[key] for d in dicts]
+    tensors = [torch.zeros(expected_shape).to(dtype) if d is None else d[key] for d in dicts]
 
     if concat:
         return torch.concat(tensors, dim=concat_dim)
@@ -543,11 +553,33 @@ def sub_state_dicts(
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
+TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
+    # Ensure the path has an appropriate extension
+    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
+    memory_config = tensor.memory_config()
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
-    return str(path)
+    return SavedWeight(
+        path=path, memory_config=memory_config
+    )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
+    """Get mesh coordinates for a given mesh shape and optional row and column indices."""
+    if row:
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+    if col:
+        assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]

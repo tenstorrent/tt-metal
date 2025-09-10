@@ -170,3 +170,30 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
 
     assert ttnn_gather.shape == index.shape
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim, runs",
+    [
+        ([64, 64], [64, 32], -1, 10),
+        ([1, 1, 32, 2048 * TILE_HEIGHT], [1, 1, 32, 2048 * TILE_HEIGHT], -1, 2),
+        ([32, 128], [32, 128], -1, 5),
+    ],
+)
+def test_gather_cache_run(input_shape, index_shape, dim, runs, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    for _ in range(runs):
+        ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+        assert ttnn_gather.shape == index.shape
+        assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))

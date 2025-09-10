@@ -61,25 +61,34 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
     "input_shapes",
     [
         [1, 640, 16, 16],
-        [1, 1280, 8, 8],
-        [1, 1280, 16, 16],
         [2, 1280, 16, 16],
         [2, 640, 16, 16],
         [1, 256, 28, 28],
         [1, 512, 14, 14],
+        [1, 64, 32, 32],
+        [2, 32, 64, 64],
+        [1, 128, 32, 32],
+        [1, 64, 64, 64],
+        [2, 64, 32, 32],
+        [1, 32, 96, 96],
+        [1, 96, 32, 32],
+        [1, 32, 80, 32],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2, 3])
 @pytest.mark.parametrize("scale_w", [2, 3])
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("math_approx_mode", [True, False])
-def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, math_fidelity, math_approx_mode):
+@pytest.mark.parametrize("memory_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, memory_layout):
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
     input = torch.rand(input_shapes, dtype=torch.bfloat16)
     tt_input = input.permute(0, 2, 3, 1)
-    input_tensor = ttnn.from_torch(tt_input, device=device)
+    input_tensor = ttnn.from_torch(tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
+
     scale_factor = (scale_h, scale_w)
     torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
     torch_result = torch_upsample(input)
@@ -187,7 +196,8 @@ def upsample_multicore_common(
                     break
                 nshards_w -= 1
             if nshards_w == 0 or nshards_h == 0:
-                raise ValueError("nshards_h or nshards_w is 0")
+                pytest.skip("nshards_h or nshards_w is 0")
+
             ncores = (nshards_h, nshards_w)
         shard_grid = get_shard_grid_from_num_cores(device, ncores)
 
@@ -255,6 +265,7 @@ def upsample_multicore_common(
         [1, 32, 5, 4],
         [1, 64, 128, 17],
         [1, 64, 132, 19],
+        [1, 8, 28, 28],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

@@ -10,13 +10,13 @@
 #include <limits>
 #include <string_view>
 #include <unordered_map>
+#include <enchantum/enchantum.hpp>
 
 #include "assert.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -118,7 +118,7 @@ DispatchSettings DispatchSettings::defaults(
         return eth_defaults(cluster, num_hw_cqs);
     }
 
-    TT_THROW("Default settings for core_type {} is not implemented", magic_enum::enum_name(core_type));
+    TT_THROW("Default settings for core_type {} is not implemented", enchantum::to_string(core_type));
 }
 
 std::vector<std::string> DispatchSettings::get_errors() const {
@@ -168,7 +168,7 @@ DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_
     if (!store.contains(k)) {
         TT_THROW(
             "DispatchSettings is not initialized for CoreType {}, {} CQs",
-            magic_enum::enum_name(core_type),
+            enchantum::to_string(core_type),
             num_hw_cqs);
     }
     return store[k];

@@ -477,14 +477,23 @@ bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return 
 
 bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
 
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    return do_block;
+}
+
 bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
 
 void ProcessorHooks::set_block(bool block) { do_block = block; }
 bool ProcessorHooks::get_block() const { return do_block; }
 
-ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode) {
+ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode) : is_active(true) {
     GraphProcessor::begin_graph_capture(mode);
-    is_active = true;
 }
 ScopedGraphCapture::~ScopedGraphCapture() {
     if (is_active) {

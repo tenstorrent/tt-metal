@@ -11,27 +11,19 @@ void kernel_main() {
     const auto num_cols_per_core = get_arg_val<uint32_t>(2);
     const auto tile_offset = get_arg_val<uint32_t>(3);
 
-    constexpr bool gamma_grad_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool beta_grad_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(2) == 1;
-    constexpr bool beta_grad_has_value = get_compile_time_arg_val(3) == 1;
+    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool beta_grad_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr auto gamma_grad_args = TensorAccessorArgs<2>();
+    constexpr auto beta_grad_args = TensorAccessorArgs<gamma_grad_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_gamma_grad = 16;
     constexpr uint32_t cb_id_beta_grad = 17;
 
     const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
-    const auto gamma_grad_data_format = get_dataformat(cb_id_gamma_grad);
-
-    const InterleavedAddrGenFast<gamma_grad_is_dram> gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
-
     const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
-    const auto beta_grad_data_format = get_dataformat(cb_id_beta_grad);
 
-    const InterleavedAddrGenFast<beta_grad_is_dram> beta_grad_addrg = {
-        .bank_base_address = beta_grad_addr, .page_size = beta_grad_tile_bytes, .data_format = beta_grad_data_format};
+    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr, gamma_grad_tile_bytes);
+    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr, beta_grad_tile_bytes);
 
     constexpr uint32_t onetile = 1;
 

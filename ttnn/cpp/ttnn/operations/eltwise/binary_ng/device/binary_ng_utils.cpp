@@ -4,11 +4,12 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/assert.hpp>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::binary_ng {
 
@@ -139,6 +140,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
                 compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+        case KernelName::ComputeRowColBcastNg:
+            return fmt::format(
+                compute,
+                root_ng,
+                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -190,7 +196,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GTZ;
+            postprocess = unary::UnaryOpType::NEZ;
             break;
         case BinaryOpType::LOGICAL_XOR:
             process_lhs = unary::UnaryOpType::NEZ;
@@ -314,6 +320,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::XLOGY:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::XLOGY;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -334,6 +347,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case SUB:
             if (dtype == DataType::INT32) {
                 return {"sub_int_tile_init();", "sub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"sub_int_tile_init();", "sub_uint32_tile"};
             } else if (dtype == DataType::UINT16) {
                 return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
@@ -349,7 +364,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
-        case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case RSUB:
+            if (dtype == DataType::INT32) {
+                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+            } else {
+                return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            }
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
@@ -411,6 +431,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
+        case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -420,7 +441,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
     if (!is_sfpu_op()) {
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
-        auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
+        auto binary_op_str = enchantum::to_string(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
@@ -512,7 +533,9 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    auto scalar_bf16 = bfloat16::truncate(scalar);
+    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);

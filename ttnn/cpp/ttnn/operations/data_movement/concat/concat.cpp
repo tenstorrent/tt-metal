@@ -12,6 +12,8 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -113,45 +115,18 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     TT_FATAL(
                         input_tensor.layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    auto untilized_tensor = ttnn::untilize(input_tensor);
-                    // untilized, so now we have a padded rm tensor. we slice to
-                    // remove the padding.
-                    const auto& input_shape = input_tensor.logical_shape();
-                    std::vector<uint32_t> begins_vec(input_shape.rank(), 0);
-                    tt::stl::Span<const uint32_t> begins = begins_vec;
-                    tt::stl::Span<const uint32_t> ends = input_shape.view();
-                    std::vector<uint32_t> steps_vec(input_shape.rank(), 1);
-                    tt::stl::Span<const uint32_t> steps = steps_vec;
-
-                    // we now perform a padding-oblivious slice to remove the
-                    // tile padding.
-                    // FIXME: change this to a legit slice call once
-                    // padding-oblivious entry point is uplifted to the slice
-                    // op.
-                    untilized_tensor = tt::tt_metal::operation::run(
-                        SliceDeviceOperation{
-                            ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
-                        {untilized_tensor},
-                        {},
-                        {std::nullopt},
-                        queue_id)[0];
-
-                    untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.logical_shape());
-                    return untilized_tensor;
+                    ttnn::SmallVector<uint32_t> ends(
+                        input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
+                    std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
+                    return ttnn::untilize_with_unpadding(queue_id, input_tensor, ttnn::Shape(ends), std::nullopt);
                 });
             return std::make_tuple(itensors, dim, groups);
         },
         .post_transform = [&logical_output_shape, queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
-            // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
+            // now we have a rm tensor, so we need to re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
-                concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
-                auto tilized =
-                    ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f, output.memory_config());
-                concat_db_print(true, "[DEBUG] tilized");
-                // need to reshape tilized result to logical concat output shape
-                auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
-                return reshaped;
+                return ttnn::tilize_with_val_padding(
+                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config());
             }
             concat_db_print(true, "[DEBUG] already tilized");
             return output;

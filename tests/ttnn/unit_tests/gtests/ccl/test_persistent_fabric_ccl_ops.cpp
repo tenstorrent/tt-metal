@@ -70,7 +70,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
-    size_t page_size = tile_size(DataFormat::Float16);
 
     // Replicate the tensor across (1, num_devices) submesh.
     const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
