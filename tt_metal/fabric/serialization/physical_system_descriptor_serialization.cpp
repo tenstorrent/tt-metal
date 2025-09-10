@@ -187,6 +187,23 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Convert physical to logical ethernet channel mappings
+    for (const auto& [host_name, asic_map] : descriptor.get_physical_to_logical_eth_chan()) {
+        auto* proto_host_mapping = proto_desc->add_physical_to_logical_eth_chan();
+        proto_host_mapping->set_host_name(host_name);
+
+        for (const auto& [asic_id, channel_map] : asic_map) {
+            auto* proto_asic_mapping = proto_host_mapping->add_asic_mappings();
+            proto_asic_mapping->set_asic_id(asic_id);
+
+            for (const auto& [physical_chan, logical_chan] : channel_map) {
+                auto* chan_map = proto_asic_mapping->add_channel_mappings();
+                chan_map->set_physical_channel(physical_chan);
+                chan_map->set_logical_channel(logical_chan);
+            }
+        }
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -244,6 +261,26 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         }
 
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
+    }
+
+    // Convert physical to logical ethernet channel mappings
+    auto& physical_to_logical_eth_chan = descriptor->get_physical_to_logical_eth_chan();
+    for (const auto& proto_host_mapping : proto_desc.physical_to_logical_eth_chan()) {
+        const std::string& host_name = proto_host_mapping.host_name();
+        std::unordered_map<uint64_t, std::unordered_map<uint8_t, uint32_t>> asic_map;
+
+        for (const auto& proto_asic_mapping : proto_host_mapping.asic_mappings()) {
+            uint64_t asic_id = proto_asic_mapping.asic_id();
+            std::unordered_map<uint8_t, uint32_t> channel_map;
+
+            for (const auto& chan_map : proto_asic_mapping.channel_mappings()) {
+                channel_map[static_cast<uint8_t>(chan_map.physical_channel())] = chan_map.logical_channel();
+            }
+
+            asic_map[asic_id] = std::move(channel_map);
+        }
+
+        physical_to_logical_eth_chan[host_name] = std::move(asic_map);
     }
 
     return descriptor;

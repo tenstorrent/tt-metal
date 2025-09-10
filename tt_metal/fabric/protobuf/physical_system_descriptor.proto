@@ -90,6 +90,24 @@ message ExitNodeConnectionTable {
     repeated ExitNodeConnection exit_connections = 2;
 }
 
+// Map entry for physical channel to logical channel
+message PhysicalToLogicalChannelMap {
+    uint32 physical_channel = 1;
+    uint32 logical_channel = 2;
+}
+
+// Map entry for ASIC ID to channel mappings
+message AsicChannelMappings {
+    uint64 asic_id = 1;
+    repeated PhysicalToLogicalChannelMap channel_mappings = 2;
+}
+
+// Map entry for hostname to ASIC channel mappings
+message HostAsicChannelMappings {
+    string host_name = 1;
+    repeated AsicChannelMappings asic_mappings = 2;
+}
+
 // Top-level Physical System Descriptor message
 message PhysicalSystemDescriptor {
     PhysicalConnectivityGraph system_graph = 1;
@@ -97,4 +115,5 @@ message PhysicalSystemDescriptor {
     repeated HostToMoboMap host_to_mobo_name = 3;
     repeated HostToRankMap host_to_rank = 4;
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
+    repeated HostAsicChannelMappings physical_to_logical_eth_chan = 6;
 }
