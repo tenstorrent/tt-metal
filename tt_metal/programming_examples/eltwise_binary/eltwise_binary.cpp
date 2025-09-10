@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,14 +27,16 @@ int main(int argc, char** argv) {
     try {
         // Initialize the device (here we use the 1st device, but you can use any device)
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
-        CommandQueue& cq = device->command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
+        distributed::MeshWorkload workload;
+        auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
@@ -49,16 +52,17 @@ int main(int argc, char** argv) {
 
         // Create 3 buffers on DRAM. These will hold the input and output data. src0 and src1 are the input buffers, dst is the
         // output buffer.
-        InterleavedBufferConfig config{
-            .device = device,                       // The device to create the buffer on
-            .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
-            .page_size = tile_size_bytes,           // The page size of the buffer in bytes. Unlike the `loopback` example, we
-                                                    // need the page size to be the same as the tile size for a large portion of
-                                                    // the NoC transfer APIs to work.
-            .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
-        auto src0_dram_buffer = CreateBuffer(config);
-        auto src1_dram_buffer = CreateBuffer(config);
-        auto dst_dram_buffer = CreateBuffer(config);
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = tile_size_bytes, //The page size of the buffer in bytes. Unlike the `loopback` example, we
+                                          // need the page size to be the same as the tile size for a large portion of the NoC transfer APIs to work.
+            .buffer_type = BufferType::DRAM}; // This is a DRAM buffer.
+        distributed::ReplicatedBufferConfig buffer_config{
+            .size = n_tiles * tile_size_bytes // The size of the buffer in bytes
+        };
+
+        auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
         std::mt19937 rng(std::random_device{}());
@@ -73,8 +77,8 @@ int main(int argc, char** argv) {
         std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
         // Upload the data from host to the device.
-        EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
-        EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -146,14 +150,15 @@ int main(int argc, char** argv) {
         // ensure that the kernel is finished before we read the output buffer. This is done by calling Finish(cq) which waits until
         // all operations in the command queue are finished. This is equivalent to calling EnqueueProgram(cq, program, true); telling
         // Metalium to wait until the program is finished before returning.
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         // Equivalently:
         // EnqueueProgram(cq, program, true);
 
         // Read the output buffer and compare it with the expected output.
         std::vector<bfloat16> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
@@ -168,7 +173,7 @@ int main(int argc, char** argv) {
         }
 
         // Finally, we close the device.
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
         fmt::print(stderr, "{}\n", e.what());
