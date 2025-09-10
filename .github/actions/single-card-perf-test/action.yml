@@ -20,7 +20,7 @@ runs:
         cat Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
         cat Models_Device_Perf_$(date +%Y_%m_%d).csv
         echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      if: ${{ env.PIPELINE != 'model-perf'}}
+      if: ${{ inputs.model_name != ''}}
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
