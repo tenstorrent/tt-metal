@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 #include <compare>
+#include <bit>
 
 class bfloat16 {
 private:
