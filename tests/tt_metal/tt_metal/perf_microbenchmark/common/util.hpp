@@ -33,13 +33,13 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 
     // This works for tensix only, will need to be updated for eth
-    std::vector<uint64_t> print_buffer_addrs = {
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_NC]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_BR]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR0]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
-    };
+    auto num_processors = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX);
+    std::vector<uint64_t> print_buffer_addrs;
+    print_buffer_addrs.reserve(num_processors);
+    for (int i = 0; i < num_processors; i++) {
+        print_buffer_addrs.push_back(reinterpret_cast<uint64_t>(&dprint_msg->data[i]));
+    }
     for (const auto& worker_core : worker_cores_used_in_program) {
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <memory>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
@@ -10,7 +11,6 @@
 #include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -19,6 +19,7 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
+#include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -37,9 +38,8 @@ class IDevice;
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::string golden_output =
+const std::string golden_output_data0 =
     R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
@@ -69,7 +69,9 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-Test Debug Print: Unpack
+)";
+const std::string golden_output_compute =
+    R"(Test Debug Print: Unpack
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
@@ -149,7 +151,9 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-Test Debug Print: Data1
+)";
+const std::string golden_output_data1 =
+    R"(Test Debug Print: Data1
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
@@ -177,9 +181,13 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
+Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
+)";
 
-void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(
+    DPrintMeshFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::string& golden_output) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     distributed::MeshWorkload workload;
@@ -231,11 +239,83 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
     // Check that the expected print messages are in the log file
     EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
 
-TEST_F(DPrintMeshFixture, TensixTestPrintFromAllHarts) {
+struct TestParams {
+    std::string test_name;
+    std::vector<HalProcessorIdentifier> enabled_processors;
+    std::string golden_output;
+};
+
+using enum HalProgrammableCoreType;
+using enum HalProcessorClassType;
+
+class PrintAllHartsFixture : public DPrintMeshFixture, public ::testing::WithParamInterface<TestParams> {
+private:
+    HalProcessorSet original_enabled_processors_;
+
+protected:
+    void ExtraSetUp() override {
+        original_enabled_processors_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        HalProcessorSet processor_set;
+        for (const auto& proc : GetParam().enabled_processors) {
+            processor_set.add(
+                proc.core_type,
+                tt::tt_metal::MetalContext::instance().hal().get_processor_index(
+                    proc.core_type, proc.processor_class, proc.processor_type));
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint, processor_set);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint, original_enabled_processors_);
+    }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    PrintAllHartsTests,
+    PrintAllHartsFixture,
+    ::testing::Values(
+        TestParams{
+            "All",
+            {
+                {TENSIX, DM, 0},
+                {TENSIX, DM, 1},
+                {TENSIX, COMPUTE, 0},
+                {TENSIX, COMPUTE, 1},
+                {TENSIX, COMPUTE, 2},
+            },
+            golden_output_data0 + golden_output_compute + golden_output_data1,
+        },
+        TestParams{
+            "Brisc",
+            {
+                {TENSIX, DM, 0},
+            },
+            golden_output_data0,
+        },
+        TestParams{
+            "BriscCompute",
+            {
+                // DPRINT server timeout if BRISC is disabled.
+                {TENSIX, DM, 0},
+                {TENSIX, COMPUTE, 0},
+                {TENSIX, COMPUTE, 1},
+                {TENSIX, COMPUTE, 2},
+            },
+            golden_output_data0 + golden_output_compute,
+        }),
+    [](const ::testing::TestParamInfo<TestParams>& info) { return info.param.test_name; });
+
+TEST_P(PrintAllHartsFixture, TensixTestPrint) {
     for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
+        this->RunTestOnDevice(
+            [](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, GetParam().golden_output);
+            },
+            mesh_device);
     }
 }
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
