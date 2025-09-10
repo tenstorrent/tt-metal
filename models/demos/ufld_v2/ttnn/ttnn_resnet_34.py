@@ -15,7 +15,7 @@ class TtnnResnet34:
             conv_args.conv1,
             conv_pth.conv1,
             device=self.device,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             dealloc_act=True,
             activation_dtype=ttnn.bfloat8_b,
         )
