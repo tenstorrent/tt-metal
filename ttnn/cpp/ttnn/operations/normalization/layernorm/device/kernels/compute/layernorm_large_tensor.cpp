@@ -342,17 +342,15 @@ void MAIN {
                 cb_push_back(cb_out, blk);
             }
         }
-
-        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
-        cb_xmm = tt::CBIndex::c_24;  // x minus mean
-#ifdef RMSNORM
-        cb_pop_front(cb_ex, 1);
-#endif
         // End of
         // Final Val Calc
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+
+        cb_xmm = tt::CBIndex::c_24;  // x minus mean
+        cb_pop_front(cb_ex, onetile);
+        cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE
