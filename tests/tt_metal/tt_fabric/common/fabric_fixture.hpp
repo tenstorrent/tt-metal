@@ -241,15 +241,15 @@ struct McastRoutingInfo {
 };
 
 void RunTestUnicastRaw(
-    BaseFabricFixture* fixture,
-    uint32_t num_hops = 1,
-    RoutingDirection direction = RoutingDirection::E,
-    bool enable_fabric_tracing = false);
+    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E, bool use_dram_dst = false);
 
 void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
+
+void RunTestUnicastRaw2D(
+    BaseFabricFixture* fixture, uint32_t ns_hops, RoutingDirection ns_dir, uint32_t ew_hops, RoutingDirection ew_dir);
 
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
@@ -261,12 +261,7 @@ void RunTestMCastConnAPI(
 void RunTest2DMCastConnAPI(
     BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops);
 
-void RunTestChipMCast1D(
-    BaseFabricFixture* fixture,
-    RoutingDirection dir,
-    uint32_t start_distance,
-    uint32_t range,
-    bool enable_fabric_tracing = false);
+void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32_t start_distance, uint32_t range);
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
