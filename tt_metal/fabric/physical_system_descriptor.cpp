@@ -34,15 +34,20 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
-    std::vector<uint16_t> ordered_bus_ids;
-    if (mobo_name == "SIENAD8-2L2T") {
-        ordered_bus_ids = {0xc1, 0x01, 0x41, 0x42};
-    } else if (mobo_name == "X12DPG-QT6") {
-        ordered_bus_ids = {0xb1, 0xca, 0x31, 0x4b};
-    } else {
+    static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+    };
+
+    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
+    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
     auto bus_id = tt::tt_metal::MetalContext::instance().get_cluster().get_bus_id(chip_id);
+    TT_FATAL(
+        std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id) != ordered_bus_ids.end(),
+        "Bus ID {} not found.",
+        bus_id);
     auto tray_id =
         std::distance(ordered_bus_ids.begin(), std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id)) + 1;
     return TrayID{tray_id};
@@ -52,7 +57,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
-        const std::string ubb_mobo_name = "S7T-MB";
+        constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
