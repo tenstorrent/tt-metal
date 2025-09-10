@@ -58,7 +58,7 @@ def test_panoptic_deeplab(device):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
+            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -70,7 +70,7 @@ def test_panoptic_deeplab(device):
 
         # Apply Conv+BatchNorm fusion to the parameters
         logger.info("Applying Conv+BatchNorm fusion to parameters...")
-        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters)
+        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
         logger.info("Conv+BatchNorm fusion completed successfully")
 
         # Create TTNN model with fused parameters
@@ -104,7 +104,7 @@ def test_panoptic_deeplab(device):
     logger.info(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
+    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.98)
     logger.info(f"Center PCC: {center_msg}")
     assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 

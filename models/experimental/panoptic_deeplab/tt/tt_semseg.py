@@ -97,15 +97,25 @@ class TtDeepLabV3PlusHead(nn.Module):
                 # Project Conv
                 # Handle both dict and object parameter formats
                 proj_conv_path = base_path["project_conv"] if isinstance(base_path, dict) else base_path.project_conv
-                proj_bias = proj_conv_path.bias if "bias" in proj_conv_path else None
-                proj_params = TtConv2dParameters(weight=proj_conv_path.weight, bias=proj_bias, device=self.device)
+                proj_bias = (
+                    proj_conv_path["bias"]
+                    if isinstance(proj_conv_path, dict) and "bias" in proj_conv_path
+                    else (proj_conv_path.bias if hasattr(proj_conv_path, "bias") else None)
+                )
+                proj_weight = proj_conv_path["weight"] if isinstance(proj_conv_path, dict) else proj_conv_path.weight
+                proj_params = TtConv2dParameters(weight=proj_weight, bias=proj_bias, device=self.device)
                 project_conv = TtConv2d.create(proj_params, stride=(1, 1), padding=(0, 0))
 
                 # Fuse Conv 0
                 fuse_conv_params = base_path["fuse_conv"] if isinstance(base_path, dict) else base_path.fuse_conv
                 fuse0_path = fuse_conv_params[0]
-                fuse0_bias = fuse0_path.bias if "bias" in fuse0_path else None
-                fuse0_params = TtConv2dParameters(weight=fuse0_path.weight, bias=fuse0_bias, device=self.device)
+                fuse0_bias = (
+                    fuse0_path["bias"]
+                    if isinstance(fuse0_path, dict) and "bias" in fuse0_path
+                    else (fuse0_path.bias if hasattr(fuse0_path, "bias") else None)
+                )
+                fuse0_weight = fuse0_path["weight"] if isinstance(fuse0_path, dict) else fuse0_path.weight
+                fuse0_params = TtConv2dParameters(weight=fuse0_weight, bias=fuse0_bias, device=self.device)
 
                 fuse_conv_0_no_slice = TtConv2d.create(fuse0_params, stride=(1, 1), padding=(1, 1))
                 fuse_conv_0_height_slice = TtConv2d.create_with_height_slicing(
@@ -114,8 +124,13 @@ class TtDeepLabV3PlusHead(nn.Module):
 
                 # Fuse Conv 1
                 fuse1_path = fuse_conv_params[1]
-                fuse1_bias = fuse1_path.bias if "bias" in fuse1_path else None
-                fuse1_params = TtConv2dParameters(weight=fuse1_path.weight, bias=fuse1_bias, device=self.device)
+                fuse1_bias = (
+                    fuse1_path["bias"]
+                    if isinstance(fuse1_path, dict) and "bias" in fuse1_path
+                    else (fuse1_path.bias if hasattr(fuse1_path, "bias") else None)
+                )
+                fuse1_weight = fuse1_path["weight"] if isinstance(fuse1_path, dict) else fuse1_path.weight
+                fuse1_params = TtConv2dParameters(weight=fuse1_weight, bias=fuse1_bias, device=self.device)
 
                 fuse_conv_1_no_slice = TtConv2d.create(fuse1_params, stride=(1, 1), padding=(1, 1))
                 fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
@@ -271,9 +286,14 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Handle both dict and object parameter formats
         head_params = parameters["head"] if isinstance(parameters, dict) else parameters.head
         head0_path = head_params[0]
-        head0_bias = head0_path.bias if "bias" in head0_path else None
+        head0_bias = (
+            head0_path["bias"]
+            if isinstance(head0_path, dict) and "bias" in head0_path
+            else (head0_path.bias if hasattr(head0_path, "bias") else None)
+        )
+        head0_weight = head0_path["weight"] if isinstance(head0_path, dict) else head0_path.weight
         head0_params = TtConv2dParameters(
-            weight=head0_path.weight,
+            weight=head0_weight,
             bias=head0_bias,
             device=self.device,
         )
@@ -282,9 +302,14 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Head 1
         head1_path = head_params[1]
-        head1_bias = head1_path.bias if "bias" in head1_path else None
+        head1_bias = (
+            head1_path["bias"]
+            if isinstance(head1_path, dict) and "bias" in head1_path
+            else (head1_path.bias if hasattr(head1_path, "bias") else None)
+        )
+        head1_weight = head1_path["weight"] if isinstance(head1_path, dict) else head1_path.weight
         head1_params = TtConv2dParameters(
-            weight=head1_path.weight,
+            weight=head1_weight,
             bias=head1_bias,
             device=self.device,
         )
@@ -295,9 +320,14 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Predictor
         predictor_params = parameters["predictor"] if isinstance(parameters, dict) else parameters.predictor
         predictor_path = predictor_params
-        predictor_bias = predictor_path.bias if "bias" in predictor_path else None
+        predictor_bias = (
+            predictor_path["bias"]
+            if isinstance(predictor_path, dict) and "bias" in predictor_path
+            else (predictor_path.bias if hasattr(predictor_path, "bias") else None)
+        )
+        predictor_weight = predictor_path["weight"] if isinstance(predictor_path, dict) else predictor_path.weight
         predictor_params = TtConv2dParameters(
-            weight=predictor_path.weight,
+            weight=predictor_weight,
             bias=predictor_bias,
             device=self.device,
         )
