@@ -60,7 +60,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      // created: createdDateFilter
+      created: createdDateFilter
     }
     if (eventType) {
       params.event = eventType;
@@ -119,31 +119,7 @@ async function run() {
     // Load previous cache if it exists
     let previousRuns = [];
     let latestCachedDate = null;
-    // Only consider reading a previous cache when an explicit cache path was provided
-    if (rawCachePath && fs.existsSync(rawCachePath)) {
-      try {
-        const rawCache = fs.readFileSync(rawCachePath, 'utf8');
-        const prev = JSON.parse(rawCache);
-        if (Array.isArray(prev)) {
-          if (prev.length && Array.isArray(prev[0])) {
-            // Array of [name, runs[]] pairs
-            previousRuns = prev.flatMap(([_, runs]) => runs);
-          } else if (prev.length && prev[0] && prev[0].id) {
-            // Array of runs
-            previousRuns = prev;
-          } else {
-            previousRuns = [];
-          }
-        } else if (typeof prev === 'object' && prev !== null) {
-          previousRuns = Object.values(prev).flat();
-        } else {
-          previousRuns = [];
-        }
-        latestCachedDate = getLatestCachedDate(previousRuns);
-      } catch (e) {
-        core.warning('Could not parse previous cache, ignoring.');
-      }
-    }
+
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
