@@ -352,14 +352,10 @@ void set_or_update_runtime_arguments(
 
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
                 // For TTS column broadcast, calculate freq and counter for dedicated kernel
-                const auto& output_shape = output.padded_shape();
-                const auto& tile = output.tensor_spec().tile();
-                uint32_t output_Ht = output_shape[-2] / tile.get_height();
-                uint32_t output_Wt = output_shape[-1] / tile.get_width();
 
-                uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
-                uint32_t start_tw = start_t % output_Wt;
-                uint32_t start_th = start_t / output_Wt;
+                uint32_t start_t = start_tile_id % (cHt * cWt);
+                uint32_t start_tw = start_t % cWt;
+                uint32_t start_th = start_t / cWt;
 
                 // Determine broadcast direction locally based on tensor shapes
                 auto pred_shape_local = predicate_tensor.logical_shape();
@@ -372,11 +368,11 @@ void set_or_update_runtime_arguments(
                 uint32_t freq, counter;
                 if (is_height_broadcast) {
                     // Height broadcast: broadcast every row
-                    freq = output_Ht;
+                    freq = cHt;
                     counter = start_th;
                 } else {
                     // Width broadcast: broadcast every column
-                    freq = output_Wt;
+                    freq = cWt;
                     counter = start_tw;
                 }
 
@@ -390,14 +386,10 @@ void set_or_update_runtime_arguments(
         } else if (variant == WhereVariant::TST) {
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
                 // For TST column broadcast, calculate freq and counter for dedicated kernel
-                const auto& output_shape = output.padded_shape();
-                const auto& tile = output.tensor_spec().tile();
-                uint32_t output_Ht = output_shape[-2] / tile.get_height();
-                uint32_t output_Wt = output_shape[-1] / tile.get_width();
 
-                uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
-                uint32_t start_tw = start_t % output_Wt;
-                uint32_t start_th = start_t / output_Wt;
+                uint32_t start_t = start_tile_id % (cHt * cWt);
+                uint32_t start_tw = start_t % cWt;
+                uint32_t start_th = start_t / cWt;
 
                 // Determine broadcast direction locally based on tensor shapes
                 auto pred_shape_local = predicate_tensor.logical_shape();
@@ -410,11 +402,11 @@ void set_or_update_runtime_arguments(
                 uint32_t freq, counter;
                 if (is_height_broadcast) {
                     // Height broadcast: broadcast every row
-                    freq = output_Ht;
+                    freq = cHt;
                     counter = start_th;
                 } else {
                     // Width broadcast: broadcast every column
-                    freq = output_Wt;
+                    freq = cWt;
                     counter = start_tw;
                 }
 

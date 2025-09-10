@@ -95,12 +95,22 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());
         } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, validate that heights are identical (broadcasting along width)
+            // For column broadcast, validate that heights are identical and exactly one width is 1
             const auto pred_h = predicate_tensor.logical_shape()[-2];
             const auto true_h = value_true_tensor.value().logical_shape()[-2];
+            const auto pred_w = predicate_tensor.logical_shape()[-1];
+            const auto true_w = value_true_tensor.value().logical_shape()[-1];
+
             TT_FATAL(
                 pred_h == true_h,
                 "Where TTS column broadcast requires predicate and value_true heights to be identical. "
+                "Predicate: {}, Value true: {}",
+                predicate_tensor.logical_shape(),
+                value_true_tensor.value().logical_shape());
+
+            TT_FATAL(
+                (pred_w == 1 && true_w > 1) || (true_w == 1 && pred_w > 1),
+                "Where TTS column broadcast requires exactly one of the widths to be 1. "
                 "Predicate: {}, Value true: {}",
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());
@@ -117,12 +127,22 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 predicate_tensor.logical_shape(),
                 value_false_tensor.value().logical_shape());
         } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, validate that heights are identical (broadcasting along width)
+            // For column broadcast, validate that heights are identical and exactly one width is 1
             const auto pred_h = predicate_tensor.logical_shape()[-2];
             const auto false_h = value_false_tensor.value().logical_shape()[-2];
+            const auto pred_w = predicate_tensor.logical_shape()[-1];
+            const auto false_w = value_false_tensor.value().logical_shape()[-1];
+
             TT_FATAL(
                 pred_h == false_h,
                 "Where TST column broadcast requires predicate and value_false heights to be identical. "
+                "Predicate: {}, Value false: {}",
+                predicate_tensor.logical_shape(),
+                value_false_tensor.value().logical_shape());
+
+            TT_FATAL(
+                (pred_w == 1 && false_w > 1) || (false_w == 1 && pred_w > 1),
+                "Where TST column broadcast requires exactly one of the widths to be 1. "
                 "Predicate: {}, Value false: {}",
                 predicate_tensor.logical_shape(),
                 value_false_tensor.value().logical_shape());
