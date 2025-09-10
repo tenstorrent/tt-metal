@@ -36,7 +36,7 @@ TEST_F(TensorTopologyTest, SingleDevice) {
 
     // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.distribution_shape(), mesh_mapper_config.mesh_shape_override);
     EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto coord = MeshCoordinate(0);
@@ -74,7 +74,7 @@ TEST_F(TensorTopology2x4Test, Replicate2D) {
 
     // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.distribution_shape(), mesh_mapper_config.mesh_shape_override);
     EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto check_neighbors_2d = [&tensor_topology](const MeshCoordinate& coord) {
@@ -144,7 +144,7 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     // Tensor topology for tensor sharded across 1 dimension should be 1D shape with number of actual shards (ie.
     // num_devices)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(num_devices));
+    EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(num_devices));
     EXPECT_EQ(
         tensor_topology.placements(), (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{1}}));
 
