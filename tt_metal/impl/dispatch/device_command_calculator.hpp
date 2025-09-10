@@ -47,6 +47,8 @@ public:
         }
     }
 
+    void add_alignment() { this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment); }
+
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(uint32_t data_sizeB) {
         this->add_prefetch_relay_inline();
@@ -120,8 +122,8 @@ public:
         if constexpr (inline_data) {
             uint32_t data_sizeB = page_size * pages;
             this->add_data(data_sizeB);
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
-        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_prefetch_relay_paged() {

@@ -151,7 +151,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_paged<false>(1, 5);
         // Do PCIE alignment for out-of-line data
-        calculator.add_data<false>(0);
+        calculator.add_alignment();
         HostMemDeviceCommand command(calculator.write_offset_bytes());
         command.add_dispatch_write_paged<false>(false, 0, 0, 0, 1, 5);
         command.align_write_offset();
