@@ -784,4 +784,6 @@ gathered = []
 for output in outputs:
     gathered.append(output.to(devices[0]))
 
+# Concatenate gathered outputs along the column dimension to complete all-gather
+final_result = torch.cat(gathered, dim=3)
 ```
