@@ -845,7 +845,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
-        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
             uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
@@ -1060,13 +1059,13 @@ KernelHandle CreateEthernetKernel(
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <
-            MetalContext::instance().hal().get_processor_classes_count(eth_core_type),
+            MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
+        MetalContext::instance().hal().get_num_risc_processors(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
