@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@kkabilar-reorg-modelperf2
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -365,11 +365,11 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@kkabilar-reorg-modelperf2
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@kkabilar-reorg-modelperf2
         if: always()
