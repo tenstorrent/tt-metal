@@ -118,9 +118,14 @@ class TtDeepLabV3PlusHead(nn.Module):
                 fuse0_params = TtConv2dParameters(weight=fuse0_weight, bias=fuse0_bias, device=self.device)
 
                 fuse_conv_0_no_slice = TtConv2d.create(fuse0_params, stride=(1, 1), padding=(1, 1))
-                fuse_conv_0_height_slice = TtConv2d.create_with_height_slicing(
-                    fuse0_params, num_slices=4, stride=(1, 1), padding=(1, 1)
-                )
+                if fuse0_params.in_channels == 160:
+                    fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
+                        fuse0_params, num_slices=5, stride=(1, 1), padding=(1, 1)
+                    )
+                else:
+                    fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
+                        fuse0_params, num_slices=4, stride=(1, 1), padding=(1, 1)
+                    )
 
                 # Fuse Conv 1
                 fuse1_path = fuse_conv_params[1]
@@ -140,7 +145,7 @@ class TtDeepLabV3PlusHead(nn.Module):
                 # With fused Conv+BN, we no longer need separate normalization layers
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
-                decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_height_slice
+                decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_slice
                 decoder_stage["fuse_conv_1_no_slice"] = fuse_conv_1_no_slice
                 decoder_stage["fuse_conv_1_height_slice"] = fuse_conv_1_height_slice
 
