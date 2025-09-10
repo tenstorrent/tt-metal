@@ -55,6 +55,7 @@ struct PhysicalPortEndpoint {
     std::string aisle;
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
+    TrayId tray_id{0};
     PortType port_type = PortType::QSFP;
     PortId port_id{0};
 
