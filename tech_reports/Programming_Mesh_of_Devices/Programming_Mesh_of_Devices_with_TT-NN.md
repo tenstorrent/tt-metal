@@ -169,7 +169,7 @@ torch_tensor = torch.zeros(1, 1, 32, 64)
 torch_tensor[..., 0:32] = 1.0
 torch_tensor[..., 32:64] = 2.0
 
-# Create a mesh mapper. Given a mesh device shape, placements specify replication or sharding of data per each dimention of the mesh shape.
+# Create a mesh mapper. Given a mesh device shape, placements specify replication or sharding of data per each dimension of the mesh shape.
 mesh_mapper = ttnn.create_mesh_mapper(
     mesh_device,
     ttnn.MeshMapperConfig(
