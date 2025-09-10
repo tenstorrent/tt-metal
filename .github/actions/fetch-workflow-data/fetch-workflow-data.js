@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Constants for pagination and filtering
-const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
+const MAX_PAGES = 200; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
 
@@ -156,7 +156,7 @@ async function run() {
     core.info('Fetching all runs...');
     const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
-    await delay(2000);
+    await delay(5000);
 
     core.info('Fetching scheduled runs...');
     const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');

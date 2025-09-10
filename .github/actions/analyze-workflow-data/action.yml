@@ -34,6 +34,8 @@ outputs:
     description: 'JSON array of workflow names that have failed their latest run on the main branch'
   report:
     description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
+  regressed_workflows:
+    description: 'JSON array of objects {name, run_id, run_url, created_at} for workflows that regressed (success -> fail)'
 
 runs:
   using: 'node20'

@@ -405,6 +405,14 @@ async function run() {
       if (!latest) return null;
       return latest.conclusion === 'success' ? 'success' : 'failure';
     };
+    const computeLatestRunInfo = (runs) => {
+      const mainBranchRuns = runs
+        .filter(r => r.head_branch === 'main')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = mainBranchRuns[0];
+      if (!latest) return null;
+      return { id: latest.id, url: latest.html_url, created_at: latest.created_at };
+    };
 
     const allNames = new Set([
       ...Array.from(filteredGrouped.keys()),
@@ -412,6 +420,7 @@ async function run() {
     ]);
 
     const changes = [];
+    const regressedDetails = [];
     for (const name of allNames) {
       const currentRuns = filteredGrouped.get(name);
       const previousRuns = filteredPreviousGrouped.get(name);
@@ -427,7 +436,11 @@ async function run() {
       else if (previous === 'success' && current !== 'success') change = 'success_to_fail';
 
       if (change) {
-        changes.push({ name, previous, current, change });
+        const info = computeLatestRunInfo(currentRuns);
+        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at });
+        if (change === 'success_to_fail' && info) {
+          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at });
+        }
       }
     }
 
@@ -455,6 +468,7 @@ async function run() {
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);
+    core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
 
     await core.summary.addRaw(finalReport).write();
 
