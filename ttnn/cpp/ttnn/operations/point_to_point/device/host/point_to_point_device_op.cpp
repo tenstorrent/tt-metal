@@ -192,17 +192,22 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    log_info(tt::LogAlways, "Creating mesh workload for point to point");
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
 
+    log_info(tt::LogAlways, "Getting mesh device");
     auto mesh_device = tensor_args.input_tensor.device();
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    log_info(tt::LogAlways, "Getting available cores");
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    log_info(tt::LogAlways, "Creating semaphore");
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    log_info(tt::LogAlways, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    log_info(tt::LogAlways, "Devices synchronized and all devices are ready");
 
     const auto& coords = tensor_coords.coords();
     for (const auto& c : use_coords) {
