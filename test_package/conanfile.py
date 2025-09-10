@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 from conan import ConanFile
 from conan.tools.cmake import cmake_layout, CMake
 from conan.tools.env import VirtualRunEnv
