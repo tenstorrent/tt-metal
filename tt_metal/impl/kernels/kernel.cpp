@@ -470,7 +470,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
 detail::KernelMeta Kernel::meta(IDevice* device) const {
-    detail::KernelMeta res {
+    detail::KernelMeta result {
         .name = this->kernel_full_name_,
         .source = this->kernel_src_.source_,
         .processor_class = get_kernel_processor_class(),
@@ -478,19 +478,20 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
     };
 
     if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-        res.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+        result.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
     }
 
     if (device != nullptr) {
-        res.binary_meta.reserve(this->expected_num_binaries());
+        result.binary_meta.reserve(this->expected_num_binaries());
         for (int i = 0; i < this->expected_num_binaries(); i++) {
-            res.binary_meta.push_back({
+            result.binary_meta.push_back({
                 .processor_type = this->get_kernel_processor_type(i),
                 .packed_size = this->get_binary_packed_size(device, i),
             });
         }
     }
-    return res;
+
+    return result;
 }
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
