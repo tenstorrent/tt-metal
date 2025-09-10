@@ -77,10 +77,6 @@ RunTimeOptions::RunTimeOptions() {
     ParseWatcherEnv();
     ParseInspectorEnv();
 
-    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-        ParseFeatureEnv((RunTimeDebugFeatures)i);
-    }
-
     test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
@@ -387,14 +383,14 @@ void RunTimeOptions::ParseInspectorEnv() {
     }
 }
 
-void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
+void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
     std::string feature_env_prefix("TT_METAL_");
     feature_env_prefix += RunTimeDebugFeatureNames[feature];
 
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
-    ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
+    ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
     ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
@@ -510,50 +506,27 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
     feature_targets[feature].chip_ids = chips;
 }
 
-void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var) {
-    uint32_t riscv_mask = 0;
-    char* env_var_str = std::getenv(env_var.c_str());
+void RunTimeOptions::ParseFeatureRiscvMask(
+    RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal) {
+    const char* env_var_str = std::getenv(env_var.c_str());
 
     if (env_var_str != nullptr) {
-        if (strstr(env_var_str, "BR")) {
-            riscv_mask |= RISCV_BR;
-        }
-        if (strstr(env_var_str, "NC")) {
-            riscv_mask |= RISCV_NC;
-        }
-        if (strstr(env_var_str, "TR0")) {
-            riscv_mask |= RISCV_TR0;
-        }
-        if (strstr(env_var_str, "TR1")) {
-            riscv_mask |= RISCV_TR1;
-        }
-        if (strstr(env_var_str, "TR2")) {
-            riscv_mask |= RISCV_TR2;
-        }
-        if (strstr(env_var_str, "TR*")) {
-            riscv_mask |= (RISCV_TR0 | RISCV_TR1 | RISCV_TR2);
-        }
-        if (strstr(env_var_str, "ER0")) {
-            riscv_mask |= RISCV_ER0;
-        }
-        if (strstr(env_var_str, "ER1")) {
-            riscv_mask |= RISCV_ER1;
-        }
-        if (strstr(env_var_str, "ER*")) {
-            riscv_mask |= (RISCV_ER0 | RISCV_ER1);
-        }
-        if (riscv_mask == 0) {
-            TT_THROW(
-                "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", env_var_str);
-        }
+        feature_targets[feature].processors = hal.parse_processor_set_spec(env_var_str);
     } else {
         // Default is all RISCVs enabled.
         bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        riscv_mask =
-            default_disabled ? 0 : (RISCV_ER0 | RISCV_ER1 | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
+        if (!default_disabled) {
+            auto& processors = feature_targets[feature].processors;
+            uint32_t num_core_types = hal.get_programmable_core_type_count();
+            for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
+                auto core_type = hal.get_programmable_core_type(core_type_index);
+                uint32_t num_processors = hal.get_num_risc_processors(core_type);
+                for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
+                    processors.add(core_type, processor_index);
+                }
+            }
+        }
     }
-
-    feature_targets[feature].riscv_mask = riscv_mask;
 }
 
 void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var) {
