@@ -213,7 +213,7 @@ Tests:
 
     patterns:
       - type: all_to_one_random
-      - iterations: 10
+        iterations: 10
 
 
   - name: "PacketSizesMeshAllToOneUnicastDynamic"
@@ -247,7 +247,7 @@ Tests:
 
     patterns:
       - type: all_to_one_random
-      - iterations: 10
+        iterations: 10
 
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:
