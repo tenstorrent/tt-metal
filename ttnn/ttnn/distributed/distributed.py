@@ -37,7 +37,7 @@ class TensorShardingInfo:
         self.mesh_shape = list(tensor.device().shape) if tensor.device() else list(tensor.host_buffer().shape())
         self.mesh_coords = self.topology.mesh_coords()
 
-        assert len(self.distribution_shape) <= 2, "Tensor visualization only supports up to 2D meshes"
+        assert len(self.mesh_shape) <= 2, "Tensor visualization only supports up to 2D meshes"
 
         self.reverse_coord_mapper = self._create_coordinate_mapper()
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
@@ -116,7 +116,7 @@ class TensorShardingInfo:
 
                     # Record representative for each distribution axis
                     if distribution_shape_rank == 1:
-                        mapping[0][distribution_coord[0]] = device_id
+                        mapping[0][distribution_coord] = device_id
                     elif distribution_shape_rank == 2:
                         mapping[0][distribution_coord[0]] = device_id
                         mapping[1][distribution_coord[1]] = device_id
