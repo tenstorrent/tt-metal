@@ -3,8 +3,6 @@
 Vector addition using custom SFPU
 =================================
 
-The SFPU (Special Function Processing Unit) is a programmable vector engine designed for efficient computation of mathematical operations. Many functions in the compute API library, such as ``sin``, ``cos``, ``exp``, ``relu``, and ``tanh``, are implemented using the SFPU. By programming the SFPU directly, users can implement custom mathematical functions that are not available in the standard library, which is useful for specialized HPC workloads.
-
 This example demonstrates how to program the vector engine to perform the simplest operation - vector addition. This example serves as a starting point for users looking to implement custom SFPU operations. We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpu_kernel_add`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_custom_sfpu_kernel_add`` executable in the ``build/programming_examples`` directory. For example:
@@ -23,69 +21,31 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
 Program setup
 -------------
 
-The host-side code sets up the device, buffers, and kernels. It's similar to other examples, but we'll highlight the key parts for this custom SFPU example.
+This example assumes familiarity with basic Metalium concepts like device initialization, buffer creation, circular buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to SFPU programming.
 
-First, we initialize the device and create DRAM buffers for two inputs (``src0``, ``src1``) and one output (``dst``).
+The host-side setup for this custom SFPU example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/custom_sfpu_kernel_add.cpp
+    // Standard device and program setup
     constexpr int device_id = 0;
     IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
-    constexpr CoreCoord core = {0, 0};
 
-    constexpr uint32_t n_tiles = 64;
-    constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-
-    InterleavedBufferConfig config{
-        .device = device,
-        .size = n_tiles * tile_size_bytes,
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM
-    };
+    // DRAM buffers: two inputs + one output
     auto src0_dram_buffer = CreateBuffer(config);
     auto src1_dram_buffer = CreateBuffer(config);
     auto dst_dram_buffer = CreateBuffer(config);
 
-Next, we create circular buffers (CBs) for communication between the data movement and compute kernels on the Tensix core. We'll use two CBs for input (``cb_in0``, ``cb_in1``) and one for output (``cb_out0``).
+    // Circular buffers for kernel communication
+    CreateCircularBuffer(program, core, /* cb_in0 config */);
+    CreateCircularBuffer(program, core, /* cb_in1 config */);
+    CreateCircularBuffer(program, core, /* cb_out0 config */);
 
-.. code-block:: cpp
-
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/custom_sfpu_kernel_add.cpp
-    constexpr uint32_t tiles_per_cb = 2;
-    tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-    CreateCircularBuffer(program, core, CircularBufferConfig(tiles_per_cb * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, tile_size_bytes));
-
-    tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-    CreateCircularBuffer(program, core, CircularBufferConfig(tiles_per_cb * tile_size_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, tile_size_bytes));
-
-    tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-    CreateCircularBuffer(program, core, CircularBufferConfig(tiles_per_cb * tile_size_bytes, {{dst_cb_index, tt::DataFormat::Float16_b}}).set_page_size(dst_cb_index, tile_size_bytes));
-
-Finally, we create the kernels. This example uses a reader, a writer, and a compute kernel.
-
-.. code-block:: cpp
-
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/custom_sfpu_kernel_add.cpp
-    auto reader = CreateKernel(
-        program,
-        "custom_sfpu_kernel_add/kernels/dataflow/read_tiles.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, ...});
-
-    auto writer = CreateKernel(
-        program,
-        "custom_sfpu_kernel_add/kernels/dataflow/write_tile.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, ...});
-
-    auto compute = CreateKernel(
-        program,
-        "custom_sfpu_kernel_add/kernels/compute/tiles_add.cpp",
-        core,
-        ComputeConfig{});
+    // Kernels: reader, writer, and custom SFPU compute
+    auto reader = CreateKernel(program, "..../read_tiles.cpp", core, DataMovementConfig{...});
+    auto writer = CreateKernel(program, "..../write_tile.cpp", core, DataMovementConfig{...});
+    auto compute = CreateKernel(program, "..../tiles_add.cpp", core, ComputeConfig{});
 
 The Kernels
 -----------
@@ -102,13 +62,14 @@ The reader kernel reads tiles from two source DRAM buffers and pushes them into 
         // ...
         for (uint32_t i = 0; i < num_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
-            noc_async_read_tile(i, src0_dram_addr, l1_buffer_addr);
+            cb_reserve_back(cb_in1, 1);
+            uint32_t cb_in0_addr = get_write_ptr(cb_in0);
+            uint32_t cb_in1_addr = get_write_ptr(cb_in1);
+            noc_async_read_tile(i, in0, cb_in0_addr);
+            noc_async_read_tile(i, in1, cb_in1_addr);
+
             noc_async_read_barrier();
             cb_push_back(cb_in0, 1);
-
-            cb_reserve_back(cb_in1, 1);
-            noc_async_read_tile(i, src1_dram_addr, l1_buffer_addr);
-            noc_async_read_barrier();
             cb_push_back(cb_in1, 1);
         }
     }
@@ -120,9 +81,10 @@ The writer kernel is straightforward: it reads result tiles from the output circ
     // tt_metal/programming_examples/custom_sfpu_kernel_add/kernels/dataflow/write_tile.cpp
     void kernel_main() {
         // ...
-        for (uint32_t i = 0; i < num_tiles; i++) {
+        for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);
-            noc_async_write_tile(i, l1_buffer_addr, dst_dram_addr);
+            uint32_t cb_out0_addr = get_read_ptr(cb_out0);
+            noc_async_write_tile(i, out0, cb_out0_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_out0, 1);
         }
