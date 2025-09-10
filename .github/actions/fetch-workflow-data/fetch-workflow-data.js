@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Constants for pagination and filtering
-const MAX_PAGES = 200; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
+const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
 
