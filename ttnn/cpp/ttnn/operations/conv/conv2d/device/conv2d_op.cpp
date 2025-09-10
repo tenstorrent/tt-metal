@@ -278,7 +278,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         block_config,
         parallelization_config,
         weights_shape,
-        std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+        sliding_window_config,
         Conv2dConfig{
             .weights_dtype = input_tensor_b.dtype(),
             .config_tensors_in_dram = this->config_tensors_in_dram,

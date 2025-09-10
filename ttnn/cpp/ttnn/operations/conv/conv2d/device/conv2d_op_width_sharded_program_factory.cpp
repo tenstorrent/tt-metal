@@ -378,6 +378,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         p_config,
         b.padded_shape(),
         {filter_h, filter_w},
+        {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
         conv_config,
         a.dtype(),
         output.dtype(),
