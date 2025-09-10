@@ -1235,7 +1235,6 @@ def test_demo_text(
     if token_accuracy:
         total_top1_acc = math.ceil(acc[0] * 100)
         total_top5_acc = math.ceil(acc[1] * 100)
-        # logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
 
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
