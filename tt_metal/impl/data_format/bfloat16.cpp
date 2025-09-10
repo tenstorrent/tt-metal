@@ -36,6 +36,19 @@ bfloat16 bfloat16::truncate(float float_num) {
     return bfloat16_from_bits(U32 >> 16);
 }
 
+// -- Comparison Operators ---
+bool bfloat16::operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); }
+
+bool bfloat16::operator!=(bfloat16 rhs) const { return !(*this == rhs); }
+
+bool bfloat16::operator<(bfloat16 rhs) const { return static_cast<float>(*this) < static_cast<float>(rhs); }
+
+bool bfloat16::operator<=(bfloat16 rhs) const { return static_cast<float>(*this) <= static_cast<float>(rhs); }
+
+bool bfloat16::operator>(bfloat16 rhs) const { return static_cast<float>(*this) > static_cast<float>(rhs); }
+
+bool bfloat16::operator>=(bfloat16 rhs) const { return static_cast<float>(*this) >= static_cast<float>(rhs); }
+
 // -- Arithmetic Operators ---
 bfloat16& bfloat16::operator+=(bfloat16 rhs) noexcept {
     *this = *this + rhs;
