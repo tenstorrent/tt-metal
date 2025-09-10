@@ -156,7 +156,7 @@ async function run() {
     const prRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
     // 2. Combine all the results into a single array
-    const newRuns = [...scheduledRuns, ...manualRuns, ...prRuns];
+    const newRuns = [...scheduledRuns, ...prRuns];
 
     core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
 
