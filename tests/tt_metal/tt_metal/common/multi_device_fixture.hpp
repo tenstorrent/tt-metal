@@ -14,7 +14,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "system_mesh.hpp"
 #include <umd/device/types/arch.hpp>

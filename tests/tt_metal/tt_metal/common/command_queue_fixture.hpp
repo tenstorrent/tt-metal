@@ -8,7 +8,6 @@
 #include <cstdint>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>

@@ -22,7 +22,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
