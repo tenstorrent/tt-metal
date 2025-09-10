@@ -100,7 +100,12 @@ RUN umask 000 && python3 -m pip config set global.extra-index-url https://downlo
 
 COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
-RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then /opt/tt_metal_infra/scripts/install_debugger.sh; fi
+RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
+        echo "Installing debugger for Ubuntu 22.04..." && \
+        /opt/tt_metal_infra/scripts/install_debugger.sh && \
+        echo "Debugger installation completed" && \
+        python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
+    fi
 
 #############################################################
 
