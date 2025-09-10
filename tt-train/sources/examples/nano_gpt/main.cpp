@@ -168,49 +168,14 @@ void generate(
     uint32_t next_token_id = 0;
     float logit_pad = -1e8F;
 
-    // auto logits_tensor = ttml::core::zeros(
-    //     ttnn::Shape({1U, 1U, static_cast<uint32_t>(top_k), 1U}),
-    //     device);
-
     auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
         std::vector<float>(original_vocab_size, 0),
         ttnn::Shape({1, 1, 1, original_vocab_size}),
         device,
         ttnn::Layout::ROW_MAJOR);
 
-    // auto top_k_results_tensor = ttml::core::zeros(
-    //     ttnn::Shape({1U, 1U, SamplingBatchSize, static_cast<uint32_t>(top_k)}),
-    //     device);
-    // auto top_k_indices_tensor = ttml::core::zeros(
-    //     ttnn::Shape({1U, 1U, SamplingBatchSize, static_cast<uint32_t>(top_k)}),
-    //     device, tt::tt_metal::DataType::UINT32);
-
-    // auto top_k_results_vector = std::vector<ttnn::Tensor>();
-
-    // auto top_k_idx_vector = std::vector<uint32_t>();
-
-    // auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector_size);
-    // std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
-
-    // auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-    //     input_idx_vector, ttnn::Shape({1, 1, 1, padded_logits_vector_size}), device, ttnn::Layout::ROW_MAJOR);
-    // idx_tensor = ttnn::repeat(idx_tensor, repeats);
-
-    // auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-    //     std::vector<uint32_t>(32, 1U), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-    // auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-    //     std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-    // auto temp_tensor = ttml::core::from_vector(
-    //     std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
     auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
 
-    // ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
-    //     {0, 0},
-    //     {0, 0},
-    //     {0, 0},
-    //     {0, padded_top_k - top_k}};
-
-    // std::vector<float> logits_vector;
     std::vector<uint32_t> next_token_vector;
     // std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> top_k_tuple;
 
@@ -255,51 +220,6 @@ void generate(
 
         logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
             logits_vector, ttnn::Shape({1, 1, 1, original_vocab_size}), device, ttnn::Layout::ROW_MAJOR);
-
-        // logits_tensor = ttnn::pad(ttnn::DefaultQueueId,
-        //                             logits_tensor,
-        //                             padding,
-        //                             logit_pad);
-
-        // logits_tensor = ttnn::repeat(logits_tensor, repeats);
-
-        // top_k_tuple = {top_k_results_tensor, top_k_indices_tensor};
-
-        // top_k_results_vector=ttnn::topk(ttnn::DefaultQueueId,
-        //     logits_tensor,
-        //     top_k,
-        //     -1,
-        //     true,
-        //     false,
-        //     std::nullopt, std::nullopt, std::nullopt,
-        //     top_k_tuple);
-
-        // top_k_results_tensor = top_k_results_vector[0];
-        // top_k_indices_tensor = top_k_results_vector[1];
-
-        // if(top_k_results_tensor.logical_shape()[3] != padded_top_k)
-        // {
-
-        //     top_k_results_tensor =
-        //     ttnn::pad(ttnn::DefaultQueueId,
-        //             top_k_results_tensor,
-        //             padding,
-        //             logit_pad);
-
-        // }
-
-        // top_k_idx_vector = top_k_indices_tensor.to_vector<uint32_t>();
-        // top_k_idx_vector.resize(padded_top_k * SamplingBatchSize, vocab_size + 1U);
-
-        // top_k_indices_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        //     top_k_idx_vector, ttnn::Shape({1, 1, SamplingBatchSize, padded_top_k}), device, ttnn::Layout::ROW_MAJOR);
-
-        // next_token_tensor = ttnn::sampling(
-        //     top_k_results_tensor,
-        //     top_k_indices_tensor,
-        //     top_k_tensor,
-        //     top_p_tensor,
-        //     temp_tensor);
 
         next_token_tensor = ttnn::argmax(ttnn::DefaultQueueId, logits_tensor, -1);
 
