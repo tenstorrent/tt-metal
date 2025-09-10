@@ -11,6 +11,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn {
 
@@ -22,8 +23,8 @@ struct Conv2dConfig {
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
-    // Either "relu" or ""
-    std::string activation = "";
+    // Fused activation function as UnaryWithParam
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -236,7 +237,7 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias;
-    std::string activation = "";
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -252,7 +253,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        std::string activation,
+        std::optional<ttnn::operations::unary::UnaryWithParam> activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -336,7 +337,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,

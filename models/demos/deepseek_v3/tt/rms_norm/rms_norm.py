@@ -80,5 +80,4 @@ class RMSNorm(RMSNormBase):
         Returns:
             Output tensor after embedding lookup
         """
-        pc = cls._get_pc(x.memory_config())
-        return ttnn.rms_norm(x, program_config=pc, **cfg)
+        return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
