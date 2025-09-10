@@ -353,7 +353,7 @@ def test_tt_model_acc(
             0, 0, 0, 0
         ]
 
-        ttnn.plus_one(current_pos_tensor)
+        ttnn.plus_one(current_pos_tensor, skip_negative_entries=True)
 
         # Update rot_mats for next iteration
         current_pos += 1
