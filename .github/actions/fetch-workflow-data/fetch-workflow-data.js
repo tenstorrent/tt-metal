@@ -81,7 +81,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       }
     }
     // If we got fewer runs than requested, we've reached the end
-    if (runs.workflow_runs.length < RUNS_PER_PAGE) break;
+    // if (runs.workflow_runs.length < RUNS_PER_PAGE) break;
   }
   return allRuns;
 }
