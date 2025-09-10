@@ -1846,7 +1846,9 @@ def test_unet_conv_wh(
         (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 16 * 32}),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32}),
+        # Issue #28172 fix bug with weights preparation in case conv maps to matmul
+        # and input tensor is interleaved and auto shard is used.
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32} if is_wormhole_b0() else None),
     ),
 )
 @pytest.mark.parametrize(
