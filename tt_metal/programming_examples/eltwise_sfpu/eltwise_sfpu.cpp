@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -26,14 +27,16 @@ int main() {
     try {
         // Initialize the device (here we use the 1st device, but you can use any device)
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
-        CommandQueue& cq = device->command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a give time. Metalium allows you to run different kernels on different cores
         // simultaneously.
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
@@ -44,16 +47,16 @@ int main() {
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
         // Allocate DRAM buffers for the input and output data.
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = tile_size_bytes * n_tiles,
-            .page_size = tile_size_bytes,
-            .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = tile_size_bytes, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig buffer_config{.size = tile_size_bytes * n_tiles};
 
         // Allocate a input and output buffer on DRAM. We will perform an unary operation on the input buffer and write
         // the result
-        std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-        std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+        std::shared_ptr<distributed::MeshBuffer> src0_dram_buffer =
+            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
+            distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
         // Allocate 2 circular buffers for input and output.
         constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -111,7 +114,7 @@ int main() {
         // Write the data on host to the input buffer on the device.
         // setting blocking to false allows us to overlap the data movement and following host operations (
         // setting kerenel args) in this case
-        EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
 
         // setup the runtime arguments for the kernels.
         SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
@@ -127,12 +130,13 @@ int main() {
         SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), n_tiles});
 
         // execute the program and wait for it to finish
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         // Read the result and compare to our expected result
         std::vector<bfloat16> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 
         // Compute the same thing on CPU for comparison
 
@@ -148,7 +152,7 @@ int main() {
             }
         }
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
