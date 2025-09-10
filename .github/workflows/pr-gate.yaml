@@ -178,9 +178,10 @@ jobs:
   ttsim-integration-tests:
     needs: [ build, find-changed-files ]
     if: ${{
-        github.ref_name == 'main' ||
+        (github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true'
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true') &&
+        github.event.pull_request.head.repo.fork == false
       }}
     strategy:
       fail-fast: false
