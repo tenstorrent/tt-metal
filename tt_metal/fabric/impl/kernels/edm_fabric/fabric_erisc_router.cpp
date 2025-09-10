@@ -339,9 +339,9 @@ FORCE_INLINE void send_next_data(
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    WATCHER_RING_BUFFER_PUSH(
-        (uint)pkt_header
-            ->src_ch_id);  // messes up timing or instruction schedule enough to make the asserts below never trip
+    // WATCHER_RING_BUFFER_PUSH(
+    //     (uint)pkt_header
+    //         ->src_ch_id);  // messes up timing or instruction schedule enough to make the asserts below never trip
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     ASSERT(dest_addr == receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
@@ -364,6 +364,17 @@ FORCE_INLINE void send_next_data(
         if (ch_id != 7) {
             WATCHER_RING_BUFFER_PUSH((uint)0xABABABAB);
             WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            invalidate_l1_cache();
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            pkt_header->src_ch_id = 7;
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
             ASSERT(false);
         }
     } else if constexpr (sender_channel_index == 1) {
@@ -371,6 +382,20 @@ FORCE_INLINE void send_next_data(
             WATCHER_RING_BUFFER_PUSH((uint)0xCBCBCBCB);
             WATCHER_RING_BUFFER_PUSH((uint)ch_id);
             // Got this capture: 0x00000007,0xcbcbcbcb,0x00000007; means the value was not written through
+            invalidate_l1_cache();
+
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (OLD) INCORRECT VALUE
+            // With invalidation, we get this capture: 0x00000007,0xcbcbcbcb,0x0000001f; means the value was not written
+            // through
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            pkt_header->src_ch_id = 31;
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (NEW) CORRECT VALUE
             ASSERT(false);
         }
 
@@ -378,6 +403,17 @@ FORCE_INLINE void send_next_data(
         if (ch_id != 65) {
             WATCHER_RING_BUFFER_PUSH((uint)0xDCDCDCDC);
             WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            invalidate_l1_cache();
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            pkt_header->src_ch_id = 65;
+            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
             ASSERT(false);
         }
 
