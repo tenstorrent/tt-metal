@@ -1708,6 +1708,63 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
     return 0;
 }
 
+template <>
+void ControlPlane::write_all_to_all_routing_fields<1, true>(MeshId mesh_id) const {
+    auto host_rank_id = this->get_local_host_rank_id_binding();
+    const auto& local_mesh_chip_id_container =
+        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+    uint16_t num_chips = local_mesh_chip_id_container.size();
+
+    // For each source chip in the current mesh
+    for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
+        compressed_routing_path_t<1, true> routing_path;
+        FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
+
+        // Calculate routing fields within the same mesh only
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
+        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+        write_to_all_tensix_cores(
+            &routing_path,
+            sizeof(routing_path),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_1D,
+            physical_chip_id);
+    }
+}
+
+template <>
+void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) const {
+    auto host_rank_id = this->get_local_host_rank_id_binding();
+    const auto& local_mesh_chip_id_container =
+        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+
+    // Get mesh shape for 2D routing calculation
+    MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
+    TT_ASSERT(num_chips <= 1024, "Number of chips exceeds 1024 for mesh {}", *mesh_id);
+    TT_ASSERT(
+        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
+        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
+        *mesh_id,
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
+        compressed_routing_path_t<2, true> routing_path;
+        FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
+
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+        write_to_all_tensix_cores(
+            &routing_path,
+            sizeof(routing_path),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
+            physical_chip_id);
+    }
+}
+
 void ControlPlane::write_routing_tables_to_all_chips() const {
     // Configure the routing tables on the chips
     TT_ASSERT(
@@ -1721,13 +1778,11 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
-    MeshShape mesh_shape = this->get_physical_mesh_shape(MeshId{0});
-    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
-    this->write_all_to_all_routing_fields_1D<true>(num_chips);
-    TT_ASSERT(num_chips <= 1024, "Number of chips exceeds 1024");
-    TT_ASSERT(mesh_shape[0] <= 32 && mesh_shape[1] <= 32, "One or both of mesh axis exceed 32");
-    this->write_all_to_all_routing_fields_2D<true>(num_chips, ew_dim);
+
+    for (const auto& mesh_id : this->get_local_mesh_id_bindings()) {
+        this->write_all_to_all_routing_fields<1, true>(mesh_id);
+        this->write_all_to_all_routing_fields<2, true>(mesh_id);
+    }
 }
 
 // TODO: remove this after TG is deprecated
@@ -2277,32 +2332,6 @@ void ControlPlane::populate_fabric_connection_info(
             risc_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
-    }
-}
-
-template <bool compressed>
-void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
-    compressed_routing_path_t<1, compressed> routing_path;
-    for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
-        write_to_all_tensix_cores(
-            &routing_path,
-            sizeof(routing_path),
-            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_1D,
-            (chip_id_t)src_chip_id);
-    }
-}
-
-template <bool compressed>
-void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
-    compressed_routing_path_t<2, compressed> routing_path;
-    for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
-        write_to_all_tensix_cores(
-            &routing_path,
-            sizeof(routing_path),
-            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
-            (chip_id_t)src_chip_id);
     }
 }
 
