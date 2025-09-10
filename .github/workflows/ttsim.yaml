@@ -15,7 +15,6 @@ on:
 
 jobs:
   ttsim-integration:
-    if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-latest
     permissions:
       contents: read
