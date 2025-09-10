@@ -40,6 +40,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -54,6 +55,7 @@
 
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::test_utils::df;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
