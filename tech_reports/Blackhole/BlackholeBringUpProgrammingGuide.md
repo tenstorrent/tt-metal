@@ -88,7 +88,7 @@ Runtime has not enabled access to program RISC-V on DRAM yet.
 
 ### NoC
 
-Non-rectangular multicast shapes and strided multicast has been brought up and tested. See gtest `DispatchFixture.DRAMtoL1MulticastExcludeRegionUpLeft` for example on usage.
+Non-rectangular multicast shapes and strided multicast has been brought up and tested. See gtest `MeshDispatchFixture.DRAMtoL1MulticastExcludeRegionUpLeft` for example on usage.
 
 On previous architectures there are instances in kernels where NoC commands are issued without explicit flushes. These were causing ND mismatches or hangs on BH because data and semaphore signals were getting updated faster than NoC has a chance to service the command and are resolved by adding flushes. Previous architectures did not need this because of higher RISC to L1 latency compared to NoC latency.
 

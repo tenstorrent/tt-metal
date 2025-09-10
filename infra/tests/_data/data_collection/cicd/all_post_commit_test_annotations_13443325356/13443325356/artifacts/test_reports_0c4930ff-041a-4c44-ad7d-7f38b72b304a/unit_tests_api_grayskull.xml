@@ -125,36 +125,36 @@ Expected equality of these values:
     <testcase name="TestL1BuffersAllocatedTopDown" file="/work/tests/tt_metal/tt_metal/api/allocator/test_l1_banking_allocator.cpp" line="34" status="run" result="completed" time="0.009" timestamp="2025-02-20T20:37:56.966" classname="MeshDeviceSingleCardBufferFixture" />
     <testcase name="TestL1BuffersDoNotGrowBeyondBankSize" file="/work/tests/tt_metal/tt_metal/api/allocator/test_l1_banking_allocator.cpp" line="58" status="run" result="completed" time="0.01" timestamp="2025-02-20T20:37:56.976" classname="MeshDeviceSingleCardBufferFixture" />
   </testsuite>
-  <testsuite name="DispatchFixture" tests="17" failures="0" disabled="2" skipped="4" errors="0" time="2.009" timestamp="2025-02-20T20:37:56.986">
-    <testcase name="TensixDRAMtoL1Multicast" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="130" status="run" result="completed" time="0.364" timestamp="2025-02-20T20:37:56.986" classname="DispatchFixture" />
-    <testcase name="TensixDRAMtoL1MulticastLoopbackSrc" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="141" status="run" result="completed" time="0.361" timestamp="2025-02-20T20:37:57.351" classname="DispatchFixture" />
-    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="152" status="run" result="skipped" time="0.011" timestamp="2025-02-20T20:37:57.712" classname="DispatchFixture">
+  <testsuite name="MeshDispatchFixture" tests="17" failures="0" disabled="2" skipped="4" errors="0" time="2.009" timestamp="2025-02-20T20:37:56.986">
+    <testcase name="TensixDRAMtoL1Multicast" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="130" status="run" result="completed" time="0.364" timestamp="2025-02-20T20:37:56.986" classname="MeshDispatchFixture" />
+    <testcase name="TensixDRAMtoL1MulticastLoopbackSrc" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="141" status="run" result="completed" time="0.361" timestamp="2025-02-20T20:37:57.351" classname="MeshDispatchFixture" />
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="152" status="run" result="skipped" time="0.011" timestamp="2025-02-20T20:37:57.712" classname="MeshDispatchFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:162&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:162
 ]]></skipped>
     </testcase>
-    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="169" status="run" result="skipped" time="0.01" timestamp="2025-02-20T20:37:57.723" classname="DispatchFixture">
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="169" status="run" result="skipped" time="0.01" timestamp="2025-02-20T20:37:57.723" classname="MeshDispatchFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:179&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:179
 ]]></skipped>
     </testcase>
-    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="186" status="run" result="skipped" time="0.009" timestamp="2025-02-20T20:37:57.733" classname="DispatchFixture">
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="186" status="run" result="skipped" time="0.009" timestamp="2025-02-20T20:37:57.733" classname="MeshDispatchFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:196&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:196
 ]]></skipped>
     </testcase>
-    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="203" status="run" result="skipped" time="0.01" timestamp="2025-02-20T20:37:57.743" classname="DispatchFixture">
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="203" status="run" result="skipped" time="0.01" timestamp="2025-02-20T20:37:57.743" classname="MeshDispatchFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:213&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:213
 ]]></skipped>
     </testcase>
-    <testcase name="TensixDRAMLoopbackSingleCore" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="175" status="run" result="completed" time="0.293" timestamp="2025-02-20T20:37:57.753" classname="DispatchFixture" />
-    <testcase name="TensixDRAMLoopbackSingleCorePreAllocated" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="193" status="run" result="completed" time="0.013" timestamp="2025-02-20T20:37:58.047" classname="DispatchFixture" />
-    <testcase name="TensixDRAMLoopbackSingleCoreDB" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="211" status="run" result="completed" time="0.351" timestamp="2025-02-20T20:37:58.061" classname="DispatchFixture" />
-    <testcase name="TensixCreateGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="17" status="run" result="completed" time="0.008" timestamp="2025-02-20T20:37:58.413" classname="DispatchFixture" />
-    <testcase name="TensixProgramGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="50" status="run" result="completed" time="0.532" timestamp="2025-02-20T20:37:58.421" classname="DispatchFixture" />
-    <testcase name="InitializeGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="15" status="run" result="completed" time="0.013" timestamp="2025-02-20T20:37:58.953" classname="DispatchFixture" />
-    <testcase name="CreateMultipleGlobalSemaphoresOnSameCore" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="46" status="run" result="completed" time="0.01" timestamp="2025-02-20T20:37:58.967" classname="DispatchFixture" />
-    <testcase name="ResetGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="82" status="run" result="completed" time="0.009" timestamp="2025-02-20T20:37:58.978" classname="DispatchFixture" />
-    <testcase name="TensixCreateKernelsOnComputeCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="15" status="run" result="completed" time="0.008" timestamp="2025-02-20T20:37:58.988" classname="DispatchFixture" />
-    <testcase name="DISABLED_TensixCreateKernelsOnStorageCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="29" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="DispatchFixture" />
-    <testcase name="DISABLED_TensixIdleEthCreateKernelsOnDispatchCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="51" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="DispatchFixture" />
+    <testcase name="TensixDRAMLoopbackSingleCore" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="175" status="run" result="completed" time="0.293" timestamp="2025-02-20T20:37:57.753" classname="MeshDispatchFixture" />
+    <testcase name="TensixDRAMLoopbackSingleCorePreAllocated" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="193" status="run" result="completed" time="0.013" timestamp="2025-02-20T20:37:58.047" classname="MeshDispatchFixture" />
+    <testcase name="TensixDRAMLoopbackSingleCoreDB" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="211" status="run" result="completed" time="0.351" timestamp="2025-02-20T20:37:58.061" classname="MeshDispatchFixture" />
+    <testcase name="TensixCreateGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="17" status="run" result="completed" time="0.008" timestamp="2025-02-20T20:37:58.413" classname="MeshDispatchFixture" />
+    <testcase name="TensixProgramGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="50" status="run" result="completed" time="0.532" timestamp="2025-02-20T20:37:58.421" classname="MeshDispatchFixture" />
+    <testcase name="InitializeGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="15" status="run" result="completed" time="0.013" timestamp="2025-02-20T20:37:58.953" classname="MeshDispatchFixture" />
+    <testcase name="CreateMultipleGlobalSemaphoresOnSameCore" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="46" status="run" result="completed" time="0.01" timestamp="2025-02-20T20:37:58.967" classname="MeshDispatchFixture" />
+    <testcase name="ResetGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="82" status="run" result="completed" time="0.009" timestamp="2025-02-20T20:37:58.978" classname="MeshDispatchFixture" />
+    <testcase name="TensixCreateKernelsOnComputeCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="15" status="run" result="completed" time="0.008" timestamp="2025-02-20T20:37:58.988" classname="MeshDispatchFixture" />
+    <testcase name="DISABLED_TensixCreateKernelsOnStorageCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="29" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="MeshDispatchFixture" />
+    <testcase name="DISABLED_TensixIdleEthCreateKernelsOnDispatchCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="51" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="MeshDispatchFixture" />
   </testsuite>
   <testsuite name="CompileProgramWithKernelPathEnvVarFixture" tests="4" failures="0" disabled="0" skipped="4" errors="0" time="0" timestamp="2025-02-20T20:37:58.996">
     <testcase name="TensixKernelUnderMetalRootDir" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="85" status="run" result="skipped" time="0" timestamp="2025-02-20T20:37:58.996" classname="CompileProgramWithKernelPathEnvVarFixture">
