@@ -15,10 +15,10 @@ jobs:
       build-wheel: true
       version: 22.04
 
-  tg-stress-test:
+  galaxy-stress-test:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-stress.yaml
+    uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
