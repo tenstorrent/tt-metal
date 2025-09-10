@@ -94,7 +94,7 @@ void MAIN {
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     } else {
-        unary_op_init_common(in_cb_id_0, in_cb_id_0);
+        unary_op_init_common_no_pack(in_cb_id_0);
         tilize_init_no_pack(in_cb_id_0, topk_output_tiles);
         if constexpr (!pack_untilize_reinit) {
             const uint32_t output_faces =
