@@ -240,7 +240,7 @@ logging is enabled, pooling parameters and resulting tensor shapes are recorded.
     <span class="n">weights</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
     <span class="n">weight_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">bias_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">activation_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">activation</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">,</span>
     <span class="n">device</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Device</span><span class="p">,</span>
     <span class="n">log_first_sample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
@@ -253,7 +253,7 @@ logging is enabled, pooling parameters and resulting tensor shapes are recorded.
 <span class="sd">        weights: Dictionary containing model weights and biases.</span>
 <span class="sd">        weight_str: Key name for convolution weights in the weights dict.</span>
 <span class="sd">        bias_str: Key name for convolution biases in the weights dict.</span>
-<span class="sd">        activation_str: Activation function name (e.g., 'relu') to apply after conv.</span>
+<span class="sd">        activation: Activation function as UnaryWithParam to apply after conv.</span>
 <span class="sd">        device: Target TT device to execute the operations on.</span>
 <span class="sd">        log_first_sample: Whether to log detailed info (used for debugging first sample).</span>
 <span class="sd">    Returns:</span>
@@ -270,7 +270,7 @@ logging is enabled, pooling parameters and resulting tensor shapes are recorded.
     <span class="n">conv_padding</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 
     <span class="c1"># Set up TT-NN convolution configuration including activation function</span>
-    <span class="n">conv_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Conv2dConfig</span><span class="p">(</span><span class="n">weights_dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">activation</span><span class="o">=</span><span class="n">activation_str</span><span class="p">)</span>
+    <span class="n">conv_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Conv2dConfig</span><span class="p">(</span><span class="n">weights_dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">activation</span><span class="o">=</span><span class="n">activation</span><span class="p">)</span>
 
     <span class="c1"># Optional detailed logging for the first sample (shape, config, etc.)</span>
     <span class="k">if</span> <span class="n">log_first_sample</span><span class="p">:</span>
@@ -388,7 +388,7 @@ to update the accuracy counters, and the result for each sample is logged. Final
         <span class="n">weights</span><span class="p">,</span>
         <span class="s2">"conv1.weight"</span><span class="p">,</span>
         <span class="s2">"conv1.bias"</span><span class="p">,</span>
-        <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span>
         <span class="n">device</span><span class="p">,</span>
         <span class="n">log_first_sample</span><span class="o">=</span><span class="n">log_this</span><span class="p">,</span>
     <span class="p">)</span>
@@ -401,7 +401,7 @@ to update the accuracy counters, and the result for each sample is logged. Final
         <span class="n">weights</span><span class="p">,</span>
         <span class="s2">"conv2.weight"</span><span class="p">,</span>
         <span class="s2">"conv2.bias"</span><span class="p">,</span>
-        <span class="s2">"relu"</span><span class="p">,</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span>
         <span class="n">device</span><span class="p">,</span>
         <span class="n">log_first_sample</span><span class="o">=</span><span class="n">log_this</span><span class="p">,</span>
     <span class="p">)</span>

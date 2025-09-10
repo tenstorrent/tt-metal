@@ -178,10 +178,11 @@ A value of 1 means no reduction, and a value of 2 means the activation block wid
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">activation</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.activation" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>A string that selects the fused activation function to be applied on the output.
-Empty string means no activation function.
-Supported activation function strings are:
-relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt</p>
+<p>Fused activation function to be applied on the output.
+None means no activation function.
+Use ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) for ReLU activation.
+Supported activation functions include:
+RELU, SILU, GELU, SIGMOID, TANH, etc.</p>
 </dd>
 </dl>
 
