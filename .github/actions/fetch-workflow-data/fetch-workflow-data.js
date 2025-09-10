@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Constants for pagination and filtering
-const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
+const MAX_PAGES = 200; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
 
@@ -47,7 +47,7 @@ function getLatestCachedDate(runs) {
  * @param {Date} sinceDate - Only fetch runs after this date
  * @returns {Promise<Array>} Array of workflow run objects
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='') {
+async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const createdDateFilter = `>=${cutoffDate.toISOString()}`;
@@ -55,17 +55,13 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
   core.info(`createdDateFilter: ${createdDateFilter}`);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const params = {
+    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
       owner: context.repo.owner,
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
       created: createdDateFilter
-    }
-    if (eventType) {
-      params.event = eventType;
-    }
-    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params);
+    });
     if (!runs.workflow_runs.length) {
       break;
     }
@@ -148,22 +144,9 @@ async function run() {
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
 
-    // 1. Fetch runs for each event type separately
-
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-
     core.info('Fetching all runs...');
-    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
-    await delay(2000);
-
-    core.info('Fetching scheduled runs...');
-    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
-
-
-    // 2. Combine all the results into a single array
-    const newRuns = [...scheduledRuns, ...allRuns];
+    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
     core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
 
