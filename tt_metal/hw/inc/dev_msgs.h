@@ -235,13 +235,14 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_target;
     volatile uint8_t pad;  // CODEGEN:skip
 };
+static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
 
 // Host -> device. Populated with the information on where we want to insert delays.
 struct debug_insert_delays_msg_t {
-    volatile uint8_t read_delay_riscv_mask = 0;    // Which Riscs will delay their reads
-    volatile uint8_t write_delay_riscv_mask = 0;   // Which Riscs will delay their writes
-    volatile uint8_t atomic_delay_riscv_mask = 0;  // Which Riscs will delay their atomics
-    volatile uint8_t feedback = 0;                 // Stores the feedback about delays (used for testing)
+    volatile uint32_t read_delay_processor_mask = 0;    // Which processors will delay their reads
+    volatile uint32_t write_delay_processor_mask = 0;   // Which processors will delay their writes
+    volatile uint32_t atomic_delay_processor_mask = 0;  // Which processors will delay their atomics
+    volatile uint32_t feedback = 0;                     // Stores the feedback about delays (used for testing)
 };
 
 enum debug_sanitize_noc_return_code_enum {
@@ -273,21 +274,6 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7
-};
-
-// XXXX TODO(PGK): why why why do we not have this standardized
-enum riscv_id_t {
-    DebugBrisc = 0,
-    DebugNCrisc = 1,
-    DebugTrisc0 = 2,
-    DebugTrisc1 = 3,
-    DebugTrisc2 = 4,
-    DebugErisc = 5,
-    DebugSubordinateErisc = 6,
-    DebugIErisc = 7,
-    DebugSubordinateIErisc = 8,
-    DebugNumUniqueRiscs = 9,
-    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -346,7 +332,7 @@ struct watcher_msg_t {
 // TODO: DebugPrintMemLayout not visible by codegen
 // To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
+    DebugPrintMemLayout data[NUM_PROCESSORS_PER_CORE_TYPE];
     uint32_t pad;  // to 1024 bytes
 };
 #endif
