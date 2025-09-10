@@ -124,7 +124,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
         uint32_t j = 0;
         for (const auto& [device_range, program] : programs) {
             auto program_data = programs_data[j++];
-            program_data.setProgramId(program.get_id());
+            program_data.setProgramId(program.impl().get_id());
             auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
             uint32_t k = 0;
             for (auto& device_coordinate : device_range) {
