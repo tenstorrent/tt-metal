@@ -63,8 +63,16 @@ def test_sd35_pipeline(
     model_location_generator,
     traced,
     use_cache,
+    is_ci_env,
+    monkeypatch,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
+
+    # Set cache directory in CI environment
+    if is_ci_env and use_cache:
+        monkeypatch.setenv(
+            "TT_DIT_CACHE_DIR", str(model_location_generator(f"TT_CACHE", model_subdir="StableDiffusion_35_Large"))
+        )
 
     # Create timing collector
     timing_collector = TimingCollector()

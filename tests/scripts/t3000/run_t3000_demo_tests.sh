@@ -298,8 +298,7 @@ run_t3000_sd35large_tests() {
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
   #Cache path
-  TT_DIT_CACHE_DIR=/mnt/MLPerf/tt_dnn-models/TT_DIT_CACHE_DIR
-  NO_PROMPT=1 TT_DIT_CACHE_DIR=$TT_DIT_CACHE_DIR pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
