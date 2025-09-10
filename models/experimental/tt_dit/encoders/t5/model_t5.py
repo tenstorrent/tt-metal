@@ -13,6 +13,13 @@ from ...layers.linear import ColParallelLinear, RowParallelLinear
 import math
 from ...layers.normalization import RMSNorm
 
+compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 
 class T5Config:
     """
@@ -195,7 +202,6 @@ class T5DenseGatedActDense:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
         self.wi1 = ColParallelLinear(
             in_features=self.config.embed_dim,
@@ -203,7 +209,6 @@ class T5DenseGatedActDense:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
         self.wo = RowParallelLinear(
             in_features=self.config.ff_dim,
@@ -212,7 +217,6 @@ class T5DenseGatedActDense:
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=self.ccl_manager,
-            init=True,
         )
 
     def load_state_dict(self, state_dict):
@@ -223,9 +227,9 @@ class T5DenseGatedActDense:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # breakpoint()
         gelu = new_gelu_activation(self.wi0(x))
-        linear = self.wi1(x)
+        linear = self.wi1(x, compute_kernel_config=compute_kernel_config)
         x = gelu * linear
-        hidden_states = self.wo(x)
+        hidden_states = self.wo(x, compute_kernel_config=compute_kernel_config)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -312,7 +316,6 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
         self.k_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -320,7 +323,6 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
         self.v_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -328,7 +330,6 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
         self.o_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -336,7 +337,6 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
         )
 
         self.layer_norm = RMSNorm(
@@ -378,10 +378,10 @@ class T5Attention:
             qkv, num_heads=num_local_heads, transpose_key=True
         )
 
-        scores = ttnn.matmul(q, k)
+        scores = ttnn.matmul(q, k, compute_kernel_config=compute_kernel_config)
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1)
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=compute_kernel_config)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
