@@ -405,3 +405,52 @@ const auto& get_device_configs() {
     return configs.get();
 }
 ```
+
+## 18. Use Exhaustive Switch Statements for Enums
+
+### Practice
+Always use exhaustive switch statements when handling enum classes, explicitly listing all cases without a `default` clause. Follow the switch statement with `TT_THROW("Unreachable")` to handle potential compiler warnings.
+
+### Explanation
+When switching on enum values, avoid using a `default` case. Instead, explicitly handle every enum value. This approach ensures that when new enum values are added, the compiler will generate an error at every switch statement that needs updating, forcing developers to handle the new case appropriately.
+
+The `TT_THROW("Unreachable")` statement after the switch handles cases where some compilers may warn about "non-void function must return a value" in CI environments.
+
+### Motivation
+- **Compile-Time Safety**: Forces compilation to fail when new enums are added, ensuring all relevant code locations are updated.
+- **Maintainability**: Prevents silent bugs from unhandled enum values that would be caught by a default case.
+- **Code Completeness**: Guarantees that every enum value is explicitly considered and handled.
+
+### Example
+```cpp
+enum class TensorLayout {
+    INVALID = 0, ROW_MAJOR = 1, TILE = 2,
+};
+
+// Good: Exhaustive switch with all cases handled
+std::string_view tensor_layout_to_string(TensorLayout layout) {
+    switch (layout) {
+        case TensorLayout::INVALID:
+            return "INVALID";
+        case TensorLayout::ROW_MAJOR:
+            return "ROW_MAJOR";
+        case TensorLayout::TILE:
+            return "TILE";
+    }
+    TT_THROW("Unreachable");
+}
+
+// Bad: Using default case hides missing enum handling
+std::string_view tensor_layout_to_string_bad(TensorLayout layout) {
+    switch (layout) {
+        case TensorLayout::ROW_MAJOR:
+            return "ROW_MAJOR";
+        case TensorLayout::TILE:
+            return "TILE";
+        default:
+            return "UNKNOWN";  // New enums will silently fall here
+    }
+}
+```
+
+When a new layout type is added (e.g., `BLOCK`), the exhaustive switch will fail to compile, immediately alerting developers to update all switch statements handling `TensorLayout`.
