@@ -23,11 +23,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicReadWriteL1) {
         auto device = mesh_device->get_devices()[0];
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_write_to_core(virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+            .enqueue_write_to_core(virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), true);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false);
+            .enqueue_read_from_core(virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), true);
 
         distributed::Finish(mesh_device->mesh_command_queue());
 
@@ -120,7 +120,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteMultipleCoresL1) {
             for (uint32_t core_y = 0; core_y < device->compute_with_storage_grid_size().y; ++core_y) {
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
-                    .enqueue_write_to_core(core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+                    .enqueue_write_to_core(core, src_data.data(), address, num_elements * sizeof(uint32_t), true);
             }
         }
 
@@ -133,7 +133,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteMultipleCoresL1) {
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
                     .enqueue_read_from_core(
-                        core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
+                        core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), true);
                 i++;
             }
         }
@@ -181,11 +181,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteEntireL1) {
         auto device = mesh_device->get_devices()[0];
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, false);
+            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, true);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, false);
+            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, true);
 
         distributed::Finish(mesh_device->mesh_command_queue());
 
@@ -211,11 +211,11 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteEntireL1) {
         const CoreCoord eth_core = *active_ethernet_cores.begin();
         const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, false);
+            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, true);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, false);
+            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, true);
 
         distributed::Finish(mesh_device->mesh_command_queue());
 
@@ -280,11 +280,11 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
         const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
 
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, false);
+            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, true);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, false);
+            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, true);
 
         distributed::Finish(mesh_device->mesh_command_queue());
 
