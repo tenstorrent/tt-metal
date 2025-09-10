@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt-metalium/kernel_types.hpp"
 
 using namespace tt;
@@ -26,8 +27,10 @@ int main() {
     // Initialize Program and Device
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Configure and create the kernel
@@ -44,7 +47,8 @@ int main() {
 
     // Configure Program and Start Program Execution on Device
     SetRuntimeArgs(program, void_compute_kernel_id, core, {});
-    EnqueueProgram(cq, program, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
     // Wait Until Program Finishes. The kernel will print the following messages:
@@ -59,8 +63,8 @@ int main() {
     // TR2: Compute core 2 (PACK)
 
     // Wait for the program to finish execution.
-    Finish(cq);
+    distributed::Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }
