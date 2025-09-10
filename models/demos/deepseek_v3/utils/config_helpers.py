@@ -484,43 +484,15 @@ def base_model_name(hf_config):
 
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
+    assert tensor.ndim == inv_scale.ndim
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
     for i, block_dim in enumerate(block_shape):
         inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.bfloat16() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].bfloat16()
+    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
     del inv_scale
     return tensor
-
-
-def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
-    dequantized_state_dict = {}
-
-    for name, tensor in state_dict.items():
-        if name.endswith("_scale_inv"):
-            continue
-
-        if tensor is not None:
-            # Look for corresponding scale tensor
-            scale_name = name + "_scale_inv"
-            if scale_name in state_dict:
-                scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
-                )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
-            else:
-                dequantized_state_dict[name] = tensor.to(dtype)
-
-    return dequantized_state_dict
-
-
-def dequantize_state_dicts(state_dict_list: list[dict[str, torch.Tensor] | None], hf_config):
-    dequant_state_dicts = [dequantize_state_dict(sd, hf_config) if sd is not None else None for sd in state_dict_list]
-    return dequant_state_dicts
 
 
 def get_state_dicts(

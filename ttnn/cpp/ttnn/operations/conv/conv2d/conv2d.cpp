@@ -20,6 +20,8 @@
 #include "ttnn/tensor/types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
@@ -412,7 +414,7 @@ Result conv2d_DRAM(
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
 
         ShardOrientation shard_orientation =
-                conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
         auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
             conv_config.shard_layout.value(),
             shard_orientation,
@@ -792,7 +794,7 @@ Result conv2d_L1(
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
-        std::optional<std::string> activation = std::nullopt;
+        std::optional<std::string> linear_activation = std::nullopt;
 
         if (input_tensor_post_tm.is_sharded()) {
             uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -805,10 +807,11 @@ Result conv2d_L1(
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
         } else {
-            if (!conv_config.activation.empty()) {
-                activation = conv_config.activation;
+            if (conv_config.activation.has_value()) {
+                linear_activation = unary::utils::unary_with_param_to_string(conv_config.activation.value());
             }
         }
+
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
             weight_tensor_on_device,
@@ -818,7 +821,7 @@ Result conv2d_L1(
             mm_output_memory_config,
             output_dtype,
             program_config,
-            activation,
+            linear_activation,
             compute_config);
 
         if (conv_config.deallocate_activation) {

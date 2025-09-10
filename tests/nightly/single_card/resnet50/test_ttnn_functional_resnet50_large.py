@@ -17,15 +17,13 @@ from ttnn.model_preprocessing import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
-    pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
+    skip_for_grayskull,
     is_wormhole_b0,
-    is_blackhole,
-    is_grayskull,
 )
 
-# from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api_24 import resnet50
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -55,7 +53,6 @@ def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
             parameters["downsample"]["bias"] = ttnn.from_torch(torch.reshape(downsample_bias, (1, 1, 1, -1)))
     elif isinstance(model, torchvision.models.resnet.ResNet):
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
         parameters["conv1"] = {}
         parameters["conv1"]["weight"] = ttnn.from_torch(conv1_weight)
         parameters["conv1"]["bias"] = ttnn.from_torch(torch.reshape(conv1_bias, (1, 1, 1, -1)))
@@ -179,7 +176,7 @@ golden_pcc = {
 
 
 class ResNet50TestInfra:
-    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity):
+    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=None):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -190,7 +187,7 @@ class ResNet50TestInfra:
         self.weight_dtype = weight_dtype
         self.math_fidelity = math_fidelity
 
-        torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+        torch_model = load_resnet50_model(model_location_generator).eval()
 
         model_config = {
             "MATH_FIDELITY": math_fidelity,
@@ -198,7 +195,7 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        input_shape = (1, 3, 896, 896)
+        input_shape = (1, 3, 1024, 1024)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
 
@@ -211,7 +208,9 @@ class ResNet50TestInfra:
 
         ## golden
 
+        print(f"Running golden model")
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        print(f"Golden model run complete")
 
         ## ttnn
 
@@ -259,24 +258,29 @@ class ResNet50TestInfra:
         )
 
 
-def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    return ResNet50TestInfra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Only works for Grayskull.")
+@pytest.mark.timeout(600)
+@skip_for_grayskull("Only works for Wormhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    test_infra = create_test_infra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT
     test_infra.run()
-    # # # Optimized run
-    # test_infra.run()
-    # # # More optimized run with caching
-    # test_infra.run()
-    # test_infra.validate()
+    # # Optimized run
+    test_infra.run()
+    # # More optimized run with caching
+    test_infra.run()
+    test_infra.validate()
