@@ -64,7 +64,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = tt::round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
+    while ((padded_num - num) >= (int)(padded_num / divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = tt::round_up(num, big_divisor);
@@ -772,7 +772,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {
@@ -787,8 +787,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .fuse_batch = true,
             .mcast_in0 = false};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     } else {
@@ -802,8 +802,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .transpose_mcast = transpose_mcast};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     }

@@ -43,7 +43,7 @@ using std::uint32_t;
 using std::uint64_t;
 
 const ll_api::memory& get_risc_binary(
-    std::string_view path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
+    const std::string& path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -51,7 +51,7 @@ const ll_api::memory& get_risc_binary(
     } cache;
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(std::string(path));
+    auto [slot, inserted] = cache.map.try_emplace(path);
     const ll_api::memory* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
@@ -252,7 +252,6 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {

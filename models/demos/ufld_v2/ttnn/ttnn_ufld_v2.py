@@ -28,7 +28,7 @@ class TtnnUFLDv2:
         self.input_dim = self.input_height // 32 * self.input_width // 32 * 8
         self.conv_pth = conv_pth
         self.res_model = TtnnResnet34(conv_args, conv_pth.res_model, device=device)
-        self.pool = TtnnUFLDV2Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
+        self.pool = TtnnUFLDV2Conv2D(conv_args.pool, conv_pth.pool, activation=None, device=device)
 
     def __call__(self, input, batch_size=1, grid_size=(8, 8), tile_size=32):
         fea = self.res_model(input, batch_size=batch_size)
