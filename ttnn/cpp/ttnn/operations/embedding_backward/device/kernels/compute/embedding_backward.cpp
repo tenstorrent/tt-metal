@@ -21,7 +21,7 @@ void MAIN {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     unary_op_init_common(cb_grad, cb_out);
-
+    DPRINT << "after unary_op_init_common" << ENDL();
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_wait_front(cb_grad, max_tiles_per_core);
 
@@ -31,6 +31,7 @@ void MAIN {
         uint32_t chunk_count = chunk_addr_ptr[4];  // Need to shift because read ptr is off by 1 << 4 in BBE
         cb_release_tile(cb_chunk_count_scratch);
 
+        DPRINT << "after getting tiles for chunk_count" << ENDL();
         for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {  // chunk_count
             cb_wait_front(cb_mask, 1);
             // get cb_index pointer from unpack to math thread
@@ -42,7 +43,7 @@ void MAIN {
             cb_wait_front(cb_out_intermed, max_tiles_per_core);
 
             cb_reserve_back(cb_out, max_tiles_per_core);
-
+            DPRINT << "after getting tiles for tiles_per_core" << ENDL();
             for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
                 tile_regs_acquire();
                 tile_regs_wait();
@@ -59,7 +60,7 @@ void MAIN {
                 tile_regs_commit();
                 tile_regs_release();
             }
-
+            DPRINT << "after reshuffle_rows_tile" << ENDL();
             cb_push_back(cb_out, max_tiles_per_core);
             cb_pop_front(cb_out_intermed, max_tiles_per_core);
 
@@ -69,5 +70,7 @@ void MAIN {
 
         cb_pop_front(cb_grad, max_tiles_per_core);
     }
+
+    DPRINT << "the end" << ENDL();
 }
 }  // namespace NAMESPACE
