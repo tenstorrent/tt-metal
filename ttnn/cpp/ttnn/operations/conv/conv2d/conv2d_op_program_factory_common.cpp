@@ -507,45 +507,47 @@ bool is_split_reader_supported(
 
 static uint32_t get_tilize_cycles_per_tile(
     tt::ARCH arch, DataType input_dtype, DataType output_dtype, bool fp32_dest_acc) {
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE:
-            switch (input_dtype) {
-                case DataType::FLOAT32:
-                    switch (output_dtype) {
-                        case DataType::FLOAT32: return 132;
-                        case DataType::BFLOAT16: return fp32_dest_acc ? 80 : 132;
-                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 77 : 132;
-                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
-                    };
-                case DataType::BFLOAT16:
-                    switch (output_dtype) {
-                        case DataType::FLOAT32: return fp32_dest_acc ? 128 : 105;
-                        case DataType::BFLOAT16: return 72;
-                        case DataType::BFLOAT8_B: return 60;
-                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
-                    };
-                default: TT_THROW("Unsupported input data type when calculating tilize cycles");
-            }
-        case tt::ARCH::WORMHOLE_B0:
-            switch (input_dtype) {
-                case DataType::FLOAT32:
-                    switch (output_dtype) {
-                        case DataType::FLOAT32: return fp32_dest_acc ? 128 : 107;
-                        case DataType::BFLOAT16: return 74;
-                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 70 : 74;
-                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
-                    };
-                case DataType::BFLOAT16:
-                    switch (output_dtype) {
-                        case DataType::FLOAT32: return fp32_dest_acc ? 117 : 92;
-                        case DataType::BFLOAT16: return fp32_dest_acc ? 68 : 61;
-                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 43 : 40;
-                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
-                    };
-                default: TT_THROW("Unsupported input data type when calculating tilize cycles");
-            }
-        default: TT_THROW("Unsupported architecture when calculating tilize cycles");
+    // Tilize cycles lookup table: [arch][input_dtype][output_dtype][fp32_dest_acc]
+    static const std::map<tt::ARCH, std::map<DataType, std::map<DataType, std::array<uint32_t, 2>>>> tilize_cycles = {
+        {tt::ARCH::BLACKHOLE,
+         {
+             {DataType::FLOAT32,
+              {{DataType::FLOAT32, {132, 132}},
+               {DataType::BFLOAT16, {132, 80}},
+               {DataType::BFLOAT8_B, {132, 77}}}},  // [non-fp32_dest_acc, fp32_dest_acc]
+             {DataType::BFLOAT16,
+              {{DataType::FLOAT32, {105, 128}},
+               {DataType::BFLOAT16, {72, 72}},
+               {DataType::BFLOAT8_B, {60, 60}}}}  // [non-fp32_dest_acc, fp32_dest_acc]
+         }},
+        {tt::ARCH::WORMHOLE_B0,
+         {
+             {DataType::FLOAT32,
+              {{DataType::FLOAT32, {107, 128}},
+               {DataType::BFLOAT16, {74, 74}},
+               {DataType::BFLOAT8_B, {74, 70}}}},  // [non-fp32_dest_acc, fp32_dest_acc]
+             {DataType::BFLOAT16,
+              {{DataType::FLOAT32, {92, 117}},
+               {DataType::BFLOAT16, {61, 68}},
+               {DataType::BFLOAT8_B, {40, 43}}}}  // [non-fp32_dest_acc, fp32_dest_acc]
+         }}};
+
+    auto arch_it = tilize_cycles.find(arch);
+    if (arch_it == tilize_cycles.end()) {
+        TT_THROW("Unsupported architecture when calculating tilize cycles");
     }
+
+    auto input_it = arch_it->second.find(input_dtype);
+    if (input_it == arch_it->second.end()) {
+        TT_THROW("Unsupported input data type when calculating tilize cycles");
+    }
+
+    auto output_it = input_it->second.find(output_dtype);
+    if (output_it == input_it->second.end()) {
+        TT_THROW("Unsupported output data type when calculating tilize cycles");
+    }
+
+    return output_it->second[fp32_dest_acc ? 1 : 0];
 }
 /*
     Split reader viability is determined by comparing the time required before matmul computation begins.
