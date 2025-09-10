@@ -230,13 +230,13 @@ def main() -> None:
         tf_prompt_len=args.tf_prompt_len,
     )
 
-    print("\n===== Generated =====\n")
-    if result.get("text") is not None:
-        print(result["text"])  # type: ignore
-    else:
-        print("[random-weights mode] token IDs:")
-        print(result["tokens"])  # type: ignore
-    print("\n=====================\n")
+    # print("\n===== Generated =====\n")
+    # if result.get("text") is not None:
+    #     print(result["text"])  # type: ignore
+    # else:
+    #     print("[random-weights mode] token IDs:")
+    #     print(result["tokens"])  # type: ignore
+    # print("\n=====================\n")
 
 
 if __name__ == "__main__":

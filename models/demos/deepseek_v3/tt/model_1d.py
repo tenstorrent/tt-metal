@@ -34,7 +34,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 class Model1D(SharedStateAddOn, AbstractModule):
     NUM_MLP_META_LAYERS = 1
     NUM_MLP_ROWS = 3
-    NUM_MOE_META_LAYERS = 1  # NOTE: change to 15 for full model
+    NUM_MOE_META_LAYERS = 15  # NOTE: change to 15 for full model
     NUM_MOE_ROWS = 4
 
     @classmethod
