@@ -370,12 +370,5 @@ bool ReadFromDeviceL1(
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
-/**
- * Return the name of the architecture present.
- *
- * Return value: std::string
- */
-std::string get_physical_architecture_name();
-
 }  // namespace detail
 }  // namespace tt::tt_metal
