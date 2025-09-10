@@ -25,7 +25,7 @@ runs:
       env:
         TRACY_NO_INVARIANT_CHECK: 1
     - uses: ./.github/actions/docker-run
-      if: ${{ env.PIPELINE == 'model-perf'}}
+      if: ${{ env.PIPELINE == 'model-perf' }}
       with:
         docker_image: ${{ env.DOCKER_IMAGE }}
         docker_password: ${{ env.DOCKER_PASSWORD }}
