@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -31,6 +32,7 @@ private:
     std::thread telemetry_thread_;
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
+    std::string metal_home_;
 
     // Telemetry data
     std::unordered_map<size_t, std::string> bool_metric_name_by_id_;
@@ -192,6 +194,31 @@ private:
         }
     }
 
+    std::string join_paths(const std::string& base, const std::string& path) {
+        if (base.empty()) {
+            return path;
+        }
+        if (path.empty()) {
+            return base;
+        }
+
+        // Check if base ends with separator
+        bool base_has_separator = (base.back() == '/' || base.back() == '\\');
+        // Check if path starts with separator
+        bool path_has_separator = (path.front() == '/' || path.front() == '\\');
+
+        if (base_has_separator && path_has_separator) {
+            // Both have separator, remove one
+            return base + path.substr(1);
+        } else if (!base_has_separator && !path_has_separator) {
+            // Neither has separator, add one
+            return base + "/" + path;
+        } else {
+            // One has separator, just concatenate
+            return base + path;
+        }
+    }
+
     std::string read_file(const std::string& path) {
         std::ifstream file(path);
         if (!file.is_open()) {
@@ -203,7 +230,18 @@ private:
     }
 
 public:
-    TelemetryServer() : started_at_(std::chrono::steady_clock::now()) {}
+    TelemetryServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
+        if (!metal_home.empty()) {
+            metal_home_ = metal_home;
+        } else {
+            const char* env_metal_home = std::getenv("TT_METAL_HOME");
+            if (env_metal_home != nullptr) {
+                metal_home_ = std::string(env_metal_home);
+            } else {
+                throw std::runtime_error("TT_METAL_HOME environment variable not set and no metal_home provided");
+            }
+        }
+    }
 
     void setup_routes() {
         // Enable CORS for all routes
@@ -214,35 +252,50 @@ public:
             return httplib::Server::HandlerResponse::Unhandled;
         });
 
-        // Serve static files (React app)
-        server_.Get("/", [this](const httplib::Request&, httplib::Response& res) {
-            std::string content = read_file("tt_telemetry/frontend/static/index.html");
-            if (content.empty()) {
-                res.set_content("<html><body><h1>Telemetry Server Running</h1><p>Place your React build in /static directory</p></body></html>", "text/html");
-            } else {
-                res.set_content(content, "text/html");
-            }
-        });
+        // Serve static assets from root path (/<foo> maps to $(TT_METAL_HOME)/tt_telemetry/frontend/static/<foo>)
+        // This includes serving index.html for the root path "/"
+        server_.Get(R"(^/(?!api/)(.*))", [this](const httplib::Request& req, httplib::Response& res) {
+            std::string path = req.matches[1].str();
 
-        // Serve static assets
-        server_.Get(R"(/static/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
-            std::string filename = req.matches[1];
-            std::string content = read_file("tt_telemetry/frontend/static/" + filename);
+            // If path is empty (root "/"), serve index.html
+            if (path.empty()) {
+                path = "index.html";
+            }
+
+            std::string content = read_file(join_paths(metal_home_, "tt_telemetry/frontend/static/" + path));
             if (!content.empty()) {
                 // Set appropriate content type
-                if (filename.ends_with(".html") || filename.ends_with(".htm")) {
+                if (path.ends_with(".html") || path.ends_with(".htm")) {
                     res.set_content(content, "text/html");
-                } else if (filename.ends_with(".js")) {
+                } else if (path.ends_with(".js")) {
                     res.set_content(content, "application/javascript");
-                } else if (filename.ends_with(".css")) {
+                } else if (path.ends_with(".css")) {
                     res.set_content(content, "text/css");
-                } else if (filename.ends_with(".json")) {
+                } else if (path.ends_with(".json")) {
                     res.set_content(content, "application/json");
+                } else if (
+                    path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg") ||
+                    path.ends_with(".gif")) {
+                    res.set_content(content, "image/*");
+                } else if (path.ends_with(".svg")) {
+                    res.set_content(content, "image/svg+xml");
+                } else if (path.ends_with(".ico")) {
+                    res.set_content(content, "image/x-icon");
                 } else {
                     res.set_content(content, "application/octet-stream");
                 }
             } else {
-                res.status = 404;
+                // If file not found, serve index.html for SPA routing
+                std::string index_content =
+                    read_file(join_paths(metal_home_, "tt_telemetry/frontend/static/index.html"));
+                if (!index_content.empty()) {
+                    res.set_content(index_content, "text/html");
+                } else {
+                    res.status = 404;
+                    res.set_content(
+                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found</p></body></html>",
+                        "text/html");
+                }
             }
         });
 
@@ -255,13 +308,6 @@ public:
                 {"uptime_seconds", uptime_seconds.count()}
             };
             res.set_content(response.dump(), "application/json");
-        });
-
-        // REST API - Get latest telemetry snapshot
-        server_.Get("/api/telemetry", [this](const httplib::Request&, httplib::Response& res) {
-            //TODO: return full snapshot
-            //auto data = telemetry_provider_.get_full_snapshot();
-            //res.set_content(data.dump(), "application/json");
         });
 
         // Server-Sent Events endpoint for real-time telemetry
@@ -320,7 +366,8 @@ public:
 
         std::cout << "Starting telemetry server on port " << port << "..." << std::endl;
         std::cout << "API endpoints:" << std::endl;
-        std::cout << "  GET  /                - Web UI" << std::endl;
+        std::cout << "  GET  /                - Web UI (serves static/index.html)" << std::endl;
+        std::cout << "  GET  /<path>          - Static assets (serves static/<path>)" << std::endl;
         std::cout << "  GET  /api/status      - Server status" << std::endl;
         std::cout << "  GET  /api/telemetry   - Current telemetry" << std::endl;
         std::cout << "  GET  /api/stream      - Real-time stream (SSE)" << std::endl;
@@ -356,8 +403,9 @@ static bool web_server_thread(std::shared_ptr<TelemetryServer> server, uint16_t 
     return true;
 }
 
-std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_server(uint16_t port) {
-    auto server = std::make_shared<TelemetryServer>();
+std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_server(
+    uint16_t port, const std::string& metal_home) {
+    auto server = std::make_shared<TelemetryServer>(metal_home);
     auto subscriber = static_pointer_cast<TelemetrySubscriber>(server);
     auto future = std::async(std::launch::async, web_server_thread, server, port);
     return std::make_pair(std::move(future), subscriber);
