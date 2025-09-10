@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # model_profile.py
 import argparse, json, yaml
 from dataclasses import dataclass
