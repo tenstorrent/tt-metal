@@ -47,11 +47,7 @@ class TtnnC3:
             device,
             parameters.cv3.conv,
             self.conv_pt.cv3.conv,
-<<<<<<< HEAD
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-=======
-            activation="silu",
->>>>>>> a4a161ba271 (Removing auto_shard)
             auto_shard=True if use_block_shard else False,
         )
 
