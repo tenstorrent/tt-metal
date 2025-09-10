@@ -83,6 +83,18 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
     cb_push_back(cb_id, onetile);
 }
 
+// Fills a tile (32x32 float32 values) with uint32_t value,
+// where each 32-bit word contains the float32 value.
+void generate_tile_with_float32_value(uint32_t cb_id, uint32_t float_value) {
+    cb_reserve_back(cb_id, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    // 1024 = 32x32
+    for (uint32_t i = 0; i < 1024U; ++i) {
+        *ptr++ = float_value;
+    }
+    cb_push_back(cb_id, onetile);
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
 void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
