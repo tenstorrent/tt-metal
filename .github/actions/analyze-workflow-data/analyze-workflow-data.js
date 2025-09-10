@@ -411,7 +411,7 @@ async function run() {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const latest = mainBranchRuns[0];
       if (!latest) return null;
-      return { id: latest.id, url: latest.html_url, created_at: latest.created_at };
+      return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
     };
 
     const allNames = new Set([
@@ -437,9 +437,13 @@ async function run() {
 
       if (change) {
         const info = computeLatestRunInfo(currentRuns);
-        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at });
+        const workflowUrl = info?.path ? getWorkflowLink(github.context, info.path) : undefined;
+        const aggregateRunUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/runs/${github.context.runId}`;
+        const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined;
+        const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined;
+        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl });
         if (change === 'success_to_fail' && info) {
-          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at });
+          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
       }
     }
