@@ -161,6 +161,7 @@ jobs:
     secrets: inherit
     if: ${{ github.ref == 'refs/heads/stable' || inputs.dry-run }}
     with:
+      os: ${{ inputs.distro || 'ubuntu' }}-${{ inputs.version || '22.04' }}
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

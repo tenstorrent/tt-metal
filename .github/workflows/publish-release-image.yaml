@@ -6,6 +6,10 @@ on:
       version:
         required: true
         type: string
+      os:
+        required: true
+        type: string
+        default: ubuntu-22.04
       tag-latest:
         required: true
         type: boolean
@@ -28,7 +32,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os: ${{ inputs.os }}
         image: [release, release-models]
     runs-on: ubuntu-latest
     outputs:
@@ -74,7 +78,7 @@ jobs:
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os: ${{ inputs.os }}
         image: [release, release-models]
         test_group:
           [
@@ -130,7 +134,7 @@ jobs:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os: ${{ inputs.os }}
         image: [release, release-models]
     runs-on:
       - ubuntu-latest
