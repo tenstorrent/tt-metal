@@ -36,7 +36,7 @@ Author: Joseph Chu
     - [8.3.2 Key Components](#832-key-components)
 - [9. MeshDevice vs PyTorch Multi-Device Programming](#9-meshdevice-vs-pytorch-multi-device-programming)
   - [9.1 Overview of Multi-Device Handling](#91-overview-of-multi-device-handling)
-  - [9.2 Code Comparison: Matrix Multiplication with All-Gather](#93-code-comparison-matrix-multiplication-with-all-gather)
+  - [9.2 Code Comparison: Matrix Multiplication with All-Gather](#92-code-comparison-matrix-multiplication-with-all-gather)
 
 ## 1. Overview
 
