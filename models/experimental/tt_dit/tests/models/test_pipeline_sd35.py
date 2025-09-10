@@ -69,10 +69,12 @@ def test_sd35_pipeline(
     """Test the new SD3.5 pipeline implementation."""
 
     # Set cache directory in CI environment
-    if is_ci_env and use_cache:
+    if is_ci_env:
         monkeypatch.setenv(
             "TT_DIT_CACHE_DIR", str(model_location_generator(f"TT_CACHE", model_subdir="StableDiffusion_35_Large"))
         )
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     # Create timing collector
     timing_collector = TimingCollector()

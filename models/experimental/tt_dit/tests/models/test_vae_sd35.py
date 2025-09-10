@@ -302,7 +302,7 @@ class ResnetBlock2D(torch.nn.Module):
 # Custom pytest mark for shared VAE device configuration
 def vae_device_config(func):
     """Decorator to apply standard VAE device configuration to tests"""
-    func = pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], indirect=True)(func)
+    func = pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], ids=["t3k", "tg"], indirect=True)(func)
     func = pytest.mark.parametrize("submesh_shape", [(1, 4)])(func)
     func = pytest.mark.parametrize(
         "device_params",

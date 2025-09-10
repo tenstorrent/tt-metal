@@ -14,7 +14,6 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 )
 
 
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
@@ -39,7 +38,6 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     indirect=True,
 )
 @pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
-@pytest.mark.models_performance_bare_metal
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -57,15 +55,14 @@ def test_sd35_new_pipeline_performance(
     use_cache,
     is_ci_env,
     galaxy_type,
-    request,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
 
     # Process skips
-    if request.config.getoption("-m") == "models_performance_bare_metal" and use_cache:
-        pytest.skip("use_cache not necessary for bare metal performance")
+    if is_ci_env and use_cache:
+        pytest.skip("use_cache not necessary for CI environment")
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -306,12 +303,12 @@ def test_sd35_new_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.17,
-            "t5_encoding_time": 0.13,
-            "total_encoding_time": 0.6,
-            "denoising_steps_time": 4,
-            "vae_decoding_time": 1.65,
-            "total_time": 6.2,
+            "clip_encoding_time": 0.12,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.45,
+            "denoising_steps_time": 4.2,
+            "vae_decoding_time": 1.3,
+            "total_time": 5.9,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
