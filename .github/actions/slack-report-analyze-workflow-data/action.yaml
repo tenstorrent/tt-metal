@@ -18,7 +18,7 @@ runs:
         tmp_file="$(mktemp)"
         printf "%s" '${{ inputs.regressed_workflows }}' > "$tmp_file"
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
-          echo "text=Failed to parse regression list" >> "$GITHUB_OUTPUT"
+          echo "payload={\"text\":\"Failed to parse regression list\"}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         TEXT=$(jq -r '
@@ -29,15 +29,11 @@ runs:
           else
             "Malformed regressions payload"
           end' "$tmp_file")
-        echo "text<<EOF" >> "$GITHUB_OUTPUT"
-        echo "$TEXT" >> "$GITHUB_OUTPUT"
-        echo "EOF" >> "$GITHUB_OUTPUT"
+        PAYLOAD=$(jq -n --arg text "$TEXT" '{text:$text}')
+        echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
     - name: Report Github Pipeline Status Slack Action
       uses: slackapi/slack-github-action@v1.26.0
       with:
-        payload: |
-          {
-            "text": "${{ steps.build.outputs.text }}"
-          }
+        payload: ${{ steps.build.outputs.payload }}
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
