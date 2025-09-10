@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Constants for pagination and filtering
-const MAX_PAGES = 500; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
+const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
 
@@ -47,7 +47,7 @@ function getLatestCachedDate(runs) {
  * @param {Date} sinceDate - Only fetch runs after this date
  * @returns {Promise<Array>} Array of workflow run objects
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
+async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='schedule') {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const createdDateFilter = `>=${cutoffDate.toISOString()}`;
@@ -60,7 +60,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      event: 'schedule',
+      event: eventType,
       created: createdDateFilter
     });
     if (!runs.workflow_runs.length) {
@@ -143,7 +143,22 @@ async function run() {
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
-    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+
+    // 1. Fetch runs for each event type separately
+    core.info('Fetching scheduled runs...');
+    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
+
+    core.info('Fetching manually-triggered runs...');
+    const manualRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'workflow_dispatch');
+
+    core.info('Fetching pull request runs...');
+    const prRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'pull_request');
+
+    // 2. Combine all the results into a single array
+    const newRuns = [...scheduledRuns, ...manualRuns, ...prRuns];
+
+    core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
+
     core.info(`Fetched newRuns count: ${newRuns.length}`);
     // Merge and deduplicate by run id
     // This ensures we keep the most recent data for each run and avoid duplicates
@@ -154,7 +169,7 @@ async function run() {
     const cutoff = getCutoffDate(days);
     mergedRuns = mergedRuns.filter(run =>
       run.head_branch === branch &&
-      // run.status === 'completed' &&
+      run.status === 'completed' &&
       new Date(run.created_at) >= cutoff
     );
     // Group runs by workflow name
