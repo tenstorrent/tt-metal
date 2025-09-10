@@ -48,7 +48,7 @@ namespace {
 std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
     std::vector<fs::path> paths = {given_file_name};
 
-    TT_ASSERT(
+    TT_FATAL(
         fs::exists(given_file_name) || (!fs::path(given_file_name).is_absolute()),
         "Kernel source path {} must be relative to TT_METAL_HOME/TT_METAL_KERNEL_PATH or be an absolute path to a "
         "valid file",
@@ -139,7 +139,7 @@ void Kernel::register_kernel_with_watcher() {
 }
 
 void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
-    TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
+    TT_FATAL(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
     auto paths = this->file_paths(device);
     MetalContext::instance().watcher_server()->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
 }
@@ -243,7 +243,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
 
 const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
     auto iter = binaries_.find(build_key);
-    TT_ASSERT(iter != binaries_.end(), "binary not found");
+    TT_FATAL(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
         TT_THROW(
             "Expected {} binaries but have {} for kernel {}",
@@ -361,7 +361,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
-    TT_ASSERT(
+    TT_FATAL(
         this->is_on_logical_core(logical_core),
         "Cannot set runtime args for core {} since kernel {} is not placed on it!",
         logical_core.str(),
@@ -497,7 +497,7 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
     if (pair.second) {
         pair.first->second = std::move(binaries);
     } else {
-        TT_ASSERT(pair.first->second == binaries);
+        TT_FATAL(pair.first->second == binaries, "Binaries already set");
     }
 }
 
@@ -514,7 +514,7 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "Binaries do not exist on disk");
     std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
@@ -559,7 +559,7 @@ bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "Binaries do not exist on disk");
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -612,7 +612,7 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
 
     const std::string output_path = build_states[0].get_out_path();
     for (auto& build : build_states) {
-        TT_ASSERT(build.get_out_path() == output_path);
+        TT_FATAL(build.get_out_path() == output_path, "Build path mismatch");
     }
 
     const std::string build_success_marker_path =
@@ -621,7 +621,7 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "Binaries do not exist on disk");
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -658,9 +658,7 @@ std::vector<std::string> ComputeKernel::file_paths(IDevice& device) const {
 
 bool DataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
-    if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
-    }
+    TT_FATAL(is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
