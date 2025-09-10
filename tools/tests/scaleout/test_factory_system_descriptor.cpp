@@ -76,7 +76,7 @@ TEST(Cluster, TestFactorySystemDescriptor4xBHQBP150) {
     // Once the physical descriptor is available, uncomment the following:
     validate_fsd_against_gsd(
         "fsd/factory_system_descriptor_4x_bh_qb_p150.textproto",
-        "tools/tests/scaleout/global_system_descriptors/system_1.yaml");
+        "tools/tests/scaleout/global_system_descriptors/gsd_4x_bh_qb_p150.yaml");
 }
 
 }  // namespace tt::scaleout_tools
