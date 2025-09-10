@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -25,9 +26,12 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor,
+    MeshDevice* mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    QueueId queue_id = DefaultQueueId);
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true);
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, QueueId queue_id = DefaultQueueId);
 
 void deallocate(Tensor& tensor, bool force = true);
 
