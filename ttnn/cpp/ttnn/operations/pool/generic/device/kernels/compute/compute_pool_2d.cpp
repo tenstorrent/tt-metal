@@ -120,7 +120,6 @@ void MAIN {
     }
 
     uint32_t tilize_stick_counter = 0;
-    uint32_t pre_tilize_cb_offset = 0;
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -208,14 +207,17 @@ void MAIN {
             tile_regs_wait();
             if constexpr (!return_indices) {
                  if constexpr (is_output_tiled) {
-                    // TILED output: accumulate sticks and perform tilization when needed
-                    pack_untilize_dest<1>(
-                        pre_tilize_cb_id, 1, pre_tilize_cb_offset, num_out_sticks, num_faces_in_output_tile);
-                    pre_tilize_cb_offset += last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
-                    if (last_c_block) {
-                        tilize_stick_counter++;
-
-                    }
+                     // TILED output: accumulate sticks and perform tilization when needed
+                     if (last_c_block) {
+                         pack_untilize_dest<partial_iter_output_tiles>(
+                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                         tilize_stick_counter++;
+                     } else {
+                         pack_untilize_dest<max_tiles_per_iter>(
+                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                         cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                     }
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
@@ -238,10 +240,9 @@ void MAIN {
                             tensix_sync();
                         }
 
-                        // init math for reduction again since SFPU gets reprogrammed by tilize
+                        // init math for reduction again since FPU gets reprogrammed by tilize
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
                         tilize_stick_counter = 0;
-                        pre_tilize_cb_offset = 0;
                     }
                 } else {
                     // ROW_MAJOR output: pack directly to output CB

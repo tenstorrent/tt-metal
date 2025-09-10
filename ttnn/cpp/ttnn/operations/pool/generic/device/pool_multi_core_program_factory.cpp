@@ -423,8 +423,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     if (is_output_tiled) {
         pre_tilize_cb_id = next_cb_index++;
-        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const uint32_t pre_tilize_cb_npages = 1;
+        const uint32_t pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
+        const uint32_t pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
         tt::tt_metal::create_cb(
             pre_tilize_cb_id, program, all_cores, pre_tilize_cb_pagesize, pre_tilize_cb_npages, params.data_format);
         log_debug(
