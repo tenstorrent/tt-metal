@@ -43,98 +43,99 @@ class TtnnAattn:
             qkv = ttnn.reshape(qkv, (1, batch_size * self.area, qkv_chan * 3, qkv_n // self.area))
             _, batch_size, _, qkv_n = qkv.shape
 
-        # Using ttnn.reshape instead of view as "The last dimension can not change in view"
+        # Reshape and create QKV heads efficiently
         qkv = ttnn.reshape(qkv, (batch_size, qkv_n, self.num_heads, self.head_dim * 3))
         qkv = ttnn.permute(qkv, (0, 2, 3, 1))  # [B, H, 3*D, S]
+        qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
+        qkv = ttnn.to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Split into Q, K, V
         q, k, v = ttnn.split(qkv, qkv.shape[2] // 3, 2)  # each: [B, H, D, S]
         ttnn.deallocate(qkv)
 
-        # Prepare Q/K/V for Flash Attention (prefill-style, non-causal): [1, H, S, D]
-        q = ttnn.permute(q, (0, 1, 3, 2))  # [B, H, S, D]
-        k_attn = ttnn.permute(k, (0, 1, 3, 2))  # [B, H, S, D]
-        v_attn = ttnn.permute(v, (0, 1, 3, 2))  # [B, H, S, D]
+        # Prepare for SDPA: [B, H, S, D]
+        q = ttnn.permute(q, (0, 1, 3, 2))
+        k = ttnn.permute(k, (0, 1, 3, 2))
+        v = ttnn.permute(v, (0, 1, 3, 2))
 
-        # Convert to TILE for SDPA and move to DRAM (SDPA requires DRAM buffers)
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k_attn = ttnn.to_layout(k_attn, ttnn.TILE_LAYOUT)
-        v_attn = ttnn.to_layout(v_attn, ttnn.TILE_LAYOUT)
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k_attn = ttnn.to_memory_config(k_attn, ttnn.DRAM_MEMORY_CONFIG)
-        v_attn = ttnn.to_memory_config(v_attn, ttnn.DRAM_MEMORY_CONFIG)
+        # Keep v_for_pe for positional embedding
+        v_for_pe = ttnn.clone(v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
 
-        # Choose SDPA program config based on sequence length
-        def _choose_sdpa_pc(seq_len: int):
-            q_chunk = 128 if (seq_len % 128 == 0) else 32
-            if seq_len % 512 == 0:
-                k_chunk = 512
-            elif seq_len % 128 == 0:
-                k_chunk = 128
-            else:
-                k_chunk = 32
-            return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=[8, 7],
-                q_chunk_size=q_chunk,
-                k_chunk_size=k_chunk,
-                exp_approx_mode=False,
-            )
-
-        pc_sdpa = _choose_sdpa_pc(qkv_n)
-
-        # Run SDPA per batch if needed to avoid cross-batch mixing
-        if batch_size == 1:
-            x_attn = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k_attn,
-                v_attn,
-                is_causal=False,
-                scale=self.scale,
-                program_config=pc_sdpa,
-            )  # [1, H, S, D]
-            # Expand back to [B, H, S, D]
-            x_attn = ttnn.reshape(x_attn, (batch_size, x_attn.shape[1], x_attn.shape[2], x_attn.shape[3]))
+        # Optimized SDPA config for better performance
+        # Choose chunk sizes based on sequence length for optimal performance
+        if qkv_n >= 512:
+            q_chunk_size = 256
+            k_chunk_size = 512
+        elif qkv_n >= 256:
+            q_chunk_size = 128
+            k_chunk_size = 256
+        elif qkv_n >= 128:
+            q_chunk_size = 128
+            k_chunk_size = 128
         else:
-            outs = []
-            for b in range(batch_size):
-                qb = ttnn.slice(q, (b, 0, 0, 0), (b + 1, q.shape[1], q.shape[2], q.shape[3]))
-                kb = ttnn.slice(k_attn, (b, 0, 0, 0), (b + 1, k_attn.shape[1], k_attn.shape[2], k_attn.shape[3]))
-                vb = ttnn.slice(v_attn, (b, 0, 0, 0), (b + 1, v_attn.shape[1], v_attn.shape[2], v_attn.shape[3]))
-                qb = ttnn.to_memory_config(qb, ttnn.DRAM_MEMORY_CONFIG)
-                kb = ttnn.to_memory_config(kb, ttnn.DRAM_MEMORY_CONFIG)
-                vb = ttnn.to_memory_config(vb, ttnn.DRAM_MEMORY_CONFIG)
-                ob = ttnn.transformer.scaled_dot_product_attention(
-                    qb,
-                    kb,
-                    vb,
-                    is_causal=False,
-                    scale=self.scale,
-                    program_config=pc_sdpa,
-                )  # [1, H, S, D]
-                outs.append(ttnn.reshape(ob, (1, ob.shape[1], ob.shape[2], ob.shape[3])))
-            x_attn = ttnn.concat(outs, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, S, D]
+            q_chunk_size = 32
+            k_chunk_size = 32
 
-        # Free Q/K/V for attention path
+        pc_sdpa = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=[8, 8],  # Use full 8x8 grid
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=True,  # Use approximation for better performance
+        )
+
+        # Compute kernel config for better performance with BFP8
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,  # Use LoFi for BFP8 operations (faster)
+            math_approx_mode=True,  # Enable approximations
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        # Run SDPA - process all batches together for better efficiency
+        x_attn = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            program_config=pc_sdpa,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # Output to L1 for faster access
+        )
+
+        # Free Q/K/V tensors early to save memory
         ttnn.deallocate(q)
-        ttnn.deallocate(k_attn)
-        ttnn.deallocate(v_attn)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
-        # Align with the rest of the pipeline which expects [B, H, D, S]
-        x = ttnn.permute(x_attn, (0, 1, 3, 2))
+        # Optimize: Combine permutations to reduce overhead
+        # x_attn is [B, H, S, D], need [B, H, W, C]
+        x = ttnn.permute(x_attn, (0, 2, 1, 3))  # [B, S, H, D]
         ttnn.deallocate(x_attn)
 
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        v = ttnn.permute(v, (0, 3, 1, 2))
+        # v_for_pe is [B, H, S, D], permute to match
+        v_for_pe = ttnn.permute(v_for_pe, (0, 2, 1, 3))  # [B, S, H, D]
 
         if self.area > 1:
-            x = ttnn.reshape(x, (1, batch_size // self.area, qkv_n * self.area, qkv_chan))
-            v = ttnn.reshape(v, (1, batch_size // self.area, qkv_n * self.area, qkv_chan))
-            batch_size, qkv_n, _, _ = x.shape
+            x = ttnn.reshape(x, (batch_size // self.area, qkv_n * self.area, self.num_heads, self.head_dim))
+            v_for_pe = ttnn.reshape(
+                v_for_pe, (batch_size // self.area, qkv_n * self.area, self.num_heads, self.head_dim)
+            )
+            batch_size = batch_size // self.area
+            qkv_n = qkv_n * self.area
 
+        # Reshape to spatial dimensions
         x = ttnn.reshape(x, (batch_size, qkv_height, qkv_width, qkv_chan))
-        v = ttnn.reshape(v, (batch_size, qkv_height, qkv_width, qkv_chan))
-        y = self.pe(v)
-        y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
-        x = x + ttnn.reshape(y, x.shape)
-        ttnn.deallocate(v)
+        v_for_pe = ttnn.reshape(v_for_pe, (batch_size, qkv_height, qkv_width, qkv_chan))
+
+        # Apply positional embedding
+        y = self.pe(v_for_pe)
+        ttnn.deallocate(v_for_pe)
+
+        if y.is_sharded():
+            y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(x, y, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(y)
 
         x = self.proj(x)
 
