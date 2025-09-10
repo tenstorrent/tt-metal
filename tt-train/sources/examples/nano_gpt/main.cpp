@@ -149,7 +149,7 @@ void generate(
     }
 
     auto mask_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1, 1, max_sequence_length, max_sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, max_sequence_length, max_sequence_length}), device));
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
@@ -170,14 +170,12 @@ void generate(
 
     auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
         std::vector<float>(original_vocab_size, 0),
-        ttnn::Shape({1, 1, 1, original_vocab_size}),
+        ttnn::Shape({1U, 1U, 1U, original_vocab_size}),
         device,
         ttnn::Layout::ROW_MAJOR);
 
     auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
-
-    std::vector<uint32_t> next_token_vector;
-    // std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> top_k_tuple;
+    std::vector<float> logits_vector(original_vocab_size, 0.0F);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -195,7 +193,10 @@ void generate(
         }
         prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded,
+            ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
+            device,
+            ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
@@ -216,7 +217,7 @@ void generate(
         auto logits_ptr = output_vector.data() + offset;
 
         // Now we do advanced sampling from these logits
-        auto logits_vector = std::vector<float>(logits_ptr, logits_ptr + original_vocab_size);
+        logits_vector = std::vector<float>(logits_ptr, logits_ptr + original_vocab_size);
 
         logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
             logits_vector, ttnn::Shape({1, 1, 1, original_vocab_size}), device, ttnn::Layout::ROW_MAJOR);
