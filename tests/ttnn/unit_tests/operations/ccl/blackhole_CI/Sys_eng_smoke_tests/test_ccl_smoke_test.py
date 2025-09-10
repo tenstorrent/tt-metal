@@ -89,7 +89,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_smoke_test(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     cluster_axis,
