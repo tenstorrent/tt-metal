@@ -291,6 +291,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         haloed_tensors.push_back(std::move(haloed_index));
     }
 
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     const uint32_t pre_allocate_size = haloed_tensor.device()
                                            ->allocator()
                                            ->get_statistics(tt::tt_metal::BufferType::L1)
