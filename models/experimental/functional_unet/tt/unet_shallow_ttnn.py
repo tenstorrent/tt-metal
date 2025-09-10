@@ -173,7 +173,9 @@ class UNetConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=True,
-            enable_act_double_buffer=True,
+            enable_act_double_buffer=(
+                conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
+            ),
             enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
             activation=activation,
             output_layout=output_layout,
