@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import time
 from types import SimpleNamespace
 from typing import Mapping, Optional
 
@@ -170,10 +169,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
     ):
-        start_total = time.time()
-
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
-        start_step = time.time()
         pad_token_id = self.tokenizer.pad_token_id
         padded_seq_len = tokens.shape[-1]
         for i in range(tokens.shape[0]):  # for each user, fix their padding
@@ -202,18 +198,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             image_embeds = torch.tensor([], dtype=torch.bfloat16)
 
         # Prepare text + vision inputs for decoder model
-        start_step = time.time()
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        time_text_embedding = time.time() - start_step
-        logger.info(f"text_embeds: {text_embeds.shape}")
-        logger.info(f"Text embedding time: {time_text_embedding:.4f}s")
-
-        start_step = time.time()
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config)
-        time_merge_tokens = time.time() - start_step
-        logger.info(f"Vision token merging time: {time_merge_tokens:.4f}s")
-
-        start_step = time.time()
         (
             input_prefill_pt,
             decoding_pos,  # Position where decoding should start for each user
@@ -224,21 +210,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             inputs.attention_mask,
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
-        time_preprocess_prefill = time.time() - start_step
-        logger.info(f"input_prefill_pt: {input_prefill_pt.shape}")
-        logger.info(f"Preprocess prefill time: {time_preprocess_prefill:.4f}s")
 
         # Get user-specific rotary position embeddings
-        start_step = time.time()
         cos, sin = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
-        time_rope_computation = time.time() - start_step
-        logger.info(f"rot_mats: {rot_mats[0].shape}, {rot_mats[1].shape}")
-        logger.info(f"RoPE computation time: {time_rope_computation:.4f}s")
-
-        start_step = time.time()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
@@ -246,32 +223,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-        time_text_forward = time.time() - start_step
-        logger.info(f"logits: {logits.shape}")
-        logger.info(f"Text forward time: {time_text_forward:.4f}s")
-
-        start_step = time.time()
         rot_mat_list = [(rot_mats[0][i : i + 1], rot_mats[1][i : i + 1]) for i in range(inputs.input_ids.shape[0])]
         super().update_cos_sin_rows(rot_mat_list)
-        time_rope_update = time.time() - start_step
-        logger.info(f"RoPE update time: {time_rope_update:.4f}s")
-
-        time_total = time.time() - start_total
-        logger.info(f"Total prefill forward time: {time_total:.4f}s")
-
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
         rot_mats_list: list = kwargs.pop(
             "rot_mats_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
-        # time this step
-        start_time = time.time()
         if rot_mats_list is not None:
             super().update_cos_sin_rows(rot_mats_list)
-        end_time = time.time()
-        time_update = end_time - start_time
-        if time_update > 0.001:
-            logger.info(f"update_cos_sin_rows time: {time_update}")
 
         return super().decode_forward_text(*args, **kwargs)
