@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -208,6 +209,8 @@ class RunTimeOptions {
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
+    // Timeout duration for operations
+    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -489,6 +492,8 @@ public:
     // Target device accessor
     inline TargetDevice get_target_device() const { return runtime_target_device_; }
 
+    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -523,6 +528,9 @@ private:
     // Helper function to parse inspector-specific environment variables.
     void ParseInspectorEnv();
 };
+
+// Function declarations for operation timeout and synchronization
+std::chrono::duration<float> get_timeout_duration_for_operations();
 
 }  // namespace llrt
 

@@ -20,13 +20,13 @@
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
-constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
-    control_plane->initialize_fabric_context(k_FabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     return control_plane;
 }
@@ -37,8 +37,8 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
 
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
-    control_plane->initialize_fabric_context(k_FabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     return control_plane;
 }
@@ -99,7 +99,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_FALSE(path.empty());
     }
 }
 
@@ -763,11 +763,11 @@ TEST(MeshGraphValidation, TestP150BlackHoleMeshGraph) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml";
     auto mesh_graph = std::make_unique<MeshGraph>(p150_mesh_graph_desc_path.string());
-    
+
     EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
     EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(1, 1));
     EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    
+
     // Check chip IDs - single chip
     EXPECT_EQ(
         mesh_graph->get_chip_ids(MeshId{0}),
@@ -786,11 +786,11 @@ TEST(MeshGraphValidation, TestP100BlackHoleMeshGraph) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
     auto mesh_graph = std::make_unique<MeshGraph>(p100_mesh_graph_desc_path.string());
-    
+
     EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
     EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(1, 1));
     EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    
+
     // Check chip IDs - single chip
     EXPECT_EQ(
         mesh_graph->get_chip_ids(MeshId{0}),
@@ -809,11 +809,11 @@ TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraph) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml";
     auto mesh_graph = std::make_unique<MeshGraph>(p150_x8_mesh_graph_desc_path.string());
-    
+
     EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
     EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 4));
     EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
-    
+
     // Check chip IDs - 8 chips in 2x4 configuration
     EXPECT_EQ(
         mesh_graph->get_chip_ids(MeshId{0}),
@@ -832,7 +832,7 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml";
     auto control_plane = make_control_plane(p150_x8_mesh_graph_desc_path);
-    
+
     // Test routing between different chips in the 2x4 mesh
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
     EXPECT_GT(valid_chans.size(), 0);

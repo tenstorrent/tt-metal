@@ -61,6 +61,65 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 
     return report.str();
 }
+
+constexpr inline LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
+    // Check that mesh_coord is within mesh_shape
+    TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
+    return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
+}
+
+std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connections(
+        const MeshCoordinate& src_mesh_coord,
+        const MeshCoordinateRange& mesh_coord_range,
+        const InstanceData& instance) {
+
+    std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> connections;
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    const auto& topology_types = mesh_desc->device_topology().dim_types();
+    const auto& channels_count = mesh_desc->channels().count();
+    const auto& policy = mesh_desc->channels().policy();
+
+    MeshShape mesh_shape = mesh_coord_range.shape();
+    MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
+    MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
+    MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
+    MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
+
+    if (topology_types[0] == proto::TorusTopology::RING) {
+        N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
+        S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
+    }
+    if (topology_types[1] == proto::TorusTopology::RING) {
+        E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
+        W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
+    }
+
+    for (const auto& [coord, direction] :
+         {std::pair{N, proto::RoutingDirection::N},
+          std::pair{E, proto::RoutingDirection::E},
+          std::pair{S, proto::RoutingDirection::S},
+          std::pair{W, proto::RoutingDirection::W}}) {
+        if (mesh_coord_range.contains(coord)) {
+            const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
+            const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
+
+            ConnectionData data{
+                .nodes = {src_device_id, dst_device_id},
+                .count = channels_count,
+                .policy = policy,
+                .directional = false,
+                .parent_instance_id = instance.global_id,
+                .routing_direction = direction, // TODO: Remove after MGD 1.0 is deprecated
+            };
+
+            connections[src_device_id].push_back(data);
+        }
+    }
+
+    return connections;
+}
+
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
@@ -169,11 +228,17 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
     populate_descriptors();
 
-    std::vector<GlobalNodeId> hierarchy;
-    top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
+    populate_instances_from_top_level();
 
+    pre_populate_connections_lookups();
     populate_connections();
 }
+
+void MeshGraphDescriptor::populate_instances_from_top_level() {
+    std::vector<GlobalNodeId> hierarchy;
+    top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
+}
+
 
 
 void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
@@ -295,7 +360,7 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
             );
             continue;
         }
-        
+
         // Check that the device topology dimensions are divisible by the host topology dimensions
         if (mesh.device_topology().dims_size() > 0) {
             for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
@@ -513,7 +578,7 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Check that there is only 2 dimensions in the device topology and host topology
+    // Check that there are only 2 dimensions in the device topology and host topology
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.device_topology().dims_size() != 2 || mesh.host_topology().dims_size() != 2) {
             error_messages.push_back(fmt::format(
@@ -607,7 +672,7 @@ void MeshGraphDescriptor::populate_descriptors() {
     }
 }
 
-const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy) {
+const GlobalNodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy) {
     GlobalNodeId global_id;
     if (node_ref.has_mesh()) {
         global_id = populate_mesh_instance(node_ref.mesh(), hierarchy);
@@ -629,7 +694,7 @@ const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_instance(c
     return global_id;
 }
 
-const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy) {
+const GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy) {
     const std::string & descriptor_name = mesh_ref.mesh_descriptor();
     const auto it = mesh_desc_by_name_.find(descriptor_name);
     TT_FATAL(it != mesh_desc_by_name_.end(), "Mesh descriptor {} not found in instance", descriptor_name);
@@ -643,8 +708,8 @@ const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_insta
         .desc = mesh_desc,
     };
 
-    const auto emplace_result = instances_.emplace(data.global_id, std::move(data));
-    auto & instance = emplace_result.first->second;
+    const auto & [instance_it, _] = instances_.emplace(data.global_id, std::move(data));
+    auto & instance = instance_it->second;
 
     instance.hierarchy = hierarchy;
 
@@ -671,7 +736,7 @@ const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_insta
     return instance.global_id;
 }
 
-const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy) {
+const GlobalNodeId MeshGraphDescriptor::populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy) {
     const std::string name = "D" + std::to_string(local_id);
     InstanceData data{
         .local_id = local_id,
@@ -695,7 +760,7 @@ const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_device_ins
     return instance.global_id;
 }
 
-const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy) {
+const GlobalNodeId MeshGraphDescriptor::populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy) {
     const std::string & descriptor_name = graph_ref.graph_descriptor();
     const auto it = graph_desc_by_name_.find(descriptor_name);
     TT_FATAL(it != graph_desc_by_name_.end(), "Graph descriptor {} not found in instance", descriptor_name);
@@ -784,7 +849,27 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
     }
 }
 
-void MeshGraphDescriptor::add_connection_to_fast_lookups(const MeshGraphDescriptor::ConnectionData& connection, const std::string& type) {
+void MeshGraphDescriptor::pre_populate_connections_lookups() {
+    for (const auto& [instance_id, instance] : instances_) {
+    // Add empty vectors for the instance's type, instance id, and source device id
+    if (connections_by_type_.find(instance.type) == connections_by_type_.end()) {
+            connections_by_type_.emplace(instance.type, std::vector<ConnectionId>());
+        }
+        if (connections_by_instance_id_.find(instance_id) == connections_by_instance_id_.end()) {
+            connections_by_instance_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+        }
+        if (connections_by_source_device_id_.find(instance_id) == connections_by_source_device_id_.end()) {
+            connections_by_source_device_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+        }
+    }
+
+    // TODO: Remove this after MGD 1.0 is deprecated
+    if (connections_by_type_.find("FABRIC") == connections_by_type_.end()) {
+        connections_by_type_.emplace("FABRIC", std::vector<ConnectionId>());
+    }
+}
+
+void MeshGraphDescriptor::add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type) {
     // Add to instance-based lookup
     connections_by_instance_id_[connection.parent_instance_id].push_back(connection.connection_id);
 
@@ -795,69 +880,6 @@ void MeshGraphDescriptor::add_connection_to_fast_lookups(const MeshGraphDescript
     if (!connection.nodes.empty()) {
         connections_by_source_device_id_[connection.nodes[0]].push_back(connection.connection_id);
     }
-}
-
-namespace {
-    constexpr inline MeshGraphDescriptor::LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
-        // Check that mesh_coord is within mesh_shape
-        TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
-        return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
-    }
-
-    // TODO: Change this function to support X dimensional topologies
-    std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> get_valid_connections(
-            const MeshCoordinate& src_mesh_coord,
-            const MeshCoordinateRange& mesh_coord_range,
-            const MeshGraphDescriptor::InstanceData& instance) {
-
-        std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> connections;
-
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-        const auto& topology_types = mesh_desc->device_topology().dim_types();
-        const auto& channels_count = mesh_desc->channels().count();
-        const auto& policy = mesh_desc->channels().policy();
-
-        MeshShape mesh_shape = mesh_coord_range.shape();
-        MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
-        MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
-        MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
-        MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
-
-        if (topology_types[0] == proto::TorusTopology::RING) {
-            N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
-            S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
-        }
-        if (topology_types[1] == proto::TorusTopology::RING) {
-            E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
-            W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
-        }
-
-        for (const auto& [coord, direction] :
-             {std::pair{N, proto::RoutingDirection::N},
-              std::pair{E, proto::RoutingDirection::E},
-              std::pair{S, proto::RoutingDirection::S},
-              std::pair{W, proto::RoutingDirection::W}}) {
-            if (mesh_coord_range.contains(coord)) {
-                const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
-                const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
-
-                MeshGraphDescriptor::ConnectionData data{
-                    .nodes = {src_device_id, dst_device_id},
-                    .count = channels_count,
-                    .policy = policy,
-                    .directional = false,
-                    .parent_instance_id = instance.global_id,
-                    .routing_direction = direction, // TODO: Remove after MGD 1.0 is deprecated
-                };
-
-                connections[src_device_id].push_back(data);
-            }
-        }
-
-        return connections;
-    }
-
-
 }
 
 void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) {
@@ -920,7 +942,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
     }
 }
 
-const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref) {
+const GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref) {
     auto & parent_instance = instances_.at(parent_instance_id);
 
     if (node_ref.has_mesh()) {
@@ -1005,7 +1027,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
         // Add the connection in every direction of the connection
-        for (unsigned int i = 0; i < connection.nodes_size(); ++i) {
+        for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
             const auto src_device_id = nodes[i];
 
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
