@@ -130,28 +130,20 @@ struct rta_offset_t {
     volatile uint16_t crta_offset;
 };
 
-// Maximums across all archs
-#ifndef CODEGEN
-// Do not expose in HAL interface.
-// Eventually they should be removed from this file.
-// And host code should get them from HAL.
-constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
-constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
-#endif
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };
 
 struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
-    volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+    volatile uint16_t sem_offset[ProgrammableCoreType::COUNT];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -165,7 +157,7 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
-    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
@@ -275,7 +267,7 @@ enum debug_assert_type_t {
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint8_t flags[MaxProcessorsPerCoreType];
     uint8_t pad[3];  // CODEGEN:skip
 };
 
@@ -294,7 +286,7 @@ struct debug_stack_usage_per_cpu_t {
 };
 
 struct debug_stack_usage_t {
-    debug_stack_usage_per_cpu_t cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    debug_stack_usage_per_cpu_t cpu[MaxProcessorsPerCoreType];
     uint8_t pad[12];  // CODEGEN:skip
 };
 
@@ -312,7 +304,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_waypoint_msg_t debug_waypoint[NUM_PROCESSORS_PER_CORE_TYPE];
+    struct debug_waypoint_msg_t debug_waypoint[MaxProcessorsPerCoreType];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
@@ -328,7 +320,7 @@ struct watcher_msg_t {
 // TODO: DebugPrintMemLayout not visible by codegen
 // To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[NUM_PROCESSORS_PER_CORE_TYPE];
+    DebugPrintMemLayout data[MaxProcessorsPerCoreType];
     uint32_t pad;  // to 1024 bytes
 };
 #endif
