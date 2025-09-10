@@ -6,6 +6,7 @@
 
 #include "noc_nonblocking_api.h"
 #include <cstdint>
+#include "eth_fw_api.h"
 
 #if !defined(COOPERATIVE_ERISC)
 #include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
