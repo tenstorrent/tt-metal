@@ -18,11 +18,12 @@ from ttnn.model_preprocessing import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     enable_memory_reports,
+    skip_for_grayskull,
     is_wormhole_b0,
-    is_blackhole,
 )
 
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -175,7 +176,7 @@ golden_pcc = {
 
 
 class ResNet50TestInfra:
-    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity):
+    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=None):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -186,7 +187,7 @@ class ResNet50TestInfra:
         self.weight_dtype = weight_dtype
         self.math_fidelity = math_fidelity
 
-        torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+        torch_model = load_resnet50_model(model_location_generator).eval()
 
         model_config = {
             "MATH_FIDELITY": math_fidelity,
@@ -194,11 +195,9 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        input_shape = (1, 3, 512, 512)
+        input_shape = (1, 3, 1024, 1024)
 
-        print(f"generating input tensor...")
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
-        print(f"generation complete.")
 
         parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model, custom_preprocessor=custom_preprocessor, device=None
@@ -209,7 +208,9 @@ class ResNet50TestInfra:
 
         ## golden
 
+        print(f"Running golden model")
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        print(f"Golden model run complete")
 
         ## ttnn
 
@@ -257,24 +258,29 @@ class ResNet50TestInfra:
         )
 
 
-def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    return ResNet50TestInfra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Only works with Grayskull")
+@pytest.mark.timeout(600)
+@skip_for_grayskull("Only works for Wormhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    test_infra = create_test_infra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT
     test_infra.run()
     # # Optimized run
     test_infra.run()
-    # # # More optimized run with caching
+    # # More optimized run with caching
     test_infra.run()
-    # test_infra.validate()
+    test_infra.validate()
