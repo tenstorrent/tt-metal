@@ -89,7 +89,9 @@ int main(int argc, char* argv[]) {
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
         "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
-        "h,help", "Print usage");
+        "metal-src-dir",
+        "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
+        cxxopts::value<std::string>())("h,help", "Print usage");
 
     auto result = options.parse(argc, argv);
 
@@ -101,6 +103,10 @@ int main(int argc, char* argv[]) {
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
+    std::string metal_src_dir = "";
+    if (result.count("metal-src-dir")) {
+        metal_src_dir = result["metal-src-dir"].as<std::string>();
+    }
 
     if (print_link_health) {
         test_print_link_health();
@@ -110,14 +116,14 @@ int main(int argc, char* argv[]) {
     log_info(tt::LogAlways, "Starting primary web server on port {}", port);
     std::future<bool> web_server;
     std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
-    std::tie(web_server, web_server_subscriber) = run_web_server(port);
+    std::tie(web_server, web_server_subscriber) = run_web_server(port, metal_src_dir);
 
     // Web server #2 (testing the ability of our producer to supply two consumers)
     uint16_t secondary_port = 5555;
     log_info(tt::LogAlways, "Starting secondary web server on port {}", secondary_port);
     std::future<bool> web_server2;
     std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
-    std::tie(web_server2, web_server2_subscriber) = run_web_server(secondary_port);
+    std::tie(web_server2, web_server2_subscriber) = run_web_server(secondary_port, metal_src_dir);
 
     if (use_mock_telemetry) {
         // Mock telemetry
