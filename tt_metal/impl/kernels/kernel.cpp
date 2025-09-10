@@ -497,7 +497,7 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
     if (pair.second) {
         pair.first->second = std::move(binaries);
     } else {
-        TT_FATAL(pair.first->second == binaries, "Binaries already set");
+        TT_FATAL(pair.first->second == binaries, "Attempting to set binaries that have already been set for build key {}", build_key);
     }
 }
 
