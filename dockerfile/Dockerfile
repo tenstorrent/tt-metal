@@ -82,6 +82,7 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 FROM ci-build AS ci-test
 
+ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
