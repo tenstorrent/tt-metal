@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        # (4, [1, 1, 8192, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
         (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
         (2, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
