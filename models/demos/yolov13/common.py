@@ -118,7 +118,7 @@ YOLOV13_L1_SMALL_SIZE = 24576
 
 
 def load_torch_model(model_location_generator=None):
-    file_path = "https://github.com/iMoonLab/yolov13/releases/download/yolov13/yolov13n.pt"
+    file_path = "https://github.com/iMoonLab/yolov13/releases/download/yolov13/yolov13x.pt"
 
     # Load model with safe globals for weights_only=True
     with torch.serialization.safe_globals(
@@ -152,8 +152,8 @@ def load_torch_model(model_location_generator=None):
         torch_model = YoloV13()
         model = YOLO(file_path)
         # Get the actual PyTorch model from YOLO
-        state_dict = {k.replace("model.", "", 1): v for k, v in pytorch_model.state_dict().items()}
-        torch_model.load_state_dict(state_dict)
+        state_dict = {k.replace("model.", "", 1): v for k, v in model.state_dict().items()}
+        torch_model.load_state_dict(state_dict, strict=False)
         torch_model.eval()
 
         return torch_model

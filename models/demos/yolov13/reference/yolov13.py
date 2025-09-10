@@ -2,9 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as f
+import torch.nn.functional as F
+from torch.nn import functional as f
+
+# Flash attention imports (optional)
+try:
+    from flash_attn import flash_attn_func
+
+    USE_FLASH_ATTN = True
+except ImportError:
+    USE_FLASH_ATTN = False
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -33,22 +44,22 @@ class Conv(nn.Module):
             dilation=dilation,
             bias=False,
         )
-        self.bn = nn.BatchNorm2d(channel_out)
+        self.bn = nn.BatchNorm2d(out_channel)
         self.activation = (
             self.default_act
             if activation is True
-            else aactivationct
+            else activation
             if isinstance(activation, nn.Module)
             else nn.Identity()
         )
 
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
-        return self.act(self.bn(self.conv(x)))
+        return self.activation(self.bn(self.conv(x)))
 
     def forward_fuse(self, x):
         """Apply convolution and activation without batch normalization."""
-        return self.act(self.conv(x))
+        return self.activation(self.conv(x))
 
 
 class DsConv(nn.Module):
@@ -56,6 +67,8 @@ class DsConv(nn.Module):
         super().__init__()
         if padding is None:
             p = (dilation * (kernel_size - 1)) // 2
+        else:
+            p = padding
         self.dw = nn.Conv2d(
             channel_in,
             channel_in,
@@ -80,10 +93,10 @@ class DsConv(nn.Module):
 class Bottleneck(nn.Module):
     def __init__(self, channel_in, channel_out, shortcut=True, groups=1, kernel=(3, 3), expasion_ration=0.5):
         super().__init__()
-        hidden_channel = int(c2 * expasion_ration)  # hidden channels
-        self.cv1 = Conv(channel_in, hidden_channel, k[0], 1)
-        self.cv2 = Conv(hidden_channel, channel_out, k[1], 1, groups=groups)
-        self.add = shortcut and c1 == c2
+        hidden_channel = int(channel_out * expasion_ration)  # hidden channels
+        self.cv1 = Conv(channel_in, hidden_channel, kernel[0], 1)
+        self.cv2 = Conv(hidden_channel, channel_out, kernel[1], 1, groups=groups)
+        self.add = shortcut and channel_in == channel_out
 
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
@@ -93,13 +106,15 @@ class Bottleneck(nn.Module):
 class C3(nn.Module):
     def __init__(self, channel_in, channel_out, n=1, shortcut=True, groups=1, expansion_ratio=0.5):
         super().__init__()
-        hidden_channel = int(c2 * expansion_ratio)  # hidden channels
+        hidden_channel = int(channel_out * expansion_ratio)  # hidden channels
         self.cv1 = Conv(channel_in, hidden_channel, 1, 1)
-        self.cv2 = Conv(channel_in, hidden_channel, 1, 1)
+        self.cv2 = Conv(channel_in, hidden_channel, 1, 1)  # this one is an aux
         self.cv3 = Conv(2 * hidden_channel, channel_out, 1)  # optional act=FReLU(c2)
         self.m = nn.Sequential(
             *(
-                Bottleneck(hidden_channel, hidden_channel, shortcut, groups, kernels=((1, 1), (3, 3)), e=1.0)
+                Bottleneck(
+                    hidden_channel, hidden_channel, shortcut, groups, kernel=((3, 3), (1, 1)), expasion_ration=1.0
+                )
                 for _ in range(n)
             )
         )
@@ -121,11 +136,11 @@ class DSBottleneck(nn.Module):
     ):
         super().__init__()
         hidden_channel = int(channel_out * expasion_ration)
-        self.cv1 = DSConv(channel_in, hidden_channel, kernel_size_dsconv_1, stride=1, padding=None, dilatation=1)
-        self.cv2 = DSConv(
-            hidden_channel, channel_out, kernel_size_dsconv_2, stride=1, padding=None, dilatation=dilatation_dsconv_2
+        self.cv1 = DsConv(channel_in, hidden_channel, kernel_size_dsconv_1, stride=1, padding=None, dilation=1)
+        self.cv2 = DsConv(
+            hidden_channel, channel_out, kernel_size_dsconv_2, stride=1, padding=None, dilation=dilatation_dsconv_2
         )
-        self.add = shortcut and c1 == c2
+        self.add = shortcut and channel_in == channel_out
 
     def forward(self, x):
         y = self.cv2(self.cv1(x))
@@ -146,7 +161,7 @@ class DSC3k(C3):
         dilatation_dsconv_2=1,
     ):
         super().__init__(channel_in, channel_out, n, shortcut, groups, expansion_ratio)
-        hidden_channel = int(channel_out * expasion_ration)
+        hidden_channel = int(channel_out * expansion_ratio)
 
         self.m = nn.Sequential(
             *(
@@ -174,7 +189,7 @@ class C2f(nn.Module):
         self.cv2 = Conv((2 + n) * self.hidden_channel, channel_out, 1)  # optional act=FReLU(c2)
         self.m = nn.ModuleList(
             Bottleneck(
-                self.hidden_channel, self.hidden_channel, shortcut, groups, kernels=((3, 3), (3, 3)), expasion_ratio=1.0
+                self.hidden_channel, self.hidden_channel, shortcut, groups, kernel=((3, 3), (3, 3)), expasion_ration=1.0
             )
             for _ in range(n)
         )
@@ -187,7 +202,7 @@ class C2f(nn.Module):
 
     def forward_split(self, x):
         """Forward pass using split() instead of chunk()."""
-        y = self.cv1(x).split((self.c, self.c), 1)
+        y = self.cv1(x).split((self.hidden_channel, self.hidden_channel), 1)
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
@@ -216,7 +231,7 @@ class DSC3k2(C2f):
                     n=2,
                     shortcut=shortcut,
                     groups=groups,
-                    e=1.0,
+                    expansion_ratio=1.0,
                     kernel_size_dsconv_1=kernel_size_dsconv_1,
                     kernel_size_dsconv_2=kernel_size_dsconv_2,
                     dilatation_dsconv_2=dilatation_dsconv_2,
@@ -229,7 +244,7 @@ class DSC3k2(C2f):
                     self.hidden_channel,
                     self.hidden_channel,
                     shortcut=shortcut,
-                    expasion_ratio=1.0,
+                    expasion_ration=1.0,
                     kernel_size_dsconv_1=kernel_size_dsconv_1,
                     kernel_size_dsconv_2=kernel_size_dsconv_2,
                     dilatation_dsconv_2=dilatation_dsconv_2,
@@ -300,7 +315,7 @@ class ABlock(nn.Module):
         super().__init__()
         self.attn = AAttn(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, activation=False))
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -348,7 +363,7 @@ class A2C2f(nn.Module):
         self.m = nn.ModuleList(
             nn.Sequential(*(ABlock(hidden_channel, num_heads, mlp_ratio, area) for _ in range(2)))
             if area_attention_2
-            else C3k(hidden_channel, channel_out, 2, shortcut, groups)
+            else C3k(hidden_channel, hidden_channel, 2, shortcut, groups)
             for _ in range(n)
         )
 
@@ -372,10 +387,10 @@ class Upsample(nn.Module):
 
 
 class DownsampleConv(nn.Module):
-    def __init__(self, kernel_size=2, stride=2, padding=0, channel_adjust=True):
+    def __init__(self, kernel_size=2, stride=2, padding=0, channel_adjust=True, in_channel=None):
         super().__init__()
         self.downsample = nn.AvgPool2d(kernel_size, stride, padding)
-        if channel_adjust:
+        if channel_adjust and in_channel is not None:
             self.channel_adjust = Conv(in_channel, in_channel * 2, 1)
         else:
             self.channel_adjust = nn.Identity()
@@ -391,7 +406,18 @@ class Concat(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        x = torch.Concat(x)
+        if isinstance(x, (list, tuple)):
+            # Handle different spatial dimensions by resizing to match the first tensor
+            if len(x) > 1:
+                target_size = x[0].shape[2:]  # Get H, W from first tensor
+                resized_tensors = []
+                for tensor in x:
+                    if tensor.shape[2:] != target_size:
+                        tensor = F.interpolate(tensor, size=target_size, mode="nearest")
+                    resized_tensors.append(tensor)
+                x = torch.cat(resized_tensors, dim=1)
+            else:
+                x = x[0]
         return x
 
 
@@ -498,14 +524,14 @@ class AdaHGComputation(nn.Module):
 
 
 class FuseModule(nn.Module):
-    def __init__(self, c_in, channel_adjust):
+    def __init__(self, channel_in, channel_adjust):
         super(FuseModule, self).__init__()
         self.downsample = nn.AvgPool2d(kernel_size=2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         if channel_adjust:
-            self.conv_out = Conv(4 * c_in, c_in, 1)
+            self.conv_out = Conv(4 * channel_in, channel_in, 1)
         else:
-            self.conv_out = Conv(3 * c_in, c_in, 1)
+            self.conv_out = Conv(3 * channel_in, channel_in, 1)
 
     def forward(self, x):
         x1_ds = self.downsample(x[0])
@@ -518,31 +544,38 @@ class FuseModule(nn.Module):
 class HyperACE(nn.Module):
     def __init__(
         self,
-        c1,
-        c2,
+        channel_in,
+        channel_out,
         n=1,
         num_hyperedges=8,
         dsc3k=True,
         shortcut=False,
-        e1=0.5,
-        e2=1,
+        expansion_ratio1=0.5,
+        expansion_ratio2=1,
         context="both",
         channel_adjust=True,
     ):
         super().__init__()
-        self.c = int(c2 * e1)
-        self.cv1 = Conv(c1, 3 * self.c, 1, 1)
-        self.cv2 = Conv((4 + n) * self.c, c2, 1)
+        self.hidden_channel = int(channel_out * expansion_ratio1)
+        self.cv1 = Conv(channel_in, 3 * self.hidden_channel, 1, 1)
+        self.cv2 = Conv((4 + n) * self.hidden_channel, channel_out, 1)
         self.m = nn.ModuleList(
-            DSC3k(self.c, self.c, 2, shortcut, k1=3, k2=7) if dsc3k else DSBottleneck(self.c, self.c, shortcut=shortcut)
+            DSC3k(self.hidden_channel, self.hidden_channel, 2, shortcut, kernel_size_dsconv_1=3, kernel_size_dsconv_2=7)
+            if dsc3k
+            else DSBottleneck(self.hidden_channel, self.hidden_channel, shortcut=shortcut)
             for _ in range(n)
         )
-        self.fuse = FuseModule(c1, channel_adjust)
-        self.branch1 = C3AH(self.c, self.c, e2, num_hyperedges, context)
-        self.branch2 = C3AH(self.c, self.c, e2, num_hyperedges, context)
 
-    def forward(self, X):
-        x = self.fuse(X)
+        self.fuse = FuseModule(channel_in, channel_adjust)
+        self.branch1 = C3AH(self.hidden_channel, self.hidden_channel, expansion_ratio2, num_hyperedges, context)
+        self.branch2 = C3AH(self.hidden_channel, self.hidden_channel, expansion_ratio2, num_hyperedges, context)
+
+    def forward(self, x):
+        # If input is a single tensor, use it directly without fuse
+        if isinstance(x, torch.Tensor):
+            x = x  # Use input directly
+        else:
+            x = self.fuse(x)
         y = list(self.cv1(x).chunk(3, 1))
         out1 = self.branch1(y[1])
         out2 = self.branch2(y[1])
@@ -558,54 +591,165 @@ class FullPAD_Tunnel(nn.Module):
         self.gate = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, x):
-        out = x[0] + self.gate * x[1]
+        if isinstance(x, (list, tuple)) and len(x) == 2:
+            out = x[0] + self.gate * x[1]
+        else:
+            out = x
         return out
+
+
+class DFL(nn.Module):
+    def __init__(self, c1=16, c2=1):
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2
+        self.conv = nn.Conv2d(c1, c2, 1, 1, 0, bias=False)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class DWConv(Conv):
+    def __init__(
+        self, channel_in, channel_out, kernel=1, stride=1, dilation=1, activation=True
+    ):  # ch_in, ch_out, kernel, stride, dilation, activation
+        """Initialize Depth-wise convolution with given parameters."""
+        super().__init__(
+            channel_in,
+            channel_out,
+            kernel,
+            stride,
+            groups=math.gcd(channel_in, channel_out),
+            dilation=dilation,
+            activation=activation,
+        )
+
+
+class Detect(nn.Module):
+    dynamic = False  # force grid reconstruction
+    export = False  # export mode
+    format = None  # export format
+    end2end = False  # end2end
+    max_det = 300  # max_det
+    shape = None
+    anchors = torch.empty(0)  # init
+    strides = torch.empty(0)  # init
+    legacy = False  # backward compatibility for v3/v5/v8/v9 models
+
+    def __init__(self, nc=80, ch=()):
+        super().__init__()
+        self.nc = nc  # number of classes
+        self.nl = len(ch)  # number of detection layers
+        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        self.no = nc + self.reg_max * 4  # number of outputs per anchor
+        self.stride = torch.zeros(self.nl)  # strides computed during build
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
+        )
+        self.cv3 = (
+            nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+            if self.legacy
+            else nn.ModuleList(
+                nn.Sequential(
+                    nn.Sequential(DWConv(x, x, 3), Conv(x, c3, 1)),
+                    nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
+                    nn.Conv2d(c3, self.nc, 1),
+                )
+                for x in ch
+            )
+        )
+        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+
+        if self.end2end:
+            self.one2one_cv2 = copy.deepcopy(self.cv2)
+            self.one2one_cv3 = copy.deepcopy(self.cv3)
+
+    def forward(self, x):
+        if self.end2end:
+            return self.forward_end2end(x)
+
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+        if self.training:  # Training path
+            return x
+        y = self._inference(x)
+        return y if self.export else (y, x)
+
+    def forward_end2end(self, x):
+        x_detach = [xi.detach() for xi in x]
+        one2one = [
+            torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i](x_detach[i])), 1) for i in range(self.nl)
+        ]
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+        if self.training:  # Training path
+            return {"one2many": x, "one2one": one2one}
+
+        y = self._inference(one2one)
+        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
+        return y if self.export else (y, {"one2many": x, "one2one": one2one})
+
+    def _inference(self, x):
+        # Inference path
+        shape = x[0].shape  # BCHW
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        if self.format != "imx" and (self.dynamic or self.shape != shape):
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+
+        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
+            box = x_cat[:, : self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4 :]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
+        if self.export and self.format in {"tflite", "edgetpu"}:
+            # Precompute normalization factor to increase numerical stability
+            # See https://github.com/ultralytics/ultralytics/issues/7371
+            grid_h = shape[2]
+            grid_w = shape[3]
+            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
+            norm = self.strides / (self.stride[0] * grid_size)
+            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
+        elif self.export and self.format == "imx":
+            dbox = self.decode_bboxes(
+                self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
+            )
+            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1)
+        else:
+            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+
+        return torch.cat((dbox, cls.sigmoid()), 1)
+
+    def bias_init(self):
+        m = self  # self.model[-1]  # Detect() module
+        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
+        # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
+        for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
+            a[-1].bias.data[:] = 1.0  # box
+            b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+        if self.end2end:
+            for a, b, s in zip(m.one2one_cv2, m.one2one_cv3, m.stride):  # from
+                a[-1].bias.data[:] = 1.0  # box
+                b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
 
 
 class YoloV13(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            Conv(3, 96, kernel=(3, 3), stride=(2, 2), padding=(1, 1)),  # 0
-            Conv(96, 192, kernel=(3, 3), stride=(2, 2), padding=(1, 1), groups=2, bias=False),  # 1
-            Dsc3k2(
-                in_channel=[192, 384],
-                out_channel=[192, 384],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 2
-            Conv(384, 384, kernel=(3, 3), stride=(2, 2), padding=(1, 1), groups=4, bias=False),  # 3
-            Dsc3k2(
-                in_channel=[384, 768],
-                out_channel=[384, 768],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 4
-            DsConv(
-                in_channel=[768, 768],
-                out_channel=[768, 768],
-                kernel=[(3, 3), (1, 1)],
-                stride=[(2, 2), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-                groups=[768, 1],
-                bias=False,
-                enable_act=True,
-            ),  # 5
-            A2C2f(),  # 6
-            DsConv(
-                in_channel=[768, 768],
-                out_channel=[768, 768],
-                kernel=[(3, 3), (1, 1)],
-                stride=[(2, 2), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-                groups=[768, 1],
-                bias=False,
-                enable_act=True,
-            ),  # 7
-            A2C2f(),  # 8
-            HyperACE(),  # 9
+            Conv(3, 96, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1)),  # 0
+            Conv(96, 192, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=2),  # 1
+            # 2
+            DSC3k2(192, 384, n=2, expasion_ratio=0.25, dsc3k=True),  # channel_in  # channel_out
+            Conv(384, 384, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=4),  # 3
+            DSC3k2(384, 768, n=2, expasion_ratio=0.25, dsc3k=True),  # 4
+            DsConv(768, 768, kernel_size=3, stride=2),  # 5
+            A2C2f(768, 768, n=4, mlp_ratio=1.5),  # 6
+            DsConv(768, 768, kernel_size=3, stride=2),  # 7
+            A2C2f(768, 768, n=4, mlp_ratio=1.5),  # 8
+            HyperACE(768, 768, n=2, dsc3k=True, channel_adjust=False, num_hyperedges=12),  # 9
             Upsample(scale_factor=2.0, mode="nearest"),  # 10
             DownsampleConv(),  # 11
             FullPAD_Tunnel(),  # 12
@@ -613,78 +757,91 @@ class YoloV13(nn.Module):
             FullPAD_Tunnel(),  # 14
             Upsample(scale_factor=2.0, mode="nearest"),  # 15
             Concat(),  # 16
-            DSC3k2(
-                in_channel=[1536, 768],
-                out_channel=[1536, 768],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 17
+            DSC3k2(1536, 768, n=2, dsc3k=True),  # 17
             FullPAD_Tunnel(),  # 18
             Upsample(scale_factor=2.0, mode="nearest"),  # 19
             Concat(),  # 20
-            DSC3k2(
-                in_channel=[1536, 768],
-                out_channel=[1536, 768],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 21
-            Conv(),  # 22
+            DSC3k2(1536, 384, n=2, dsc3k=True),  # 21
+            Conv(768, 384, kernel_size=1, stride=1),  # 22
             FullPAD_Tunnel(),  # 23
-            Conv(),  # 24
+            Conv(384, 384, kernel_size=3, stride=2, padding=1),  # 24
             Concat(),  # 25
-            DSC3k2(
-                in_channel=[1536, 768],
-                out_channel=[1536, 768],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 26
+            DSC3k2(1152, 768, n=2, dsc3k=True),  # 26
             FullPAD_Tunnel(),  # 27
-            Conv(),  # 28
+            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28
             Concat(),  # 29
-            DSC3k2(
-                in_channel=[1536, 768],
-                out_channel=[1536, 768],
-                kernel=[(1, 1), (1, 1)],
-                stride=[(1, 1), (1, 1)],
-                padding=[(1, 1), (1, 1)],
-            ),  # 30
+            DSC3k2(1536, 768, n=2, dsc3k=True),  # 30
             FullPAD_Tunnel(),  # 31
-            Detect(),  # 32
+            HyperACE(768, 768, n=2, dsc3k=True),  # 9
+            Upsample(scale_factor=2.0, mode="nearest"),  # 10
+            DownsampleConv(),  # 11
+            FullPAD_Tunnel(),  # 12
+            FullPAD_Tunnel(),  # 13
+            FullPAD_Tunnel(),  # 14
+            Upsample(scale_factor=2.0, mode="nearest"),  # 15
+            Concat(),  # 16
+            DSC3k2(1536, 768, n=2, dsc3k=True),  # 17
+            FullPAD_Tunnel(),  # 18
+            Upsample(scale_factor=2.0, mode="nearest"),  # 19
+            Concat(),  # 20
+            DSC3k2(1536, 768, n=2, dsc3k=True),  # 21
+            Conv(768, 384, kernel_size=1, stride=1),  # 22
+            FullPAD_Tunnel(),  # 23
+            Conv(384, 384, kernel_size=3, stride=2, padding=1),  # 24
+            Concat(),  # 25
+            DSC3k2(1152, 768, n=2, dsc3k=True),  # 26
+            FullPAD_Tunnel(),  # 27
+            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28
+            Concat(),  # 29
+            DSC3k2(1536, 768, n=2, dsc3k=True),  # 30
+            FullPAD_Tunnel(),  # 31
+            Detect(nc=80, ch=(384, 768, 768)),  # 32
         )
 
     def forward(self, x):
-        x = self.model[0](x)  # 0
-        x = self.model[1](x)  # 1
-        x = self.model[2](x)  # 2
-        x = self.model[3](x)  # 3
-        x = self.model[4](x)  # 4
-        x4 = x
-        x = self.model[5](x)  # 5
-        x = self.model[6](x)  # 6
-        x6 = x
-        x = self.model[7](x)  # 7
-        x = self.model[8](x)  # 8
-        x = self.model[9](x)  # 9
-        x = self.model[10](x)  # 10
-        x10 = x
-        x = f.upsample(x, scale_factor=2.0)  # 11
-        x = torch.cat((x, x6), 1)  # 12
-        x = self.model[13](x)  # 13
-        x13 = x
-        x = f.upsample(x, scale_factor=2.0)  # 14
-        x = torch.cat((x, x4), 1)  # 15
-        x = self.model[16](x)  # 16
-        x16 = x
-        x = self.model[17](x)  # 17
-        x = torch.cat((x, x13), 1)  # 18
-        x = self.model[19](x)  # 19
-        x19 = x
-        x = self.model[20](x)  # 20
-        x = torch.cat((x, x10), 1)  # 21
-        x = self.model[22](x)  # 22
-        x22 = x
-        x = self.model[23](x16, x19, x22)  # 23
+        # Backbone
+        x = self.model[0](x)  # Conv: 3->96
+        x = self.model[1](x)  # Conv: 96->192
+        x = self.model[2](x)  # DSC3k2: 192->384
+        x = self.model[3](x)  # Conv: 384->384
+        x = self.model[4](x)  # DSC3k2: 384->768
+        x4 = x  # Save for later concatenation
+        x = self.model[5](x)  # DsConv: 768->768
+        x = self.model[6](x)  # A2C2f: 768->768
+        x6 = x  # Save for later concatenation
+        x = self.model[7](x)  # DsConv: 768->768
+        x = self.model[8](x)  # A2C2f: 768->768
+        x = self.model[9](x)  # HyperACE: 768->768
+        x = self.model[10](x)  # Upsample
+        x10 = x  # Save for later concatenation
+        x = self.model[11](x)  # DownsampleConv
+
+        # Neck - FPN
+        x = self.model[12](x)  # FullPAD_Tunnel
+        x = self.model[13](x)  # FullPAD_Tunnel
+        x = self.model[14](x)  # FullPAD_Tunnel
+        x = self.model[15](x)  # Upsample
+        x = self.model[16]([x, x4])  # Concat
+        x = self.model[17](x)  # DSC3k2: 1536->768
+        x16 = x  # Save for later concatenation
+        x = self.model[18](x)  # FullPAD_Tunnel
+        x = self.model[19](x)  # Upsample
+        x = self.model[20]([x, x10])  # Concat
+        x = self.model[21](x)  # DSC3k2: 1536->768
+        x19 = x  # Save for later concatenation
+        x = self.model[22](x)  # Conv: 768->384
+        x22 = x  # Save for later concatenation
+
+        # Head
+        x = self.model[23](x)  # FullPAD_Tunnel
+        x = self.model[24](x)  # Conv: 384->384
+        x = self.model[25]([x, x19])  # Concat
+        x = self.model[26](x)  # DSC3k2: 1152->768
+        x = self.model[27](x)  # FullPAD_Tunnel
+        x = self.model[28](x)  # Conv: 768->768
+        x = self.model[29]([x, x16])  # Concat
+        x = self.model[30](x)  # DSC3k2: 1536->768
+        x = self.model[31](x)  # FullPAD_Tunnel
+        x = self.model[32](x)  # Detect
+
         return x
