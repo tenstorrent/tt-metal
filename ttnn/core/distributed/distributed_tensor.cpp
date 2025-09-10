@@ -379,10 +379,8 @@ public:
         }
 
         auto xtensor_adapter = experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
-        // NOLINTBEGIN(bugprone-use-after-move)
-        return {
-            std::move(xtensor_adapter).data(), experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr())};
-        // NOLINTEND(bugprone-use-after-move)
+        auto&& shape = experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
+        return {std::move(xtensor_adapter).data(), std::move(shape)};
     }
 
     Tensor compose(const Tensor& tensor) const {

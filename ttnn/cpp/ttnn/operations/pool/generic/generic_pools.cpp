@@ -267,7 +267,9 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     if (reallocate_halo_output) {
         haloed_tensor = ttnn::move(haloed_tensor);
     }
-    haloed_tensors.push_back(std::move(haloed_tensor));  // NOLINT(bugprone-use-after-move)
+
+    // NOLINTNEXTLINE(bugprone-use-after-move)
+    haloed_tensors.push_back(std::move(haloed_tensor));
 
     if (return_indices) {
         Tensor haloed_index = ttnn::halo(
@@ -292,10 +294,8 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     }
 
     // NOLINTNEXTLINE(bugprone-use-after-move)
-    const uint32_t pre_allocate_size = haloed_tensor.device()
-                                           ->allocator()
-                                           ->get_statistics(tt::tt_metal::BufferType::L1)
-                                           .total_allocated_bytes;  // NOLINT(bugprone-use-after-move)
+    const uint32_t pre_allocate_size =
+        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
