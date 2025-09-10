@@ -11,6 +11,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
 #include <iostream>
@@ -66,12 +67,15 @@ void matmul_multicore_reuse(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    IDevice* device) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device) {
     /*
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
      */
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    IDevice* device = mesh_device->get_devices()[0];
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
@@ -187,27 +191,18 @@ void matmul_multicore_reuse(
     uint32_t dram_buffer_C_size =
         single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    tt_metal::InterleavedBufferConfig dram_config_A{
-        .device = device,
-        .size = dram_buffer_A_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    tt_metal::InterleavedBufferConfig dram_config_B{
-        .device = device,
-        .size = dram_buffer_B_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = dram_buffer_A_size};
 
-    tt_metal::InterleavedBufferConfig dram_config_C{
-        .device = device,
-        .size = dram_buffer_C_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = dram_buffer_B_size};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config_A);
-    auto src1_dram_buffer = CreateBuffer(dram_config_B);
-    auto dst_dram_buffer = CreateBuffer(dram_config_C);
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = dram_buffer_C_size};
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
     /*
      * Config of Circular Buffer in the device L1
@@ -341,10 +336,11 @@ void matmul_multicore_reuse(
     // ReadFromBuffer(dst_dram_buffer, output);
     // ReadFromBuffer(src0_dram_buffer, output);
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 }
 
 ///////////////////////////////////////
@@ -355,7 +351,7 @@ int main() {
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup
@@ -392,7 +388,7 @@ int main() {
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, mesh_device);
         result_vec = untilize_nfaces(result_vec, M, N);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
@@ -401,7 +397,7 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception! what: {}\n", e.what());
