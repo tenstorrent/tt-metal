@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD
 #include "dev_msgs.h"
 #include <cstdint>
 #include <enchantum/enchantum.hpp>

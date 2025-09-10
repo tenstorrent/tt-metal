@@ -12,7 +12,7 @@ void kernel_main() {
 
     constexpr uint32_t briscIndex = 0;
     volatile tt_l1_ptr uint32_t* briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        &((mailboxes_t*)MEM_MAILBOX_BASE)->profiler.buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
+        &((mailboxes_t*)MEM_MAILBOX_BASE)->profiler.buffer[briscIndex].data[kernel_profiler::CUSTOM_MARKERS]);
 
     uint32_t syncTimeBufferIndex = 0;
 
