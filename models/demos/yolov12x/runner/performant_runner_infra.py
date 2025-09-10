@@ -19,12 +19,15 @@ class YOLOv12xPerformanceRunnerInfra:
         self,
         device,
         batch_size,
+        act_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        use_pretrained_weight=True,
         mesh_mapper=None,
         weights_mesh_mapper=None,
         mesh_composer=None,
-        model_location_generator=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -38,9 +41,11 @@ class YOLOv12xPerformanceRunnerInfra:
         self.mesh_composer = mesh_composer
 
         self.batch_size = batch_size
-        self.torch_input_tensor = torch_input_tensor
+        self.act_dtype = act_dtype
+        self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
-        self.torch_model = load_torch_model(model_location_generator=self.model_location_generator)
+        self.torch_input_tensor = torch_input_tensor
+        self.torch_model = load_torch_model(model_location_generator)
 
         self.torch_input_tensor = (
             torch.randn((self.batch_size * self.num_devices, 3, 640, 640), dtype=torch.float32)
@@ -48,12 +53,16 @@ class YOLOv12xPerformanceRunnerInfra:
             else self.torch_input_tensor
         )
 
-        self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
-        self.parameters = create_yolov12x_model_parameters(self.torch_model, self.torch_input_params, self.device)
-
-        self.ttnn_yolov12x_model = YoloV12x(device, self.parameters)
+        model_type = f"torch_model"
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
+
+        self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
+        self.parameters = create_yolov12x_model_parameters(
+            self.torch_model, self.torch_input_params, device=self.device
+        )
+
+        self.ttnn_yolov12x_model = YoloV12x(self.device, self.parameters)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
@@ -112,7 +121,9 @@ class YOLOv12xPerformanceRunnerInfra:
         output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.mesh_composer)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
 
-        logger.info(f"YoloV12x - batch_size={self.batch_size}, PCC={self.pcc_message}")
+        logger.info(
+            f"Yolov12x batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_passed}"
+        )
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor)

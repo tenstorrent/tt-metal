@@ -24,7 +24,11 @@ class TtYOLOv12xConv2D:
         is_detect=False,
         is_dfl=False,
         config_override=None,
+        auto_shard=False,
         deallocate_activation=False,
+        act_block_h_override=0,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -43,7 +47,7 @@ class TtYOLOv12xConv2D:
         if hasattr(self.padding, "__len__"):
             if len(self.padding) == 2:
                 self.padding = (self.padding[0], self.padding[0], self.padding[1], self.padding[1])
-            elif len(padding) == 4:
+            elif len(self.padding) == 4:
                 self.padding = (self.padding[0], self.padding[1], self.padding[2], self.padding[3])
             else:
                 raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
@@ -57,6 +61,7 @@ class TtYOLOv12xConv2D:
             packer_l1_acc=False if self.is_detect else True,
             math_approx_mode=True,
         )
+
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
@@ -115,6 +120,52 @@ class TtYOLOv12xConv2D:
         return x
 
 
+class Conv:
+    def __init__(
+        self,
+        device,
+        parameter,
+        conv_pt,
+        enable_act=True,
+        is_detect=False,
+        enable_identity=False,
+        is_dfl=False,
+        config_override=None,
+        use_1d_systolic_array=True,
+        auto_shard=False,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        activation="",
+        deallocate_activation=False,
+        activation_dtype=ttnn.bfloat8_b,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
+    ):
+        self.enable_identity = enable_identity
+        self.enable_act = enable_act
+        if not self.enable_identity:
+            activation = "silu"
+        self.conv = TtYOLOv12xConv2D(
+            parameter.conv,
+            conv_pt.conv,
+            device=device,
+            is_detect=is_detect,
+            is_dfl=is_dfl,
+            config_override=config_override,
+            use_1d_systolic_array=use_1d_systolic_array,
+            auto_shard=auto_shard,
+            shard_layout=shard_layout,
+            activation=activation,
+            deallocate_activation=deallocate_activation,
+            activation_dtype=activation_dtype,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=enable_weights_double_buffer,
+        )
+
+    def __call__(self, x):
+        x = self.conv(x)
+        return x
+
+
 class TtnnBottleneck:
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = TtYOLOv12xConv2D(
@@ -154,3 +205,8 @@ def get_mesh_mappers(device):
         weights_mesh_mapper = None
         output_mesh_composer = None
     return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def deallocate_tensors(*tensors):
+    for t in tensors:
+        ttnn.deallocate(t)

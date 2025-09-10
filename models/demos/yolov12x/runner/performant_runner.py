@@ -12,12 +12,15 @@ class YOLOv12xPerformantRunner:
         self,
         device,
         device_batch_size=1,
+        act_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        use_pretrained_weight=True,
         mesh_mapper=None,
         weights_mesh_mapper=None,
         mesh_composer=None,
-        model_location_generator=None,
     ):
         self.device = device
         self.resolution = resolution
@@ -27,16 +30,18 @@ class YOLOv12xPerformantRunner:
         self.weights_mesh_mapper = weights_mesh_mapper
         self.mesh_composer = mesh_composer
 
-        self.model_location_generator = model_location_generator
         self.runner_infra = YOLOv12xPerformanceRunnerInfra(
             device,
             device_batch_size,
+            act_dtype,
+            weight_dtype,
+            model_location_generator,
             resolution=resolution,
             torch_input_tensor=self.torch_input_tensor,
+            use_pretrained_weight=use_pretrained_weight,
             mesh_mapper=mesh_mapper,
             weights_mesh_mapper=weights_mesh_mapper,
             mesh_composer=mesh_composer,
-            model_location_generator=self.model_location_generator,
         )
 
         (
@@ -103,9 +108,12 @@ class YOLOv12xPerformantRunner:
         torch_output_tensor = self.runner_infra.torch_output_tensor
         assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
 
-    def run(self, torch_input_tensor=None, check_pcc=False):
+    def run(self, torch_input_tensor, check_pcc=False):
+        n, c, h, w = torch_input_tensor.shape
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+
         output = self._execute_yolov12x_trace_2cqs_inference(tt_inputs_host)
+
         if check_pcc:
             self._validate(torch_input_tensor, output)
 

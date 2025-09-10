@@ -45,11 +45,13 @@ def init_model_and_runner(
         performant_runner = YOLOv12xPerformantRunner(
             device,
             batch_size_per_device,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            model_location_generator,
             resolution=(640, 640),
             mesh_mapper=inputs_mesh_mapper,
             weights_mesh_mapper=weights_mesh_mapper,
             mesh_composer=outputs_mesh_composer,
-            model_location_generator=model_location_generator,
         )
 
     return model, performant_runner, outputs_mesh_composer, batch_size

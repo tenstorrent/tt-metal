@@ -55,7 +55,11 @@ class TtnnA2C2f:
         )
         if a2 and residual:
             self.gamma = 0.01 * ttnn.ones(
-                [c2], dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                [c2],
+                dtype=ttnn.bfloat8_b,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             self.gamma = None
