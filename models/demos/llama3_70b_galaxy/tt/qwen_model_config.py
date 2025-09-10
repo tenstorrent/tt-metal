@@ -352,8 +352,8 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
-            # core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(2, 0)
             core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            # core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )

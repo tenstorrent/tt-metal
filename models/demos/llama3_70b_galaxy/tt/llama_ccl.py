@@ -216,7 +216,8 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.create_sharded_memory_config(
-                shape=(32, 64),
+                # shape=(32, 64),
+                shape=(32, 128),
                 core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -235,7 +236,8 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.from_torch(
-                torch.zeros((1, 1, M, 64)),
+                # torch.zeros((1, 1, M, 64)),
+                torch.zeros((1, 1, M, 128)),
                 # torch.zeros((1, 1, M, 128)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
