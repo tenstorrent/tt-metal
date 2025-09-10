@@ -149,14 +149,21 @@ async function run() {
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
 
     // 1. Fetch runs for each event type separately
+
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+
+    core.info('Fetching all runs...');
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+
+    await delay(2000);
+
     core.info('Fetching scheduled runs...');
     const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
 
-    core.info('Fetching pull request runs...');
-    const prRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
     // 2. Combine all the results into a single array
-    const newRuns = [...scheduledRuns, ...prRuns];
+    const newRuns = [...scheduledRuns, ...allRuns];
 
     core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
 
