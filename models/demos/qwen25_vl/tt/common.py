@@ -38,23 +38,6 @@ def merge_vision_tokens(
     return input_embeds
 
 
-def rotary_embed(position_ids):
-    """
-    Apply rotary embeddings to the input embeddings
-    """
-    inv_freq_expanded = ttnn.repeat(ttnn.reshape(self.inv_freq, (1, 1, -1, 1)), (3, position_ids.shape[1], -1, 1))
-    position_ids_expanded = ttnn.reshape(
-        position_ids, (3, position_ids.shape[1], 1, position_ids.shape[2])
-    )  # shape (3, bs, 1, positions)
-
-    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
-    emb = ttnn.concat((freqs, freqs), dim=-1)
-    cos = ttnn.cos(emb) * self.attention_scaling
-    sin = ttnn.sin(emb) * self.attention_scaling
-
-    return cos, sin
-
-
 def preprocess_inputs_prefill(
     input_embeds,
     model_args,
@@ -130,7 +113,6 @@ def multimodal_rope_from_hf(
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
     )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
-    logger.info(f"padded_inputs: {padded_inputs.shape}")
 
     # Create a mask that is all 1s for the full max_seq_len, ensuring RoPE calculations cover all positions.
     # The original inputs.attention_mask might have 0s for padding within its original length,
@@ -138,7 +120,6 @@ def multimodal_rope_from_hf(
     padded_attention_mask = torch.ones_like(
         padded_inputs, dtype=inputs.attention_mask.dtype, device=inputs.attention_mask.device
     )
-    logger.info(f"padded_attention_mask: {padded_attention_mask.shape}")
 
     # Qwen2_5_VLForConditionalGeneration.forward:
     position_ids, rope_deltas = reference_model.model.get_rope_index(
