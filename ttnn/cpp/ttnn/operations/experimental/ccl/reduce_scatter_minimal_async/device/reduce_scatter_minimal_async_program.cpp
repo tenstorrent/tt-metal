@@ -75,9 +75,11 @@ uint32_t default_workers(
     if (topology == ttnn::ccl::Topology::Ring) {
         // For ring, 50+MB is where 8 workers start scaling. 1-50MB is where 4 workers start scaling. 0-1MB is where 2
         // workers start scaling.
-        if (data_moved_per_link_bytes > double(50)) {
+        constexpr double RING_HIGH_DATA_THRESHOLD_MB = 50.0;
+        constexpr double RING_LOW_DATA_THRESHOLD_MB = 1.0;
+        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < double(1)) {
+        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {2, 1};
         } else {
             candidate_worker_counts = {4, 2, 1};
@@ -85,9 +87,11 @@ uint32_t default_workers(
     } else if (topology == ttnn::ccl::Topology::Linear) {
         // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
         // 2 workers start scaling.
-        if (data_moved_per_link_bytes > double(4)) {
+        constexpr double LINEAR_HIGH_DATA_THRESHOLD_MB = 4.0;
+        constexpr double LINEAR_LOW_DATA_THRESHOLD_MB = 0.5;
+        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < double(0.5)) {
+        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {2, 1};
         } else {
             candidate_worker_counts = {4, 2, 1};
@@ -119,7 +123,10 @@ uint32_t default_chunks_per_sync(
     // default value of syncing once This was determined by the sweep test:
     // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
     TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
-    uint32_t default_value = topology == ttnn::ccl::Topology::Ring ? 80 : 20;
+    constexpr uint32_t RING_DEFAULT_CHUNKS_PER_SYNC = 80;
+    constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
+    uint32_t default_value =
+        topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
     uint32_t total_chunks = std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
 }
