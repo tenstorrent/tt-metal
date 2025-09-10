@@ -325,8 +325,8 @@ def test_multimodal_demo_text(
                 )
             ],
             [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            # [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            # [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
     else:
         dialogs = [
