@@ -104,11 +104,11 @@ root_instance {
     value { host_id: 0 }
   }
   child_mappings {
-    key: "system2"
+    key: "system3"
     value { host_id: 1 }
   }
   child_mappings {
-    key: "system3"
+    key: "system2"
     value { host_id: 2 }
   }
   child_mappings {
