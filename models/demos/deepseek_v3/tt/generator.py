@@ -108,6 +108,12 @@ class DeepseekGenerator:
         self.single_layer = single_layer
         self._prepare_run_configs(cache_dir)
 
+        # Trace state (decode)
+        self._trace_id: int | None = None
+        self._trace_tokens: ttnn.Tensor | None = None
+        self._trace_positions: ttnn.Tensor | None = None
+        self._trace_output: ttnn.Tensor | None = None
+
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
         # if getattr(hf_config, "max_seq_len", None) is not None:
@@ -261,6 +267,92 @@ class DeepseekGenerator:
         ttnn.deallocate(logits_tt)
 
         return logits  # [1, 1, B, V]
+
+    def _read_logits_host(self, tt_logits: ttnn.Tensor) -> torch.Tensor:
+        """Convert device logits [1, 1, B, V] to torch [B, V]."""
+        pt_logits = ttnn.to_torch(tt_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
+        return pt_logits.squeeze(0).squeeze(0)
+
+    def _capture_decode_trace(self, init_tokens: torch.Tensor, positions: torch.Tensor) -> None:
+        """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
+        assert self._trace_id is None, "Trace already captured"
+
+        # 1) Warm-up compile run (no trace) to keep compilation out of capture
+        _ = self._decode_step(init_tokens, positions)
+
+        # 2) Allocate persistent device inputs
+        # Tokens buffer shape [1, 1, B]
+        torch_input = init_tokens.view(1, 1, -1).to(torch.int32)
+        self._trace_tokens = ttnn.from_torch(
+            torch_input,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # Positions buffer shape [B]
+        self._trace_positions = ttnn.from_torch(
+            positions.to(torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.mesh_device.shape),
+            dtype=ttnn.int32,
+        )
+
+        # 3) Capture decode graph
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        rope_tensors = self.rope.get_rot_mats(self._trace_positions)
+        self._trace_output = Model1D.forward_decode(
+            self._trace_tokens,
+            self._trace_positions,
+            {"cos_matrix": rope_tensors[0], "sin_matrix": rope_tensors[1], "trans_matrix": rope_tensors[2]},
+            self.page_table_tt,
+            self.model1d_run_config,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        self._trace_id = trace_id
+
+    def decode_forward(
+        self,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        *,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
+    ) -> torch.Tensor | ttnn.Tensor:
+        """Run a single decode iteration.
+
+        - If enable_trace is True, lazily capture a trace on first call and then execute the trace.
+        - If enable_trace is False, run without trace (allocates per call).
+
+        Inputs:
+          tokens_step: torch int tensor [B]
+          positions: torch int tensor [B]
+        Returns logits as torch [B, V] if read_from_device else device tensor handle.
+        """
+        if not enable_trace:
+            logits_tt_or = self._decode_step(tokens_step, positions)
+            return self._read_logits_host(logits_tt_or) if read_from_device else logits_tt_or
+
+        # Trace path
+        if self._trace_id is None:
+            self._capture_decode_trace(tokens_step, positions)
+            # First call: return the captured run's output
+            assert self._trace_output is not None
+            return self._read_logits_host(self._trace_output) if read_from_device else self._trace_output
+
+        # Update persistent inputs and execute
+        assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
+        # Update tokens [1, 1, B]
+        torch_input = tokens_step.view(1, 1, -1).to(torch.int32)
+        ttnn.copy_host_to_device_tensor(torch_input, self._trace_tokens)
+        # Update positions [B]
+        ttnn.copy_host_to_device_tensor(positions.to(torch.int32), self._trace_positions)
+
+        ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+        assert self._trace_output is not None
+        return self._read_logits_host(self._trace_output) if read_from_device else self._trace_output
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         # logits: [1, 1, B, V]
