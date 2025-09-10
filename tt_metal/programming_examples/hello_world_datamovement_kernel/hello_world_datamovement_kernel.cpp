@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -23,10 +24,12 @@ int main() {
 
     // Initialize Program and Device. We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
-    IDevice* device = CreateDevice(0);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // And a program that represents the set of work we want to execute on the device at a single time.
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Configure and create Data Movement kernels
@@ -51,8 +54,9 @@ int main() {
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     // Wait Until Program Finishes. The program should print the following (NC and BR is Data movement core 1 and 0
     // respectively):
     //
@@ -68,6 +72,6 @@ int main() {
     // BR: - Data Movement core 0
 
     std::cout << "Thank you, Core {0, 0} on Device 0, for the completed task." << std::endl;
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }
