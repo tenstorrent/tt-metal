@@ -9,6 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
@@ -92,7 +93,7 @@ void matmul_multi_core(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    IDevice* device) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Check if the configuration is valid - matrices must be divisible by tile dimensions
     TT_ASSERT(
         (M * N) % TILE_HW == 0,
@@ -102,7 +103,10 @@ void matmul_multi_core(
         TILE_HW);
 
     // Setup the device and command queue for multi-core execution
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    IDevice* device = mesh_device->get_devices()[0];
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
 
     // Get the compute grid size to determine how many cores are available
@@ -134,27 +138,18 @@ void matmul_multi_core(
     // Writing data from input vectors to source buffers.
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
 
-    tt_metal::InterleavedBufferConfig dram_config_A{
-        .device = device,
-        .size = single_tile_size * Mt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    tt_metal::InterleavedBufferConfig dram_config_B{
-        .device = device,
-        .size = single_tile_size * Nt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
 
-    tt_metal::InterleavedBufferConfig dram_config_C{
-        .device = device,
-        .size = single_tile_size * Mt * Nt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config_A);
-    auto src1_dram_buffer = CreateBuffer(dram_config_B);
-    auto dst_dram_buffer = CreateBuffer(dram_config_C);
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
     // Configure Circular Buffers
     // Circular buffers act as staging areas for data movement between DRAM and compute units.
@@ -263,10 +258,11 @@ void matmul_multi_core(
     // 3. Read back the result from DRAM to host memory
     // The 'true' parameter in EnqueueReadBuffer ensures we wait for completion (so when the function
     // returns, the output vector is fully populated).
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 }
 
 ///////////////////////////////////////
@@ -276,7 +272,7 @@ int main() {
 
     try {
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Create source data with specified matrix dimensions
         constexpr uint32_t M = 640;  // Number of rows in matrix A (user-defined)
@@ -325,7 +321,7 @@ int main() {
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, device);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, mesh_device);
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
@@ -338,7 +334,7 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
