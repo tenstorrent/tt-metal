@@ -455,19 +455,26 @@ async function run() {
 
     // Build a minimal regressions section (success -> fail only)
     let regressionsSection = '';
+    let stayedFailingSection = '';
     try {
       const parsed = JSON.parse(fs.readFileSync(statusChangesPath, 'utf8')) || [];
       const regressions = parsed.filter(item => item.change === 'success_to_fail').map(item => item.name);
+      const stayedFailing = parsed.filter(item => item.change === 'stayed_failing').map(item => item.name);
       if (regressions.length > 0) {
         regressionsSection = ['','## Regressions (Pass → Fail)', ...regressions.map(n => `- ${n}`),''].join('\n');
       } else {
         regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
       }
+      if (stayedFailing.length > 0) {
+        stayedFailingSection = ['','## Still Failing (No Recovery)', ...stayedFailing.map(n => `- ${n}`),''].join('\n');
+      } else {
+        stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
+      }
     } catch (_) {
       // If parsing fails, omit the section silently
     }
 
-    const finalReport = [mainReport, regressionsSection].join('\n');
+    const finalReport = [mainReport, regressionsSection, stayedFailingSection].join('\n');
 
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
