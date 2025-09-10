@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -17,10 +18,13 @@ using namespace tt::tt_metal;
 
 int main() {
     // Device setup
-    IDevice* device = CreateDevice(0);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+    IDevice* device = mesh_device->get_devices()[0];
 
     // Device command queue and program setup
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Core range setup
@@ -42,11 +46,12 @@ int main() {
 
     // Input data preparation
     constexpr uint32_t single_tile_size = sizeof(uint16_t) * tt::constants::TILE_HW;
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
 
-    std::shared_ptr<Buffer> src_dram_buffer = CreateBuffer(dram_config);  // Input buffer
-    std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);  // Output buffer
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Core synchronization semaphore setup
     const uint32_t sem_id = CreateSemaphore(program, sem_core_range, 0);
@@ -54,7 +59,7 @@ int main() {
     // Source data preparation and DRAM transfer
     const uint16_t input_data = 14;  // Example input data
     std::vector<uint16_t> src_vec(1, input_data);
-    EnqueueWriteBuffer(cq, src_dram_buffer, src_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 
     // L1 circular buffer setup
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -105,14 +110,20 @@ int main() {
     SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
 
     // Program enqueue
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // Data transfer back to host machine
     std::vector<uint16_t> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);  // Blocking call to ensure data is read before proceeding
+    distributed::ReadShard(
+        cq,
+        result_vec,
+        dst_dram_buffer,
+        distributed::MeshCoordinate(0, 0),
+        true);  // Blocking call to ensure data is read before proceeding
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 
-    CloseDevice(device);
+    mesh_device->close();
 }
