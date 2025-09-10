@@ -158,8 +158,7 @@ int main(int argc, char **argv) {
     //A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
     auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
-        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -188,16 +187,16 @@ int main(int argc, char **argv) {
         size_t num_dests = receiver_cores_logical.size();
 
         ////////// SEMAPHORE SETUP //////////
-        uint32_t sender = CreateSemaphore(program_, all_cores_logical, 0);
-        uint32_t receiver = CreateSemaphore(program_, all_cores_logical, 0);
+        uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
+        uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
 
         ////////// DRAM & SRAM BUFFERS SETUP //////////
         constexpr uint32_t num_tiles = 1;
         uint32_t dram_bank_id = 0;
-        auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
-        auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        MakeCircularBufferBFP16(program_, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        MakeCircularBufferBFP16(program_, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        auto src0_dram_buffer = MakeBufferBFP16(mesh_device, num_tiles, false);
+        auto output_dram_buffer = MakeBufferBFP16(mesh_device, num_dests * num_tiles, false);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
@@ -230,7 +229,7 @@ int main(int argc, char **argv) {
         ////////// COMPUTE KERNEL SETUP //////////
         vector<uint32_t> compute_kernel_args = {};
         CreateKernel(
-            program_,
+            program,
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
             ComputeConfig{
@@ -309,6 +308,6 @@ int main(int argc, char **argv) {
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);
     }
 
-    mesh_device.reset();
+    mesh_device->close();
     return 0;
 }
