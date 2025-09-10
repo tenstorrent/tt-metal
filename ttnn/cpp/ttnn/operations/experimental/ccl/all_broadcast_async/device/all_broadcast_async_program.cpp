@@ -209,6 +209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     CoreCoord barrier_core;
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
+        printf("for device id %d, link %u, using core (%zu, %zu)\n", sender_device->id(), link, core.x, core.y);
         if (link == 0) {
             // drain sync core is the first worker core
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
@@ -233,6 +234,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
         }
+        printf("setting runtime args for reader kernel \n");
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
@@ -277,6 +279,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
+        printf("setting runtime args for writer kernel\n");
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 

@@ -41,7 +41,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
+    DPRINT << "Starting kernel\n";
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
@@ -195,4 +195,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+    DPRINT << "Done kernel\n";
 }

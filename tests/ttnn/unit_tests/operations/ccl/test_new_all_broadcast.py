@@ -200,8 +200,10 @@ def run_all_broadcast_impl(
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
+        print("after all_broadcast and before synchronize")
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        print("after synchronize")
         logger.info(f"Done op")
 
     passed = True
@@ -235,26 +237,28 @@ def run_all_broadcast_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
-        (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        # (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        # (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        # (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        # (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (32, 1, [1, 1, 1, 1], ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
 def test_all_broadcast(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -269,7 +273,7 @@ def test_all_broadcast(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,

@@ -179,6 +179,7 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
+    printf("start of FDMeshCommandQueue::clear_expected_num_workers_completed\n");
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event =
@@ -207,8 +208,10 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+    printf("before FDMeshCommandQueue::clear_expected_num_workers_completed wait\n");
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    printf("end of FDMeshCommandQueue::clear_expected_num_workers_completed\n");
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
@@ -485,8 +488,10 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+    printf("before FDMeshCommandQueue::finish_nolock wait\n");
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    printf("after FDMeshCommandQueue::finish_nolock wait\n");
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);

@@ -581,7 +581,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 bool MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
-
+    printf("start of mesh close\n");
     if (this->is_initialized()) {
         ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
     }
@@ -591,11 +591,17 @@ bool MeshDevice::close() {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 
+    printf("after call\n");
     mesh_command_queues_.clear();
+    printf("after clear\n");
     sub_device_manager_tracker_.reset();
+    printf("after reset1\n");
     scoped_devices_.reset();
+    printf("after reset2\n");
     parent_mesh_.reset();
+    printf("after reset3\n");
     is_internal_state_initialized = false;
+    printf("end of mesh close\n");
     return true;
 }
 
