@@ -1,3 +1,4 @@
+motherboard: "X12DPG-QT6"
 boards {
   board {
     tray_id: 1

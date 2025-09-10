@@ -1,5 +1,6 @@
 compute_node_specs:
   metal-wh-01:
+    motherboard: X12DPG-QT6
     asic_info:
       - tray_id: 1
         board_type: N300
@@ -30,6 +31,7 @@ compute_node_specs:
           - asic_location: 1
             asic_id: 14521741474
   metal-wh-02:
+    motherboard: X12DPG-QT6
     asic_info:
       - tray_id: 1
         board_type: N300
@@ -60,6 +62,7 @@ compute_node_specs:
           - asic_location: 1
             asic_id: 14521741424
   metal-wh-05:
+    motherboard: X12DPG-QT6
     asic_info:
       - tray_id: 1
         board_type: N300
@@ -90,6 +93,7 @@ compute_node_specs:
           - asic_location: 1
             asic_id: 14521741468
   metal-wh-03:
+    motherboard: X12DPG-QT6
     asic_info:
       - tray_id: 1
         board_type: N300
@@ -120,6 +124,7 @@ compute_node_specs:
           - asic_location: 1
             asic_id: 14521741318
   metal-wh-08:
+    motherboard: X12DPG-QT6
     asic_info:
       - tray_id: 1
         board_type: N300

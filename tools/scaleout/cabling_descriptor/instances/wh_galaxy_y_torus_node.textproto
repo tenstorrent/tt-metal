@@ -1,3 +1,4 @@
+motherboard: "S7T-MB"
 boards {
   board { tray_id: 1 board_type: "UBB" }
   board { tray_id: 2 board_type: "UBB" }

@@ -4,12 +4,14 @@
 
 #include "cabling_generator.hpp"
 
+#include <board/board.hpp>
+#include <connector/connector.hpp>
+
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
-#include <connector/connector.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -75,6 +77,10 @@ Node build_node(
     Node template_node;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
+    if (node_descriptor.motherboard().empty()) {
+        throw std::runtime_error("Node descriptor " + node_descriptor_name + " missing motherboard");
+    }
+    template_node.motherboard = node_descriptor.motherboard();
 
     // Create boards with internal connections marked (using cached boards)
     for (const auto& board_item : node_descriptor.boards().board()) {
@@ -279,6 +285,23 @@ std::pair<Node&, HostId> resolve_node_from_path(
     }
 }
 
+void populate_deployment_hosts(
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::unordered_map<std::string, Node>& node_templates,
+    std::vector<Host>& deployment_hosts) {
+    // Store deployment hosts
+    deployment_hosts.reserve(deployment_descriptor.hosts().size());
+    for (const auto& proto_host : deployment_descriptor.hosts()) {
+        deployment_hosts.emplace_back(Host{
+            .hostname = proto_host.host(),
+            .hall = proto_host.hall(),
+            .aisle = proto_host.aisle(),
+            .rack = proto_host.rack(),
+            .shelf_u = proto_host.shelf_u(),
+            .motherboard = node_templates.at(proto_host.node_type()).motherboard});
+    }
+}
+
 // Constructor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
@@ -289,17 +312,6 @@ CablingGenerator::CablingGenerator(
     auto deployment_descriptor =
         load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
             deployment_descriptor_path);
-
-    // Store deployment hosts
-    deployment_hosts_.reserve(deployment_descriptor.hosts().size());
-    for (const auto& proto_host : deployment_descriptor.hosts()) {
-        deployment_hosts_.emplace_back(Host{
-            .hostname = proto_host.host(),
-            .hall = proto_host.hall(),
-            .aisle = proto_host.aisle(),
-            .rack = proto_host.rack(),
-            .shelf_u = proto_host.shelf_u()});
-    }
 
     // Build cluster with all connections and port validation
     root_instance_ = build_graph_instance(
@@ -318,6 +330,9 @@ CablingGenerator::CablingGenerator(
 
     // Generate all logical chip connections
     generate_logical_chip_connections();
+
+    // Populate deployment hosts
+    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
 // Getters for all data
@@ -345,6 +360,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         host->set_aisle(deployment_host.aisle);
         host->set_rack(deployment_host.rack);
         host->set_shelf_u(deployment_host.shelf_u);
+        host->set_motherboard(deployment_host.motherboard);
     }
 
     // Add board types

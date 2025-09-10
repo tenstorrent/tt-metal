@@ -31,6 +31,7 @@ struct Host {
     std::string aisle;
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
+    std::string motherboard;
 };
 
 struct LogicalChannelEndpoint {
@@ -70,6 +71,7 @@ using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChanne
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
 
 struct Node {
+    std::string motherboard;
     std::unordered_map<TrayId, Board> boards;
     HostId host_id{0};
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
