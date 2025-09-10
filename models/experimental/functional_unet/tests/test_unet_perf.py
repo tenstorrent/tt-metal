@@ -85,6 +85,7 @@ def test_unet_trace_perf(
     device,
     reset_seeds,
 ):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28119")
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
@@ -139,6 +140,7 @@ def test_unet_trace_perf_multi_device(
     mesh_device,
     reset_seeds,
 ):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28119")
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq_multi_device,
     )
