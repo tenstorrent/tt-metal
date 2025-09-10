@@ -1248,3 +1248,4 @@ def test_demo_text(
             assert (
                 total_top5_acc >= min_top5_acc
             ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+            logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
