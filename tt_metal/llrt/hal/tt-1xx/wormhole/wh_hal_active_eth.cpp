@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
 
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
-#include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -115,9 +115,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-    static_assert(
-        llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <=
-        eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

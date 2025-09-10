@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
@@ -9,7 +10,6 @@
 
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
-#include "llrt_common/mailbox.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <umd/device/types/core_coordinates.hpp>
@@ -90,7 +90,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,

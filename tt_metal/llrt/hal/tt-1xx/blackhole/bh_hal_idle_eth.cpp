@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt_common/mailbox.hpp"
+#define HAL_BUILD
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
@@ -108,7 +108,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
