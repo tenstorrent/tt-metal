@@ -68,24 +68,24 @@ def fuse_conv_bn_weights_ttnn(
     # Compute the fused bias: (conv_bias - bn_running_mean) * scale + bn_bias
     fused_bias = (conv_bias - bn_running_mean) * scale + bn_bias
 
-    # Convert back to TTNN tensors
-    fused_weight_ttnn = ttnn.from_torch(fused_weight, dtype=ttnn.bfloat16)
+    # Convert back to TTNN tensors with proper device placement
+    fused_weight_ttnn = ttnn.from_torch(fused_weight, device=conv_weight_ttnn.device(), dtype=ttnn.bfloat16)
 
     # Handle bias tensor shape for TTNN (reshape to [1, 1, 1, -1] if needed)
     if len(fused_bias.shape) == 1:
         fused_bias = fused_bias.reshape((1, 1, 1, -1))
-    fused_bias_ttnn = ttnn.from_torch(fused_bias, dtype=ttnn.bfloat16)
+    fused_bias_ttnn = ttnn.from_torch(fused_bias, device=conv_weight_ttnn.device(), dtype=ttnn.bfloat16)
 
     return fused_weight_ttnn, fused_bias_ttnn
 
 
 def fuse_conv_bn_parameters(parameters, eps=1e-5):
     """
-    Fuse Conv+BatchNorm patterns in preprocessed TTNN parameters.
+    Fuse Conv+BatchNorm patterns in preprocessed parameters.
 
     This function takes the parameters object returned by create_panoptic_deeplab_parameters()
-    and performs Conv+BN fusion at the parameter level, returning a new parameters object
-    with only the fused convolution weights.
+    and performs Conv+BN fusion, returning a new parameters object with only the fused
+    convolution weights.
 
     Args:
         parameters: Parameter dict returned by create_panoptic_deeplab_parameters()
@@ -94,25 +94,24 @@ def fuse_conv_bn_parameters(parameters, eps=1e-5):
     Returns:
         dict: New parameter dict with fused Conv weights and biases
     """
-    fused_parameters = {}
 
-    def process_module_params(module_params, module_path=""):
-        """Recursively process parameters to find and fuse Conv+BN patterns."""
-        fused_module_params = {}
+    def process_module(module_params, path=""):
+        """Recursively process parameters and fuse Conv+BN patterns."""
+        fused_params = {}
 
         for key, value in module_params.items():
-            current_path = f"{module_path}.{key}" if module_path else key
+            current_path = f"{path}.{key}" if path else key
 
             if isinstance(value, dict):
-                # Check if this looks like a Conv layer with attached norm
+                # Check if this is a Conv+BN pattern (has both 'weight' and 'norm' keys)
                 if "weight" in value and "norm" in value:
                     print(f"Fusing Conv+BN parameters at: {current_path}")
 
-                    # Extract conv parameters
+                    # Extract conv parameters (TTNN tensors)
                     conv_weight = value["weight"]
                     conv_bias = value.get("bias", None)
 
-                    # Extract norm parameters
+                    # Extract norm parameters (TTNN tensors)
                     norm_params = value["norm"]
                     bn_weight = norm_params["weight"]
                     bn_bias = norm_params["bias"]
@@ -130,27 +129,59 @@ def fuse_conv_bn_parameters(parameters, eps=1e-5):
                         eps=eps,
                     )
 
-                    # Store only the fused conv parameters
-                    fused_module_params[key] = {"weight": fused_weight, "bias": fused_bias}
-
-                elif "weight" in value and "bias" in value and len(value) == 2:
-                    # This is already a simple conv layer, keep as is
-                    fused_module_params[key] = value
-
-                elif all(isinstance(v, dict) for v in value.values()):
-                    # This is a nested module, recurse
-                    fused_module_params[key] = process_module_params(value, current_path)
-
+                    # Store only the fused conv parameters (now TTNN tensors)
+                    fused_params[key] = {"weight": fused_weight, "bias": fused_bias}
                 else:
-                    # Other parameter structures, keep as is
-                    fused_module_params[key] = value
+                    # Recursively process nested dictionaries
+                    fused_params[key] = process_module(value, current_path)
+
+            elif isinstance(value, list):
+                # Handle lists (like ParameterList structures)
+                fused_list = []
+                for i, item in enumerate(value):
+                    item_path = f"{current_path}[{i}]"
+                    if isinstance(item, dict) and "weight" in item and "norm" in item:
+                        print(f"Fusing Conv+BN parameters at: {item_path}")
+
+                        # Extract conv parameters (TTNN tensors)
+                        conv_weight = item["weight"]
+                        conv_bias = item.get("bias", None)
+
+                        # Extract norm parameters (TTNN tensors)
+                        norm_params = item["norm"]
+                        bn_weight = norm_params["weight"]
+                        bn_bias = norm_params["bias"]
+                        bn_running_mean = norm_params["running_mean"]
+                        bn_running_var = norm_params["running_var"]
+
+                        # Perform fusion
+                        fused_weight, fused_bias = fuse_conv_bn_weights_ttnn(
+                            conv_weight_ttnn=conv_weight,
+                            conv_bias_ttnn=conv_bias,
+                            bn_weight_ttnn=bn_weight,
+                            bn_bias_ttnn=bn_bias,
+                            bn_running_mean_ttnn=bn_running_mean,
+                            bn_running_var_ttnn=bn_running_var,
+                            eps=eps,
+                        )
+
+                        # Store only the fused conv parameters
+                        fused_list.append({"weight": fused_weight, "bias": fused_bias})
+                    elif isinstance(item, dict):
+                        # Recursively process nested dict items
+                        fused_list.append(process_module(item, item_path))
+                    else:
+                        # Keep non-dict items as-is
+                        fused_list.append(item)
+
+                fused_params[key] = fused_list
+
             else:
-                # Individual parameters, keep as is
-                fused_module_params[key] = value
+                fused_params[key] = value
 
-        return fused_module_params
+        return fused_params
 
-    return process_module_params(parameters)
+    return process_module(parameters)
 
 
 def custom_preprocessor(model, name):
