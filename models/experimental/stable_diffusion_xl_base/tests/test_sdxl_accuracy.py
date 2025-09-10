@@ -193,6 +193,8 @@ def sdxl_get_prompts(
                 break
             prompts.append(row[2])
 
+    prompts = prompts * 2
+
     return prompts
 
 
