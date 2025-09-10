@@ -202,53 +202,55 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
         device_markers_per_core_risc_map) {
     ZoneScoped;
 
-    uint32_t total_num_markers = 0;
-    auto middle = device_markers_per_core_risc_map.begin();
-    std::advance(middle, device_markers_per_core_risc_map.size() / 2);
-    uint32_t middle_index = 0;
-    std::vector<uint32_t> device_markers_chunk_offsets;
-    for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
-        if (core == middle->first) {
-            middle_index = total_num_markers;
-        }
-        for (const auto& [_, markers] : risc_map) {
-            device_markers_chunk_offsets.push_back(total_num_markers);
-            total_num_markers += markers.size();
-        }
-    }
+    // uint32_t total_num_markers = 0;
+    // auto middle = device_markers_per_core_risc_map.begin();
+    // std::advance(middle, device_markers_per_core_risc_map.size() / 2);
+    // uint32_t middle_index = 0;
+    // std::vector<uint32_t> device_markers_chunk_offsets;
+    // for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
+    //     if (core == middle->first) {
+    //         middle_index = total_num_markers;
+    //     }
+    //     for (const auto& [_, markers] : risc_map) {
+    //         device_markers_chunk_offsets.push_back(total_num_markers);
+    //         total_num_markers += markers.size();
+    //     }
+    // }
 
-    device_markers_chunk_offsets.push_back(total_num_markers);
+    // device_markers_chunk_offsets.push_back(total_num_markers);
 
-    tracy::TTDeviceMarker dummy_marker;
-    std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
-        total_num_markers, std::cref(dummy_marker));
+    // tracy::TTDeviceMarker dummy_marker;
+    // std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
+    //     total_num_markers, std::cref(dummy_marker));
 
-    std::thread t([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
-        uint32_t i = middle_index;
-        for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
-            for (const auto& [_, markers] : it->second) {
-                for (const tracy::TTDeviceMarker& marker : markers) {
-                    device_markers_vec[i] = std::cref(marker);
-                    ++i;
-                }
-            }
-        }
-    });
+    // std::thread t([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
+    //     uint32_t i = middle_index;
+    //     for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
+    //         for (const auto& [_, markers] : it->second) {
+    //             for (const tracy::TTDeviceMarker& marker : markers) {
+    //                 device_markers_vec[i] = std::cref(marker);
+    //                 ++i;
+    //             }
+    //         }
+    //     }
+    // });
 
-    uint32_t i = 0;
-    for (auto it = device_markers_per_core_risc_map.begin(); it != middle; ++it) {
-        for (const auto& [_, markers] : it->second) {
-            for (const tracy::TTDeviceMarker& marker : markers) {
-                device_markers_vec[i] = std::cref(marker);
-                ++i;
-            }
-        }
-    }
+    // uint32_t i = 0;
+    // for (auto it = device_markers_per_core_risc_map.begin(); it != middle; ++it) {
+    //     for (const auto& [_, markers] : it->second) {
+    //         for (const tracy::TTDeviceMarker& marker : markers) {
+    //             device_markers_vec[i] = std::cref(marker);
+    //             ++i;
+    //         }
+    //     }
+    // }
 
-    t.join();
+    // t.join();
 
-    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
+    // mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
 
+    // return device_markers_vec;
+    std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec;
     return device_markers_vec;
 }
 
@@ -1570,14 +1572,30 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #endif
 }
 
-DeviceProfiler::~DeviceProfiler() {
+void DeviceProfiler::dumpData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    uint32_t i = 0;
+    std::vector<std::thread> threads;
     for (auto& [_, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
         for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
-            processDeviceMarkerData(device_markers);
+            threads.emplace_back([this, &device_markers, i]() {
+                tracy::SetThreadName(fmt::format("processDeviceMarkerData-{}", i).c_str());
+                processDeviceMarkerData(device_markers);
+            });
+            i++;
         }
+    };
+    // i++;
+    // if (i == 30) {
+    //     break;
+    // }
+
+    log_info(tt::LogMetal, "Number of threads: {}", threads.size());
+
+    for (auto& thread : threads) {
+        thread.join();
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
@@ -1589,6 +1607,12 @@ DeviceProfiler::~DeviceProfiler() {
         TracyTTDestroy(tracyCtx.second);
     }
     t.join();
+#endif
+}
+
+DeviceProfiler::~DeviceProfiler() {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
 #endif
 }
 

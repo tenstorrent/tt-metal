@@ -33,6 +33,12 @@ public:
         this->sync_set_devices.clear();
     };
 
+    void dumpData() {
+        for (auto& [_, device_profiler] : this->device_profiler_map) {
+            device_profiler.dumpData();
+        }
+    }
+
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
     ProfilerStateManager(const ProfilerStateManager&) = delete;

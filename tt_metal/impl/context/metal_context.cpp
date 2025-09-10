@@ -225,6 +225,7 @@ void MetalContext::teardown() {
         cluster_->l1_barrier(device_id);
     }
 
+    profiler_state_manager_->dumpData();
     profiler_state_manager_.reset();
 
     for (auto& mem_map : dispatch_mem_map_) {

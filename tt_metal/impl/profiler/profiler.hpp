@@ -209,6 +209,8 @@ public:
     // frequency scale
     double freq_scale = 1.0;
 
+    void dumpData();
+
     // Freshen device logs
     void freshDeviceLog();
 
