@@ -23,10 +23,11 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
 void MAIN {
+    cb_wait_front(kLrCbIndex, 1U);
+
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {
             cb_wait_front(kGradCbIndex, block_size);
-            cb_wait_front(kLrCbIndex, 1U);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_tiles_init(kGradCbIndex, kLrCbIndex);
