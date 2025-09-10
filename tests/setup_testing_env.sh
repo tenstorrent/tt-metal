@@ -121,10 +121,6 @@ main() {
         exit 1
     fi
 
-    # Source the version file to load variables
-    # shellcheck source=/dev/null
-    source "$version_file"
-
     # Get chip architecture
     local chip_arch
     if [[ -n "${CHIP_ARCH:-}" ]]; then
@@ -140,77 +136,50 @@ main() {
     # Setup pre-commit hooks
     setup_precommit
 
-    # Determine architecture, OS, file extension, and extraction flags
-    local arch_os
-    arch_os="$(uname -m)_$(uname -s)"
-    local file_ext tar_flags
-    case "$(uname -m)" in
-        x86_64)
-            file_ext="txz"
-            tar_flags="-xJf"
-            ;;
-        aarch64)
-            file_ext="tar"
-            tar_flags="-xf"
-            ;;
-        *)
-            echo "ERROR: Unsupported architecture: $(uname -m)" >&2
-            exit 1
-            ;;
-    esac
-
-    # Build the variable name for the MD5 hash and get its value securely
-    local md5_var="sfpi_${arch_os}_${file_ext}_md5"
-    if [[ -z "${!md5_var:-}" ]]; then
-        echo "ERROR: SFPI package for ${arch_os} is not available. MD5 variable '$md5_var' is not set." >&2
-        exit 1
-    fi
-    local expected_md5="${!md5_var}"
+    # shellcheck source=/dev/null
+    local $(grep -v '^#' $version_file)
 
     # Check if SFPI is already installed and up to date
-    local current_version=""
-    if [[ -f "${SCRIPT_DIR}/sfpi/sfpi.version" ]]; then
-        current_version="$(cat "${SCRIPT_DIR}/sfpi/sfpi.version")"
-    fi
-
-    if [[ "$current_version" == "$sfpi_version" ]]; then
+    if [[ -f "${SCRIPT_DIR}/sfpi/sfpi.version" ]] &&
+       [[ "$sfpi_version" == "$(cat "${SCRIPT_DIR}/sfpi/sfpi.version")" ]] ; then
         echo "SFPI is already at the correct version: $sfpi_version"
         exit 0
     fi
 
-    # Download and install SFPI
-    echo "SFPI not present or out of date. Fetching version ${sfpi_version}..."
-
-    # Create a temporary directory for the download
-    TEMP_DIR="$(mktemp -d)"
-    local download_file="$TEMP_DIR/sfpi-${arch_os}.${file_ext}"
-    local download_url="$sfpi_url/$sfpi_version/sfpi-${arch_os}.${file_ext}"
-
-    # Download the file
-    if ! wget -O "$download_file" --waitretry=5 --retry-connrefused "$download_url"; then
-        echo "ERROR: Failed to download $download_url" >&2
-        exit 1
+    local pkg=txz
+    # taken from tt-metal/install_dependencies.sh
+    local sfpi_arch=$(uname -m)
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch}_${pkg}_md5")
+    if [[ -z $(eval echo "$sfpi_${pkg}_md5") ]] ; then
+	echo "[ERROR] SFPI $sfpi_version $pkg package for ${sfpi_arch} is not available" >&2
+	exit 1
     fi
 
-    # Verify the MD5 checksum
-    local actual_md5
-    actual_md5="$(md5sum -b "$download_file" | cut -d' ' -f1)"
-    if [[ "$actual_md5" != "$expected_md5" ]]; then
-        echo "ERROR: MD5 checksum mismatch for sfpi-${arch_os}.${file_ext}" >&2
-        echo "  Expected: $expected_md5" >&2
-        echo "  Actual:   $actual_md5" >&2
+    # Download SFPI
+    echo "SFPI not present or out of date. Fetching version ${sfpi_version}..."
+    local TEMP_DIR=$(mktemp -d)
+    local filename="sfpi_${sfpi_version}_${sfpi_arch}.${pkg}"
+    local download_url="$sfpi_url/v$sfpi_version"
+    if ! wget -P $TEMP_DIR --waitretry=5 --retry-connrefused "$download_url/$filename" ; then
+        echo "ERROR: Failed to download $download_url/$filename" >&2
         exit 1
+    fi
+    if [ $(md5sum -b "${TEMP_DIR}/$filename" | cut -d' ' -f1) \
+	     != "$sfpi_pkg_md5" ] ; then
+	echo "[ERROR] SFPI $filename md5 mismatch" >&2
+	rm -rf $TEMP_DIR
+	exit 1
     fi
 
     # Remove old installation and extract the new one
     echo "Extracting SFPI release..."
     rm -rf "${SCRIPT_DIR}/sfpi"
-    # The -f flag is already included in the $tar_flags variable.
-    # Passing it again was causing the error.
-    if ! tar "${tar_flags}" "$download_file" -C "${SCRIPT_DIR}"; then
-        echo "ERROR: Failed to extract SFPI release from $download_file" >&2
+    if ! tar xJf "$TEMP_DIR/$filename" -C "${SCRIPT_DIR}"; then
+        echo "ERROR: Failed to extract SFPI release from $filename" >&2
+	rm -rf $TEMP_DIR
         exit 1
     fi
+    rm -rf $TEMP_DIR
 
     # Write the new version file
     echo "$sfpi_version" > "${SCRIPT_DIR}/sfpi/sfpi.version"
