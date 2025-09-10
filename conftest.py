@@ -741,12 +741,6 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
-    parser.addoption(
-        "--enable-debug-script",
-        action="store_true",
-        default=False,
-        help="Enable debug script (tt-triage.py) execution before test cleanup on failures/timeouts",
-    )
 
 
 @pytest.fixture
@@ -938,12 +932,10 @@ def pytest_runtest_teardown(item, nextitem):
         if test_failed:
             logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
             # Run debug script before reset for failed tests
-            debug_enabled = item.config.getoption("--enable-debug-script")
-            if debug_enabled:
-                try:
-                    run_debug_script()
-                except Exception as e:
-                    logger.error(f"Failed to run debug script during teardown: {e}")
+            try:
+                run_debug_script()
+            except Exception as e:
+                logger.error(f"Failed to run debug script during teardown: {e}")
             reset_tensix(set(item.pci_ids))
 
 
