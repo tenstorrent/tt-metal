@@ -978,7 +978,6 @@ def _get_clip_prompt_embeds(
     num_images_per_prompt: int,
     clip_skip: int = 0,
     mesh_device: ttnn.MeshDevice | None = None,
-    torch_device: torch.types.Device = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     tokens = tokenizer(
         prompts,
@@ -1016,15 +1015,12 @@ def _get_clip_prompt_embeds(
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
         pooled_prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_prompt_embeds)[0])
-
-        prompt_embeds = prompt_embeds.to(device=torch_device)
-        pooled_prompt_embeds = pooled_prompt_embeds.to(device=torch_device)
     else:
-        tokens = tokens.to(text_encoder.device)
+        tokens = tokens.to(device=text_encoder.device)
         with torch.no_grad():
             output = text_encoder.forward(tokens, output_hidden_states=True)
-        prompt_embeds = output.hidden_states[-(clip_skip + 2)]
-        pooled_prompt_embeds = output.pooler_output
+        prompt_embeds = output.hidden_states[-(clip_skip + 2)].to("cpu")
+        pooled_prompt_embeds = output.pooler_output.to("cpu")
 
     # In diffusers v0.35.1 `pooled_prompt_embeds` is repeated along the wrong dimension in
     # `StableDiffusion3Pipeline`, effectively mixing up the prompts.
@@ -1044,14 +1040,10 @@ def _get_t5_prompt_embeds(
     empty_sequence_length: int,
     num_images_per_prompt: int,
     mesh_device: ttnn.MeshDevice | None = None,
-    torch_device: torch.types.Device = None,
     embedding_dim: int,
 ) -> torch.Tensor:
     if text_encoder is None:
-        return torch.zeros(
-            [len(prompts) * num_images_per_prompt, empty_sequence_length, embedding_dim],
-            device=torch_device,
-        )
+        return torch.zeros([len(prompts) * num_images_per_prompt, empty_sequence_length, embedding_dim])
 
     tokens = tokenizer(
         prompts,
@@ -1084,12 +1076,11 @@ def _get_t5_prompt_embeds(
         tt_prompt_embeds = tt_hidden_states[-1]
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
-        prompt_embeds = prompt_embeds.to(device=torch_device)
     else:
         tokens = tokens.to(device=text_encoder.device)
         with torch.no_grad():
             output = text_encoder.forward(tokens)
-        prompt_embeds = output.last_hidden_state
+        prompt_embeds = output.last_hidden_state.to("cpu")
 
     return prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
 
