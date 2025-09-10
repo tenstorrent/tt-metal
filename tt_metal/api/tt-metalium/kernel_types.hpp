@@ -129,6 +129,8 @@ struct KernelBinaryMeta {
 
 struct KernelMeta {
     // Kernel identifiers:
+    // Owner for name and source is the Program class,
+    // (direct owner is the Kernel class internally)
     std::string_view name, source;
 
     // Core identifiers:
