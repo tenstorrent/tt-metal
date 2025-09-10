@@ -57,9 +57,14 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # Handle both dict and object parameter formats
         center_head_params = parameters["center_head"] if isinstance(parameters, dict) else parameters.center_head
         center_head0_path = center_head_params[0]
-        ch0_bias = center_head0_path.bias if "bias" in center_head0_path else None
+        ch0_bias = (
+            center_head0_path["bias"]
+            if isinstance(center_head0_path, dict) and "bias" in center_head0_path
+            else (center_head0_path.bias if hasattr(center_head0_path, "bias") else None)
+        )
+        ch0_weight = center_head0_path["weight"] if isinstance(center_head0_path, dict) else center_head0_path.weight
         ch0_params = TtConv2dParameters(
-            weight=center_head0_path.weight,
+            weight=ch0_weight,
             bias=ch0_bias,
             device=self.device,
         )
@@ -70,9 +75,14 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # center_head_1
         center_head1_path = center_head_params[1]
-        ch1_bias = center_head1_path.bias if "bias" in center_head1_path else None
+        ch1_bias = (
+            center_head1_path["bias"]
+            if isinstance(center_head1_path, dict) and "bias" in center_head1_path
+            else (center_head1_path.bias if hasattr(center_head1_path, "bias") else None)
+        )
+        ch1_weight = center_head1_path["weight"] if isinstance(center_head1_path, dict) else center_head1_path.weight
         ch1_params = TtConv2dParameters(
-            weight=center_head1_path.weight,
+            weight=ch1_weight,
             bias=ch1_bias,
             device=self.device,
         )
@@ -86,9 +96,16 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             parameters["center_predictor"] if isinstance(parameters, dict) else parameters.center_predictor
         )
         center_predictor_path = center_predictor_params
-        cp_bias = center_predictor_path.bias if "bias" in center_predictor_path else None
+        cp_bias = (
+            center_predictor_path["bias"]
+            if isinstance(center_predictor_path, dict) and "bias" in center_predictor_path
+            else (center_predictor_path.bias if hasattr(center_predictor_path, "bias") else None)
+        )
+        cp_weight = (
+            center_predictor_path["weight"] if isinstance(center_predictor_path, dict) else center_predictor_path.weight
+        )
         cp_params = TtConv2dParameters(
-            weight=center_predictor_path.weight,
+            weight=cp_weight,
             bias=cp_bias,
             device=self.device,
         )
@@ -98,9 +115,14 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # offset_head_0
         offset_head_params = parameters["offset_head"] if isinstance(parameters, dict) else parameters.offset_head
         offset_head0_path = offset_head_params[0]
-        oh0_bias = offset_head0_path.bias if "bias" in offset_head0_path else None
+        oh0_bias = (
+            offset_head0_path["bias"]
+            if isinstance(offset_head0_path, dict) and "bias" in offset_head0_path
+            else (offset_head0_path.bias if hasattr(offset_head0_path, "bias") else None)
+        )
+        oh0_weight = offset_head0_path["weight"] if isinstance(offset_head0_path, dict) else offset_head0_path.weight
         oh0_params = TtConv2dParameters(
-            weight=offset_head0_path.weight,
+            weight=oh0_weight,
             bias=oh0_bias,
             device=self.device,
         )
@@ -111,9 +133,14 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # offset_head_1
         offset_head1_path = offset_head_params[1]
-        oh1_bias = offset_head1_path.bias if "bias" in offset_head1_path else None
+        oh1_bias = (
+            offset_head1_path["bias"]
+            if isinstance(offset_head1_path, dict) and "bias" in offset_head1_path
+            else (offset_head1_path.bias if hasattr(offset_head1_path, "bias") else None)
+        )
+        oh1_weight = offset_head1_path["weight"] if isinstance(offset_head1_path, dict) else offset_head1_path.weight
         oh1_params = TtConv2dParameters(
-            weight=offset_head1_path.weight,
+            weight=oh1_weight,
             bias=oh1_bias,
             device=self.device,
         )
@@ -127,9 +154,16 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             parameters["offset_predictor"] if isinstance(parameters, dict) else parameters.offset_predictor
         )
         offset_predictor_path = offset_predictor_params
-        op_bias = offset_predictor_path.bias if "bias" in offset_predictor_path else None
+        op_bias = (
+            offset_predictor_path["bias"]
+            if isinstance(offset_predictor_path, dict) and "bias" in offset_predictor_path
+            else (offset_predictor_path.bias if hasattr(offset_predictor_path, "bias") else None)
+        )
+        op_weight = (
+            offset_predictor_path["weight"] if isinstance(offset_predictor_path, dict) else offset_predictor_path.weight
+        )
         op_params = TtConv2dParameters(
-            weight=offset_predictor_path.weight,
+            weight=op_weight,
             bias=op_bias,
             device=self.device,
         )
