@@ -742,6 +742,9 @@ input_b = ttnn.from_torch(
 # Perform matrix multiplication - done in parallel on 2 devices
 output = ttnn.matmul(input_a, input_b)
 
+# All-gather to collect results from all devices
+gathered = ttnn.all_gather(output, dim=3, cluster_axis=0)
+
 ```
 
 #### PyTorch Single-Node Multi-GPU:
@@ -781,6 +784,4 @@ gathered = []
 for output in outputs:
     gathered.append(output.to(devices[0]))
 
-# Concatenate results
-result = torch.cat(gathered, dim=3)
 ```
