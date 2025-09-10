@@ -22,19 +22,19 @@ class TtBiFusion:
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
             return_height_width=True,
         )
@@ -48,7 +48,7 @@ class TtBiFusion:
             device=device,
             conv=model_params.downsample.block.conv,
             conv_pth=parameters.downsample.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
             shard_layout=shard_layout,
         )

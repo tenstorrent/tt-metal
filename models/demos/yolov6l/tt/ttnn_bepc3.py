@@ -33,21 +33,21 @@ class TtBepC3:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
         )
         self.repblock = TtRepBlock(
