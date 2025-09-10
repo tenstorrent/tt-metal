@@ -62,13 +62,13 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         // Derive Tray ID based on the Physical PCIe slot for N300 systems
         uint32_t tray_id = 0;
         if (cluster.get_bus_id(chip_id) == 0x41) {
-            tray_id = 1;
-        } else if (cluster.get_bus_id(chip_id) == 0x42) {
-            tray_id = 2;
-        } else if (cluster.get_bus_id(chip_id) == 0x01) {
             tray_id = 3;
-        } else if (cluster.get_bus_id(chip_id) == 0xc1) {
+        } else if (cluster.get_bus_id(chip_id) == 0x42) {
             tray_id = 4;
+        } else if (cluster.get_bus_id(chip_id) == 0x01) {
+            tray_id = 2;
+        } else if (cluster.get_bus_id(chip_id) == 0xc1) {
+            tray_id = 1;
         }
         return {TrayID{tray_id}, asic_location};
     } else {
