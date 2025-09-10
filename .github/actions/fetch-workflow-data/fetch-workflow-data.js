@@ -47,7 +47,7 @@ function getLatestCachedDate(runs) {
  * @param {Date} sinceDate - Only fetch runs after this date
  * @returns {Promise<Array>} Array of workflow run objects
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='schedule') {
+async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='') {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const createdDateFilter = `>=${cutoffDate.toISOString()}`;
@@ -55,17 +55,21 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
   core.info(`createdDateFilter: ${createdDateFilter}`);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+    const params = {
       owner: context.repo.owner,
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      event: eventType,
       created: createdDateFilter
-    });
+    }
+    if (eventType) {
+      params.event = eventType;
+    }
+    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params);
     if (!runs.workflow_runs.length) {
       break;
     }
+
     for (const run of runs.workflow_runs) {
       const runDate = new Date(run.created_at);
       if (sinceDate && runDate <= sinceDate) {
@@ -148,11 +152,8 @@ async function run() {
     core.info('Fetching scheduled runs...');
     const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
 
-    core.info('Fetching manually-triggered runs...');
-    const manualRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'workflow_dispatch');
-
     core.info('Fetching pull request runs...');
-    const prRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'pull_request');
+    const prRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
 
     // 2. Combine all the results into a single array
     const newRuns = [...scheduledRuns, ...manualRuns, ...prRuns];

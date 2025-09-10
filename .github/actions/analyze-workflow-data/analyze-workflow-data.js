@@ -393,12 +393,8 @@ async function run() {
     // Create authenticated Octokit client for PR info
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
 
-    // Generate report
-    const report = await buildReport(filteredGrouped, octokit, github.context);
-
-    // Set outputs
-    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
-    core.setOutput('report', report);
+    // Generate primary report
+    const mainReport = await buildReport(filteredGrouped, octokit, github.context);
 
     // Compute status changes vs previous and write JSON
     const computeLatestConclusion = (runs) => {
@@ -440,7 +436,27 @@ async function run() {
     fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
     core.setOutput('status_changes_path', statusChangesPath);
 
-    await core.summary.addRaw(report).write();
+    // Build a minimal regressions section (success -> fail only)
+    let regressionsSection = '';
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statusChangesPath, 'utf8')) || [];
+      const regressions = parsed.filter(item => item.change === 'success_to_fail').map(item => item.name);
+      if (regressions.length > 0) {
+        regressionsSection = ['','## Regressions (Pass → Fail)', ...regressions.map(n => `- ${n}`),''].join('\n');
+      } else {
+        regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
+      }
+    } catch (_) {
+      // If parsing fails, omit the section silently
+    }
+
+    const finalReport = [mainReport, regressionsSection].join('\n');
+
+    // Set outputs
+    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
+    core.setOutput('report', finalReport);
+
+    await core.summary.addRaw(finalReport).write();
 
   } catch (error) {
     core.setFailed(error.message);
