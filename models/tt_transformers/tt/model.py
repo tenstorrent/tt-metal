@@ -41,6 +41,7 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.simplified_rms = True if self.args.base_model_name == "Qwen2.5-VL-7B" else False
 
         self.tt_ccl = TT_CCL(self.mesh_device)
 
@@ -111,6 +112,7 @@ class Transformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
+                simplified_rms=self.simplified_rms,
             ),
             args,
             self.tt_ccl,
