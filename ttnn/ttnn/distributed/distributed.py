@@ -116,7 +116,7 @@ class TensorShardingInfo:
 
                     # Record representative for each distribution axis
                     if distribution_shape_rank == 1:
-                        mapping[0][distribution_coord] = device_id
+                        mapping[0][distribution_coord[0]] = device_id
                     elif distribution_shape_rank == 2:
                         mapping[0][distribution_coord[0]] = device_id
                         mapping[1][distribution_coord[1]] = device_id
