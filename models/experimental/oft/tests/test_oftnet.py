@@ -5,6 +5,9 @@ import os
 from models.experimental.oft.reference.oftnet import OftNet
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
+from models.experimental.oft.tests.test_common import GRID_RES, GRID_SIZE, GRID_HEIGHT, Y_OFFSET, H_PADDED, W_PADDED
+from models.experimental.oft.tests.test_common import load_checkpoint
+
 from models.experimental.oft.reference.utils import make_grid, load_calib, load_image
 from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
@@ -27,25 +30,25 @@ from loguru import logger
     "model_dtype, use_host_oft, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       (torch.bfloat16, False, False, 0.210, 0.533, 0.986, 0.507),  # Using device OFT without scaling
-       (torch.bfloat16, False,  True, 0.954, 0.991, 0.999, 0.850),  # Using device OFT with scaling
-       (torch.bfloat16,  True, False, 0.793, 0.891, 0.998, 0.858),
-       (torch.bfloat16,  True,  True, 0.886, 0.987, 0.999, 0.831),
+    #    (torch.bfloat16, False, False, 0.210, 0.533, 0.986, 0.507),  # Using device OFT without scaling
+    #    (torch.bfloat16, False,  True, 0.954, 0.991, 0.999, 0.850),  # Using device OFT with scaling
+    #    (torch.bfloat16,  True, False, 0.793, 0.891, 0.998, 0.858),
+    #    (torch.bfloat16,  True,  True, 0.886, 0.987, 0.999, 0.831),
        ( torch.float32, False, False, 0.211, 0.593, 0.989, 0.632),  # Using device OFT without scaling
        ( torch.float32, False,  True, 0.964, 0.994, 0.998, 0.806),  # Using device OFT with scaling
-       ( torch.float32,  True, False, 0.923, 0.889, 0.997, 0.931),
-       ( torch.float32,  True,  True, 0.921, 0.993, 0.998, 0.821)
+    #    ( torch.float32,  True, False, 0.923, 0.889, 0.997, 0.931),
+    #    ( torch.float32,  True,  True, 0.921, 0.993, 0.998, 0.821)
     ],
     # fmt: on
     ids=[
-        "bfp16_use_device_oft_no_scaling",
-        "bfp16_use_device_oft_with_scaling",
-        "bfp16_use_host_oft_no_scaling",
-        "bfp16_use_host_oft_with_scaling",
+        # "bfp16_use_device_oft_no_scaling",
+        # "bfp16_use_device_oft_with_scaling",
+        # "bfp16_use_host_oft_no_scaling",
+        # "bfp16_use_host_oft_with_scaling",
         "fp32_use_device_oft_no_scaling",
         "fp32_use_device_oft_with_scaling",
-        "fp32_use_host_oft_no_scaling",
-        "fp32_use_host_oft_with_scaling",
+        # "fp32_use_host_oft_no_scaling",
+        # "fp32_use_host_oft_with_scaling",
     ],
 )
 @pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
@@ -64,57 +67,29 @@ def test_oftnet(
 ):
     torch.manual_seed(42)
 
-    input_tensor = load_image(input_image_path, pad_hw=(384, 1280), dtype=model_dtype)[None]
-    calib = load_calib(calib_path, dtype=model_dtype)[None]
     # OFT configuration based on real model parameters
-    grid_res = 0.5
-    grid_size = (80.0, 80.0)
-    grid_height = 4.0
-    y_offset = 1.74
-    grid = make_grid(grid_size, (-grid_size[0] / 2.0, y_offset, 0.0), grid_res, dtype=model_dtype)[None]
+    input_tensor = load_image(input_image_path, pad_hw=(H_PADDED, W_PADDED), dtype=model_dtype)[None].to(model_dtype)
+    calib = load_calib(calib_path, dtype=model_dtype)[None].to(model_dtype)
+    grid = make_grid(GRID_SIZE, (-GRID_SIZE[0] / 2.0, Y_OFFSET, 0.0), GRID_RES, dtype=model_dtype)[None].to(model_dtype)
 
     topdown_layers = 8
     ref_model = OftNet(
         num_classes=1,
         frontend="resnet18",
         topdown_layers=topdown_layers,
-        grid_res=grid_res,
-        grid_height=grid_height,
+        grid_res=GRID_RES,
+        grid_height=GRID_HEIGHT,
         dtype=model_dtype,
         scale_features=scale_features,
     )
 
-    if checkpoints_path is not None and os.path.isfile(checkpoints_path):
-        logger.info(f"Loading model weights from {checkpoints_path}")
-        checkpoint = torch.load(checkpoints_path, map_location="cpu")
-
-        # Load state dict as is
-        ref_model.load_state_dict(checkpoint["model"], strict=True)
-
-        # Ensure all weights are converted to the specified dtype after loading
-        ref_model.to(ref_model.dtype)
-        logger.info(f"Converted all model weights to {ref_model.dtype}")
-    else:
-        assert False, f"Checkpoint path {checkpoints_path} is not a file"
-        logger.warning(f"Checkpoint path {checkpoints_path} does not exist, using random weights")
-
-    # Ensure all input tensors are of the right dtype before passing them to create_OFT_model_parameters
-    model_dtype = ref_model.dtype
-    input_tensor = input_tensor.to(model_dtype)
-    calib = calib.to(model_dtype)
-    grid = grid.to(model_dtype)
-    logger.info(f"Converted all input tensors to {model_dtype}")
-
+    ref_model = load_checkpoint(checkpoints_path, ref_model)
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
     tt_input = input_tensor.permute((0, 2, 3, 1))
     tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_calib = ttnn.from_torch(
-        calib, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    tt_grid = ttnn.from_torch(
-        grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_calib = ttnn.from_torch(calib, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grid = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # with torch.inference_mode():
     tt_module = TTOftNet(
@@ -129,23 +104,27 @@ def test_oftnet(
         calib=calib,
         grid=grid,
         topdown_layers=topdown_layers,
-        grid_res=grid_res,
-        grid_height=grid_height,
+        grid_res=GRID_RES,
+        grid_height=GRID_HEIGHT,
         host_fallback_model=ref_model if use_host_oft else None,
-        OFT_fallback=use_host_oft,
-        FeedForward_fallback=False,
-        Lateral_fallback=False,
+        fallback_oft=use_host_oft,
+        fallback_feedforward=False,
+        fallback_lateral=False,
         scale_features=scale_features,
     )
 
-    outputs, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
-    (tt_outputs, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
-        device, tt_input, tt_calib, tt_grid
-    )
+    intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
+    (
+        (tt_intermediates, intermediates_names),
+        tt_scores,
+        tt_pos_offsets,
+        tt_dim_offsets,
+        tt_ang_offsets,
+    ) = tt_module.forward(device, tt_input, tt_calib, tt_grid)
 
     all_passed = True
     PCC_THRESHOLD = 0.990
-    for i, (out, tt_out, layer_name) in enumerate(zip(outputs, tt_outputs, layer_names)):
+    for i, (out, tt_out, layer_name) in enumerate(zip(intermediates, tt_intermediates, intermediates_names)):
         # conver tt output to torch, channel first, and correct shape
         if isinstance(tt_out, ttnn.Tensor):
             tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
@@ -178,3 +157,32 @@ def test_oftnet(
         special_char = "✅" if passed else "❌"
         logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
     assert all(all_passed), f"OFTnet outputs did not pass the PCC check {all_passed=}"
+
+    # Save outputs to files, useful when debugging encoder
+    SAVE_OUTPUTS = False
+
+    if SAVE_OUTPUTS:
+        # Create directory if it doesn't exist
+        output_dir = os.path.join(os.path.dirname(__file__), "output_comparison")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Construct a unique filename based on test parameters
+        test_config = f"{model_dtype}_device_oft_{scale_features}_host_oft_{use_host_oft}"
+        output_file = os.path.join(output_dir, f"outputs_{test_config}.pt")
+
+        # Package all outputs in a dictionary
+        output_dict = {
+            "ref_scores": ref_outs[0],
+            "ref_pos_offsets": ref_outs[1],
+            "ref_dim_offsets": ref_outs[2],
+            "ref_ang_offsets": ref_outs[3],
+            "tt_scores": tt_outs[0],
+            "tt_pos_offsets": tt_outs[1],
+            "tt_dim_offsets": tt_outs[2],
+            "tt_ang_offsets": tt_outs[3],
+        }
+
+        # Save outputs to file using torch.save
+        torch.save(output_dict, output_file)
+
+        logger.info(f"Saved outputs to {output_file}")

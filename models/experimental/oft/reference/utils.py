@@ -2,6 +2,7 @@ import torch
 from PIL import Image
 from torchvision.transforms.functional import to_tensor
 import pytest
+import matplotlib.pyplot as plt
 
 
 def make_grid(grid_size, grid_offset, grid_res, dtype=torch.float32):
@@ -52,6 +53,46 @@ def perspective(matrix, vector, dtype):
     homogenous = torch.matmul(matrix[..., :-1], vector) + matrix[..., [-1]]
     homogenous = homogenous.squeeze(-1)
     return homogenous[..., :-1] / homogenous[..., [-1]]
+
+
+def rotate(vector, angle):
+    """
+    Rotate a vector around the y-axis
+    """
+    sinA, cosA = torch.sin(angle), torch.cos(angle)
+    xvals = cosA * vector[..., 0] + sinA * vector[..., 2]
+    yvals = vector[..., 1]
+    zvals = -sinA * vector[..., 0] + cosA * vector[..., 2]
+    return torch.stack([xvals, yvals, zvals], dim=-1)
+
+
+def bbox_corners(obj):
+    """
+    Return the 2D
+    """
+
+    # Get corners of bounding box in object space
+    offsets = torch.tensor(
+        [
+            [-0.5, 0.0, -0.5],  # Back-left lower
+            [0.5, 0.0, -0.5],  # Front-left lower
+            [-0.5, 0.0, 0.5],  # Back-right lower
+            [0.5, 0.0, 0.5],  # Front-right lower
+            [-0.5, -1.0, -0.5],  # Back-left upper
+            [0.5, -1.0, -0.5],  # Front-left upper
+            [-0.5, -1.0, 0.5],  # Back-right upper
+            [0.5, -1.0, 0.5],  # Front-right upper
+        ]
+    )
+    corners = offsets * torch.tensor(obj.dimensions)
+    # corners = corners[:, [2, 0, 1]]
+
+    # Apply y-axis rotation
+    corners = rotate(corners, torch.tensor(obj.angle))
+
+    # Apply translation
+    corners = corners + torch.tensor(obj.position)
+    return corners
 
 
 def get_abs_and_relative_error(tensor_a, tensor_b):
@@ -155,3 +196,39 @@ def test_monotonically_growing_integral_image():
     x_nhwc_bad[0, 2, 2, 0] = 0  # Introduce a violation
     with pytest.raises(AssertionError):
         check_monotonic_increase(x_nhwc_bad, mode="last")
+
+
+def vis_score(score, grid, cmap="cividis", ax=None, title=None):
+    score = score.cpu().float().detach().numpy()
+    grid = grid.cpu().float().detach().numpy()
+
+    # Create a new axis if one is not provided
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.gca()
+
+    # Plot scores
+    ax.clear()
+    ax.pcolormesh(grid[..., 0], grid[..., 2], score, cmap=cmap, vmin=0, vmax=1)
+    ax.set_aspect("equal")
+
+    # Set title if provided
+    if title is not None:
+        ax.set_title(title)
+
+    # Format axes
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("z (m)")
+
+    return ax
+
+
+def visualize_score(ref_scores, scores, grid):
+    # Visualize score
+    fig_score = plt.figure(num="score", figsize=(8, 6))
+    fig_score.clear()
+
+    vis_score(ref_scores[0, 0], grid[0], ax=plt.subplot(121), title="Torch")
+    vis_score(scores[0, 0], grid[0], ax=plt.subplot(122), title="TTNN")
+
+    return fig_score

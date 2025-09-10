@@ -5,6 +5,8 @@ from loguru import logger
 
 from collections import namedtuple
 
+from models.experimental.oft.tt.common import Conv
+
 ObjectData = namedtuple("ObjectData", ["classname", "position", "dimensions", "angle", "score"])
 
 
@@ -21,6 +23,7 @@ class TTObjectEncoder:
     def __init__(
         self,
         device,
+        parameters,
         classnames=["Car"],
         pos_std=[0.5, 0.36, 0.5],
         log_dim_mean=[[0.42, 0.48, 1.35]],
@@ -61,10 +64,12 @@ class TTObjectEncoder:
 
         # Create Gaussian kernel for NMS
         # moved to init phase to avoid recreating it every time
-        self.kernel = gaussian_kernel(sigma)
-        self.kernel = self.kernel.expand(self.nclass, self.nclass, -1, -1)
-        self.ttnn_kernel = ttnn.from_torch(self.kernel, dtype=ttnn.bfloat16)
-        logger.debug(f"ttnn {self.kernel.shape=}")
+        # self.kernel = gaussian_kernel(sigma)
+        # self.kernel = self.kernel.expand(self.nclass, self.nclass, -1, -1)
+        # self.ttnn_kernel = ttnn.from_torch(self.kernel, dtype=ttnn.bfloat16)
+        # logger.debug(f"ttnn {self.kernel.shape=}")
+
+        self.nms_conv = Conv(parameters.nms_conv, parameters.conv_args, output_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def decode(self, device, heatmaps, pos_offsets, dim_offsets, ang_offsets, grid):
         positions = self._decode_positions(device, pos_offsets, grid)
@@ -95,7 +100,7 @@ class TTObjectEncoder:
         return objects, peaks_torch
 
     def _decode_heatmaps(self, device, heatmaps):
-        peaks, max_inds = ttnn_non_maximum_suppression_dbg(device, heatmaps, self.ttnn_kernel)
+        peaks, max_inds = self._non_maximum_suppression(device, heatmaps)
         scores = heatmaps
         # classids = torch.nonzero(peaks)[:, 0] #moved to level above
         return peaks, max_inds, scores  # , classids
@@ -122,81 +127,47 @@ class TTObjectEncoder:
         atan2 = ttnn.atan2(sin, cos)
         return atan2
 
+    def _non_maximum_suppression(self, device, heatmaps):
+        heatmaps_4d = ttnn.unsqueeze(heatmaps, 0)
+        n, c, h, w = heatmaps_4d.shape
+        heatmaps_4d = ttnn.permute(heatmaps_4d, (0, 2, 3, 1))  # TO CHECK
+        smoothed, out_h, out_w = self.nms_conv(device, heatmaps_4d)
 
-def ttnn_non_maximum_suppression_dbg(
-    device, heatmaps, kernel, sigma=1.0, thresh=0.05, max_peaks=50, dtype=ttnn.bfloat16
-):
-    heatmaps_4d = ttnn.unsqueeze(heatmaps, 0)
-    n, c, h, w = heatmaps_4d.shape
-    heatmaps_4d = ttnn.permute(heatmaps_4d, (0, 2, 3, 1))
+        smoothed = ttnn.to_memory_config(smoothed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        smoothed = ttnn.to_layout(smoothed, ttnn.ROW_MAJOR_LAYOUT)
 
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_approx_mode=False,
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-    conv_config = ttnn.Conv2dConfig(
-        deallocate_activation=False,  # umesto deallocate_input
-        reallocate_halo_output=True,
-        in_place=False,  # umesto in_place_halo
-        weights_dtype=ttnn.bfloat16,
-    )
-    smoothed, [out_h, out_w] = ttnn.conv2d(
-        input_tensor=heatmaps_4d,
-        weight_tensor=kernel,
-        device=device,
-        in_channels=c,
-        out_channels=c,
-        batch_size=1,
-        input_height=h,
-        input_width=w,
-        kernel_size=[5, 5],
-        stride=[1, 1],
-        padding=[2, 2],
-        dilation=[1, 1],
-        groups=1,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        return_output_dim=True,
-    )
+        _, indices = ttnn.max_pool2d(
+            input_tensor=smoothed,
+            batch_size=n,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            kernel_size=[3, 3],
+            stride=[1, 1],
+            padding=[1, 1],
+            dilation=[1, 1],
+            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ceil_mode=False,
+            in_place_halo=False,
+            deallocate_input=False,
+            reallocate_halo_output=True,
+            return_indices=True,
+        )
+        # fallback to torch to calculate max_peaks
+        max_inds = ttnn.to_torch(indices, dtype=torch.int64).permute(0, 3, 1, 2).view(n, c, h, w)
+        heatmaps_torch = ttnn.to_torch(heatmaps, dtype=torch.float32)
+        max_inds = max_inds.squeeze(0)
+        flat_inds = torch.arange(out_h * out_w).type_as(max_inds).view(out_h, out_w)
+        peaks = flat_inds == max_inds
+        logger.debug(f"PEAKS {peaks.long().sum()}")
+        peaks = peaks & (heatmaps_torch > self.thresh)
+        # Keep only the top N peaks
+        if peaks.long().sum() > self.max_peaks:
+            scores = heatmaps_torch[peaks]
+            scores, _ = torch.sort(scores, descending=True)
+            peaks = peaks & (heatmaps_torch > scores[self.max_peaks - 1])
 
-    smoothed = ttnn.to_memory_config(smoothed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    smoothed = ttnn.to_layout(smoothed, ttnn.ROW_MAJOR_LAYOUT)
-
-    ttnn_output, indices = ttnn.max_pool2d(
-        input_tensor=smoothed,
-        batch_size=n,
-        input_h=h,
-        input_w=w,
-        channels=c,
-        kernel_size=[3, 3],
-        stride=[1, 1],
-        padding=[1, 1],
-        dilation=[1, 1],
-        # applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ceil_mode=False,
-        in_place_halo=False,
-        deallocate_input=False,
-        reallocate_halo_output=True,
-        return_indices=True,
-    )
-    # fallback to torch to calculate max_peaks
-    max_inds = ttnn.to_torch(indices, dtype=torch.int64).permute(0, 3, 1, 2).view(n, c, h, w)
-    heatmaps_torch = ttnn.to_torch(heatmaps, dtype=torch.float32)
-    max_inds = max_inds.squeeze(0)
-    flat_inds = torch.arange(out_h * out_w).type_as(max_inds).view(out_h, out_w)
-    peaks = flat_inds == max_inds
-    logger.debug(f"PEAKS {peaks.long().sum()}")
-    peaks = peaks & (heatmaps_torch > thresh)
-    # Keep only the top N peaks
-    if peaks.long().sum() > max_peaks:
-        scores = heatmaps_torch[peaks]
-        scores, _ = torch.sort(scores, descending=True)
-        peaks = peaks & (heatmaps_torch > scores[max_peaks - 1])
-
-    logger.debug(f"{peaks.shape=}, {peaks.dtype=}")
-    logger.debug(f"TTNN: Final PEAKS value {peaks.long().sum()}")
-    # max_inds return for max_pool2d validation
-    return peaks, max_inds
+        logger.debug(f"{peaks.shape=}, {peaks.dtype=}")
+        logger.debug(f"TTNN: Final PEAKS value {peaks.long().sum()}")
+        # max_inds return for max_pool2d validation
+        return peaks, max_inds

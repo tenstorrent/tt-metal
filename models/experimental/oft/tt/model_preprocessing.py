@@ -113,14 +113,17 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
 
 
 # def create_OFT_model_parameters_resnet(model: OftNet, input_tensor: torch.Tensor, device):
-def create_decoder_model_parameters(model, input_tensor: torch.Tensor, device):
+def create_decoder_model_parameters(model, input_tensors: torch.Tensor, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=None,
     )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
+
+    input1, input2, input3, input4, input5 = input_tensors
+    parameters.conv_args = infer_ttnn_module_args(
+        model=model, run_model=lambda model: model.decode(input1, input2, input3, input4, input5), device=None
+    )
     # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
     parameters["model_args"] = model
 

@@ -119,6 +119,9 @@ class OFT:
         if use_signpost:
             signpost(header="OFT block started")
 
+        if features.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
+
         integral_image = ttnn_integral_image_channel_last(features)
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)

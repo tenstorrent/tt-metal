@@ -99,11 +99,6 @@ class OftNet(nn.Module):
         ######
 
         # Apply OFT and sum
-        # return ortho_feats, integral_img, bbox_corners[..., [0, 1]], bbox_corners[..., [2, 3]], bbox_corners[..., [2, 1]], bbox_corners[..., [0, 3]]
-        # from models.experimental.oft.reference.oft import integral_image
-        # int_img8 = integral_image(lat8)
-        # int_img16 = integral_image(lat16)
-        # int_img32 = integral_image(lat32)
         ortho8, integral_img8, bbox_top_left8, bbox_btm_right8, bbox_top_right8, bbox_btm_left8 = self.oft8(
             lat8, calib, grid
         )
@@ -156,7 +151,7 @@ class OftNet(nn.Module):
                 grid,
                 topdown,
             ],
-            scores,
+            scores.squeeze(2),
             pos_offsets,
             dim_offsets,
             ang_offsets,

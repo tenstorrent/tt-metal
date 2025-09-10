@@ -31,9 +31,9 @@ class TTOftNet:
         grid_res=0.5,
         grid_height=4,
         host_fallback_model=None,
-        FeedForward_fallback=False,
-        Lateral_fallback=False,
-        OFT_fallback=False,
+        fallback_feedforward=False,
+        fallback_lateral=False,
+        fallback_oft=False,
         scale_features=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
@@ -118,11 +118,11 @@ class TTOftNet:
             )
 
         self.host_fallback_model = host_fallback_model
-        self.OFT_fallback = OFT_fallback
-        self.FeedForward_fallback = FeedForward_fallback
-        self.Lateral_fallback = Lateral_fallback
+        self.OFT_fallback = fallback_oft
+        self.FeedForward_fallback = fallback_feedforward
+        self.Lateral_fallback = fallback_lateral
         assert not (
-            (host_fallback_model == None) and (OFT_fallback or FeedForward_fallback or Lateral_fallback)
+            (host_fallback_model == None) and (fallback_oft or fallback_feedforward or fallback_lateral)
         ), "If host_fallback_model is None, all fallbacks must be False"
 
     def forward_normalization(self, device, input_tensor):
@@ -371,9 +371,15 @@ class TTOftNet:
             import torch
             import torch.nn.functional as F
 
-            feats8_torch = ttnn.to_torch(feats8, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
-            feats16_torch = ttnn.to_torch(feats16, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
-            feats32_torch = ttnn.to_torch(feats32, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            feats8_torch = (
+                ttnn.to_torch(feats8, dtype=self.host_fallback_model.dtype).permute((0, 3, 1, 2)).contiguous()
+            )
+            feats16_torch = (
+                ttnn.to_torch(feats16, dtype=self.host_fallback_model.dtype).permute((0, 3, 1, 2)).contiguous()
+            )
+            feats32_torch = (
+                ttnn.to_torch(feats32, dtype=self.host_fallback_model.dtype).permute((0, 3, 1, 2)).contiguous()
+            )
             lat8_torch = F.relu(self.host_fallback_model.bn8(self.host_fallback_model.lat8(feats8_torch)))
             lat16_torch = F.relu(self.host_fallback_model.bn16(self.host_fallback_model.lat16(feats16_torch)))
             lat32_torch = F.relu(self.host_fallback_model.bn32(self.host_fallback_model.lat32(feats32_torch)))

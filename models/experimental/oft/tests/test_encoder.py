@@ -5,7 +5,11 @@ from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from tests.ttnn.utils_for_testing import check_with_pcc
 import pytest
 from models.experimental.oft.reference.utils import make_grid
+from models.experimental.oft.tt.model_preprocessing import create_decoder_model_parameters
+from models.experimental.oft.tests.test_common import GRID_RES, GRID_SIZE, Y_OFFSET
+
 from loguru import logger
+import os
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
@@ -17,18 +21,65 @@ from loguru import logger
     # fmt: on
     ids=["use_ttnn_peaks", "use_host_peaks"],
 )
+@pytest.mark.parametrize("model_dtype", [torch.bfloat16], ids=["bfp16"])
+@pytest.mark.parametrize(
+    "input_file_path",
+    [
+        # fmt: off
+    ("output_comparison/outputs_torch.float32_device_oft_False_host_oft_False.pt"),
+        # ("output_comparison/outputs_torch.float32_device_oft_True_host_oft_False.pt")
+        # fmt: on
+    ],
+)
 def test_decode(
-    device, use_host_peaks, pcc_peaks, pcc_scores_ttnn, pcc_positions_ttnn, pcc_dimensions_ttnn, pcc_angles_ttnn
+    device,
+    model_dtype,
+    input_file_path,
+    use_host_peaks,
+    pcc_peaks,
+    pcc_scores_ttnn,
+    pcc_positions_ttnn,
+    pcc_dimensions_ttnn,
+    pcc_angles_ttnn,
 ):
     torch.manual_seed(1)
-    encoder = ObjectEncoder(nms_thresh=0.2)
-    ttnn_encoder = TTObjectEncoder(device, nms_thresh=0.2)
-    grid = make_grid(grid_size=(80.0, 80.0), grid_offset=(-40.0, 1.74, 0.0), grid_res=0.5)
-    # Prepare dummy inputs
-    scores = torch.rand((1, 1, 159, 159), dtype=torch.bfloat16)
-    pos_offsets = torch.rand((1, 1, 3, 159, 159), dtype=torch.bfloat16)
-    dim_offsets = torch.rand((1, 1, 3, 159, 159), dtype=torch.bfloat16)
-    ang_offsets = torch.rand((1, 1, 2, 159, 159), dtype=torch.bfloat16)
+    encoder = ObjectEncoder(nms_thresh=0.2, dtype=model_dtype)
+
+    grid = make_grid(GRID_SIZE, (-GRID_SIZE[0] / 2.0, Y_OFFSET, 0.0), GRID_RES, dtype=model_dtype)[None]
+
+    # Load the precomputed outputs for testing
+    if input_file_path is not None and os.path.isfile(os.path.join(os.path.dirname(__file__), input_file_path)):
+        output_file = os.path.join(os.path.dirname(__file__), input_file_path)
+        output_dict = torch.load(output_file)
+
+        # Extract the outputs from the dictionary
+        scores = output_dict["ref_scores"].squeeze(0)
+        pos_offsets = output_dict["ref_pos_offsets"].squeeze(0)
+        dim_offsets = output_dict["ref_dim_offsets"].squeeze(0)
+        ang_offsets = output_dict["ref_ang_offsets"].squeeze(0)
+    else:
+        # Prepare dummy inputs
+        scores = torch.rand((1, 159, 159), dtype=model_dtype)
+        pos_offsets = torch.rand((1, 3, 159, 159), dtype=model_dtype)
+        dim_offsets = torch.rand((1, 3, 159, 159), dtype=model_dtype)
+        ang_offsets = torch.rand((1, 2, 159, 159), dtype=model_dtype)
+
+    # Convert to bfloat16 if needed based on model_dtype
+    if model_dtype != scores.dtype:
+        scores = scores.to(model_dtype)
+    if model_dtype != pos_offsets.dtype:
+        pos_offsets = pos_offsets.to(model_dtype)
+    if model_dtype != dim_offsets.dtype:
+        dim_offsets = dim_offsets.to(model_dtype)
+    if model_dtype != ang_offsets.dtype:
+        ang_offsets = ang_offsets.to(model_dtype)
+
+    grid = grid.squeeze(0)
+    decoder_params = create_decoder_model_parameters(
+        encoder, [scores, pos_offsets, dim_offsets, ang_offsets, grid], device
+    )
+    print(f"{decoder_params=}")
+    ttnn_encoder = TTObjectEncoder(device, decoder_params, nms_thresh=0.2)
 
     scores_ttnn = ttnn.from_torch(
         scores, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device
@@ -45,10 +96,10 @@ def test_decode(
     grid_ttnn = ttnn.from_torch(
         grid, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device
     )
-    # decoder_params = create_decoder_model_parameters(encoder.decode, scores, pos_offsets, dim_offsets, ang_offsets, grid, device)
-    ret_val = encoder.decode(scores[0], pos_offsets[0], dim_offsets[0], ang_offsets[0], grid)
+
+    ret_val = encoder.decode(scores, pos_offsets, dim_offsets, ang_offsets, grid)
     ret_val_ttnn = ttnn_encoder.decode(
-        device, scores_ttnn[0], pos_offsets_ttnn[0], dim_offsets_ttnn[0], ang_offsets_ttnn[0], grid_ttnn
+        device, scores_ttnn, pos_offsets_ttnn, dim_offsets_ttnn, ang_offsets_ttnn, grid_ttnn
     )
 
     peaks, max_inds, scores, classids, positions, dimensions, angles = ret_val

@@ -63,13 +63,15 @@ class OFT(nn.Module):
 
         # Sample integral image at bounding box locations
         integral_img = integral_image(features)
-        top_left = F.grid_sample(integral_img, bbox_corners[..., [0, 1]])
-        btm_right = F.grid_sample(integral_img, bbox_corners[..., [2, 3]])
-        top_right = F.grid_sample(integral_img, bbox_corners[..., [2, 1]])
-        btm_left = F.grid_sample(integral_img, bbox_corners[..., [0, 3]])
+        top_left = F.grid_sample(integral_img, bbox_corners[..., [0, 1]], align_corners=False)
+        btm_right = F.grid_sample(integral_img, bbox_corners[..., [2, 3]], align_corners=False)
+        top_right = F.grid_sample(integral_img, bbox_corners[..., [2, 1]], align_corners=False)
+        btm_left = F.grid_sample(integral_img, bbox_corners[..., [0, 3]], align_corners=False)
 
-        # Compute voxel features (ignore features which are not visible)
-        vox_feats = (top_left + btm_right - top_right - btm_left) / area
+        # Compute voxel features (ignore features which are not visible))
+        vox_feats = top_left + btm_right - top_right - btm_left
+        # vox_feats = vox_feats * features.shape[-1] * features.shape[-2] * 8
+        vox_feats = vox_feats / area
         # Make sure visible mask is in the right dtype
         vox_feats = vox_feats * visible.to(dtype=self.dtype)
         # vox_feats = vox_feats.view(batch, -1, depth, width)
