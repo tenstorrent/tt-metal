@@ -153,9 +153,11 @@ async function run() {
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 
-    core.info('Fetching all runs...');
-    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
-    core.info(`Fetched allRuns count: ${allRuns.length}`);
+    // core.info('Fetching all runs...');
+    // const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+    // core.info(`Fetched allRuns count: ${allRuns.length}`);
+
+    const allRuns = [];
 
     await delay(5000);
 

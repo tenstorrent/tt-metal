@@ -165,6 +165,13 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
+      - name: Post regressions to Slack
+        if: ${{ steps.analyze.outputs.regressed_workflows != '[]' }}
+        uses: ./.github/actions/slack-report-analyze-workflow-data
+        with:
+          slack_webhook_url: https://hooks.slack.com/services/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
+          regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+
   handle-failures:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
