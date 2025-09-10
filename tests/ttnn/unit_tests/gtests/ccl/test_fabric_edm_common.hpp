@@ -303,13 +303,25 @@ void run_workloads(
 
     log_info(tt::LogTest, "Running...");
 
-    for (size_t i = 0; i < num_workloads; i++) {
-        tt_metal::distributed::EnqueueMeshWorkload(devices.at(i)->mesh_command_queue(), workloads.at(i), false);
-    }
-
     log_debug(tt::LogTest, "Calling Finish");
-    for (size_t i = 0; i < num_workloads; i++) {
-        tt_metal::distributed::Finish(devices.at(i)->mesh_command_queue());
+    std::vector<std::thread> threads;
+    threads.reserve(num_workloads);
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        for (size_t i = 0; i < num_workloads; i++) {
+            threads.emplace_back(std::thread([&] {
+                tt_metal::distributed::EnqueueMeshWorkload(devices.at(i)->mesh_command_queue(), workloads.at(i), true);
+            }));
+        }
+
+        std::ranges::for_each(threads, [](std::thread& t) { t.join(); });
+    } else {
+        for (size_t i = 0; i < num_workloads; i++) {
+            tt_metal::distributed::EnqueueMeshWorkload(devices.at(i)->mesh_command_queue(), workloads.at(i), false);
+        }
+
+        for (size_t i = 0; i < num_workloads; i++) {
+            tt_metal::distributed::Finish(devices.at(i)->mesh_command_queue());
+        }
     }
 }
 
