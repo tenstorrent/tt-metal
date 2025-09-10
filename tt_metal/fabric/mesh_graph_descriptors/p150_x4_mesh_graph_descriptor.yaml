@@ -10,7 +10,7 @@ ChipSpec: {
 
 Board: [
   { name: P150,
-    type: TORUS_XY,
+    type: MESH,
     topology: [1, 4]}
 ]
 
@@ -23,5 +23,4 @@ Mesh: [
 }
 ]
 
-Graph: [
-]
+Graph: []
