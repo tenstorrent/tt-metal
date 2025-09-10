@@ -89,9 +89,10 @@ inline void apply_tweaks() {
 inline void service_base_fw() {
     // Base fw only uses noc0
     ncrisc_noc_full_sync<0>();
-    reinterpret_cast<void (*)(uint32_t)>(
-        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    service_eth_msg();
+    update_boot_results_eth_link_status_check();
     noc_init<0>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    ncrisc_noc_counters_init<0>();
     apply_tweaks();
 }
 
@@ -136,6 +137,7 @@ void __attribute__((noinline)) Application(void) {
     }
     apply_tweaks();
     ncrisc_noc_full_sync();
+    ncrisc_noc_counters_init();
 
     deassert_all_reset();
     wait_subordinate_eriscs();

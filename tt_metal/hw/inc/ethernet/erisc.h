@@ -6,6 +6,7 @@
 
 #include "noc_nonblocking_api.h"
 #include <cstdint>
+#include "eth_fw_api.h"
 
 inline void (*rtos_context_switch_ptr)();
 inline void (*toggle_macpcs_ptr)(uint32_t);
@@ -21,7 +22,11 @@ inline __attribute__((always_inline)) void risc_context_switch() {
 #endif
 }
 
-inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync() { rtos_context_switch_ptr(); }
+inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync() {
+#ifdef COOPERATIVE_ERISC
+    rtos_context_switch_ptr();
+#endif
+}
 
 inline __attribute__((always_inline)) void enable_erisc_app() { gEnableFwFlag[0] = 1; }
 

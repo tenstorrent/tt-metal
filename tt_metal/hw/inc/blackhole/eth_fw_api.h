@@ -243,7 +243,19 @@ FORCE_INLINE bool is_link_up() {
 }
 
 FORCE_INLINE bool is_port_up() {
+    invalidate_l1_cache();
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
+}
+
+FORCE_INLINE void service_eth_msg() {
+    invalidate_l1_cache();
+    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+}
+
+FORCE_INLINE void update_boot_results_eth_link_status_check() {
+    invalidate_l1_cache();
+    reinterpret_cast<void (*)(uint32_t)>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
 }
 
 #endif
