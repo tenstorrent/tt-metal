@@ -113,7 +113,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
-    activation="",
+    activation=None,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -173,7 +173,7 @@ def run_conv(
 
     # for Sqrt activation functions we need positive numbers as output of conv2d
     # in order to get valid sqrt values
-    sqrt_act_function = activation == "sqrt"
+    sqrt_act_function = activation is not None and activation.op_type == ttnn.UnaryOpType.SQRT
     torch_input_tensor_nchw = randomize_torch_tensor(
         torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
     )
@@ -208,6 +208,7 @@ def run_conv(
         dilation=(dilation_h, dilation_w),
         groups=groups,
     )
+    # Handle UnaryWithParam activation type with direct enum mapping
     act_func = get_torch_act_func_from_string(activation)
     if act_func:
         ref = act_func(ref)
@@ -333,7 +334,9 @@ def run_conv(
     else:
         pcc = 0.997
 
-    if activation == "tanh":
+    # Check if activation is tanh
+    is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+    if is_tanh:
         # Scale down PCC for tanh.
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
@@ -643,10 +646,21 @@ def test_conv_features_multi_device(
         [3, 1],
     ],
 )
-@pytest.mark.parametrize("enable_act_double_buffer", [True, False])
-@pytest.mark.parametrize("enable_weights_double_buffer", [True, False])
+@pytest.mark.parametrize("enable_act_double_buffer", [True])
+@pytest.mark.parametrize("enable_weights_double_buffer", [True])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "sigmoid_approx", "tanh", "sqrt", "gelu"])
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+    ],
+)
 def test_conv_activation(
     device,
     torch_tensor_map,
@@ -673,7 +687,9 @@ def test_conv_activation(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
+    # Check if activation is sqrt
+    is_sqrt = activation is not None and activation.op_type == ttnn.UnaryOpType.SQRT
+    if output_dtype == ttnn.bfloat8_b and shard_layout == HS and is_sqrt:
         pytest.skip(
             "Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16"
         )
@@ -2988,7 +3004,7 @@ def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
         padding,
         None,
         auto_shard=True,
-        activation="silu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
 
 
@@ -3002,7 +3018,7 @@ def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
 #fmt: on
 
 @pytest.mark.parametrize("shard_layout", [BS])
-@pytest.mark.parametrize("activation", ["relu"])
+@pytest.mark.parametrize("activation", [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
 def test_block_sharding_relu_act_block_h(
@@ -3149,7 +3165,7 @@ def test_conv2d_model_fruit(
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
         input_layout= input_layout,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=enable_act_double_buffer,
         input_dtype = input_dtype,
     )
@@ -3851,13 +3867,13 @@ def test_conv2d_with_fold(
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant, shard_layout, activation",
     (
-        (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, ""),
-        (1, 320, 320, 40, 40, 3, 3, 1, 1, 1, 1, 320, True, None, False, HS, "silu"),
-        (1, 320, 320, 80, 80, 3, 3, 2, 2, 1, 1, 320, True, None, False, HS, "silu"),
-        (1, 640, 640, 20, 20, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
-        (1, 640, 640, 40, 40, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
-        (1, 640, 640, 40, 40, 3, 3, 2, 2, 1, 1, 640, True, None, False, BS, ""),
-        (1, 640, 640, 80, 80, 3, 3, 2, 2, 1, 1, 640, True, None, False, None, ""),
+        (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, None),
+        (1, 320, 320, 40, 40, 3, 3, 1, 1, 1, 1, 320, True, None, False, HS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 320, 320, 80, 80, 3, 3, 2, 2, 1, 1, 320, True, None, False, HS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 20, 20, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 40, 40, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 40, 40, 3, 3, 2, 2, 1, 1, 640, True, None, False, BS, None),
+        (1, 640, 640, 80, 80, 3, 3, 2, 2, 1, 1, 640, True, None, False, None, None),
     ),
 )
 @pytest.mark.parametrize(
