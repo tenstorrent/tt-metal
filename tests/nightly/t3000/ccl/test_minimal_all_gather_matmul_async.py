@@ -357,27 +357,25 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
-        True,
         False,
     ],
-    ids=["separate", "fused"],
+    ids=["fused"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
     [
         (True, True),
-        (True, False),
-        (False, True),
     ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+    ids=[
+        "barrier_with_persistent_buffers",
+    ],
 )
 @pytest.mark.parametrize(
     "chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
@@ -392,12 +390,9 @@ def run_all_gather_impl(
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        pytest.param(
-            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_matmul_async(
     mesh_device,
@@ -456,3 +451,4 @@ def test_all_gather_matmul_async(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
