@@ -44,16 +44,17 @@ void MAIN {
     constexpr uint32_t in_idx_cb_id_1 = get_compile_time_arg_val(10);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(11);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(12);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(16);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(18);
-    constexpr uint32_t right_inc = get_compile_time_arg_val(19);
-    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(20);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(21);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(22);
+    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(17);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(18);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(19);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(20);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(21);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(22);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(23);
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -121,11 +122,9 @@ void MAIN {
         const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
         current_idx_col = start_col;
 
-        cb_wait_front(tile_idx_tmp_cb_id, 1);
-
-        // tilize_init_short_with_dt_no_pack(in_cb_id_0, tile_idx_tmp_cb_id, topk_output_tiles);
-        // tilize_block_no_pack(tile_idx_tmp_cb_id, topk_output_tiles, idx_dst_idx, topk_cb_tile_idx);
-        // tilize_uninit_with_dt_no_pack(tile_idx_tmp_cb_id, in_cb_id_0);
+        cb_wait_front(idx_tmp_cb_id, 1);
+        cb_wait_front(right_inc_tmp_cb_id, 1);
+        cb_wait_front(down_left_wrap_inc_tmp_cb_id, 1);
     }
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {

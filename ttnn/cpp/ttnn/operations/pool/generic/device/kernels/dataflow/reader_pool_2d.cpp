@@ -67,8 +67,6 @@ template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
     uint32_t in_idx_cb_id,
-    uint32_t tile_tmp_cb_id,
-    uint32_t tile_idx_tmp_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -275,21 +273,24 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
-    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(31);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(33);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
+    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(30);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(31);
+    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(32);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(33);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(38);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(39);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(40);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(41);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -337,7 +338,7 @@ void kernel_main() {
             // TODO we don't need to init the idx CBs, but eases debugging for now
             if constexpr (return_indices) {
                 clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
-                clear_out_tiles<tile_idx_tmp_cb_id, clear_value_cb_id>();
+                clear_out_tiles<idx_tmp_cb_id, clear_value_cb_id>();
             }
         }
     }
@@ -372,10 +373,28 @@ void kernel_main() {
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
 
+        // initialize the right inc tile
+        cb_reserve_back(right_inc_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* right_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(right_inc_tmp_cb_id));
+        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
+            right_ptr[i] = right_inc;
+        }
+        cb_push_back(right_inc_tmp_cb_id, 1);
+
+        // initialize the down left wrap inc tile
+        cb_reserve_back(down_left_wrap_inc_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* down_left_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(down_left_wrap_inc_tmp_cb_id));
+        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
+            down_left_ptr[i] = down_left_wrap_inc;
+        }
+        cb_push_back(down_left_wrap_inc_tmp_cb_id, 1);
+
         // initialize the index CB
-        cb_reserve_back(tile_idx_tmp_cb_id, 1);
+        cb_reserve_back(idx_tmp_cb_id, 1);
         volatile tt_l1_ptr uint16_t* idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(tile_idx_tmp_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(idx_tmp_cb_id));
         uint32_t write_inc = TILE_WIDTH;
 #ifdef ARCH_BLACKHOLE
         if (in_c <= FACE_WIDTH) {
@@ -396,8 +415,8 @@ void kernel_main() {
             kernel_idx += in_w - window_w;
         }
         DPRINT << "TILE IDX CB" << ENDL();
-        tt::data_movement::common::print_u16_pages(get_write_ptr(tile_idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
-        cb_push_back(tile_idx_tmp_cb_id, 1);
+        tt::data_movement::common::print_u16_pages(get_write_ptr(idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
+        cb_push_back(idx_tmp_cb_id, 1);
     }
 
     // initialize the scalar CB
@@ -467,8 +486,6 @@ void kernel_main() {
                 in_nblocks_c,
                 in_cb_id,
                 in_idx_cb_id,
-                tile_tmp_cb_id,
-                tile_idx_tmp_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -501,8 +518,6 @@ void kernel_main() {
             in_nblocks_c,
             in_cb_id,
             in_idx_cb_id,
-            tile_tmp_cb_id,
-            tile_idx_tmp_cb_id,
             window_h,
             window_w,
             in_w_padded,
