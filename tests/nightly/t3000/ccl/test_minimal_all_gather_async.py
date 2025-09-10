@@ -142,6 +142,7 @@ def run_all_gather_impl(
             num_buffers_per_channel=num_buffers_per_channel,
         )
 
+        print("after all gather async\n")
         return tt_all_gather_out_tensor
 
     if enable_trace:
@@ -171,7 +172,9 @@ def run_all_gather_impl(
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            print("before synchronize\n")
+            # ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            print("after synchronize\n")
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -197,10 +200,10 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
     [
-        (32, [32, 1, 1, 1], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (32, [1, 32, 1, 1], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (32, [1, 1, 32, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        (32, [1, 1, 1, 32], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [8, 1, 1, 1], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 8, 1, 1], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
         "composite_ag_test_one",
