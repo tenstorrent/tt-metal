@@ -11,11 +11,11 @@ from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0
 
 def validate_test(num_devices, topology, shape, cluster_axis):
     if (2 == num_devices) and (topology == ttnn.Topology.Ring):
-        pytest.skip("Ring configuration requires more than 2 devices")
+        pytest.skip("TI_SKIP: Ring configuration requires more than 2 devices")
     if (shape[cluster_axis] != num_devices) and (topology == ttnn.Topology.Ring):
-        pytest.skip("Ring configuration requires the entire row or column so it loops around")
+        pytest.skip("TI_SKIP: Ring configuration requires the entire row or column so it loops around")
     if shape[cluster_axis] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
+        pytest.skip("TI_SKIP: Test requires more devices than are available on this platform")
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
