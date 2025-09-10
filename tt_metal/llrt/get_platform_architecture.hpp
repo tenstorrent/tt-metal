@@ -14,26 +14,6 @@
 
 namespace tt::tt_metal {
 
-inline tt::ARCH get_physical_architecture() {
-    auto arch = tt::ARCH::Invalid;
-    // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
-    // This map holds PCI info for each mmio chip.
-    auto devices_info = PCIDevice::enumerate_devices_info();
-    if (devices_info.size() > 0) {
-        arch = devices_info.begin()->second.get_arch();
-        for (auto& [device_id, device_info] : devices_info) {
-            tt::ARCH detected_arch = device_info.get_arch();
-            TT_FATAL(
-                arch == detected_arch,
-                "Expected all devices to be {} but device {} is {}",
-                tt::arch_to_str(arch),
-                device_id,
-                tt::arch_to_str(detected_arch));
-        }
-    }
-    return arch;
-}
-
 /**
  * @brief Detects the platform architecture based on the environment or hardware.
  *
@@ -67,7 +47,6 @@ inline tt::ARCH get_physical_architecture() {
  * @see tt::get_arch_from_string
  * @see PCIDevice::enumerate_devices_info
  */
-
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
     // If running in mock mode, derive architecture from provided cluster descriptor
@@ -82,7 +61,21 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         arch = init.get_arch_name();
     } else {
-        arch = get_physical_architecture();
+        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
+        // This map holds PCI info for each mmio chip.
+        auto devices_info = PCIDevice::enumerate_devices_info();
+        if (devices_info.size() > 0) {
+            arch = devices_info.begin()->second.get_arch();
+            for (auto& [device_id, device_info] : devices_info) {
+                tt::ARCH detected_arch = device_info.get_arch();
+                TT_FATAL(
+                    arch == detected_arch,
+                    "Expected all devices to be {} but device {} is {}",
+                    tt::arch_to_str(arch),
+                    device_id,
+                    tt::arch_to_str(detected_arch));
+            }
+        }
     }
 
     return arch;

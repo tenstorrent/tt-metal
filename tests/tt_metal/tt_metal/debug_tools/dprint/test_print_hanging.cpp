@@ -37,7 +37,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different virtual cores, so wildcard the exact coordinates.
 const std::string golden_output =
-    R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 4, waiting on a RAISE signal: 1
+    R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 0, waiting on a RAISE signal: 1
 )";
 
 void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {

@@ -68,7 +68,7 @@ static void print_stack_trace() {
         }
     }
 
-    free(strings);
+    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
 }
 // NOLINTEND(cppcoreguidelines-no-malloc)
 

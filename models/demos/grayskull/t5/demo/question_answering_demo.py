@@ -13,9 +13,9 @@ from transformers import AutoTokenizer, T5Config, T5ForConditionalGeneration
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.generation_utils import get_logits_processor
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.grayskull.t5.tt import ttnn_functional_t5, ttnn_optimized_functional_t5
-from models.generation_utils import get_logits_processor
-from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):

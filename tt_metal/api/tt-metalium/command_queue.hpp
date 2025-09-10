@@ -15,12 +15,12 @@
 
 namespace tt::tt_metal {
 
-class Event;
+struct Event;
 class Program;
 class Kernel;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 class CommandQueue {
 public:
