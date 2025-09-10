@@ -38,20 +38,16 @@ std::string tt::get_alias(tt::ARCH arch) {
 }
 
 tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
-    tt::ARCH arch;
     if ((arch_str == "grayskull") || (arch_str == "GRAYSKULL")) {
-        arch = tt::ARCH::GRAYSKULL;
+        return tt::ARCH::GRAYSKULL;
     } else if ((arch_str == "wormhole_b0") || (arch_str == "WORMHOLE_B0")) {
-        arch = tt::ARCH::WORMHOLE_B0;
+        return tt::ARCH::WORMHOLE_B0;
     } else if ((arch_str == "blackhole") || (arch_str == "BLACKHOLE")) {
-        arch = tt::ARCH::BLACKHOLE;
+        return tt::ARCH::BLACKHOLE;
     } else if ((arch_str == "Invalid") || (arch_str == "INVALID")) {
-        arch = tt::ARCH::Invalid;
-    } else {
-        throw std::runtime_error(arch_str + " is not recognized as tt::ARCH.");
+        return tt::ARCH::Invalid;
     }
-
-    return arch;
+    throw std::runtime_error(arch_str + " is not recognized as tt::ARCH.");
 }
 
 auto fmt::formatter<tt::DataFormat>::format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator {

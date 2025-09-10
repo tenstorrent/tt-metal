@@ -704,12 +704,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
-    EmbeddingsIndexType embeddings_index_type;
-    if (a.dtype() == DataType::BFLOAT16) {
-        embeddings_index_type = EmbeddingsIndexType::BFP16;
-    } else {
-        embeddings_index_type = EmbeddingsIndexType::UINT32;
-    }
+    EmbeddingsIndexType embeddings_index_type (a.dtype() == DataType::BFLOAT16) ? EmbeddingsIndexType::BFP16 : EmbeddingsIndexType::UINT32);
 
     std::map<std::string, std::string> embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"},
