@@ -56,9 +56,9 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // build a line of devices
     std::vector<std::shared_ptr<MeshDevice>> devices = {
         test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
-        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
-        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
-        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 2)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
