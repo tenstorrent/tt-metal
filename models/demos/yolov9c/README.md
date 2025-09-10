@@ -19,7 +19,7 @@ Yolov9 marks a significant advancement in real-time object detection, introducin
 ### Model
 Use the following command to run the Yolov9c model:
   ```
-  pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c
+  pytest --disable-warnings models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py
   ```
 
 ### Demo with Trace+2CQs
@@ -78,23 +78,23 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640` - `Segmentation`, end-2-end perf is `45` FPS.
+- For `640x640` - `Segmentation`, end-2-end perf is `51` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```
 
-- For `640x640` - `Detection`, end-2-end perf is `65` FPS.
+- For `640x640` - `Detection`, end-2-end perf is `82` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640` - `Segmentation`, end-2-end perf is `87` FPS.
+- For `640x640` - `Segmentation`, end-2-end perf is `92` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant_dp
   ```
 
-- For `640x640` - `Detection`, end-2-end perf is `120` FPS.
+- For `640x640` - `Detection`, end-2-end perf is `131` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
