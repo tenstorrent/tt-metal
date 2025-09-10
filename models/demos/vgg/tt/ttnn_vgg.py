@@ -88,7 +88,7 @@ def ttnn_vgg16(
                 h_sharding = False
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=False,
                 reallocate_halo_output=False,
                 shard_layout=(
@@ -241,7 +241,7 @@ def ttnn_vgg11(
                 h_sharding = False
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=False,
                 reallocate_halo_output=False,
                 shard_layout=(

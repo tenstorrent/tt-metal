@@ -23,14 +23,14 @@ class TtBottleRep:
             conv=model_params.conv1.block.conv,
             conv_pth=parameters.conv1.block.conv,
             shard_layout=shard_layout,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.conv2.block.conv,
             conv_pth=parameters.conv2.block.conv,
             shard_layout=shard_layout,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             return_height_width=True,
             deallocate_activation=True,
         )
