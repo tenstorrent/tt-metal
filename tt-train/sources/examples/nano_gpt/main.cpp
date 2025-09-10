@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdint>
 #include <numeric>
+#include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
@@ -30,8 +31,6 @@
 #include "optimizers/adamw.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
-#include "ttnn/operations/reduction/sampling/sampling.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -99,6 +98,11 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
+constexpr uint32_t SamplingBatchSize = 32U;
+
+void sample() {
+}
+
 template <typename Tokenizer>
 void generate(
     Model &model,
@@ -133,6 +137,7 @@ void generate(
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
+    auto padded_top_k = round_up_to_tile(static_cast<uint32_t>(top_k), (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -148,11 +153,66 @@ void generate(
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
-    std::vector<float> padded_logits_vector(max_sequence_length, 0.0);
+    std::vector<float> padded_logits_vector(vocab_size, 0.0);
 
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
     fmt::print("{}", prompt);
+
+    // Sampling setup
+
+    auto repeats = ttnn::Shape({1U, 1U, SamplingBatchSize, 1U});
+    uint32_t prompt_tokens_padded_size = 0;
+    uint32_t logits_vector_size = 0;
+    uint32_t padded_logits_vector_size = padded_logits_vector.size();
+    uint32_t next_token_id = 0;
+    float logit_pad = -1e8F;
+
+    // auto logits_tensor = ttml::core::zeros(
+    //     ttnn::Shape({1U, 1U, static_cast<uint32_t>(top_k), 1U}),
+    //     device);
+
+    auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(original_vocab_size, 0),
+        ttnn::Shape({1, 1, 1, original_vocab_size}),
+        device,
+        ttnn::Layout::ROW_MAJOR);
+
+    // auto top_k_results_tensor = ttml::core::zeros(
+    //     ttnn::Shape({1U, 1U, SamplingBatchSize, static_cast<uint32_t>(top_k)}),
+    //     device);
+    // auto top_k_indices_tensor = ttml::core::zeros(
+    //     ttnn::Shape({1U, 1U, SamplingBatchSize, static_cast<uint32_t>(top_k)}),
+    //     device, tt::tt_metal::DataType::UINT32);
+
+    // auto top_k_results_vector = std::vector<ttnn::Tensor>();
+
+    // auto top_k_idx_vector = std::vector<uint32_t>();
+
+    // auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector_size);
+    // std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
+
+    // auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+    //     input_idx_vector, ttnn::Shape({1, 1, 1, padded_logits_vector_size}), device, ttnn::Layout::ROW_MAJOR);
+    // idx_tensor = ttnn::repeat(idx_tensor, repeats);
+
+    // auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+    //     std::vector<uint32_t>(32, 1U), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+    // auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+    //     std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+    // auto temp_tensor = ttml::core::from_vector(
+    //     std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+    auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
+
+    // ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+    //     {0, 0},
+    //     {0, 0},
+    //     {0, 0},
+    //     {0, padded_top_k - top_k}};
+
+    // std::vector<float> logits_vector;
+    std::vector<uint32_t> next_token_vector;
+    // std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> top_k_tuple;
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -161,7 +221,6 @@ void generate(
         if (prompt_tokens.size() > max_sequence_length) {
             start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
         }
-
         // Fill padded array
         for (uint32_t i = 0; i < max_sequence_length; ++i) {
             prompt_tokens_padded[i] = pad_token_id;
@@ -169,7 +228,7 @@ void generate(
         for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
-        auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
+        prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
 
@@ -192,47 +251,66 @@ void generate(
         auto logits_ptr = output_vector.data() + offset;
 
         // Now we do advanced sampling from these logits
+        auto logits_vector = std::vector<float>(logits_ptr, logits_ptr + original_vocab_size);
 
-        auto logits_span = std::span<float>(logits_ptr, original_vocab_size);
-        auto logits_vector = std::vector<float>(logits_span.begin(), logits_span.end());
+        logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            logits_vector, ttnn::Shape({1, 1, 1, original_vocab_size}), device, ttnn::Layout::ROW_MAJOR);
 
-        std::copy(logits_ptr, logits_ptr + original_vocab_size, padded_logits_vector.begin());
-        float pad = -1e8;
-        std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), pad);
-        auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector.size());
-        std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
+        // logits_tensor = ttnn::pad(ttnn::DefaultQueueId,
+        //                             logits_tensor,
+        //                             padding,
+        //                             logit_pad);
 
-        auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-            padded_logits_vector, ttnn::Shape({1, 1, 1, 256}), device);
+        // logits_tensor = ttnn::repeat(logits_tensor, repeats);
 
-        auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            input_idx_vector, ttnn::Shape({1, 1, 1, 256}), device, ttnn::Layout::ROW_MAJOR);
-        auto repeats = ttnn::Shape({32, 1, 1, 1});
-        logits_tensor = ttnn::repeat(logits_tensor, repeats);
-        idx_tensor = ttnn::repeat(idx_tensor, repeats);
+        // top_k_tuple = {top_k_results_tensor, top_k_indices_tensor};
 
-        auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            std::vector<uint32_t>(32, top_k), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-        auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-            std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-        auto temp_tensor = ttml::core::from_vector(
-            std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        // top_k_results_vector=ttnn::topk(ttnn::DefaultQueueId,
+        //     logits_tensor,
+        //     top_k,
+        //     -1,
+        //     true,
+        //     false,
+        //     std::nullopt, std::nullopt, std::nullopt,
+        //     top_k_tuple);
 
-        auto next_token_tensor = ttnn::sampling(
-            logits_tensor, idx_tensor, top_k_tensor, top_p_tensor, temp_tensor
+        // top_k_results_tensor = top_k_results_vector[0];
+        // top_k_indices_tensor = top_k_results_vector[1];
 
-        );
-        auto next_token_vector = next_token_tensor.to_vector<uint32_t>();
-        uint32_t next_token_id = next_token_vector[0];
+        // if(top_k_results_tensor.logical_shape()[3] != padded_top_k)
+        // {
 
-        // uint32_t next_token_id =
-        //     std::distance(logits_span.begin(), std::max_element(logits_span.begin(), logits_span.end()));
+        //     top_k_results_tensor =
+        //     ttnn::pad(ttnn::DefaultQueueId,
+        //             top_k_results_tensor,
+        //             padding,
+        //             logit_pad);
+
+        // }
+
+        // top_k_idx_vector = top_k_indices_tensor.to_vector<uint32_t>();
+        // top_k_idx_vector.resize(padded_top_k * SamplingBatchSize, vocab_size + 1U);
+
+        // top_k_indices_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        //     top_k_idx_vector, ttnn::Shape({1, 1, SamplingBatchSize, padded_top_k}), device, ttnn::Layout::ROW_MAJOR);
+
+        // next_token_tensor = ttnn::sampling(
+        //     top_k_results_tensor,
+        //     top_k_indices_tensor,
+        //     top_k_tensor,
+        //     top_p_tensor,
+        //     temp_tensor);
+
+        next_token_tensor = ttnn::argmax(ttnn::DefaultQueueId, logits_tensor, -1);
+
+        // next_token_vector = next_token_tensor.to_vector<uint32_t>();
+        next_token_id = next_token_tensor.item<uint32_t>();
 
         if (next_token_id >= original_vocab_size) {
             // Handle out-of-vocabulary token
             next_token_id = 0;
         }
-        // // Append the new token
+        // Append the new token
         prompt_tokens.push_back(next_token_id);
 
         // Decode and print
@@ -601,7 +679,7 @@ int main(int argc, char **argv) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
