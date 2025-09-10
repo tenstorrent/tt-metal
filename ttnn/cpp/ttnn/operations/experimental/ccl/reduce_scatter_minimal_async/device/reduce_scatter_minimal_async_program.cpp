@@ -40,10 +40,16 @@ namespace ttnn {
 
 namespace operations::experimental::ccl::detail {
 
-uint32_t reduce_scatter_minimal_async_core_count(
+uint32_t reduce_scatter_minimal_async_core_count_per_link(
     uint32_t num_workers_per_direction,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
+    log_trace(
+        tt::LogOp,
+        "DEBUG: num_workers_per_direction: {}, num_directions_per_link: {}, num_mux_cores_per_direction_per_link: {}",
+        num_workers_per_direction,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link);
     return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 }
 
@@ -59,6 +65,7 @@ uint32_t default_workers(
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t num_cores = subdevice_core_range_set.num_cores();
+    log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
     ttnn::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
@@ -87,8 +94,10 @@ uint32_t default_workers(
         }
     }
     for (auto worker_count : candidate_worker_counts) {
-        uint32_t core_count = reduce_scatter_minimal_async_core_count(
-            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        uint32_t core_count =
+            num_links * reduce_scatter_minimal_async_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        log_trace(tt::LogOp, "DEBUG: core_count {} for worker_count {}", core_count, worker_count);
         if (num_cores >= core_count) {
             log_trace(
                 tt::LogOp,
@@ -329,8 +338,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
-    uint32_t num_cores_per_link = operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count(
-        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+    uint32_t num_cores_per_link =
+        operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
+            num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -865,8 +875,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
-    uint32_t num_cores_per_link = operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count(
-        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+    uint32_t num_cores_per_link =
+        operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
+            num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
