@@ -1602,9 +1602,9 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     (
         (torch.Size([100])),
         (torch.Size([32, 32])),
-        # (torch.Size([3, 128, 32])),
-        # (torch.Size([1, 3, 320, 384])),
-        # (torch.Size([1, 1, 32, 320, 12])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1697,11 +1697,19 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
+<<<<<<< HEAD
         (torch.Size([100])),
         (torch.Size([32, 32])),
         (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
         (torch.Size([1, 1, 32, 320, 12])),
+=======
+        # (torch.Size([100])),
+        (torch.Size([32, 32])),
+        # (torch.Size([3, 128, 32])),
+        # (torch.Size([1, 3, 320, 384])),
+        # (torch.Size([1, 1, 32, 320, 12])),
+>>>>>>> b5e1435e85 (rebase)
     ),
 )
 @pytest.mark.parametrize(
@@ -1709,7 +1717,10 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
     [
         (torch.float32, ttnn.float32),
         (torch.bfloat16, ttnn.bfloat16),
+<<<<<<< HEAD
         (torch.bfloat16, ttnn.bfloat8_b),
+=======
+>>>>>>> b5e1435e85 (rebase)
     ],
 )
 def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
@@ -1754,4 +1765,3 @@ def test_unary_rpow_ttnn(input_shapes, exponent, device):
 
     assert_with_ulp(output_tensor, golden_tensor)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
-
