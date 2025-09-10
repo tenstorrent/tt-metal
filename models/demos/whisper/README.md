@@ -18,39 +18,6 @@ Read more about Whisper at [huggingface.co/distil-whisper/distil-large-v3](https
 pytest --disable-warnings models/demos/whisper/tests/test_whisper_modules.py::test_ttnn_whisper
 ```
 
-### End to End Model Performance for Whisper Variant - `openai-whisper-base`
-
-#### Single Device:
-
-- End-2-end perf is 35 FPS
-```sh
-pytest --disable-warnings models/demos/whisper/tests/test_performance.py::test_whisper_v3_e2e_performance[openai-whisper-base]
-```
-
-#### Multi Device (DP=2, n300):
-
-- End-2-end perf is 55 FPS
-```sh
-pytest --disable-warnings models/demos/whisper/tests/test_performance.py::test_whisper_v3_e2e_performance_dp[openai-whisper-base]
-```
-
-### End to End Model Performance for Whisper Variant - `distil-whisper/distil-large-v3`
-
-#### Single Device:
-
-- End-2-end perf is 21 FPS
-```sh
-pytest --disable-warnings models/demos/whisper/tests/test_performance.py::test_whisper_v3_e2e_performance[distil-whisper/distil-large-v3]
-```
-Note: Reported e2e perf for single device is from N150 execution (that uses tensix dispatch). If you are running for single device on N300, the e2e perf will be slow as N300 uses eth dispatch.
-
-#### Multi Device (DP=2, n300):
-
-- End-2-end perf is 10 FPS
-```sh
-pytest --disable-warnings models/demos/whisper/tests/test_performance.py::test_whisper_v3_e2e_performance_dp[distil-whisper/distil-large-v3]
-```
-
 ### Conditional Generation Demo
 
 - To run the conditional generation demo with custom inputs:
