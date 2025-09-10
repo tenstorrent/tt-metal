@@ -60,7 +60,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      created: createdDateFilter
+      // created: createdDateFilter
     }
     if (eventType) {
       params.event = eventType;
