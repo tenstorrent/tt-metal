@@ -78,15 +78,21 @@ run_t3000_qwen25_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_qwen25_tests"
-  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
-  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
-  qwen25_coder_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-Coder-32B
+  export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
-  HF_MODEL=$qwen25_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
+  echo "LOG_METAL: Running run_t3000_qwen25_tests"
+  qwen25_7b=Qwen/Qwen2.5-7B-Instruct
+  tt_cache_7b=$HF_HOME/tt_cache/Qwen--Qwen2.5-7B-Instruct
+  qwen25_72b=Qwen/Qwen2.5-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-72B-Instruct
+  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  tt_cache_coder_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-Coder-32B
+
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
+  HF_MODEL=$qwen25_72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
   pip install -r models/tt_transformers/requirements.txt
-  HF_MODEL=$qwen25_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
+  HF_MODEL=$qwen25_coder_32b TT_CACHE_PATH=$tt_cache_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
