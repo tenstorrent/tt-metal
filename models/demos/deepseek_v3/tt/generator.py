@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -133,62 +132,66 @@ class DeepseekGenerator:
         hf_config.max_seq_len = 4096
 
     def _prepare_run_configs(self, cache_dir: str | Path | None) -> None:
-        cache_root = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
-        weights_out = cache_root / "weights"
-        weights_out.mkdir(parents=True, exist_ok=True)
-
-        if self.random_weights:
-            if self.single_layer and self.single_layer.lower() == "moe":
-                raise NotImplementedError(
-                    "Random weights with 'moe' single layer is not supported by Model1D demo yet. Use 'mlp' or disable random mode."
-                )
-            logger.info("Building random weights from HF reference model (ForCausalLM)...")
-            ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
-            # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
-            ref_model = ref_model.to(dtype=torch.bfloat16)
-            torch_state = ref_model.state_dict()
-            # Quantize MLP weights as expected by TT converters
-            torch_state = add_inv_scale_to_state_dict(
-                torch_state,
-                block_shape=self.hf_config.quantization_config["weight_block_size"],
-            )
-            stripped = _strip_model_prefix(torch_state)
-            model1d_state = {
-                k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
-                or k.startswith("lm_head.")
-            }
-        else:
-            logger.info("Loading HF weights (this may take a while)...")
-            hf_weights = load_model_weights(self.model_path)
-            logger.info("HF weights loaded")
-
-            # Split weight dicts for Model1D and LMHead
-            stripped = _strip_model_prefix(hf_weights)
-            if "lm_head.weight" not in stripped:
-                raise RuntimeError(
-                    "No HF safetensors found in model path or missing 'lm_head.weight'. "
-                    "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
-                )
-            model1d_state = {
-                k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
-                or k.startswith("lm_head.")
-            }
-
-        deepseek_cache_path = Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
+        # Resolve cache location and weight config path up-front.
         weights_type = "random" if self.random_weights else "real"
-        cache_dir = deepseek_cache_path / f"model_{self.hf_config.num_hidden_layers}_layers" / weights_type
+        cache_dir = Path(cache_dir) / f"model_{self.hf_config.num_hidden_layers}_layers" / weights_type
         tensor_cache_path = cache_dir / "ttnn_tensors_cache"
         weight_config_path = cache_dir / "weight_config.json"
-        # save this weight config to json file if it doesn't exist
-        if not weight_config_path.exists():
+
+        # Fast path: if cached weight_config exists, use it and SKIP HF load/convert entirely.
+        if weight_config_path.exists():
+            logger.info(f"Weight config found at {weight_config_path}, loading existing one (skipping HF load).")
+            with open(weight_config_path, "r") as f:
+                self.model1d_weight_config = json.load(f)
+            logger.info(f"Loaded weight config from {weight_config_path}")
+        else:
+            # Cache miss: build weights and create cache + config
+            logger.info(f"Building weights and creating cache + config at {cache_dir}")
+            if self.random_weights:
+                if self.single_layer and self.single_layer.lower() == "moe":
+                    raise NotImplementedError(
+                        "Random weights with 'moe' single layer is not supported by Model1D demo yet. Use 'mlp' or disable random mode."
+                    )
+                logger.info("Building random weights from HF reference model (ForCausalLM)...")
+                ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
+                # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
+                ref_model = ref_model.to(dtype=torch.bfloat16)
+                torch_state = ref_model.state_dict()
+                # Quantize MLP weights as expected by TT converters
+                torch_state = add_inv_scale_to_state_dict(
+                    torch_state,
+                    block_shape=self.hf_config.quantization_config["weight_block_size"],
+                )
+                stripped = _strip_model_prefix(torch_state)
+                model1d_state = {
+                    k: v
+                    for k, v in stripped.items()
+                    if k.startswith("embed_tokens.")
+                    or k.startswith("layers.")
+                    or k.startswith("norm.")
+                    or k.startswith("lm_head.")
+                }
+            else:
+                logger.info("Loading HF weights (this may take a while)...")
+                hf_weights = load_model_weights(self.model_path)
+                logger.info("HF weights loaded")
+
+                # Split weight dicts for Model1D and LMHead
+                stripped = _strip_model_prefix(hf_weights)
+                if "lm_head.weight" not in stripped:
+                    raise RuntimeError(
+                        "No HF safetensors found in model path or missing 'lm_head.weight'. "
+                        "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
+                    )
+                model1d_state = {
+                    k: v
+                    for k, v in stripped.items()
+                    if k.startswith("embed_tokens.")
+                    or k.startswith("layers.")
+                    or k.startswith("norm.")
+                    or k.startswith("lm_head.")
+                }
+
             logger.info(f"Weight config not found at {weight_config_path}, creating new one.")
             self.model1d_weight_config = Model1D.convert_weights(
                 self.hf_config, model1d_state, tensor_cache_path, self.mesh_device
@@ -196,23 +199,19 @@ class DeepseekGenerator:
             with open(weight_config_path, "w") as f:
                 json.dump(self.model1d_weight_config, f)
             logger.info(f"Saved weight config to {weight_config_path}")
-        else:
-            logger.info(f"Weight config found at {weight_config_path}, loading existing one.")
-            with open(weight_config_path, "r") as f:
-                self.model1d_weight_config = json.load(f)
-            logger.info(f"Loaded weight config from {weight_config_path}")
 
+        logger.info(f"Creating decode model config")
         model_decode_cfg = Model1D.decode_model_config(self.hf_config, self.mesh_device)
-        logger.info("Model decode config created")
+        logger.info(f"Creating state")
         model_state = Model1D.create_state(
             self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
         )
-        logger.info("States created")
+        logger.info(f"Creating shared state")
         model_shared_state = Model1D.create_shared_state(self.hf_config, self.mesh_device)
-        logger.info("Shared states created")
 
+        logger.info(f"Creating run config")
         self.model1d_run_config = create_run_config(
-            model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state
+            model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state, show_progress=True
         )
         logger.info("Run config is ready")
 

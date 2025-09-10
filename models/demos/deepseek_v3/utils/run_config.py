@@ -9,6 +9,7 @@ from types import NoneType
 from typing import Any, overload
 
 from loguru import logger
+from tqdm import tqdm
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
@@ -50,19 +51,22 @@ RunDecodeConfig = (
 
 @overload
 def create_run_config(
-    model_config: ModelPrefillConfig, weight_config: WeightConfig, *model_states: ModelState
+    model_config: ModelPrefillConfig,
+    weight_config: WeightConfig,
+    *model_states: ModelState,
+    show_progress: bool = False,
 ) -> RunPrefillConfig:
     ...
 
 
 @overload
 def create_run_config(  # type: ignore
-    model_config: ModelDecodeConfig, weight_config: WeightConfig, *model_states: ModelState
+    model_config: ModelDecodeConfig, weight_config: WeightConfig, *model_states: ModelState, show_progress: bool = False
 ) -> RunDecodeConfig:
     ...
 
 
-def create_run_config(model_config, weight_config, *model_states):
+def create_run_config(model_config, weight_config, *model_states, show_progress: bool = False):
     # The states are merged to create a single unified model state.
     unified_model_state = functools.reduce(
         lambda cfg1, cfg2: _merge_config_containers(
@@ -82,7 +86,22 @@ def create_run_config(model_config, weight_config, *model_states):
         merge_config_specific_items=_merge_model_config_state_items,
         search_for_mesh_device=True,
         mb_mesh_device=None,
+        progress_update=None,
     )
+
+    # Optionally show a progress bar for tensor loads from weight_config
+    progress_update = None
+    if show_progress:
+        total_loads = _count_tensor_loads(model_state_config, weight_config)
+        pbar = (
+            tqdm(total=total_loads, desc="Loading run config tensors", dynamic_ncols=True) if total_loads > 0 else None
+        )
+
+        def _update(n: int = 1):
+            if pbar is not None:
+                pbar.update(n)
+
+        progress_update = _update
 
     run_config = _merge_config_containers(
         model_state_config,
@@ -90,14 +109,24 @@ def create_run_config(model_config, weight_config, *model_states):
         merge_config_specific_items=_merge_run_config,
         search_for_mesh_device=False,
         mb_mesh_device=None,
+        progress_update=progress_update,
     )
+
+    # Close the progress bar if used
+    try:
+        if show_progress and "pbar" in locals() and pbar is not None:
+            pbar.close()
+    except Exception:
+        pass
 
     logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 
 
-def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_mesh_device: ttnn.Device | None) -> Any:
+def _merge_model_config_state_items(
+    model_config_item: Any, state_item: Any, mb_mesh_device: ttnn.Device | None, _progress_update=None
+) -> Any:
     if state_item is None and isinstance(model_config_item, FromWeightConfig):
         return FromWeightConfig(
             mesh_device=_merge_model_config_state_items(model_config_item.mesh_device, state_item, mb_mesh_device)
@@ -121,10 +150,18 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
     raise ValueError(f"Unsupported model_weight and state config items to merge: {model_config_item} and {state_item}")
 
 
-def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
+def _merge_run_config(
+    model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None, progress_update=None
+) -> Any:
     if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
         # Always use multihost format since that's what the test is using
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+        result = ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+        if progress_update is not None:
+            try:
+                progress_update(1)
+            except Exception:
+                pass
+        return result
 
     if weight_config_item is None:
         assert not isinstance(
@@ -148,9 +185,10 @@ def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None) -> Any:
 def _merge_config_containers(
     cfg_a: Any,
     cfg_b: Any,
-    merge_config_specific_items: Callable[[Any, Any, ttnn.MeshDevice | None], Any],
+    merge_config_specific_items: Callable[[Any, Any, ttnn.MeshDevice | None, Any], Any],
     search_for_mesh_device: bool,
     mb_mesh_device: ttnn.MeshDevice | None = None,
+    progress_update=None,
 ) -> Any:
     """Helper function to merge two configs, where the first one may partially consist of OpConfigs."""
     if cfg_a is None and cfg_b is None:
@@ -158,7 +196,7 @@ def _merge_config_containers(
 
     if is_op_config(cfg_a):
         op_config_dict = {f.name: getattr(cfg_a, f.name) for f in fields(cfg_a)}  # type: ignore
-        return cfg_a.__class__(**_merge_config_containers(op_config_dict, cfg_b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device))  # type: ignore
+        return cfg_a.__class__(**_merge_config_containers(op_config_dict, cfg_b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device, progress_update))  # type: ignore
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
@@ -169,7 +207,9 @@ def _merge_config_containers(
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
             return container(
-                _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
+                _merge_config_containers(
+                    a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device, progress_update
+                )
                 for a, b in zip(cfg_a, cfg_b, strict=True)
             )
 
@@ -189,11 +229,56 @@ def _merge_config_containers(
                 merge_config_specific_items,
                 search_for_mesh_device,
                 mb_mesh_device,
+                progress_update,
             )
             for k in set(cfg_a.keys()) | set(cfg_b.keys())
         }
 
-    return merge_config_specific_items(cfg_a, cfg_b, mb_mesh_device)
+    return merge_config_specific_items(cfg_a, cfg_b, mb_mesh_device, progress_update)
+
+
+def _count_tensor_loads(model_state_config_item: Any, weight_config_item: Any) -> int:
+    """Count how many tensor loads (ttnn.load_tensor) will occur when merging
+    the provided model_state_config with weight_config.
+
+    We identify leaves where model_state_config_item is FromWeightConfig and
+    weight_config_item is a string path.
+    """
+    # Base cases
+    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
+        return 1
+
+    # Recurse through OpConfig dataclasses by converting to dict of fields
+    if is_op_config(model_state_config_item):
+        model_state_config_item = {
+            f.name: getattr(model_state_config_item, f.name) for f in fields(model_state_config_item)
+        }
+    if is_op_config(weight_config_item):
+        weight_config_item = {f.name: getattr(weight_config_item, f.name) for f in fields(weight_config_item)}
+
+    # Recurse through matching containers
+    if isinstance(model_state_config_item, dict) and isinstance(weight_config_item, dict):
+        count = 0
+        keys = set(model_state_config_item.keys()) | set(weight_config_item.keys())
+        for k in keys:
+            count += _count_tensor_loads(model_state_config_item.get(k), weight_config_item.get(k))
+        return count
+
+    if isinstance(model_state_config_item, (list, tuple, type(None))) and isinstance(
+        weight_config_item, (list, tuple, type(None))
+    ):
+        if model_state_config_item is None or weight_config_item is None:
+            return 0
+        if len(model_state_config_item) != len(weight_config_item):
+            # Mismatched containers; conservatively traverse the zipped prefix
+            length = min(len(model_state_config_item), len(weight_config_item))
+            return sum(
+                _count_tensor_loads(a, b) for a, b in zip(model_state_config_item[:length], weight_config_item[:length])
+            )
+        return sum(_count_tensor_loads(a, b) for a, b in zip(model_state_config_item, weight_config_item))
+
+    # Otherwise, no tensor load at this node
+    return 0
 
 
 def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -> str:
