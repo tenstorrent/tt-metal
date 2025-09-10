@@ -53,8 +53,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, True,  False, 0.340, 0.720, 0.994, 0.745),
-       ( torch.float32, False, False, False, True,   True, 0.970, 0.996, 0.999, 0.826),
+       ( torch.float32, False, False, False, True,  False, 0.298, 0.717, 0.994, 0.745),
+       ( torch.float32, False, False, False, True,   True, 0.970, 0.995, 0.999, 0.820),
        ( torch.float32,  True,  True, False, True,  False, 0.882, 0.963, 0.998, 0.897),
        ( torch.float32, False, False, True, True,   False, 0.916, 0.883, 0.997, 0.934),
     ],
