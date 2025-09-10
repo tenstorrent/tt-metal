@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.linear &mdash; TT-NN  documentation</title>
+  <title>ttnn.addmm &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.linear.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.addmm.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.matmul_batched_weights" href="ttnn.matmul_batched_weights.html" />
-    <link rel="prev" title="ttnn.matmul" href="ttnn.matmul.html" /> 
+    <link rel="next" title="ttnn.sparse_matmul" href="ttnn.sparse_matmul.html" />
+    <link rel="prev" title="ttnn.matmul_batched_weights" href="ttnn.matmul_batched_weights.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -65,9 +65,9 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.matmul.html">ttnn.matmul</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.linear</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.linear.html">ttnn.linear</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.matmul_batched_weights.html">ttnn.matmul_batched_weights</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.addmm.html">ttnn.addmm</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.addmm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sparse_matmul.html">ttnn.sparse_matmul</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseProgramConfig.html">ttnn.MatmulMultiCoreReuseProgramConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
@@ -126,9 +126,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.linear</li>
+      <li class="breadcrumb-item active">ttnn.addmm</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.linear.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.addmm.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -136,61 +136,64 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-linear">
-<h1>ttnn.linear<a class="headerlink" href="#ttnn-linear" title="Permalink to this heading"></a>
+  <section id="ttnn-addmm">
+<h1>ttnn.addmm<a class="headerlink" href="#ttnn-addmm" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.linear">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">linear</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.linear',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.matmul.linear_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.linear" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.addmm">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">addmm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.addmm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.matmul.addmm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.addmm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns the linear transformation of the inputs.</p>
-<p>The limitations and behaviours are the same as for matmul.</p>
+<p>Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.</p>
+<ul>
+<li><p>If mat1_tensor has shape (n, m) and mat2_tensor has shape (m, p), input_tensor needs to be of shape (n, p) and
+result will also be (n, p).</p></li>
+<li><p>If optional_output_tensor is provided, it needs to be of shape (n, p) and result will be stored there; all
+previous content will be overwritten, reference to this object will also be returned.</p></li>
+<li>
+<p>Arguments alpha and beta are scaling factors, result calculation look like this:</p>
+<blockquote>
+<div>
+<p>out = beta * input_tensor + alpha * (mat1_tensor @ mat2_tensor)</p>
+</div>
+</blockquote>
+</li>
+<li><p>If beta is 0, then content of input_tensor is ignored.</p></li>
+<li><p>Arguments beta and alpha should be real numbers;</p></li>
+</ul>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the second tensor to be multiplied. Needs to be on the device.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – tensor to be added to result of matrix multiplication of mat1_tensor and mat2_tensor</p></li>
+<li><p><strong>mat1_tensor</strong> (<em>ttnn.Tensor</em>) – the first tensor to be matrix multiplied</p></li>
+<li><p><strong>mat2_tensor</strong> (<em>ttnn.Tensor</em>) – the second tensor to be matrix multiplied</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>activation</strong> (<em>str</em><em>, </em><em>optional</em>) – the activation function to be applied. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>alpha</strong> (<em>float</em>) – multiplier for mat1_tensor @ mat2_tensor</p></li>
+<li><p><strong>beta</strong> (<em>float</em>) – multiplier for input_tensor</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using ttnn.DRAM_MEMORY_CONFIG.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em>) – the data type of the output tensor. Supported types: <cite>ttnn.bfloat16</cite>, <cite>ttnn.float32</cite>, <cite>ttnn.bfloat8_b</cite>  Defaults to <cite>None</cite> which means it will default to the highest precision of <cite>input_tensor</cite>, <cite>mat1_tensor</cite> or <cite>mat2_tensor</cite>.</p></li>
+<li><p><strong>program_config</strong> (<em>ttnn.MatmulProgramConfig</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Specifies the output tile configuration. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User-provided on-device output tensor where the result of matmul is to be written. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>global_cb</strong> (<em>ttnn.GlobalCircularBuffer</em>) – TBD</p></li>
+<li><p><strong>sub_device_id</strong> (<em>ttnn.SubDeviceId</em>) – TBD</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><em>ttnn.Tensor</em> – output tensor of shape (n, p)</p>
 </dd>
 </dl>
-<div class="admonition-example admonition">
-<p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># batched matrix x broadcasted matrix</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">activations</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">weight</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">32</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">bias</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">128</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">activations</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="n">bias</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
-<span class="go">[10, 64, 128]</span>
-</pre></div>
-</div>
-</div>
 </dd>
 </dl>
 
@@ -201,8 +204,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.matmul.html" class="btn btn-neutral float-left" title="ttnn.matmul" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.matmul_batched_weights.html" class="btn btn-neutral float-right" title="ttnn.matmul_batched_weights" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.matmul_batched_weights.html" class="btn btn-neutral float-left" title="ttnn.matmul_batched_weights" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.sparse_matmul.html" class="btn btn-neutral float-right" title="ttnn.sparse_matmul" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

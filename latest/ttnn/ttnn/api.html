@@ -104,6 +104,13 @@
 <li class="toctree-l3"><a class="reference internal" href="#matrix-multiplication">Matrix Multiplication</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.matmul.html">ttnn.matmul</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.linear.html">ttnn.linear</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.matmul_batched_weights.html">ttnn.matmul_batched_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.addmm.html">ttnn.addmm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.sparse_matmul.html">ttnn.sparse_matmul</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseProgramConfig.html">ttnn.MatmulMultiCoreReuseProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#pointwise-unary">Pointwise Unary</a><ul>
@@ -713,6 +720,38 @@
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.linear.html#ttnn.linear" title="ttnn.linear"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.linear</span></code></a></p></td>
 <td><p>Returns the linear transformation of the inputs.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.matmul_batched_weights.html#ttnn.matmul_batched_weights" title="ttnn.matmul_batched_weights"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.matmul_batched_weights</span></code></a></p></td>
+<td><p>performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.addmm.html#ttnn.addmm" title="ttnn.addmm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.addmm</span></code></a></p></td>
+<td><p>Returns a matrix products of tensors mat1_tensor and mat2_tensor.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.sparse_matmul.html#ttnn.sparse_matmul" title="ttnn.sparse_matmul"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sparse_matmul</span></code></a></p></td>
+<td><p>Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.</p></td>
+</tr>
+</tbody>
+</table>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseProgramConfig.html#ttnn.MatmulMultiCoreReuseProgramConfig" title="ttnn.MatmulMultiCoreReuseProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseProgramConfig</span></code></a></p></td>
+<td><p>Configuration class for multi-core reusable matmul operations.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCastProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</span></code></a></p></td>
+<td><p>The "2D" matmul program config is used for block sharded tensors, and general interleaved tensors.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</span></code></a></p></td>
+<td><p>Configuration class for 1D multicast matmul operations with advanced features.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</span></code></a></p></td>
+<td><p>This program config is a specialized config for very narrow tensors stored in DRAM.</p></td>
 </tr>
 </tbody>
 </table>
