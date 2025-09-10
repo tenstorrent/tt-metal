@@ -56,13 +56,13 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
 
@@ -106,6 +106,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool is_internal_state_initialized = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -208,9 +209,6 @@ public:
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
-
     // Initialization APIs
     bool initialize(
         uint8_t num_hw_cqs,
@@ -238,7 +236,7 @@ public:
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;

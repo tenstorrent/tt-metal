@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 from diffusers import StableDiffusionXLPipeline
 from loguru import logger
-from conftest import is_galaxy
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -31,6 +30,7 @@ from models.utility_functions import profiler
 class TtSDXLPipelineConfig:
     num_inference_steps: int
     guidance_scale: float
+    is_galaxy: bool
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
@@ -65,7 +65,7 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        if is_galaxy():
+        if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
@@ -162,7 +162,7 @@ class TtSDXLPipeline(LightweightModule):
 
             self.image_processing_compiled = True
 
-    def encode_prompts(self, prompts):
+    def encode_prompts(self, prompts, negative_prompts):
         # Encode prompts using the text encoders.
 
         if self.pipeline_config.encoders_on_device:
@@ -174,6 +174,11 @@ class TtSDXLPipeline(LightweightModule):
             all_embeds = []
             for i in range(0, len(prompts), self.batch_size):
                 batch_prompts = prompts[i : i + self.batch_size]
+                current_negative_prompts = (
+                    negative_prompts[i : i + self.batch_size]
+                    if isinstance(negative_prompts, list)
+                    else negative_prompts
+                )
                 batch_embeds = batch_encode_prompt_on_device(
                     self.torch_pipeline,
                     self.tt_text_encoder,
@@ -184,7 +189,7 @@ class TtSDXLPipeline(LightweightModule):
                     device=self.cpu_device,
                     num_images_per_prompt=1,
                     do_classifier_free_guidance=True,
-                    negative_prompt=None,
+                    negative_prompt=current_negative_prompts,
                     negative_prompt_2=None,
                     prompt_embeds=None,
                     negative_prompt_embeds=None,
@@ -225,7 +230,7 @@ class TtSDXLPipeline(LightweightModule):
                 device=self.cpu_device,
                 num_images_per_prompt=1,
                 do_classifier_free_guidance=True,
-                negative_prompt=None,
+                negative_prompt=negative_prompts,
                 negative_prompt_2=None,
                 prompt_embeds=None,
                 negative_prompt_embeds=None,

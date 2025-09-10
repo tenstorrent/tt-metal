@@ -32,6 +32,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -124,6 +125,8 @@ bool reader_cb_writer(
     std::map<std::string, std::string> writer_defines = {
         {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not output_is_dram))}};
 
+    std::vector<uint32_t> reader_compile_time_args = {cb_id, uint32_t(input_buffer->page_size())};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     auto reader_kernel = CreateKernel(
         program_,
         reader_kernel_name,
@@ -131,8 +134,10 @@ bool reader_cb_writer(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram},
+            .compile_args = reader_compile_time_args,
             .defines = reader_defines});
+    std::vector<uint32_t> writer_compile_time_args = {cb_id, uint32_t(output_buffer->page_size())};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     auto writer_kernel = CreateKernel(
         program_,
         writer_kernel_name,
@@ -140,7 +145,7 @@ bool reader_cb_writer(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::NOC_1,
-            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram},
+            .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
     if (banked_reader) {
@@ -224,9 +229,8 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
             .set_page_size(output_cb_index, cfg.page_size_bytes);
     CreateCircularBuffer(program_, cfg.logical_core, l1_output_cb_config);
 
-    bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
-    bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
-
+    std::vector<uint32_t> reader_compile_time_args_dc = {input0_cb_index, uint32_t(input_buffer->page_size())};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args_dc);
     auto reader_kernel = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_reader.cpp",
@@ -234,8 +238,10 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {input0_cb_index, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
+            .compile_args = reader_compile_time_args_dc});
 
+    std::vector<uint32_t> writer_compile_time_args_dc = {output_cb_index, uint32_t(output_buffer->page_size())};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args_dc);
     auto writer_kernel = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_writer.cpp",
@@ -243,7 +249,7 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {output_cb_index, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
+            .compile_args = writer_compile_time_args_dc});
 
     vector<uint32_t> compute_kernel_args = {
         uint(cfg.num_tiles)  // per_core_tile_cnt

@@ -91,6 +91,22 @@ TensorAccessorArgs::TensorAccessorArgs(const Buffer* buffer, tensor_accessor::Ar
     buffer_(buffer), args_config_(args_config) {
     update_args_config();
 }
+TensorAccessorArgs::TensorAccessorArgs(const std::shared_ptr<Buffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer& buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer.get_reference_buffer()), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer* buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer ? buffer->get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
 
 void TensorAccessorArgs::update_args_config() {
     if (!buffer_) {

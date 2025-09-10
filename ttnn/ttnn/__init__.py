@@ -109,6 +109,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_mapper,
     concat_mesh_to_tensor_composer,
     create_mesh_composer,
+    compute_distribution_to_mesh_mapping,
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
@@ -273,8 +274,6 @@ from ttnn.core import (
     LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
-    dump_memory_config,
-    load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
@@ -387,6 +386,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

@@ -793,7 +793,7 @@ static void wait_for_worker_program_completion(
     }
 }
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
@@ -848,13 +848,15 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         tt::tt_metal::BufferType::L1  // buffer type
     );
 
-    auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
+    auto output_tensor = ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         input_mesh_tensor,
         dim,
-        {multi_device_global_semaphore},
+        multi_device_global_semaphore,
+        /* persistent_output_buffer */ std::nullopt,
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
+        /* cluster_axis */ std::nullopt,
         SubDeviceId(0));
 
     // wait for op completion
@@ -916,13 +918,15 @@ void run_ring_all_gather_with_persistent_fabric(
         tt::tt_metal::BufferType::L1  // buffer type
     );
 
-    auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
+    auto output_tensor = ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         input_mesh_tensor,
         dim,
-        {multi_device_global_semaphore},
+        multi_device_global_semaphore,
+        /* persistent_output_buffer */ std::nullopt,
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         topology,
+        /* cluster_axis */ std::nullopt,
         SubDeviceId(0));
 
     // wait for op completion

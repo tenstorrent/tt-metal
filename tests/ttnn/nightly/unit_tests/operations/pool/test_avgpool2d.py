@@ -273,7 +273,7 @@ def run_avg_pool2d(
     # and accumulation order differences in pooling operations
     # These factors compound, especially with small divisor overrides and large kernels,
     # requiring relaxed rtol thresholds for robust comparisons.
-    rtol = 0.02
+    rtol = 0.01
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)

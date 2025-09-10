@@ -4,11 +4,12 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/physical_desc.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 
 namespace tt::tt_metal {
 
@@ -32,51 +33,56 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
-// TODO: UBB specific code here is duplicated. This needs to be exposed as a UMD API.
-const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-};
+TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
+    static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+    };
 
-std::pair<TrayID, NID> get_ubb_id(chip_id_t chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_nid = bus_id & 0x0F;
-        return {TrayID{tray_bus_id_it - tray_bus_ids.begin() + 1}, NID{ubb_nid}};
+    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+        return TrayID{0};
     }
-    return {};
+    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
+    auto bus_id = tt::tt_metal::MetalContext::instance().get_cluster().get_bus_id(chip_id);
+    auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
+    TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
+    auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
+    return TrayID{tray_id};
 }
 
-std::pair<TrayID, NID> get_asic_position(
-    chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
+std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
-        return get_ubb_id(chip_id);
-    } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
-        // Derive NID based on the tunnel depth for N300 systems
-        auto mmio_device = cluster.get_associated_mmio_device(chip_id);
-        auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
-        NID n_id;
-        for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
-            const auto& devices_on_tunnel = tunnels[tunnel];
-            auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
-            if (device_it != devices_on_tunnel.end()) {
-                n_id = NID{device_it - devices_on_tunnel.begin() + 1};
-            }
-        }
-        // Derive Tray ID based on the Physical PCIe slot for N300 systems
-        uint32_t tray_id =
-            1 + std::distance(
-                    sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
-        return {TrayID{tray_id}, n_id};
+        constexpr std::string_view ubb_mobo_name = "S7T-MB";
+
+        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
-        TT_THROW("Unrecognized board type. Cannot determine asic position.");
+        auto tray_id = get_tray_id_for_chip(chip_id, get_mobo_name());
+        ASICLocation asic_location;
+        if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+            // Derive ASIC Location based on the tunnel depth for Wormhole systems
+            // TODO: Remove this once UMD populates the ASIC Location for WH systems.
+            auto mmio_device = cluster.get_associated_mmio_device(chip_id);
+            auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
+            for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
+                const auto& devices_on_tunnel = tunnels[tunnel];
+                auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
+                if (device_it != devices_on_tunnel.end()) {
+                    asic_location = ASICLocation{device_it - devices_on_tunnel.begin()};
+                    break;
+                }
+            }
+        } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+            // Query ASIC Location from the Cluster Descriptor for BH.
+            asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+        } else {
+            TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
+        }
+        return {tray_id, asic_location};
     }
-    return {};
 }
 
 struct EthEndpoint {
@@ -162,7 +168,18 @@ void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
     }
 }
 
+void PhysicalSystemDescriptor::clear() {
+    // Erase all contents in all data structures
+    system_graph_.asic_connectivity_graph.clear();
+    system_graph_.host_connectivity_graph.clear();
+    asic_descriptors_.clear();
+    host_to_mobo_name_.clear();
+    host_to_rank_.clear();
+    exit_node_connection_table_.clear();
+}
+
 void PhysicalSystemDescriptor::run_local_discovery() {
+    this->clear();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
@@ -176,20 +193,15 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
-    std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
     auto& exit_nodes = exit_node_connection_table_[hostname];
-
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
-    }
 
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, n_id] = get_asic_position(src, sorted_pcie_slots);
+        auto [tray_id, asic_location] = get_asic_position(src);
         asic_descriptors_[src_unique_id] =
-            ASICDescriptor{TrayID{tray_id}, n_id, cluster_desc->get_board_type(src), src_unique_id, hostname};
+            ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
         std::unordered_map<chip_id_t, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
@@ -240,6 +252,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     if (my_rank == controller_rank) {
         this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
+        this->validate_graphs();
     }
     this->exchange_metadata(false);
     distributed_context.barrier();
@@ -308,7 +321,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     }
 
     if (sender_ranks.find(my_rank) != sender_ranks.end()) {
-        auto serialized_desc = serialize_physical_descriptor_to_bytes(*this);
+        auto serialized_desc = serialize_physical_system_descriptor_to_bytes(*this);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
@@ -336,7 +349,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = deserialize_physical_descriptor_from_bytes(serialized_peer_desc);
+            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
             this->merge(std::move(peer_desc));
         }
     }
@@ -397,13 +410,13 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
             tray_group["board_type"] = enchantum::to_string(group.second.front().board_type);
             std::vector<ASICDescriptor> sorted_asics = group.second;
             std::sort(sorted_asics.begin(), sorted_asics.end(), [](const ASICDescriptor& a, const ASICDescriptor& b) {
-                return a.n_id < b.n_id;
+                return a.asic_location < b.asic_location;
             });
             // Create asics array
             YAML::Node asics_array;
             for (const auto& asic : sorted_asics) {
                 YAML::Node asic_node;
-                asic_node["nid"] = *(asic.n_id);
+                asic_node["asic_location"] = *(asic.asic_location);
                 asic_node["asic_id"] = *(asic.unique_id);
                 asics_array.push_back(asic_node);
             }
@@ -436,9 +449,9 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
                     src_conn_node["host_name"] = src_asic_desc.host_name;
                     dst_conn_node["host_name"] = dst_asic_desc.host_name;
                     src_conn_node["tray_id"] = *(src_asic_desc.tray_id);
-                    src_conn_node["nid"] = *(src_asic_desc.n_id);
+                    src_conn_node["asic_location"] = *(src_asic_desc.asic_location);
                     dst_conn_node["tray_id"] = *(dst_asic_desc.tray_id);
-                    dst_conn_node["nid"] = *(dst_asic_desc.n_id);
+                    dst_conn_node["asic_location"] = *(dst_asic_desc.asic_location);
                     src_conn_node["chan_id"] = +eth_conn.src_chan;
                     dst_conn_node["chan_id"] = +eth_conn.dst_chan;
 
@@ -464,6 +477,85 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
         fout << root;
     } else {
         std::cout << root << std::endl;
+    }
+}
+
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
+    emit_physical_system_descriptor_to_text_proto(*this, file_path);
+}
+
+void PhysicalSystemDescriptor::validate_graphs() {
+    // Validate that the representation of the system is internally consistent.
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        for (const auto& [src_asic, edges] : asic_group) {
+            const auto& src_host = asic_descriptors_.at(src_asic).host_name;
+            const auto& src_host_edges = system_graph_.host_connectivity_graph.at(src_host);
+
+            for (const auto& [dst_asic, eth_conns] : edges) {
+                const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
+
+                bool all_local = std::all_of(
+                    eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return conn.is_local; });
+
+                bool all_global = std::all_of(
+                    eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return !conn.is_local; });
+
+                // All connections must be uniformly local or global.
+                TT_FATAL(
+                    all_local || all_global,
+                    "Physical Discovery Error: All ethernet connections should either be local or global. "
+                    "Please reset the system and try again.");
+
+                if (all_local) {
+                    // Local connections must remain within the same host.
+                    TT_FATAL(
+                        src_host == dst_host,
+                        "Physical Discovery Error: Local Connection between {} and {} is not on the same host. "
+                        "Please reset the system and try again.",
+                        src_host,
+                        dst_host);
+                    continue;  // no need to check further
+                }
+
+                // Global connections must cross hosts.
+                TT_FATAL(
+                    src_host != dst_host,
+                    "Physical Discovery Error: Hostnames for connections marked as global should be different. "
+                    "Please reset the system and try again.");
+
+                // Validate each global ethernet connection.
+                for (const auto& eth_conn : eth_conns) {
+                    // Look for a host edge matching dst_host.
+                    auto host_edge_it =
+                        std::find_if(src_host_edges.begin(), src_host_edges.end(), [&](const auto& host_edge) {
+                            return host_edge.first == dst_host;
+                        });
+
+                    TT_FATAL(
+                        host_edge_it != src_host_edges.end(),
+                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
+                        "connectivity graph. Please reset the system and try again.",
+                        src_host,
+                        dst_host);
+
+                    const auto& exit_node_conns = host_edge_it->second;
+                    bool exit_conn_found = std::any_of(
+                        exit_node_conns.begin(), exit_node_conns.end(), [&](const ExitNodeConnection& exit_node_conn) {
+                            return exit_node_conn.src_exit_node == src_asic &&
+                                   exit_node_conn.dst_exit_node == dst_asic &&
+                                   exit_node_conn.eth_conn.src_chan == eth_conn.src_chan &&
+                                   exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
+                        });
+
+                    TT_FATAL(
+                        exit_conn_found,
+                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
+                        "host connectivity graph. Please reset the system and try again.",
+                        src_host,
+                        dst_host);
+                }
+            }
+        }
     }
 }
 
@@ -507,10 +599,10 @@ TrayID PhysicalSystemDescriptor::get_tray_id(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).tray_id;
 }
 
-NID PhysicalSystemDescriptor::get_n_id(AsicID asic_id) const {
+ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     TT_FATAL(
         asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
-    return asic_descriptors_.at(asic_id).n_id;
+    return asic_descriptors_.at(asic_id).asic_location;
 }
 
 std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
