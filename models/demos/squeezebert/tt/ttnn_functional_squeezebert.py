@@ -60,7 +60,6 @@ def ttnn_conv1d(
     packer_l1_acc=False,
     groups=4,
     math_approx=True,
-    activation="",
     reallocate_halo=False,
     reshard=False,
 ):

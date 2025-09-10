@@ -23,7 +23,7 @@ class TtSppf:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -31,7 +31,7 @@ class TtSppf:
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
 

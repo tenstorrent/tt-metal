@@ -15,42 +15,82 @@ class TtnnDetect:
         self.device = device
 
         self.cv2_0_0 = TtYOLOv5xConv2D(
-            device, parameters.cv2[0][0].conv, self.conv_pt.cv2[0][0].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[0][0].conv,
+            self.conv_pt.cv2[0][0].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_1 = TtYOLOv5xConv2D(
-            device, parameters.cv2[0][1].conv, self.conv_pt.cv2[0][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[0][1].conv,
+            self.conv_pt.cv2[0][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_2 = TtYOLOv5xConv2D(device, parameters.cv2[0][2], self.conv_pt.cv2[0][2], is_detect=True)
 
         self.cv2_1_0 = TtYOLOv5xConv2D(
-            device, parameters.cv2[1][0].conv, self.conv_pt.cv2[1][0].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[1][0].conv,
+            self.conv_pt.cv2[1][0].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_1 = TtYOLOv5xConv2D(
-            device, parameters.cv2[1][1].conv, self.conv_pt.cv2[1][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[1][1].conv,
+            self.conv_pt.cv2[1][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_2 = TtYOLOv5xConv2D(device, parameters.cv2[1][2], self.conv_pt.cv2[1][2], is_detect=True)
 
         self.cv2_2_0 = TtYOLOv5xConv2D(
-            device, parameters.cv2[2][0].conv, self.conv_pt.cv2[2][0].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[2][0].conv,
+            self.conv_pt.cv2[2][0].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_2_1 = TtYOLOv5xConv2D(
-            device, parameters.cv2[2][1].conv, self.conv_pt.cv2[2][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv2[2][1].conv,
+            self.conv_pt.cv2[2][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_2_2 = TtYOLOv5xConv2D(device, parameters.cv2[2][2], self.conv_pt.cv2[2][2], is_detect=True)
 
         self.cv3_0_0 = TtYOLOv5xConv2D(
-            device, parameters.cv3[0][0].conv, self.conv_pt.cv3[0][0].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv3[0][0].conv,
+            self.conv_pt.cv3[0][0].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_1 = TtYOLOv5xConv2D(
-            device, parameters.cv3[0][1].conv, self.conv_pt.cv3[0][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv3[0][1].conv,
+            self.conv_pt.cv3[0][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_2 = TtYOLOv5xConv2D(device, parameters.cv3[0][2], self.conv_pt.cv3[0][2], is_detect=True)
 
         self.cv3_1_0 = TtYOLOv5xConv2D(
-            device, parameters.cv3[1][0].conv, self.conv_pt.cv3[1][0].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv3[1][0].conv,
+            self.conv_pt.cv3[1][0].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_1 = TtYOLOv5xConv2D(
-            device, parameters.cv3[1][1].conv, self.conv_pt.cv3[1][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv3[1][1].conv,
+            self.conv_pt.cv3[1][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_2 = TtYOLOv5xConv2D(device, parameters.cv3[1][2], self.conv_pt.cv3[1][2], is_detect=True)
 
@@ -59,12 +99,16 @@ class TtnnDetect:
             parameters.cv3[2][0].conv,
             self.conv_pt.cv3[2][0].conv,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_1 = TtYOLOv5xConv2D(
-            device, parameters.cv3[2][1].conv, self.conv_pt.cv3[2][1].conv, is_detect=True, activation="silu"
+            device,
+            parameters.cv3[2][1].conv,
+            self.conv_pt.cv3[2][1].conv,
+            is_detect=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_2_2 = TtYOLOv5xConv2D(device, parameters.cv3[2][2], self.conv_pt.cv3[2][2], is_detect=True)
 

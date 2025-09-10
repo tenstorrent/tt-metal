@@ -21,19 +21,19 @@ class TtDetect:
             device=device,
             conv=model_params.stems[0].block.conv,
             conv_pth=parameters.stems[0].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.stem_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[1].block.conv,
             conv_pth=parameters.stems[1].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.stem_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.stems[2].block.conv,
             conv_pth=parameters.stems[2].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
@@ -41,34 +41,34 @@ class TtDetect:
             device=device,
             conv=model_params.cls_convs[0].block.conv,
             conv_pth=parameters.cls_convs[0].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cls_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[1].block.conv,
             conv_pth=parameters.cls_convs[1].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cls_convs_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_convs[2].block.conv,
             conv_pth=parameters.cls_convs[2].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
         self.reg_convs_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[0].block.conv,
             conv_pth=parameters.reg_convs[0].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.reg_convs_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.reg_convs[1].block.conv,
             conv_pth=parameters.reg_convs[1].block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.reg_convs_2 = Yolov6l_Conv2D(
@@ -76,7 +76,7 @@ class TtDetect:
             conv=model_params.reg_convs[2].block.conv,
             conv_pth=parameters.reg_convs[2].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
 

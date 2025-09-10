@@ -23,7 +23,7 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer0.block.conv,
             conv_pth=parameters.reduce_layer0.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
         )
         self.Bifusion0 = TtBiFusion(
@@ -35,7 +35,7 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.reduce_layer1.block.conv,
             conv_pth=parameters.reduce_layer1.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.Bifusion1 = TtBiFusion(device, parameters.Bifusion1, model_params.Bifusion1)
         self.Rep_p3 = TtBepC3(device, parameters.Rep_p3, model_params.Rep_p3, n=12)
@@ -44,7 +44,7 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample2.block.conv,
             conv_pth=parameters.downsample2.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12)
 
@@ -52,7 +52,7 @@ class TtCSPRepBiFPANNeck:
             device=device,
             conv=model_params.downsample1.block.conv,
             conv_pth=parameters.downsample1.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             shard_layout=ttnn.ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.Rep_n4 = TtBepC3(

@@ -781,6 +781,37 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: {}", name);
 }
 
+std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
+    switch (unary_op.op_type) {
+        case UnaryOpType::RELU: return "relu";
+        case UnaryOpType::RELU6: return "relu6";
+        case UnaryOpType::GELU: return "gelu";
+        case UnaryOpType::SILU: return "silu";
+        case UnaryOpType::SIGMOID:
+            if (unary_op.params.size() >= 2 && unary_op.params[1] == static_cast<float>(true)) {
+                return "sigmoid_approx";
+            }
+            return "sigmoid";
+        case UnaryOpType::SQRT: return "sqrt";
+        case UnaryOpType::EXP: return "exp";
+        case UnaryOpType::RECIP: return "recip";
+        case UnaryOpType::LOG: return "log";
+        case UnaryOpType::LOG1P: return "log1p";
+        case UnaryOpType::TANH: return "tanh";
+        case UnaryOpType::LOG2: return "log2";
+        case UnaryOpType::LOG10: return "log10";
+        case UnaryOpType::SIN: return "sin";
+        case UnaryOpType::COS: return "cos";
+        case UnaryOpType::ABS: return "abs";
+        case UnaryOpType::ABS_INT32: return "abs_int32";
+        case UnaryOpType::SIGN: return "sign";
+        case UnaryOpType::SQUARE: return "square";
+        case UnaryOpType::SOFTPLUS: return "softplus";
+        case UnaryOpType::ALT_COMPLEX_ROTATE90: return "alt_complex_rotate90";
+        default: TT_THROW("Unsupported unary op type: {}", static_cast<int>(unary_op.op_type));
+    }
+}
+
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
     const std::optional<std::vector<float>>& params,
