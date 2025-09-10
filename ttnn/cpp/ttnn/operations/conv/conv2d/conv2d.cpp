@@ -537,6 +537,7 @@ Result conv2d_L1(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
     auto orig_stride = stride;
+    conv_config.config_tensors_in_dram = true;
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
