@@ -400,7 +400,24 @@ static_assert(
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t CHANNEL_HISTORY_BUFFER_ADDR_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t SENDER_CHANNEL_HISTORY_BUFFER_ADDRESS = get_compile_time_arg_val(CHANNEL_HISTORY_BUFFER_ADDR_IDX);
+constexpr size_t SENDER_CHANNEL_HISTORY_BUFFER_NUM_ENTRIES =
+    get_compile_time_arg_val(CHANNEL_HISTORY_BUFFER_ADDR_IDX + 1);
+constexpr size_t RECEIVER_CHANNEL_HISTORY_SENT_BUFFER_ADDRESS =
+    get_compile_time_arg_val(CHANNEL_HISTORY_BUFFER_ADDR_IDX + 2);
+constexpr size_t RECEIVER_CHANNEL_HISTORY_ACKED_BUFFER_ADDRESS =
+    get_compile_time_arg_val(CHANNEL_HISTORY_BUFFER_ADDR_IDX + 3);
+constexpr size_t RECEIVER_CHANNEL_HISTORY_BUFFER_NUM_ENTRIES =
+    get_compile_time_arg_val(CHANNEL_HISTORY_BUFFER_ADDR_IDX + 4);
+constexpr size_t SPECIAL_MARKER_4_IDX = CHANNEL_HISTORY_BUFFER_ADDR_IDX + 5;
+constexpr size_t SPECIAL_MARKER_4 = 0x40c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_4_IDX) == SPECIAL_MARKER_4,
+    "Special marker 4 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_4_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =

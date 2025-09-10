@@ -88,6 +88,7 @@ static void configure_risc_settings(
             is_sender_channel_serviced.fill(true);
             is_receiver_channel_serviced.fill(true);
         } else {
+            TT_THROW("Invalid number of RISC cores for fabric: {}", num_riscv_cores);
             // Blackhole: Distribute sender/receiver across two RISC cores
             if (risc_id == 0) {
                 // ERISC0: Handle sender channels only
@@ -365,8 +366,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
     // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
     static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
-        {{16, 16}, {8, 16}, {8, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-        {{16, 16}, {8, 16}, {8, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+        {{1, 1}, {1, 1}, {1, 1}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+        {{1, 1}, {1, 1}, {1, 1}}   // BLACKHOLE: {sender_slots, receiver_slots}
     };
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
@@ -805,15 +806,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         options.direction);
 
     log_trace(
-        tt::LogOp,
+        tt::LogFabric,
         "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}",
         is_dateline,
         is_dateline_upstream,
         is_dateline_upstream_adj_dev);
-    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_trace(tt::LogFabric, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_trace(tt::LogFabric, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_trace(tt::LogFabric, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_trace(tt::LogFabric, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
@@ -828,7 +829,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         total_slot_count * channel_buffer_size_bytes,
         available_channel_buffering_space);
 
-    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
+    log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
     // set the local sender channel sizes
     this->sender_channels_num_buffers = num_sender_buffer_slots;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -855,13 +856,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_base_address[i] = sender_buffer_addr;
         sender_buffer_addr += this->sender_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
+        log_trace(tt::LogFabric, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
     }
     uint32_t receiver_buffer_addr = sender_buffer_addr;
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->receiver_channels_base_address[i] = receiver_buffer_addr;
         receiver_buffer_addr += this->receiver_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
+        log_trace(tt::LogFabric, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
     }
     uint32_t buffer_addr_end = receiver_buffer_addr;
     // set the base addresses for the remote channels
@@ -869,16 +870,48 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->remote_sender_channels_base_address[i] = remote_sender_buffer_addr;
         remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Remote Sender {} channel_start: {}", i, this->remote_sender_channels_base_address[i]);
+        log_trace(tt::LogFabric, "Remote Sender {} channel_start: {}", i, this->remote_sender_channels_base_address[i]);
     }
     uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->remote_receiver_channels_base_address[i] = remote_receiver_buffer_addr;
         remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Remote Receiver {} channel_start: {}", i, this->remote_receiver_channels_base_address[i]);
+        log_trace(
+            tt::LogFabric, "Remote Receiver {} channel_start: {}", i, this->remote_receiver_channels_base_address[i]);
     }
 
-    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
+    log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
+
+    this->sender_channel_history_buffer_address = buffer_addr_end;
+    this->sender_channel_history_buffer_num_entries = 2048;
+    const size_t sender_channel_history_buffer_size =
+        this->sender_channel_history_buffer_num_entries * sizeof(uint32_t);
+    buffer_addr_end += sender_channel_history_buffer_size;
+    this->receiver_channel_sent_history_buffer_address = buffer_addr_end;
+    this->receiver_channel_history_buffer_num_entries = 2048;
+    const size_t receiver_channel_history_buffer_size =
+        this->receiver_channel_history_buffer_num_entries * sizeof(uint32_t);
+    buffer_addr_end += receiver_channel_history_buffer_size;
+    this->receiver_channel_acked_history_buffer_address = buffer_addr_end;
+    buffer_addr_end += receiver_channel_history_buffer_size;
+
+    log_info(tt::LogFabric, "Sender channel history buffer address: {}", this->sender_channel_history_buffer_address);
+    log_info(
+        tt::LogFabric,
+        "Receiver channel sent history buffer address: {}",
+        this->receiver_channel_sent_history_buffer_address);
+    log_info(
+        tt::LogFabric,
+        "Receiver channel acked history buffer address: {}",
+        this->receiver_channel_acked_history_buffer_address);
+    log_info(
+        tt::LogFabric,
+        "Sender channel history buffer num entries: {}",
+        this->sender_channel_history_buffer_num_entries);
+    log_info(
+        tt::LogFabric,
+        "Receiver channel sent history buffer num entries: {}",
+        this->receiver_channel_history_buffer_num_entries);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
         // for dateline connection, skip the last sender channel check (2 for 1d, 4 for 2d)
@@ -1064,19 +1097,25 @@ void append_worker_to_fabric_edm_sender_rt_args(
 }
 
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx) {
-    log_trace(tt::LogOp, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
-    log_trace(tt::LogOp, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: num_buffers_per_channel {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_l1_sem_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_connection_handshake_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: edm_worker_location_info_addr {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: buffer_size_bytes {}", starting_arg_idx, args[starting_arg_idx++]);
-    log_trace(tt::LogOp, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
+    log_trace(tt::LogFabric, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: num_buffers_per_channel {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_l1_sem_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_connection_handshake_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: edm_worker_location_info_addr {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: buffer_size_bytes {}", starting_arg_idx, args[starting_arg_idx++]);
+    log_trace(tt::LogFabric, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
-        tt::LogOp, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric,
+        "arg[{}]: sender_worker_flow_control_semaphore_id {}",
+        starting_arg_idx,
+        args[starting_arg_idx++]);
     log_trace(
-        tt::LogOp, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric,
+        "arg[{}]: sender_worker_buffer_index_semaphore_id {}",
+        starting_arg_idx,
+        args[starting_arg_idx++]);
     return starting_arg_idx + 10;
 }
 
@@ -1443,6 +1482,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         // }
 
         ct_args.push_back(0x30c0ffee);
+
+        ct_args.push_back(config.sender_channel_history_buffer_address);
+        ct_args.push_back(config.sender_channel_history_buffer_num_entries);
+        ct_args.push_back(config.receiver_channel_sent_history_buffer_address);
+        ct_args.push_back(config.receiver_channel_acked_history_buffer_address);
+        ct_args.push_back(config.receiver_channel_history_buffer_num_entries);
+        ct_args.push_back(0x40c0ffee);
+
         return ct_args;
 }
 
@@ -1594,7 +1641,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
-    log_trace(tt::LogOp, "Building connection to persistent fabric");
+    log_trace(tt::LogFabric, "Building connection to persistent fabric");
     static constexpr uint32_t worker_chan = 0;
     TT_FATAL(
         sender_channels_buffer_index_semaphore_id[worker_chan] !=

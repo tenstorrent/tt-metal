@@ -104,4 +104,6 @@ void kernel_main() {
 
     // Make sure all the noc txns are done
     noc_async_full_barrier();
+
+    WATCHER_RING_BUFFER_PUSH((uint)0x00c0ffee);
 }

@@ -372,6 +372,12 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> remote_sender_channels_base_address = {};
     std::array<std::size_t, num_receiver_channels> remote_receiver_channels_base_address = {};
 
+    size_t sender_channel_history_buffer_address = 0;
+    size_t sender_channel_history_buffer_num_entries = 0;
+    size_t receiver_channel_history_buffer_num_entries = 0;
+    size_t receiver_channel_sent_history_buffer_address = 0;
+    size_t receiver_channel_acked_history_buffer_address = 0;
+
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;

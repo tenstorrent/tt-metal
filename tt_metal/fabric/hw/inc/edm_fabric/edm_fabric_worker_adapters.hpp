@@ -17,6 +17,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "debug/assert.h"
+#include "debug/ring_buffer.h"
 
 #include <cstdint>
 #include <array>
@@ -274,6 +275,10 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
+            WATCHER_RING_BUFFER_PUSH((uint) * this->edm_buffer_local_free_slots_read_ptr);
+            WATCHER_RING_BUFFER_PUSH((uint)this->buffer_slot_write_counter.counter);
+            ASSERT(this->buffer_slot_write_counter.counter >= *this->edm_buffer_local_free_slots_read_ptr);
             // if (this->edm_noc_x == 24 && this->edm_noc_y == 25) {
             //     WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
             //     WATCHER_RING_BUFFER_PUSH((uint)(this->buffer_slot_write_counter.counter));
@@ -310,6 +315,7 @@ struct WorkerToFabricEdmSenderImpl {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
+
         while (!this->edm_has_space_for_packet());
         WAYPOINT("FWSD");
     }
