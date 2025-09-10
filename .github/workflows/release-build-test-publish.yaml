@@ -224,7 +224,7 @@ jobs:
       - blackhole-multi-card-demos
 
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/stable' || inputs.dry-run }}
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
