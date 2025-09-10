@@ -25,7 +25,7 @@ class DebugToolsMeshFixture : public MeshDispatchFixture {
        }
 };
 
-// A version of DispatchFixture with DPrint enabled on all cores.
+// A version of MeshDispatchFixture with DPrint enabled on all cores.
 class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
@@ -112,7 +112,7 @@ protected:
     }
 };
 
-// A version of DispatchFixture with watcher enabled
+// A version of MeshDispatchFixture with watcher enabled
 class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string log_file_name = "generated/watcher/watcher.log";
