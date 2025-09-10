@@ -91,7 +91,7 @@ def create_config_from_args(args) -> SweepsConfig:
 
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
-    arch_env = os.getenv("ARCH_NAME")
+    arch_env = os.getenv("ARCH_NAME") or os.getenv("IRD_ARCH_NAME")
     if not arch_env:
         logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
         exit(1)
