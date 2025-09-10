@@ -591,6 +591,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
