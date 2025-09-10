@@ -136,3 +136,4 @@ ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
 .conan-build/*
+!/test_package/

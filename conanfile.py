@@ -7,12 +7,11 @@ import subprocess
 import re
 
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
+from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
 
 
 class TTMetaliumConan(ConanFile):
     name = "tt-metalium"
-    version = None
     package_type = "library"
     license = "Apache-2.0"
     url = "https://github.com/tenstorrent/tt-metal"
@@ -82,6 +81,9 @@ class TTMetaliumConan(ConanFile):
         self.tool_requires("cmake/[>=3.25]")
 
     def generate(self):
+        deps = CMakeDeps(self)
+        deps.generate()
+
         tc = CMakeToolchain(self)
         tc.generator = "Ninja"
 
