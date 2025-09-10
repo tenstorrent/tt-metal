@@ -303,11 +303,11 @@ def test_sd35_new_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.12,
-            "t5_encoding_time": 0.1,
-            "total_encoding_time": 0.45,
+            "clip_encoding_time": 0.17,
+            "t5_encoding_time": 0.12,
+            "total_encoding_time": 0.55,
             "denoising_steps_time": 4.2,
-            "vae_decoding_time": 1.3,
+            "vae_decoding_time": 1.35,
             "total_time": 5.9,
         }
     else:

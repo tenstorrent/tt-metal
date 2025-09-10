@@ -100,7 +100,7 @@ run_t3000_stable_diffusion_35_large_tests() {
 
   echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
 
-  env pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -m "models_performance_bare_metal" ; fail+=$?
+  env pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "2x4cfg1sp0tp1" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

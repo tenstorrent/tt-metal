@@ -61,6 +61,7 @@ def test_sd35_pipeline(
     num_links,
     no_prompt,
     model_location_generator,
+    get_tt_cache_path,
     traced,
     use_cache,
     is_ci_env,
@@ -68,11 +69,19 @@ def test_sd35_pipeline(
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
 
-    # Set cache directory in CI environment
+    model_version = f"stabilityai/stable-diffusion-3.5-{model_name}"
+
+    # Setup CI environment
     if is_ci_env:
-        monkeypatch.setenv(
-            "TT_DIT_CACHE_DIR", str(model_location_generator(f"TT_CACHE", model_subdir="StableDiffusion_35_Large"))
-        )
+        if use_cache:
+            monkeypatch.setenv(
+                "TT_DIT_CACHE_DIR",
+                str(
+                    get_tt_cache_path(
+                        default_dir="/mnt/MLPerf", model_subdir="TT_DIT", model_version="StableDiffusion_35_Large"
+                    )
+                ),
+            )
         if traced:
             pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
@@ -93,9 +102,7 @@ def test_sd35_pipeline(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(
-            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
-        ),
+        model_checkpoint_path=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
         use_cache=use_cache,
     )
 
