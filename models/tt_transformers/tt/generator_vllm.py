@@ -192,11 +192,8 @@ def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyI
 
 
 def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    override_tt_config = getattr(ctx.model_config, "override_tt_config", None)
-    processor_config = {}
-    if override_tt_config is not None:
-        processor_config = override_tt_config.get("processor_config", {})
-    input_processor = ctx.get_hf_processor(**processor_config)
+    mm_processor_kwargs = getattr(ctx.model_config, "mm_processor_kwargs", None) or {}
+    input_processor = ctx.get_hf_processor(**mm_processor_kwargs)
 
     if "prompt" in inputs:
         prompt_text = inputs["prompt"]
