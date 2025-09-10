@@ -27,7 +27,7 @@ port_type_connections {
         port_id: 2
       }
       port_b {
-        tray_id: 2
+        tray_id: 3
         port_id: 2
       }
     }
@@ -38,7 +38,7 @@ port_type_connections {
         port_id: 3
       }
       port_b {
-        tray_id: 3
+        tray_id: 2
         port_id: 3
       }
     }
@@ -46,22 +46,22 @@ port_type_connections {
     connections {
       port_a {
         tray_id: 2
-        port_id: 3
+        port_id: 2
       }
       port_b {
         tray_id: 4
-        port_id: 3
+        port_id: 2
       }
     }
     # Card 3 to Card 4 connection
     connections {
       port_a {
         tray_id: 3
-        port_id: 2
+        port_id: 3
       }
       port_b {
         tray_id: 4
-        port_id: 2
+        port_id: 3
       }
     }
   }
