@@ -23,7 +23,7 @@ from models.utility_functions import (
 )
 
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xxlarge_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
