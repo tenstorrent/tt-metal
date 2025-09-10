@@ -288,7 +288,7 @@ void Hal::initialize_bh() {
         uint32_t mailbox_base =
             MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
         return mailbox_base + offsetof(blackhole::EthFwMailbox, arg) +
-               (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
+               (arg_index * sizeof(((blackhole::EthFwMailbox*)nullptr)->arg[0]));
     };
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
