@@ -741,6 +741,12 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--enable-debug-script",
+        action="store_true",
+        default=False,
+        help="Enable debug script (tt-triage.py) execution before test cleanup on failures/timeouts",
+    )
 
 
 @pytest.fixture
@@ -931,6 +937,13 @@ def pytest_runtest_teardown(item, nextitem):
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
             logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
+            # Run debug script before reset for failed tests
+            debug_enabled = item.config.getoption("--enable-debug-script")
+            if debug_enabled:
+                try:
+                    run_debug_script()
+                except Exception as e:
+                    logger.error(f"Failed to run debug script during teardown: {e}")
             reset_tensix(set(item.pci_ids))
 
 
@@ -964,6 +977,12 @@ def pytest_timeout_set_timer(item, settings):
                 parent_status = get_parent_status()
             if parent_status != "already dead":
                 logger.warning(f"This test seems to have hung... Timing out test case")
+                # Run debug script before killing the test process
+                try:
+                    run_debug_script()
+                except Exception as e:
+                    logger.error(f"Failed to run debug script after timeout: {e}")
+
                 os.kill(parent_pid, signal.SIGKILL)
             logger.info(f"Killing timer")
             os._exit(1)
@@ -983,7 +1002,44 @@ def pytest_timeout_set_timer(item, settings):
 # then it should get cleaned up by the controller through this fixture
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
+    # Run debug script before reset for crashed workers
+    try:
+        run_debug_script()
+    except Exception as e:
+        logger.error(f"Failed to run debug script during crash handling: {e}")
     reset_tensix()
+
+
+def run_debug_script():
+    """Run the tt-triage.py debug script to check system state before cleanup."""
+    import shutil
+
+    # Check if ttexalens module is available
+    try:
+        import ttexalens
+    except ImportError:
+        logger.warning(
+            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
+        )
+        return
+
+    debug_script_path = os.path.join(os.getenv("TT_METAL_HOME", "."), "scripts", "debugging_scripts", "tt-triage.py")
+
+    if not os.path.exists(debug_script_path):
+        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
+        return
+
+    try:
+        logger.info("Running debug script to check system state")
+        debug_result = run_process_and_get_result(f"python {debug_script_path}")
+
+        logger.info(f"Debug script status: {debug_result.returncode}")
+        if debug_result.stdout:
+            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
+        if debug_result.stderr:
+            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
+    except Exception as e:
+        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):
