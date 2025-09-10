@@ -30,35 +30,23 @@ jobs:
   release-precheck:
     runs-on: ubuntu-latest
     outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-      tag_type: ${{ steps.set-tag-type.outputs.tag_type }}
+      is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
+      tag_type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag_type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
+      - name: Get is-release-candidate and tag_type
+        id: get-is-release-candidate-and-tag-type
         run: |
           # A workflow dispatch on a tag is considered a release run for us.
           isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-      - name: Get should-create-release
-        id: get-should-create-release
-        run: |
-          # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          if [ "$shouldCreateRelease" != "true" ]; then
-            echo "should-create-release is false, no release needed. Exiting workflow."
-            exit 1
-          fi
-          echo "should-create-release is true, proceeding with release workflow."
-      - name: Set tag_type
-        id: set-tag-type
-        run: |
+
+          # Set tag_type
           if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
-            if [[ "${{ steps.get-is-release-candidate.outputs.is-release-candidate }}" == "true" ]]; then
+            if [[ "$isReleaseCandidate" == "true" ]]; then
               echo "tag_type=rc" >> "$GITHUB_OUTPUT"
             else
               echo "tag_type=" >> "$GITHUB_OUTPUT"
@@ -66,6 +54,18 @@ jobs:
           else
             echo "tag_type=dev" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Get should-create-release
+        id: get-should-create-release
+        run: |
+          # Run once to check for errors
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          if [ "$shouldCreateRelease" != "true" ]; then
+            echo "should-create-release is false, no release needed. Exiting workflow."
+            exit 1
+          fi
+          echo "should-create-release is true, proceeding with release workflow."
 
   create-tag:
     needs: release-precheck
