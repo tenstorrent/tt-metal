@@ -44,12 +44,9 @@ TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
     auto bus_id = tt::tt_metal::MetalContext::instance().get_cluster().get_bus_id(chip_id);
-    TT_FATAL(
-        std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id) != ordered_bus_ids.end(),
-        "Bus ID {} not found.",
-        bus_id);
-    auto tray_id =
-        std::distance(ordered_bus_ids.begin(), std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id)) + 1;
+    auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
+    TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
+    auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
     return TrayID{tray_id};
 }
 
