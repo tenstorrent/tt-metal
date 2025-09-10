@@ -114,7 +114,7 @@ int main() {
     // In no conditions a read on the command queue will be executed before kernel execution in front of it has
     // completed.
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking=*/true);
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
         mesh_device->close();

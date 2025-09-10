@@ -130,24 +130,13 @@ int main() {
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    /* Create source data and write to DRAM */
-    std::vector<uint32_t> src0_vec;
-    std::vector<uint32_t> src1_vec;
-    src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
-    src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
-
-    // We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1
-    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::WriteShard(cq, src0_dram_buffer, src0_vec, device_coord);
-    distributed::WriteShard(cq, src1_dram_buffer, src1_vec, device_coord);
-
     /* Execute the workload */
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     // Read the results from the destination DRAM buffer into host memory.
     std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 
     // compare the results with the expected values.
     bool success = true;
