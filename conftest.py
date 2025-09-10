@@ -1004,7 +1004,6 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 def run_debug_script():
     """Run the tt-triage.py debug script to check system state before cleanup."""
-    import shutil
 
     # Check if ttexalens module is available
     try:
