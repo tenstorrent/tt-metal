@@ -511,6 +511,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 data_size_bytes);
         }
     }
+    command_sequence.align_write_offset();
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(
@@ -592,7 +593,10 @@ void issue_buffer_dispatch_command_sequence(
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
         calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
     } else {
-        calculator.add_dispatch_write_paged<true>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
+        // no inline data
+        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
+        // do PCIE alignment for out-of-line data
+        calculator.add_data<false>(data_size_bytes);
     }
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {

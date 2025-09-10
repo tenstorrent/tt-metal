@@ -449,8 +449,10 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
 
     if (inline_data) {
         TT_ASSERT(data != nullptr);  // compiled out?
-        uint32_t increment_sizeB = tt::align(data_sizeB, this->pcie_alignment);
-        this->add_data(data, data_sizeB, increment_sizeB);
+        this->add_data(data, data_sizeB, data_sizeB);
+        // Increment wr offset to aligned address only if data is inline. Out-of-line data will
+        // follow right after the command, so defer alignment to after it.
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 }
 
@@ -666,6 +668,11 @@ void DeviceCommand<hugepage_write>::add_data(
     this->validate_cmd_write(cmd_write_offset_incrementB);
     this->memcpy((uint8_t*)this->cmd_region + this->cmd_write_offsetB, data, data_size_to_copyB);
     this->cmd_write_offsetB += cmd_write_offset_incrementB;
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::align_write_offset() {
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 
 template <bool hugepage_write>

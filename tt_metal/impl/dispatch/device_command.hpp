@@ -133,6 +133,8 @@ public:
     void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
         __attribute((nonnull(2)));
 
+    void align_write_offset(void);
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint8_t type,

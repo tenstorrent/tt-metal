@@ -39,7 +39,13 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_data(uint32_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
+    template <bool pcie_aligned = true>
+    void add_data(uint32_t cmd_write_offset_incrementB) {
+        this->cmd_write_offsetB += cmd_write_offset_incrementB;
+        if constexpr (not pcie_aligned) {
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(uint32_t data_sizeB) {
