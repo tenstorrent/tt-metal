@@ -714,12 +714,18 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         for (uint32_t programmable_core_type_index = 0;
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg =
-                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-                msg->kernel_config.host_assigned_id = program.get_runtime_id();
+                auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                // TODO: port KernelGroup to use HAL types.
+                auto msg =
+                    dev_msgs_factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<std::byte*>(&kg->launch_msg));
+                auto go_msg =
+                    dev_msgs_factory.create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&kg->go_msg));
+                msg.kernel_config().host_assigned_id() = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);

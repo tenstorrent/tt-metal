@@ -21,6 +21,7 @@
 #include <impl/debug/watcher_server.hpp>
 
 #include <array>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 #include <vector>
 
@@ -128,6 +129,8 @@ private:
         dev_msgs::launch_msg_t::View launch_msg,
         dev_msgs::go_msg_t::ConstView go_msg);
     void initialize_and_launch_firmware(chip_id_t device_id);
+    dev_msgs::core_info_msg_t populate_core_info_msg(
+        chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const;
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
