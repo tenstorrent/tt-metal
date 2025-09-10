@@ -31,19 +31,8 @@
 // TODO: w/ the hal, this can come from core specific defines
 constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 
-#ifndef CODEGEN
-// TODO: can't codegen for templates / 2d arrays
-// To be fixed by making RiscCount a per-core constant, and let
-// HAL handle the host side access.
-template <uint32_t RiscCount>
-struct profiler_msg_template_t {
-    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    uint32_t buffer[RiscCount][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
-};  // struct profiler_msg_template_t
-#endif
-
 // TODO: move these to processor specific files
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
 
 // Several firmware/kernel files depend on this file for dev_mem_map.h and/or noc_parameters.h inclusion
 // We don't want to pollute host code with those
@@ -75,10 +64,18 @@ static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcess
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
-using profiler_msg_t = profiler_msg_template_t<PROFILER_RISC_COUNT>;
-#elif !defined(CODEGEN)
-using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
+#else
+#error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
 #endif
+
+struct profiler_msg_buffer_t {
+    uint32_t data[kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
+struct profiler_msg_t {
+    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
+    profiler_msg_buffer_t buffer[PROFILER_RISC_COUNT];
+};
 
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;

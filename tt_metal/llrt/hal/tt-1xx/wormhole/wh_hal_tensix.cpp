@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD
 #include "dev_msgs.h"
 #include <cstdint>
 
 #include "assert.hpp"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
-#include "llrt_common/mailbox.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <umd/device/tt_core_coordinates.h>
@@ -137,7 +137,7 @@ HalCoreInfoType create_tensix_mem_map() {
         }
         processor_classes[processor_class_idx] = processor_types;
     }
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<TensixProcessorTypes> <= MEM_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
