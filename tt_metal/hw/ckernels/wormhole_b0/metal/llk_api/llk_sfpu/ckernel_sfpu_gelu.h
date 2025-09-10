@@ -32,7 +32,7 @@ namespace sfpu {
 
 inline sfpi::vFloat calculate_gelu_chebychev(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
-    v_if(val >= -3.0f) {
+    v_if(val >= -5.5f) {
         result = POLYVAL15(
             -1.81205228163e-09,
             -4.59055119276e-08,
@@ -51,6 +51,9 @@ inline sfpi::vFloat calculate_gelu_chebychev(sfpi::vFloat val) {
             0.499174645395,
             2.98325768482e-05,
             val);
+
+        // Ensure result has the same sign as input using setsgn
+        result = setsgn(result, val);
     }
     v_endif;
 
@@ -69,10 +72,9 @@ void gelu_derivative_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-// chebychev gelu approximation
-if (APPROXIMATION_MODE) {
-    _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
-} else {
+    if (APPROXIMATION_MODE) {
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+    } else {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
@@ -83,8 +85,7 @@ if (APPROXIMATION_MODE) {
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
-    // _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
-}
+    }
 }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
