@@ -332,7 +332,7 @@ struct watcher_msg_t {
 // TODO: DebugPrintMemLayout not visible by codegen
 // To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
+    DebugPrintMemLayout data[NUM_PROCESSORS_PER_CORE_TYPE];
     uint32_t pad;  // to 1024 bytes
 };
 #endif

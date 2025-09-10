@@ -24,6 +24,7 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
 #include <vector>
 
 #include "assert.hpp"
@@ -73,20 +74,33 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
-            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
-            case DPRINT_RISCV_INDEX_ER1:
+            case 0: return abbreviated ? "ER" : "ERISC";
+            case 1:
                 return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
-        switch (risc_id) {
-            case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
-            case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
-            case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
-            case DPRINT_RISCV_INDEX_TR2: return abbreviated ? "TR2" : "TRISC2";
-            case DPRINT_RISCV_INDEX_BR:
-                return abbreviated ? "BR" : "BRISC";
-                // Default case falls through and handled at end.
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        auto [processor_class, processor_type] =
+            hal.get_processor_class_and_type_from_index(tt::tt_metal::HalProgrammableCoreType::TENSIX, risc_id);
+        switch (processor_class) {
+            case tt::tt_metal::HalProcessorClassType::DM:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "BR" : "BRISC";
+                    case 1:
+                        return abbreviated ? "NC" : "NCRISC";
+                        // Default case falls through and handled at end.
+                }
+                break;
+            case tt::tt_metal::HalProcessorClassType::COMPUTE:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "TR0" : "TRISC0";
+                    case 1: return abbreviated ? "TR1" : "TRISC1";
+                    case 2:
+                        return abbreviated ? "TR2" : "TRISC2";
+                        // Default case falls through and handled at end.
+                }
+                break;
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
@@ -577,7 +591,7 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
+    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
         TT_THROW("Timed out waiting on debug print server to read data.");
     }
 }  // await
