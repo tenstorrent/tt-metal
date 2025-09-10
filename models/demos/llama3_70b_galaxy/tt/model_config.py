@@ -1337,6 +1337,13 @@ class TtModelArgs:
                 ]
             )
 
+            # intermediate_core_range_set = ttnn.CoreRangeSet(
+            #     [
+            #         ttnn.CoreRange(ttnn.CoreCoord(1,1), ttnn.CoreCoord(2, 1)),
+            #         ttnn.CoreRange(ttnn.CoreCoord(1,2), ttnn.CoreCoord(2, 2)),
+            #     ]
+            # )
+
             self.model_config["AG_MM_RECV_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 3840 // 4),  # K // num_of_receiver_cores 3584 -> 3840 padding
                 core_grid=intermediate_core_range_set,

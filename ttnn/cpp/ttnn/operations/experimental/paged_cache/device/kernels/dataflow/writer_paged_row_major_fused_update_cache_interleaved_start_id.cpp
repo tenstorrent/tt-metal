@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -11,6 +12,8 @@ void kernel_main() {
     if (!has_work) {
         return;
     }
+
+    DeviceZoneScopedN("Writer PCU");
 
     const uint32_t cache_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(rt_args_idx++);

@@ -197,17 +197,23 @@ class TtLlamaMLP(LightweightModule):
         # if self.iter in {0, 9, 10}:
         #     ttnn.device.dump_device_memory_state(self.mesh_device, prefix=f"iter_{self.iter}_before_all_gather_matmul")
         # print input memory config
-        print(f"ff1ff3: {ff1ff3.shape}")
-        print(f"ff1ff3 memory config:{ff1ff3.memory_config()}\n\n\n")
-        print(f"w2 memory config: {self.w2.memory_config()}\n\n\n")
-        print(f'ag memory config: {self.model_config["AG_MM_RECV_MEMCFG"]}\n\n\n')
-        print(f'mm memory config: {self.model_config["FF2_OUT_RING_MEMCFG"]}\n\n\n')
+        # print(f"ff1ff3: {ff1ff3.shape}")
+        # print(f"ff1ff3 memory config:{ff1ff3.memory_config()}\n\n\n")
+        # print(f"w2 memory config: {self.w2.memory_config()}\n\n\n")
+        # print(f'ag memory config: {self.model_config["AG_MM_RECV_MEMCFG"]}\n\n\n')
+        # print(f'mm memory config: {self.model_config["FF2_OUT_RING_MEMCFG"]}\n\n\n')
         # print(f'compute_kernel_config: {self.args.compute_kernel_config_hifi2}\n\n\n')
         # print(f'dtype: {ttnn.bfloat8_b}\n\n\n')
         # print(f'global_cb: {self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None}\n\n\n')
         # print(f'buffer_key: AG_MM\n\n\n')
         # # return ff1ff3 to host
-
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
         # print(f'ff1ff3: {ff1ff3.shape}')
         # breakpoint()
         w2_out = self.tt_ccl.all_gather_matmul(
@@ -219,7 +225,7 @@ class TtLlamaMLP(LightweightModule):
             mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],  # self.model_config["AG_MM_MATMUL_MEMCFG"],
             num_links=4,  # TODO: Check if this is correct
             # program_config=self.model_config["AG_MM_PROG_CONFIG"],
-            compute_kernel_config=self.args.compute_kernel_config_hifi2,  # self.model_config["AG_MM_COMPUTE_KERNEL_CONFIG"],
+            compute_kernel_config=compute_kernel_config,  # self.model_config["AG_MM_COMPUTE_KERNEL_CONFIG"],
             dtype=ttnn.bfloat8_b,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             buffer_key="AG_MM",

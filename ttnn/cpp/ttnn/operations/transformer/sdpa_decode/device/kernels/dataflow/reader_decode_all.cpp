@@ -8,8 +8,11 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("SDPA reader");
+
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
     We want to read for a particular batch cur_batch, and sequence length up to padded layer length.

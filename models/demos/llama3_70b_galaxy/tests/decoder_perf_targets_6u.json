@@ -33,17 +33,6 @@
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
-    "AllGatherAsync_0": {
-      "op_name": "AllGatherAsync_Binary_Mult",
-      "kernel_duration": 7083.920833333334,
-      "op_to_op": 820.3703703703703,
-      "first_to_last_start": 104.51851851851852,
-      "non-overlapped-dispatch-time": 4531.650793650794,
-      "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
-      "dispatch_duration_relative_margin": 0.2
-    },
     "Matmul_0": {
       "op_name": "QKV_MM",
       "kernel_duration": 7082.489583333333,
@@ -66,8 +55,8 @@
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.1
     },
-    "Matmul_2": {
-      "op_name": "FF2_MM",
+    "LlamaAllGatherMatmulAsync_0": {
+      "op_name": "FF2_AG_MM",
       "kernel_duration": 13973.23125,
       "op_to_op": 652.1777777777777,
       "first_to_last_start": 1941.1703703703704,

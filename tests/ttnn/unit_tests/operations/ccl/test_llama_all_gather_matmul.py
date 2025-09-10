@@ -141,13 +141,12 @@ def run_llama_all_gather_matmul_impl(
     ##### Set up fabric stuff
     ##################################
 
-    linear = True
-    if linear:
-        all_gather_replicate_topology = ttnn.Topology.Linear
-        wrap_mesh = False
-    else:
-        all_gather_replicate_topology = ttnn.Topology.Ring
-        wrap_mesh = False
+    # if linear:
+    #     all_gather_replicate_topology = ttnn.Topology.Linear
+    #     wrap_mesh = False
+    # else:
+    all_gather_replicate_topology = ttnn.Topology.Ring
+    wrap_mesh = False
 
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 

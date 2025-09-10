@@ -15,6 +15,7 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
 }
 
 void kernel_main() {
+    DeviceZoneScopedN("PF writer whole");
     // Compile time args
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
@@ -54,13 +55,14 @@ void kernel_main() {
             uint32_t curr_block_height_in_tiles = block_height_in_tiles[t];
             uint32_t curr_block_size = curr_block_num_tiles * curr_single_tile_sizes;
             uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
+            DPRINT << "PF writer num_blocks[t]" << num_blocks[t] << ENDL();
 
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
 
             for (uint32_t block = 0; block < num_blocks[t]; ++block) {
                 {
                     {
-                        DeviceZoneScopedN("PF writer wait localCB and reserve");
+                        DeviceZoneScopedN("PF writer wait localCB and res back");
                         cb_wait_front(local_cb_id, max_block_num_tiles);
                         experimental::remote_cb_reserve_back(remote_cb_id, 1);
                     }
@@ -88,7 +90,7 @@ void kernel_main() {
     }
 
     {
-        DeviceZoneScopedN("PF writer wait localCB and reserve");
+        DeviceZoneScopedN("PF writer update remote cb");
         experimental::update_remote_cb_config_in_l1(remote_cb_id);
 
         // reset noc counters here because we didn't properly update ptrs for better perf.
@@ -97,8 +99,10 @@ void kernel_main() {
         } else {
             dynamic_noc_local_state_init();
         }
-
+    }
         // signal reader can exit, since reader cannot exit early due to the ongoing traffic on the same noc.
+    {
+        DeviceZoneScopedN("PF writer push sync");
         cb_reserve_back(sync_cb_id, 1);
         cb_push_back(sync_cb_id, 1);
     }

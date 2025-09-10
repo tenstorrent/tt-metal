@@ -23,7 +23,7 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -23
+DECODER_OP_END_INDEX = -24
 NUM_OPS_IN_SAMPLING = 12
 
 DECODER_PREFIX = "model"
@@ -42,7 +42,7 @@ MAX_TYPE = "max"
     [
         (  # 10 layers for devive perf measurements
             "instruct",
-            10,
+            2,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -396,7 +396,7 @@ def test_llama_TG_perf_device(
     batch_size = 32
     subdir = "tg-llama-demo-device-perf-default"
     num_iterations = 1
-    num_layers = 10
+    num_layers = 2
 
     command = f"pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -499,6 +499,9 @@ def test_llama_TG_perf_device(
     if len(avg_kernel_duration_model_tail_trace) != len(perf_targets["model_tail"]):
         print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
 
+    ## decoder first layers
+    print_dict(avg_kernel_duration_first_layer_trace, "avg_kernel_duration_first_layer_trace")
+
     ## decoder mid layers
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
     print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
@@ -513,6 +516,7 @@ def test_llama_TG_perf_device(
     assert len(avg_kernel_duration_mid_layers_compilation) == len(
         perf_targets["decoder"]
     ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
+
     assert len(avg_dispatch_duration_model_tail_trace) == len(
         perf_targets["model_tail"]
     ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."

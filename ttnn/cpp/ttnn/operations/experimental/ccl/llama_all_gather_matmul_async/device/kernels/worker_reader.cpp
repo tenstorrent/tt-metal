@@ -60,6 +60,8 @@ void kernel_main() {
     uint32_t core_id = 0;
     cb_reserve_back(cb0_id, num_tiles_to_read);
     uint32_t l1_write_addr = get_write_ptr(cb0_id);
+
+    // comment this out
     while (tiles_read < num_tiles_to_read) {
         DPRINT << "CCL WRD core_noc_x[core_id]: " << core_noc_x[core_id] << ENDL();
         DPRINT << "CCL WRD core_noc_y[core_id]: " << core_noc_y[core_id] << ENDL();
@@ -97,6 +99,7 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("CCL WRD write tile ");
+        // comment out
         noc_async_write(
             l1_read_addr,
             noc0_dest_noc_addr + intermediate_first_core_tile_start_offset * tensor0_page_size,

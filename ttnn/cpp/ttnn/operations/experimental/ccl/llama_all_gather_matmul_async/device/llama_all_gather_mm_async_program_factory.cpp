@@ -132,6 +132,11 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const auto [sender_worker_core_range, sender_worker_cores] =
         ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
 
+    // CoreRangeSet sender_worker_core_range;
+    // sender_worker_core_range = CoreRangeSet(CoreRange(CoreCoord(3,0), CoreCoord(3,3)));
+
+    // auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
+
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
@@ -187,6 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    // auto reader_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     reader_kernel_config.compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
@@ -205,6 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    // auto writer_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id

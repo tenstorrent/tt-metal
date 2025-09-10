@@ -1084,11 +1084,7 @@ class TT_CCL:
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        HOP_GRID = ttnn.CoreRangeSet(
-            [
-                # ttnn.CoreRange(ttnn.CoreCoord(3, 6), ttnn.CoreCoord(3, 6)),
-            ]
-        )
+        HOP_GRID = ttnn.CoreRangeSet([])
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=storage_grid,
@@ -1113,7 +1109,7 @@ class TT_CCL:
             dim,
             cluster_axis,
             self.mesh_device,
-            ttnn.Topology.Linear,
+            self.model_config["CCL_TOPOLOGY"],
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],  # TODO: Fix this
             num_links=num_links,
             ag_memory_config=ag_memory_config,

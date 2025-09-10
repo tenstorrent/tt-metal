@@ -10,6 +10,8 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
+    DeviceZoneScopedN("PF reader whole");
+
     // Compile time args
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
@@ -124,13 +126,20 @@ void kernel_main() {
     }
 
     // wait for signal to exit, since reader cannot exit early due to the ongoing traffic on the same noc.
-    cb_wait_front(sync_cb_id, 1);
-    cb_pop_front(sync_cb_id, 1);
+    {
+        DeviceZoneScopedN("PF reader sync cb wait");
+        cb_wait_front(sync_cb_id, 1);
+        cb_pop_front(sync_cb_id, 1);
+    }
 
     // reset noc counters here because we didn't properly update ptrs for better perf.
-    if (noc_mode == DM_DEDICATED_NOC) {
-        ncrisc_noc_counters_init();
-    } else {
-        dynamic_noc_local_state_init();
+    {
+        DeviceZoneScopedN("PF reader reset noc");
+
+        if (noc_mode == DM_DEDICATED_NOC) {
+            ncrisc_noc_counters_init();
+        } else {
+            dynamic_noc_local_state_init();
+        }
     }
 }

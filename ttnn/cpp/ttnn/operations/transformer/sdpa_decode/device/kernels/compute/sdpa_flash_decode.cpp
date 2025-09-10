@@ -22,6 +22,7 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -98,6 +99,8 @@ void MAIN {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+
+    DeviceZoneScopedN("SDPA compute");
 
     // idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
