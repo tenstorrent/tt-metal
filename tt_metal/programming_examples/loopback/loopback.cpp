@@ -7,6 +7,7 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -31,11 +32,11 @@ int main() {
     try {
         // Initialize the device (here we use the 1st device, but you can use any device)
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
-        CommandQueue& cq = device->command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
         // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
@@ -45,26 +46,26 @@ int main() {
         constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
         // Configuration for the buffers.
-        InterleavedBufferConfig dram_config{
-            .device = device,              // Device which owns the buffer
-            .size = dram_buffer_size,      // Size of the buffer in bytes
+        distributed::DeviceLocalBufferConfig dram_config{
             .page_size = tile_size_bytes,  // Number of bytes when round-robin between banks. Usually this is the same
                                            // as the tile size for efficiency.
-            .buffer_type = BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-        InterleavedBufferConfig l1_config{
-            .device = device,
-            .size = tile_size_bytes,
-            .page_size = tile_size_bytes,
-            .buffer_type = BufferType::L1};  // This time we allocate on L1
+            .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
+        distributed::DeviceLocalBufferConfig l1_config{
+            .page_size = tile_size_bytes, .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
+
+        distributed::ReplicatedBufferConfig dram_buffer_config{.size = dram_buffer_size}; // Size of the buffers in bytes
+        distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
 
         // Allocate the buffers
-        auto l1_buffer = CreateBuffer(l1_config);
-        auto input_dram_buffer = CreateBuffer(dram_config);
-        auto output_dram_buffer = CreateBuffer(dram_config);
+        auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+        auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
@@ -74,8 +75,8 @@ int main() {
         // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
         // {0, 0} and uses the default NoC.
         std::vector<uint32_t> dram_copy_compile_time_args;
-        TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
-        TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
@@ -98,7 +99,7 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
-        EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 
         // Set the arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
@@ -109,8 +110,9 @@ int main() {
         // Run the program. Again blocking is set to false. So the host function returns immediately and can continue
         // executing while the program is running on the device; leading the better performance if the host has other
         // work to do.
-        EnqueueProgram(cq, program, /*blocking=*/false);
-        Finish(cq);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
         // NOTE: The above is equivalent to the following single line:
         // EnqueueProgram(cq, program, /*blocking=*/true);
 
@@ -118,7 +120,8 @@ int main() {
         // the read to complete before returning. Thus we can be sure the data is ready to be used right after the call.
         // The vector will be automatically resized to fit the data.
         std::vector<bfloat16> result_vec;
-        EnqueueReadBuffer(cq, output_dram_buffer, result_vec, /*blocking*/ true);
+        distributed::ReadShard(
+            cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking*/ true);
 
         // Compare the result with the input. The result should be the same as the input.
         TT_FATAL(
@@ -134,7 +137,7 @@ int main() {
         }
 
         // Close the device
-        if (!CloseDevice(device)) {
+        if (!mesh_device->close()) {
             pass = false;
         }
 
