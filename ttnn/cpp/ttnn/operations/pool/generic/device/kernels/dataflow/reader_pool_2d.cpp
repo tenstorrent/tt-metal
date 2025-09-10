@@ -66,7 +66,6 @@ ALWI void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t in_idx_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -114,11 +113,6 @@ ALWI void read_window_with_top_left_index(
         }
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         cb_reserve_back(in_cb_id, 1);
-        uint32_t in_idx_l1_write_addr = 0;
-        if constexpr (return_indices) {
-            in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
-            cb_reserve_back(in_idx_cb_id, 1);
-        }
         uint32_t processed_sticks = 0;
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
@@ -132,17 +126,6 @@ ALWI void read_window_with_top_left_index(
                     in_l1_write_addr += read_bytes * w_multiple;
                 } else {
                     in_l1_write_addr += max_write_inc * w_multiple;
-                }
-                if constexpr (return_indices) {
-                    const uint32_t idx_read_offset =
-                        in_idx_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-                    noc_async_read_one_packet(
-                        get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
-                    if constexpr (tilize_reconfig) {
-                        in_idx_l1_write_addr += read_bytes * w_multiple;
-                    } else {
-                        in_idx_l1_write_addr += max_write_inc * w_multiple;
-                    }
                 }
                 processed_sticks += w_multiple;
                 if constexpr (is_large_kernel) {
@@ -194,13 +177,6 @@ ALWI void read_window_with_top_left_index(
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
             cb_push_back(in_cb_id, 1);
-            if constexpr (return_indices) {
-                if (ind == 0) {
-                    DPRINT << "IN IDX CB" << ENDL();
-                    tt::data_movement::common::print_u16_pages(get_write_ptr(in_idx_cb_id), TILE_WIDTH, TILE_HEIGHT);
-                }
-                cb_push_back(in_idx_cb_id, 1);
-            }
         }
     }
 }
@@ -337,7 +313,6 @@ void kernel_main() {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
             // TODO we don't need to init the idx CBs, but eases debugging for now
             if constexpr (return_indices) {
-                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
                 clear_out_tiles<idx_tmp_cb_id, clear_value_cb_id>();
             }
         }
@@ -365,13 +340,15 @@ void kernel_main() {
         } else if (start_col <= pad_l) {
             // top left is in left padding, we increment from the padding index in the leftmost
             // column of the starting row of the padded tensor
-            uint16_t leftmost_valid_index = start_row * in_w;
+            uint16_t leftmost_valid_index = (start_row - pad_t) * in_w;
             uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
             init_index = start_row_left_pad_idx + start_col;
         } else {
             // top left is in valid region, we choose the valid index
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
+
+        DPRINT << "init_index: " << init_index << ENDL();
 
         // initialize the right inc tile
         cb_reserve_back(right_inc_tmp_cb_id, 1);
@@ -414,8 +391,8 @@ void kernel_main() {
             }
             kernel_idx += in_w - window_w;
         }
-        DPRINT << "TILE IDX CB" << ENDL();
-        tt::data_movement::common::print_u16_pages(get_write_ptr(idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
+        // DPRINT << "INIT TILE IDX CB" << ENDL();
+        // tt::data_movement::common::print_u16_pages(get_write_ptr(idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
         cb_push_back(idx_tmp_cb_id, 1);
     }
 
@@ -485,7 +462,6 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
-                in_idx_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -517,7 +493,6 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
-            in_idx_cb_id,
             window_h,
             window_w,
             in_w_padded,

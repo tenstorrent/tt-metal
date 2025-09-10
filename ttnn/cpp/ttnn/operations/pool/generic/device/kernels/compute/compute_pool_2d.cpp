@@ -10,8 +10,9 @@
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -55,11 +56,14 @@ void MAIN {
     constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(21);
     constexpr uint32_t in_w_padded = get_compile_time_arg_val(22);
     constexpr uint32_t kernel_w = get_compile_time_arg_val(23);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(24);
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
+    constexpr uint32_t inc_dst_idx = 4;
+    constexpr uint32_t index_scratch_dst_idx = 5;
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -100,12 +104,8 @@ void MAIN {
         if constexpr (!pack_untilize_reinit) {
             const uint32_t output_faces =
                 last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
+            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, 32, output_faces);
         }
-
-        // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
-        // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
-        max_reduce_with_indices_init();
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -131,7 +131,6 @@ void MAIN {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        const uint32_t curr_in_idx_cb_id = !reader0 ? in_idx_cb_id_1 : in_idx_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
@@ -156,31 +155,39 @@ void MAIN {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
-                    cb_wait_front(curr_in_idx_cb_id, 1);
-
-                    tilize_init_short_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
-                    tilize_block_no_pack(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id);
-                    tilize_init_short_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
+                    tensix_sync();
+                    UNPACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
+                    // UNPACK(tt::compute::common::print_full_tile(right_inc_tmp_cb_id));
+                    tilize_init_short_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id, topk_output_tiles);
+                    tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
+                    tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_scratch_dst_idx, topk_cb_tile_idx);
+                    tilize_uninit_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id);
+                    tilize_init_short_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id, topk_output_tiles);
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
+                    tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
 
+                    tensix_sync();
+                    max_reduce_with_indices_init();
+                    tensix_sync();
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
-                    cb_pop_front(curr_in_idx_cb_id, 1);
-
                     // update the current index column
-                    uint32_t inc;
                     if (current_idx_col + right_inc + kernel_w > in_w_padded) {
                         // we reached the edge, wrap down and to the left
-                        current_idx_col += down_left_wrap_inc;
-                        inc = down_left_wrap_inc;
+                        current_idx_col = pad_l;
+                        tilize_block_no_pack(
+                            down_left_wrap_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
+                        UNPACK(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
                     } else {
                         // we are still in the same row, move to the right
                         current_idx_col += right_inc;
-                        inc = right_inc;
+                        tilize_block_no_pack(right_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
+                        UNPACK(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
                     }
-                    // update the index tile with the new indices for the next top left position
+                    tensix_sync();
+                    add_int_tile_init();
+                    tensix_sync();
+                    add_uint16_tile(index_scratch_dst_idx, inc_dst_idx, index_scratch_dst_idx);
 
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -220,6 +227,14 @@ void MAIN {
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+                pack_untilize_dest<
+                    topk_output_tiles,
+                    topk_output_tiles,
+                    false,
+                    false,
+                    TILE_C_DIM,
+                    index_scratch_dst_idx>(
+                    idx_tmp_cb_id, 1, 0, 32, 4);  // write back to the idx tmp cb to be used in the next iteration
 
                 if constexpr (pack_untilize_reinit) {
                     tensix_sync();

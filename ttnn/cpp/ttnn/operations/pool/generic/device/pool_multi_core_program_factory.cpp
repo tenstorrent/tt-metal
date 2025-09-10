@@ -610,7 +610,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         right_inc,                      // 20
         down_left_wrap_inc,             // 21
         in_w_padded,                    // 22
-        kernel_w};                      // 23
+        kernel_w,                       // 23
+        pad_l};                         // 24
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -640,6 +641,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
+
+            printf(
+                "core %d (x,y) = (%d,%d) start_index: %d start_row: %d start_col: %d\n",
+                core_i,
+                core_x_i,
+                core_y_i,
+                start_index,
+                start_row,
+                start_col);
 
             std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
             SetRuntimeArgs(program, reader0_kernel, core, args);
