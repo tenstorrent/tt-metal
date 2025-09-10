@@ -64,7 +64,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = tt::round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
+    while ((padded_num - num) >= (int)(padded_num / divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = tt::round_up(num, big_divisor);
