@@ -1687,7 +1687,7 @@ class ModelArgs:
             with open(config_file, "r") as f:
                 config = json.load(f)
         config = {
-            "vocab_size": 32000,
+            "vocab_size": 64,  # 32000,
             "max_position_embeddings": 4096,
             "hidden_size": 1024,
             "intermediate_size": 1024,
@@ -1890,7 +1890,7 @@ class ModelArgs:
         for k in keys_dict:
             # print(k, state_dict[k].shape)
             if (k == "tok_embeddings.weight") or (k == "output.weight"):
-                state_dict[k] = state_dict[k][:, :1024]
+                state_dict[k] = state_dict[k][:64, :1024]
             elif ("w1" in k) or ("w3" in k):
                 state_dict[k] = state_dict[k][:2048, :1024]
             elif "w2" in k:
