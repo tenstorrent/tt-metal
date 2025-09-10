@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <type_traits>
+#include <compare>
 
 class bfloat16 {
 private:
@@ -24,7 +24,8 @@ public:
     constexpr bfloat16() = default;
 
     // create from arithmetic type: tie-to-even rounding
-    template <class T, typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+    template <class T>
+        requires std::is_arithmetic_v<T>
     constexpr bfloat16(T v) noexcept {
         float f = static_cast<float>(v);
         uint16_data = from_float(f);
@@ -34,21 +35,17 @@ public:
     static bfloat16 truncate(float float_num);
 
     // Widening conversion
-    operator float() const {
+    constexpr operator float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
-        float result;
-        std::memcpy(&result, &uint32_data, sizeof(float));
-        return result;
+        return std::bit_cast<float>(uint32_data);
     }
 
     // -- Comparison Operators ---
-    bool operator==(bfloat16 rhs) const;
-    bool operator!=(bfloat16 rhs) const;
-    bool operator<(bfloat16 rhs) const;
-    bool operator<=(bfloat16 rhs) const;
-    bool operator>(bfloat16 rhs) const;
-    bool operator>=(bfloat16 rhs) const;
+    constexpr bool operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); };
+    constexpr std::partial_ordering operator<=>(bfloat16 rhs) noexcept {
+        return static_cast<float>(*this) <=> static_cast<float>(rhs);
+    }
 
     // -- Arithmetic Operators ---
     bfloat16& operator+=(bfloat16 rhs) noexcept;
