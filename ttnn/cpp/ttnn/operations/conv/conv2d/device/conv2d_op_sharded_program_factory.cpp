@@ -592,6 +592,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
+        writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
@@ -632,7 +633,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
-        log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+        log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
