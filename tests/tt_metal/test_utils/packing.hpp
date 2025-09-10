@@ -70,13 +70,30 @@ std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
         "sizeof(PackType)={} % ValueType::SIZEOF={} must equal 0",
         sizeof(PackType),
         ValueType::SIZEOF);
+
+    constexpr auto sized = []<std::size_t N>() {
+        if constexpr (N == 1) {
+            return std::uint8_t{};
+        } else if constexpr (N == 2) {
+            return std::uint16_t{};
+        } else if constexpr (N == 4) {
+            return std::uint32_t{};
+        } else if constexpr (N == 8) {
+            return std::uint64_t{};
+        } else {
+            static_assert(N == 1 || N == 2 || N == 4 || N == 8, "unsupported size");
+        }
+    };
+
+    using bits_type = decltype(sized.template operator()<ValueType::SIZEOF>());
     constexpr unsigned int num_values_to_unpack = sizeof(PackType) / ValueType::SIZEOF;
     std::vector<ValueType> results = {};
     constexpr unsigned long bitmask = (1 << (ValueType::SIZEOF * CHAR_BIT)) - 1;
     std::for_each(values.begin(), values.end(), [&](const PackType& value) {
         PackType current_value = value;
         for (unsigned j = 0; j < num_values_to_unpack; j++) {
-            results.push_back(ValueType(static_cast<uint32_t>(current_value & bitmask)));
+            bits_type bits_of_value = static_cast<bits_type>(current_value & bitmask);
+            results.push_back(std::bit_cast<ValueType>(bits_of_value));
             current_value = current_value >> (ValueType::SIZEOF * CHAR_BIT);
         }
     });

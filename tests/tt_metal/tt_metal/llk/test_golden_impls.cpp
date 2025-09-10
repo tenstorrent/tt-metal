@@ -166,9 +166,9 @@ std::vector<uint16_t> gold_reduce_h(
                 for (int h = 0; h < shape[2]; h++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(static_cast<float>(bfloat16(src_vec[offs])), sum);
+                        sum = fmaxf(static_cast<float>(bfloat16_from_bits(src_vec[offs])), sum);
                     } else {
-                        sum += static_cast<float>(bfloat16(src_vec[offs]));
+                        sum += static_cast<float>(bfloat16_from_bits(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, 0, w);
@@ -199,9 +199,9 @@ std::vector<uint16_t> gold_reduce_w(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(static_cast<float>(bfloat16(src_vec[offs])), sum);
+                        sum = fmaxf(static_cast<float>(bfloat16_from_bits(src_vec[offs])), sum);
                     } else {
-                        sum += static_cast<float>(bfloat16(src_vec[offs]));
+                        sum += static_cast<float>(bfloat16_from_bits(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, h, 0);
@@ -236,9 +236,9 @@ std::vector<uint16_t> gold_reduce_hw(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(static_cast<float>(bfloat16(src_vec[offs])), sum);
+                        sum = fmaxf(static_cast<float>(bfloat16_from_bits(src_vec[offs])), sum);
                     } else {
-                        sum += static_cast<float>(bfloat16(src_vec[offs]));
+                        sum += static_cast<float>(bfloat16_from_bits(src_vec[offs]));
                     }
                 }
             }

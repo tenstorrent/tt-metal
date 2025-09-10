@@ -100,12 +100,18 @@ inline std::vector<uint16_t> gold_bcast_op(
                         case BcastDim::HW: b_index = c + n * C; break;             // bcast tensor is nc
                         default: TT_THROW("Unexpected broadcast mode in gold_bcast_op");
                     }
-                    float bval = static_cast<float>(bfloat16(bcast_vals[b_index]));
+                    float bval = static_cast<float>(bfloat16_from_bits(bcast_vals[b_index]));
                     float result1 = 0.0f;
                     switch (bcast_op) {
-                        case BcastOp::ADD: result1 = static_cast<float>(bfloat16(src_vec[offs])) + bval; break;
-                        case BcastOp::SUB: result1 = static_cast<float>(bfloat16(src_vec[offs])) - bval; break;
-                        case BcastOp::MUL: result1 = static_cast<float>(bfloat16(src_vec[offs])) * bval; break;
+                        case BcastOp::ADD:
+                            result1 = static_cast<float>(bfloat16_from_bits(src_vec[offs])) + bval;
+                            break;
+                        case BcastOp::SUB:
+                            result1 = static_cast<float>(bfloat16_from_bits(src_vec[offs])) - bval;
+                            break;
+                        case BcastOp::MUL:
+                            result1 = static_cast<float>(bfloat16_from_bits(src_vec[offs])) * bval;
+                            break;
                         default: TT_THROW("Unexpected bcast_op");
                     }
                     result[offs] = bfloat16_to_bits(bfloat16(result1));
@@ -150,8 +156,8 @@ inline std::vector<uint16_t> gold_bmm(
                     auto offsB = addrB.offs(0, ib, k, n);
                     auto offsC = addrC.offs(0, ib, m, n);
 
-                    float aa = static_cast<float>(bfloat16(A[offsA]));
-                    float bb = static_cast<float>(bfloat16(B[offsB]));
+                    float aa = static_cast<float>(bfloat16_from_bits(A[offsA]));
+                    float bb = static_cast<float>(bfloat16_from_bits(B[offsB]));
                     resultf[offsC] += aa * bb;
                     if (acc16) {
                         resultf[offsC] = static_cast<float>(bfloat16(resultf[offsC]));
