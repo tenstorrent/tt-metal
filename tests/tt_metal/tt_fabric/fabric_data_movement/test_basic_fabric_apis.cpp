@@ -215,6 +215,18 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
     }
 }
 
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 0, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3E) {
+    RunTestUnicastRaw2D(this, 0, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N3E) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
@@ -260,6 +272,10 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
 TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
+
+TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 1); }
+
+TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
