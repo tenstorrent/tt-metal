@@ -15,7 +15,7 @@ on:
 
 jobs:
   ttsim-integration:
-    if: github.repository == 'tenstorrent/tt-metal'
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
