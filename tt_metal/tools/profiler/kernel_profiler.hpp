@@ -262,7 +262,8 @@ __attribute__((noinline)) void finish_profiler() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-    uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
+    uint32_t pageSize =
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
@@ -275,7 +276,7 @@ __attribute__((noinline)) void finish_profiler() {
             uint32_t dram_offset = 0;
             uint32_t send_size = 0;
             if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
+                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               profiler_control_buffer[hostIndex] * sizeof(uint32_t);
@@ -284,7 +285,7 @@ __attribute__((noinline)) void finish_profiler() {
 
                 profiler_control_buffer[hostIndex] = currEndIndex;
             } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
+                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
 
@@ -347,15 +348,15 @@ __attribute__((noinline)) void quick_push() {
 
     profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
 
-    uint32_t dram_offset =
-        (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
+    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
     const auto s = TensorAccessor(
         tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
         profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram);
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
 
     uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 

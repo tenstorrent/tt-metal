@@ -28,9 +28,6 @@
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
-// TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
-
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
 
@@ -306,7 +303,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
+    struct debug_waypoint_msg_t debug_waypoint[NUM_PROCESSORS_PER_CORE_TYPE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
