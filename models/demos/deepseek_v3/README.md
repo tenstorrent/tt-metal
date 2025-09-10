@@ -81,6 +81,47 @@ run_config = MLP1D.run_config(model_config, weight_config, model_state)
 output = MLP1D.forward_prefill(input_tensor, run_config) # or forward_decode(input_tensor, run_config)
 ```
 
+## Demo CLI
+
+The demo entrypoint `models/demos/deepseek_v3/demo/demo.py` supports:
+
+- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
+- `--cache-dir PATH`: Where to store converted TTNN weights and caches. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
+- `--max-new-tokens N`: Number of tokens to generate (default: 32).
+- `--random-weights`: Use randomly initialized weights (single dense layer only). Does not require tokenizer or safetensors.
+- `--single-layer {mlp,moe}`: With `--random-weights`, request a single layer (mlp supported).
+- `--token-accuracy`: Enable teacher‑forcing decode and report accuracy (requires full‑model mode + tokenizer).
+- `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
+- `--tf-prompt-len N`: Override the teacher‑forcing prompt length in tokens (taken from the reference file). Defaults to half+1 if omitted.
+
+When not using `--random-weights`, pass a prompt as the first argument or via the `prompt` parameter when calling programmatically.
+
+### Teacher Forcing Accuracy Verification
+
+You can verify accuracy under teacher forcing using a reference file with tokenized ground‑truth. The expected format matches the tt_transformers demos/tests:
+
+- Keys: `reference_tokens` (LongTensor [1, T]) and optional `top5_tokens` (LongTensor [T, 5]).
+- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground‑truth continuation.
+
+Generate a compatible reference file with the tt_transformers helper (use the same tokenizer/model family as your DeepSeek model to ensure token IDs match):
+
+- Hugging Face path:
+  - `python models/tt_transformers/tests/generate_reference_outputs.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
+- Or use the HF‑only variant:
+  - `python models/tt_transformers/tests/generate_reference_hf.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
+
+Run the DeepSeek‑V3 demo with teacher forcing:
+
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
+  - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
+  - `... --tf-prompt-len 1024 --max-new-tokens 256`
+
+Notes:
+
+- `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
+- The demo decodes a single sequence in teacher‑forcing mode. `--max-new-tokens` is capped to the number of available GT tokens in the reference file.
+- If `top5_tokens` is present in the reference, the demo reports both top‑1 and top‑5 accuracies; otherwise, only top‑1.
+
 ## Details
 ###  Folder Contents
 - [reference](./reference): Reference model code from HuggingFace, cleaned up and extracted submodule code etc.
