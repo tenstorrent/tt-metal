@@ -35,7 +35,9 @@ runs:
           else
             "Malformed regressions payload"
           end' "$tmp_file")
-        PAYLOAD=$(jq -cn --arg text "$TEXT" '{text:$text}')
+        AGG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        FULL_TEXT=$'Aggregate Workflow Data run: <'"$AGG_URL"'|this run>\n\n'"$TEXT"
+        PAYLOAD=$(jq -cn --arg text "$FULL_TEXT" '{text:$text}')
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
     - name: Report Github Pipeline Status Slack Action
       uses: slackapi/slack-github-action@v1.26.0
