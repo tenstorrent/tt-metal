@@ -88,11 +88,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::CELU:
         case UnaryOpType::HARDTANH:
         case UnaryOpType::THRESHOLD:
-<<<<<<< HEAD
-        case UnaryOpType::CLAMP_TSS: return true;
-=======
+        case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::RPOW: return true;
->>>>>>> e0efe4cbe9 (Migrate rpow as llk op)
         default: return false;
     }
     return false;
