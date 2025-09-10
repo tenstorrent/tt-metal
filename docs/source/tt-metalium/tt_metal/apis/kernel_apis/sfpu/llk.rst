@@ -8,7 +8,7 @@ Overview
 
 SFPI is the programming interface to the SFPU.  It consists of a C++ wrapper
 around a RISCV GCC compiler base which has been extended with vector data types and
-__builtin intrinsics to generate SFPU instructions.  The wrapper provides a
+``__builtin`` intrinsics to generate SFPU instructions.  The wrapper provides a
 C++ like interface for programming.
 
 Compiler Options/Flags
@@ -32,7 +32,7 @@ Further, the following options disable parts of the SFPI enabled compiler:
   * ``-fno-rvtt-sfpu-warn``: disable sfpu specific warnings/errors
   * ``-fno-rvtt-sfpu-combine``: disable sfpu instruction combining
   * ``-fno-rvtt-sfpu-cc``: disable sfpu CC optimizations
-  * ``-fno-rvtt-sfpu-replay``: disable sfpu REPLAY optimizations (wormhole only)
+  * ``-fno-rvtt-sfpu-replay``: disable sfpu REPLAY optimizations
 
 Example
 -------
@@ -93,6 +93,8 @@ The main things to note from the example are:
 And also some implications
 
   * Standard C++ ``if`` statements cannot be used to handle vector conditionals
+  * ``v_if`` implements condition via predication - only vector operations are predicated
+  * Same performance consideration apply SFPI as for any SIMT architecture - avoid divergent ``v_if`` execution paths
 
 Details
 =======
@@ -150,10 +152,36 @@ The only macros used within the wrapper implement the predicated conditional pro
   * ``v_endblock``
   * ``v_and()``
 
-The conditionals work mostly as expected but note the required ``v_endif`` at the end of an if/else chain.  Forgetting this results in compilation errors as the ``v_if`` macro contains a ``{`` which is matched by the ``v_endif``.
+The conditionals work mostly as expected but note the required ``v_endif`` at the end of an if/else chain. Forgetting this results in compilation errors as the ``v_if`` macro contains a ``{`` which is matched by the ``v_endif``:
 
-``v_block`` and ``v_and`` allow for the following code to progressively "narrow" the CC
-state:
+.. code-block:: c++
+
+    v_if (a < b) {
+        dst_reg[0] = a;
+    } v_elseif (a > b) {
+        dst_reg[0] = b;
+    } v_else {
+        dst_reg[0] = a + b;
+    }
+    v_endif;
+
+``dst_reg[0]`` is assigned ``a`` where ``a < b``, ``b`` where ``a > b`` and ``a + b`` where ``a == b``.
+
+However note that ``v_if`` and alike works via predication. In other words, both sides of the conditional are executed and only the enabled vector elements are written. RISC-V instructions are executed normally. For example:
+
+.. code-block:: c++
+
+    v_if (a < b) {
+        DPRINT << "a < b\n";
+    } v_else {
+        dst_reg[0] = b;
+        DPRINT << "a >= b\n";
+    }
+    v_endif;
+
+Will result in both ``a < b`` and ``a >= b`` being printed, but only the elements where ``a >= b`` being written to ``dst_reg[0]``.
+
+``v_block`` and ``v_and`` allow for the following code to progressively "narrow" the CC state:
 
 .. code-block:: c++
 
@@ -252,21 +280,25 @@ Adds the 8-bit value in ''exp'' to the exponent of ''v'' and returns the result 
     vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
     vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
 
-''l0'', ''l1'', ''l2'' each contain 2 8-bit floating point values ''A'' and ''B'' with ''A'' in bits 15:8 and ''B'' in bits 7:0. The 8-bit format is:
+``l0``, ``l1``, ``l2`` each contain 2 8-bit floating point values ``A`` and ``B`` with ``A`` in bits 15:8 and ``B`` in bits 7:0. The 8-bit format is:
+
   * 0xFF represents the value 0, otherwise
   * bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa
-Floating point representations of ''A'' and ''B'' (19-bit on GS and 32-bit on WH) are constructed by:
+
+Floating point representations of ``A`` and ``B`` (19-bit on GS and 32-bit on WH) are constructed by:
+
   * Using the sign bit
   * Generating an 8-bit exponent as (127 – exponent_extender)
   * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
 
-''A'' and ''B'' are selected from one of ''l0'', ''l1'' or ''l2'' based on the value in ''v'' as follows:
-  * ''l0'' when ''v'' < 0
-  * ''l1'' when ''v'' == 0
-  * ''l2'' when ''v'' > 0
+``A`` and ``B`` are selected from one of ``l0``, ``l1`` or ``l2`` based on the value in ``v`` as follows:
 
-XXXX is this backwards?
-Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
+  * ``l0`` when ``v`` < 0
+  * ``l1`` when ``v`` == 0
+  * ``l2`` when ``v`` > 0
+
+.. XXXX is this backwards?
+.. Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
 
 .. code-block:: c++
 
@@ -415,6 +447,13 @@ then assigns the LReg to the constant register and so takes 1 cycle longer
 than just loading an LReg.  Accessing a constant register is just as fast as
 accessing an LReg.  Loading a constant register loads the same value into all
 vector elements.
+
+Using programmable constants reduces the mount of loads needed during kernel
+execution and so can improve performance. However, users should be aware that
+other functions may overwrite the constant registers (this is what some of the
+``init_*`` functions do).  Therefore, if a constant register is used, it
+should be placed in the initialization function and users needs to ensure
+no other function overwrites it before use.
 
 Assigning LRegs
 ^^^^^^^^^^^^^^^
