@@ -57,17 +57,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
     ) -> ModelPrefillConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.prefill_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.prefill_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -89,17 +82,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
     ) -> ModelDecodeConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.decode_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.decode_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -155,7 +141,12 @@ class MoEDecoderBlock(DecoderBlockBase):
         return x_partitioned
 
     @classmethod
-    def _broadcast_row_to_mesh(cls, tt_input: ttnn.Tensor, mesh_shape: tuple[int, int], src_row: int) -> ttnn.Tensor:
+    def _broadcast_row_to_mesh(
+        cls,
+        tt_input: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        src_row: int,
+    ) -> ttnn.Tensor:
         """Broadcast data from a source row to all other rows in the mesh."""
         # Broadcast from src_row to mesh
         # Loop over rows, skip src_row
@@ -204,13 +195,9 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
     ) -> ModelState:
         return {
-            "moe": [
-                None if is_padding else MoE.create_shared_state(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.create_shared_state(hf_config, mesh_device)],
             "shared_expert": {},
         }
 
