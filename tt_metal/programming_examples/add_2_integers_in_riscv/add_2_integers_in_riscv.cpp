@@ -24,17 +24,21 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize a device
+    // Initialize a MeshDevice:
+    // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
+    // single object,
+    // maintaining uniform memory and runtime state across all physical devices.
+    // A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
-    // Create a command queue and program
-    // Command queue
-    //    * Submit work (execute programs and read/write buffers) to the device
-    // Program
-    //    * Contains kernels that perform computations or data movement
+    // Submitting work to a MeshDevice is done through a MeshCommandQueue.
+    // A MeshCommandQueue lets you enqueue uploads/downloads (buffer operations) and execute programs on the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    // A MeshWorkload groups one or more programs that will execute on a MeshDevice.
+    // The set of physical devices targeted by the workload is specified by a MeshCoordinateRange.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    // A Program contains kernels that perform computations or data movement.
     Program program = CreateProgram();
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
@@ -42,6 +46,7 @@ int main() {
 
     // Adding 2 integers in RISC-V thus a buffer size of 4 bytes.
     constexpr uint32_t buffer_size = sizeof(uint32_t);
+
     // There are many modes of buffer allocation, here we use interleaved buffers. Interleaved buffers are the most
     // flexible and generally recommended buffer type for most applications. As the Tensix core does not have direct
     // access to DRAM, an extra buffer on L1 (SRAM) is required to read/write data from/to DRAM.
@@ -57,7 +62,10 @@ int main() {
         .size = buffer_size,
     };
 
-    // Create the DRAM and SRAM buffers
+    // Create the DRAM and SRAM buffers:
+    // MeshBuffer objects are allocated per device according to the DeviceLocalBufferConfig (location, page size)
+    // and sized by the ReplicatedBufferConfig. Here we create three DRAM buffers for inputs/outputs and three L1
+    // buffers used as on-core scratch space for the Data Movement kernels.
     auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
@@ -102,17 +110,15 @@ int main() {
             dst_l1_buffer->address(),
         });
 
-    // Enqueue the kernel for execution on the device. Setting blocking to false allows the program to continue
-    // executing while the kernel is being executed on the device (which is for demonstration purposes here as
-    // immidiately after we read the result).
+    // Add the program to the workload and enqueue it for execution on the MeshDevice.
+    // Setting blocking=false returns immediately; commands on the queue execute in FIFO order.
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 
-    // Read in result into a host vector. This time we set blocking to true as we can only compare the result after the
-    // data has been read from the device.
-    // NOTE: Everything in the command queue is executed in order, one by one after the previous command has completed.
-    // In no conditions a read on the command queue will be executed before kernel execution in front of it has
-    // completed.
+    // Read a shard of the destination MeshBuffer back to host.
+    // ReadShard reads from a specific device identified by MeshCoordinate; the last argument controls blocking.
+    // This time we set blocking=true since we must have the data before comparing.
+    // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
     std::vector<uint32_t> result_vec;
     distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking=*/true);
     if (result_vec.size() != 1) {
