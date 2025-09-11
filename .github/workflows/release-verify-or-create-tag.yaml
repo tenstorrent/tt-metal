@@ -33,8 +33,6 @@ jobs:
       attestations: write
       actions: write
     runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
     steps:
