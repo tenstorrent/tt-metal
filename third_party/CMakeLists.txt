@@ -65,7 +65,6 @@ CPMAddPackage(
         "BUILD_TESTING OFF"
         "protobuf_BUILD_EXAMPLES OFF"
         "BUILD_SHARED_LIBS OFF"
-        "protobuf_BUILD_SHARED_LIBS OFF"
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
