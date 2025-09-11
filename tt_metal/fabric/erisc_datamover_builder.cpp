@@ -297,7 +297,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
     this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_status_address = edm_local_sync_address + field_size;
+    this->edm_local_tensix_sync_address = edm_local_sync_address + field_size;
+    this->edm_status_address = edm_local_tensix_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
 
@@ -1149,6 +1150,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     termination_signal_ptr(config.termination_signal_address),
     edm_local_sync_ptr(config.edm_local_sync_address),
+    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
     edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
@@ -1254,6 +1256,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
+    // add the downstream tensix connection arg here, num_downstream_tensix_connections
+    ct_args.push_back(this->num_downstream_tensix_connections);
+
     // when have dateline vc (vc1) and with tensix exntension enabled, need to send vc1 to downstream fabric router
     // instead of downstream tensix exntension.
     bool vc1_has_different_downstream_dest =
@@ -1304,6 +1309,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
+        this->edm_local_tensix_sync_ptr,
         this->edm_status_ptr,
 
         // fabric counters
@@ -1373,8 +1379,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.insert(ct_args.end(), main_args.begin(), main_args.end());
 
     // insert the sender channel num buffers
-    // Index updated to account for 23 stream ID arguments + 1 marker at the beginning
-    const size_t sender_channel_num_buffers_idx = 38;  // 14 + 23 + 1
+    // Index updated to account for 23 stream ID arguments + 1 marker + 1 downstream tensix connections
+    const size_t sender_channel_num_buffers_idx = 39;  // 14 + 23 + 1 + 1
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
@@ -1752,6 +1758,11 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     eth_chan_directions ds_dir = downstream_builder.get_direction();
 
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
+
+    if constexpr (std::is_same_v<BuilderType, FabricTensixDatamoverBuilder>) {
+        this->num_downstream_tensix_connections++;
+        downstream_builder.append_upstream_routers_noc_xy(this->my_noc_x, this->my_noc_y);
+    }
 
     if (is_2D_routing) {
         // TODO: unify vc0 and vc1?
