@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 class MeshTraceBuffer;
+class SubmeshAllocatorDependenciesManager;
 
 using DeviceIds = std::vector<int>;
 
@@ -124,6 +125,7 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+    std::shared_ptr<SubmeshAllocatorDependenciesManager> submesh_allocator_manager_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -335,6 +337,9 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Allocator ID management for overlapped allocators
+    uint32_t current_allocator_id() const;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

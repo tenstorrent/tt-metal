@@ -53,6 +53,7 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/distributed/submesh_allocator_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
@@ -224,6 +225,12 @@ MeshDevice::MeshDevice(
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
+    if (parent_mesh_) {
+        submesh_allocator_manager_ = parent_mesh_->submesh_allocator_manager_;
+    } else {
+        submesh_allocator_manager_ = std::make_shared<SubmeshAllocatorDependenciesManager>();
+    }
+    submesh_allocator_manager_->register_mesh(*this);
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -1029,5 +1036,9 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+uint32_t MeshDevice::current_allocator_id() const {
+    return submesh_allocator_manager_ ? submesh_allocator_manager_->allocator_id_for(*this) : 0u;
+}
 
 }  // namespace tt::tt_metal::distributed
