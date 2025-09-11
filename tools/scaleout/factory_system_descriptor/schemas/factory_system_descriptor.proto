@@ -13,7 +13,7 @@ message FactorySystemDescriptor {
     }
 
     message BoardLocationType {
-        uint32 host_id = 1;
+        optional uint32 host_id = 1;
         uint32 tray_id = 2;
         string board_type = 3;
     }
@@ -23,10 +23,10 @@ message FactorySystemDescriptor {
     }
 
     message EndPoint {
-        uint32 host_id = 1;
+        optional uint32 host_id = 1;
         uint32 tray_id = 2;
-        uint32 asic_location = 3;
-        uint32 chan_id = 4;
+        optional uint32 asic_location = 3;
+        optional uint32 chan_id = 4;
     }
 
     message Connection {

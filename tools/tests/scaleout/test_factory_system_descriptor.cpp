@@ -16,6 +16,7 @@ TEST(Cluster, TestFactorySystemDescriptor16LB) {
         "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
 
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_16_n300_lb.textproto");
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_16_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
@@ -31,6 +32,7 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
 
     // Generate the FSD (textproto format)
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_5_n300_lb.textproto");
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_5_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
