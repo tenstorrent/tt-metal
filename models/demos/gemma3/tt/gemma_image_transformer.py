@@ -33,6 +33,8 @@ class TtGemmaImageTransformer(LightweightModule):
         self.mesh_device = mesh_device
         self.gated = gated
 
+        print("Number of gemma vision transformer layers is: ", layers)
+
         self.resblocks = [
             TtGemmaImageTransformerBlock(
                 mesh_device=mesh_device,

@@ -32,6 +32,7 @@ def test_gemma_vision(
     reset_seeds,
     bsz,
 ):
+    print("Mesh device num devices:", mesh_device.get_num_devices())
     pcc_required = 0.95
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)

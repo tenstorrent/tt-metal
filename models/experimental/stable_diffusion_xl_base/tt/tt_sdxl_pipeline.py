@@ -68,6 +68,9 @@ class TtSDXLPipeline(LightweightModule):
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
+            assert (
+                os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
+            ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config)
@@ -351,13 +354,33 @@ class TtSDXLPipeline(LightweightModule):
 
         logger.info("Preparing input tensors for TT model...")
         profiler.start("prepare_input_tensors")
+        logger.info("Done profiler start")
         device_tensors = [self.tt_latents_device, *self.tt_prompt_embeds_device, *self.tt_text_embeds_device]
 
+        print("Begin tensor loop copy")
         for host_tensor, device_tensor in zip(host_tensors, device_tensors):
+            print("Begin tensor copy")
+            print("Copying host tensor to device tensor shape: ", host_tensor.shape, device_tensor.shape)
+            print(
+                "Copying host tensor to device tensor padded shape: ",
+                host_tensor.padded_shape,
+                device_tensor.padded_shape,
+            )
+            print("Copying host tensor to device tensor dtype: ", host_tensor.dtype, device_tensor.dtype)
+            print("Copying host tensor to device tensor layout: ", host_tensor.layout, device_tensor.layout)
+            print(
+                "Copying host tensor to device tensor memory config: ",
+                host_tensor.memory_config(),
+                device_tensor.memory_config(),
+            )
+            print("End tensor copy")
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+        print("End tensor loop copy")
 
         ttnn.synchronize_device(self.ttnn_device)
+        logger.info("Done synchronize device")
         profiler.end("prepare_input_tensors")
+        logger.info("Done profiler end")
 
     def generate_images(self):
         # SDXL inference run.

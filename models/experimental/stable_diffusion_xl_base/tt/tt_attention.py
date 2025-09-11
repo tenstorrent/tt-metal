@@ -185,6 +185,8 @@ class TtAttention(LightweightModule):
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
+        print("Post sdpa shape: ", hidden_states.shape)
+        print("Post sdpa tensor: ", hidden_states.padded_shape)
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.linear(

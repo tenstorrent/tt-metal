@@ -235,6 +235,7 @@ def test_multimodal_demo_text(
     )
 
     HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace
+    print("Num batches is: ")
 
     if not HF_MODEL:
         ckpt_dir = os.environ["LLAMA_DIR"]
@@ -325,6 +326,7 @@ def test_multimodal_demo_text(
     _num_decode_tokens = 0
 
     prompt_encoder = hf_multimodal_encode if HF_MODEL else formatter.encode_dialog_prompt
+    print("Num batches is: ", num_batches)
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
@@ -383,7 +385,9 @@ def test_multimodal_demo_text(
                     )
 
             # Get cached prefill time
+            print("Running inference prefill, iteration: ", batch_idx)
             with profiler("inference_prefill", iteration=batch_idx):
+                my_prefill_start_time = time.time()
                 (
                     batch_logits,
                     prefill_batch_xattn_masks,
@@ -398,6 +402,9 @@ def test_multimodal_demo_text(
                     total_lens,
                     prefill_lens,
                 )
+                ttnn.synchronize_device(mesh_device)
+                my_prefill_end_time = time.time()
+                print("My Prefill time is: ", my_prefill_end_time - my_prefill_start_time)
 
             prefill_end = time.perf_counter()
             next_tokens, next_texts = sampler(batch_logits)
@@ -479,6 +486,8 @@ def test_multimodal_demo_text(
     compile_decode_time = profiler.get_duration("compile_decode")
     total_inference_prefill_time = profiler.get_duration_sum("inference_prefill")
     total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0) - compile_decode_time
+    print("Total inference prefill time is: ", total_inference_prefill_time)
+    print("Num batches is: ", num_batches)
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time

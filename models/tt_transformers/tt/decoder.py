@@ -34,6 +34,7 @@ class TransformerBlock(LightweightModule):
         self.num_devices = args.num_devices
         self.args = args
         self.hidden_size = args.dim
+        print(f"hidden_size: {self.hidden_size}")
         self.n_heads = args.n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = args.max_seq_len
@@ -188,6 +189,9 @@ class TransformerBlock(LightweightModule):
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
+
+        print("Pre attention norm input shape: ", x.shape)
+        print("Pre attention norm input: ", x)
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)

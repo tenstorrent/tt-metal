@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import time
 from typing import List
 
 import torch
@@ -77,16 +78,24 @@ class TtGemmaModel(Transformer):
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
         if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
+            print("Computing prefill :)")
+            # measure time for compute_vision_token
+            start_time = time.time()
             vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
             comp_vision_output = ttnn.to_torch(
                 vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
             )[: vision_output.shape[0], :]
+            end_time = time.time()
+            print(f"Time taken for compute_vision_token: {end_time - start_time} seconds")
 
+            start_time = time.time()
             image_features = comp_vision_output.squeeze(0)
             special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(tokens_embd)
             image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
             tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+            end_time = time.time()
+            print(f"Time taken for host stuff: {end_time - start_time} seconds")
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,

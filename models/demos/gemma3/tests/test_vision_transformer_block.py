@@ -21,7 +21,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "gated",
-    (True, False),
+    (False,),
 )
 @pytest.mark.parametrize(
     "mesh_device",

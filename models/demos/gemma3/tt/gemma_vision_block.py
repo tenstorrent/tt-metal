@@ -86,8 +86,11 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
 
         bsz, in_channel, h, w = images.shape
+        print("ImagesShape in gemma_vision_block: ", images.shape)
 
         x = self.embeddings(images)
+        print("Shape following embeddings: ", x.shape)
+        print("Tensor following embeddings: ", x)
         attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])
 
         tt_mask = ttnn.from_torch(

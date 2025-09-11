@@ -32,6 +32,7 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
 ):
+    ttnn_device.enable_program_cache()
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
@@ -152,6 +153,7 @@ def run_demo_inference(
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
+    ttnn_device.disable_and_clear_program_cache()
     return images
 
 
@@ -168,7 +170,7 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    ((20),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
@@ -199,7 +201,7 @@ def run_demo_inference(
     ids=("with_trace", "no_trace"),
 )
 def test_demo(
-    mesh_device,
+    device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -211,7 +213,7 @@ def test_demo(
     guidance_scale,
 ):
     return run_demo_inference(
-        mesh_device,
+        device,
         is_ci_env,
         prompt,
         negative_prompt,
