@@ -19,7 +19,7 @@ template <
     bool reformat_dst_to_col_on_end,
     bool convert_M2_to_var_on_end>
 inline void llk_math_welfords_sfpu(
-    uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows, uint32_t reciprocal_lut_ptr) {
+    uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows, uint32_t* reciprocal_lut_ptr) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_welfords_llk_entry_,
         input_dst_index,

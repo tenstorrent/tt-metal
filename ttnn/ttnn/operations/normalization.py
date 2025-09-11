@@ -358,12 +358,50 @@ def create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channe
     return input_mask_tensor
 
 
+def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, grid_x, grid_y):
+    """
+    Create reciprocals tensor for group norm with welford algorithm.
+    Generates reciprocal values 1/1, 1/2, 1/3, ..., 1/N.
+    The number of elements is based on the tensor size and the number of groups.
+    The tensor is replicated for each core so that when sharded to L1 memory, each core has a complete copy.
+
+    Args:
+        N: Batch size
+        C: Number of channels
+        H: Height
+        W: Width
+        num_groups: Number of groups
+        grid_x: Number of cores across x dimension
+        grid_y: Number of cores across y dimension
+
+    Returns:
+        Row major tensor with reciprocal values
+    """
+    import torch
+    import math
+
+    # Calculate number of reciprocals needed: ceil(C*H*W/(G*32*P))
+    total_elements = C * H * W
+    denominator = num_groups * 32 * grid_x
+    num_reciprocals = math.ceil(total_elements / denominator)
+
+    # Create reciprocal values: 1/1, 1/2, 1/3, ..., 1/N
+    reciprocals_tensor = 1.0 / torch.arange(1, num_reciprocals + 1, dtype=torch.float32)
+
+    # Repeat the reciprocals tensor for each core so they all have identical copies
+    return reciprocals_tensor.repeat(grid_x * grid_y, 1)
+
+
 def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):
     return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False)
 
 
 def create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel):
     return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=True)
+
+
+def create_group_norm_reciprocals(N, C, H, W, num_groups, grid_x, grid_y):
+    return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, grid_x, grid_y)
 
 
 def get_group_norm_cores_across_channel(memory_layout, core_grid):

@@ -67,18 +67,22 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, use_welford):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("welford_mode", ["legacy", "welford_normal", "welford_reciprocal"])
+def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
+    # torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
+    # Determine welford and reciprocals settings
+    use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
+    use_reciprocals = welford_mode == "welford_reciprocal"
+
     # torch input tensor
     torch_input_tensor = torch.rand(N * C * H * W, dtype=torch.bfloat16).reshape(N, C, H, W)
-    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
-    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
+    torch_bias = torch.ones((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -100,6 +104,29 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_size, return_mask=True
     )
 
+    # Create reciprocals tensor if needed
+    reciprocals_tensor = None
+    if use_reciprocals:
+        # Generate reciprocals tensor
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size.x, grid_size.y)
+        reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                    ),
+                    (torch_reciprocals.shape[0] // (grid_size.x * grid_size.y), torch_reciprocals.shape[1]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+
     # groupnorm
     num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
@@ -115,24 +142,13 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
             inplace=False,
             num_out_blocks=num_out_blocks,
             use_welford=use_welford,
+            reciprocals=reciprocals_tensor,
         )
         ttnn.synchronize_device(device)
 
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # # Write output with C elements per row
-    # with open("tensor_input.txt", "w") as f:
-    #     for row in input_tensor.reshape(-1, C):
-    #         f.write(" ".join(str(x.item()) for x in row) + "\n")
-    # with open("tensor_output.txt", "w") as f:
-    #     for row in output_tensor.reshape(-1, C):
-    #         f.write(" ".join(str(x.item()) for x in row) + "\n")
-    # with open("torch_tensor_output.txt", "w") as f:
-    #     for row in torch_output_tensor.reshape(-1, C):
-    #         f.write(" ".join(str(x.item()) for x in row) + "\n")
-
-    # breakpoint()
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
 

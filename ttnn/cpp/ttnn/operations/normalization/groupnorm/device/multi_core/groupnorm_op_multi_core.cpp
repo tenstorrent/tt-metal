@@ -1152,6 +1152,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& reciprocals,
     Tensor& output,
     float eps,
     uint32_t num_groups,
@@ -1171,11 +1172,18 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
     }
 
+    // Mode is 0 for legacy groupnorm, 1 for welford groupnorm, 2 for groupnorm with reciprocals
+    uint32_t groupnorm_mode = (reciprocals.has_value() ? 2 : use_welford ? 1 : 0);
+    uint32_t num_reciprocals = reciprocals.has_value() ? reciprocals.value().shard_spec().value().numel() : 0;
+
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reciprocal_cb_data_format =
+        reciprocals.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(reciprocals.value().dtype())
+                                : tt::DataFormat::Float32;
     if (gamma.has_value()) {
         gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype());
     }
@@ -1442,6 +1450,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm3_CB_size_group_2 = 0;
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
+    uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     // output buffer size
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
     uint32_t out_CB_size_group_2 = 0;
@@ -1850,7 +1859,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht_group_1 * block_wt};
+        (std::uint32_t)block_ht_group_1 * block_wt,
+        (std::uint32_t)groupnorm_mode};
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_2 = {
         1,
         (std::uint32_t)gamma.has_value(),
@@ -1871,7 +1881,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_2,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht_group_2 * block_wt};
+        (std::uint32_t)block_ht_group_2 * block_wt,
+        (std::uint32_t)groupnorm_mode};
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
@@ -1968,7 +1979,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
-    };
+
+        (std::uint32_t)reciprocals.has_value()};
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -2001,7 +2013,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
-    };
+
+        (std::uint32_t)reciprocals.has_value()};
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
         (std::uint32_t)0,
@@ -2035,7 +2048,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
-    };
+
+        (std::uint32_t)reciprocals.has_value()};
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -2068,7 +2082,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
-    };
+
+        (std::uint32_t)reciprocals.has_value()};
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -2302,6 +2317,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
             .set_page_size(cb_ex2pe_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+
+    // reciprocal
+    uint32_t cb_reciprocals = tt::CBIndex::c_18;
+    if (reciprocals.has_value()) {
+        tt::tt_metal::CircularBufferConfig reciprocal_cb_config =
+            tt::tt_metal::CircularBufferConfig(reciprocal_CB_size, {{cb_reciprocals, reciprocal_cb_data_format}})
+                .set_page_size(cb_reciprocals, reciprocal_CB_size)
+                .set_globally_allocated_address(*reciprocals.value().buffer());
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, reciprocal_cb_config);
+    }
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -2546,58 +2571,72 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             writer_kernel_ids.push_back(writer_kernels_id_group_2);
         }
     }
-    auto override_runtime_args_callback =
-        [writer_kernel_ids, reader_sender_kernel_ids, reader_receiver_kernel_ids, core_coords, grid_size, mcast_groups](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer()->address();
-            const auto& gamma_tensor = optional_input_tensors.at(0);
-            const auto& beta_tensor = optional_input_tensors.at(1);
-            const auto& mask_tensor = optional_input_tensors.at(2);
-            auto dst_buffer = output_tensors.at(0).buffer()->address();
+    auto override_runtime_args_callback = [writer_kernel_ids,
+                                           reader_sender_kernel_ids,
+                                           reader_receiver_kernel_ids,
+                                           core_coords,
+                                           grid_size,
+                                           mcast_groups,
+                                           groupnorm_mode,
+                                           cb_reciprocals](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer_a = input_tensors.at(0).buffer()->address();
+        const auto& gamma_tensor = optional_input_tensors.at(0);
+        const auto& beta_tensor = optional_input_tensors.at(1);
+        const auto& mask_tensor = optional_input_tensors.at(2);
+        // We don't use negative mask tensor in this one (at pos 3)
+        const auto& reciprocals_tensor = optional_input_tensors.at(4);
+        auto dst_buffer = output_tensors.at(0).buffer()->address();
 
-            for (uint32_t i = 0; i < core_coords.size(); ++i) {
-                CoreCoord core = core_coords[i];
+        // This is one where reciprocals are used
+        if (groupnorm_mode == 2) {
+            auto reciprocals_buffer = reciprocals_tensor.value().buffer();
+            UpdateDynamicCircularBufferAddress(program, cb_reciprocals, *reciprocals_buffer);
+        }
 
-                auto writer_kernel_id = writer_kernel_ids.at(i);
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+        for (uint32_t i = 0; i < core_coords.size(); ++i) {
+            CoreCoord core = core_coords[i];
 
-                writer_runtime_args[3] = dst_buffer;
-                if (gamma_tensor.has_value()) {
-                    writer_runtime_args[4] = gamma_tensor.value().buffer()->address();
-                }
-                if (beta_tensor.has_value()) {
-                    writer_runtime_args[5] = beta_tensor.value().buffer()->address();
-                }
-                if (mask_tensor.has_value()) {
-                    writer_runtime_args[6] = mask_tensor.value().buffer()->address();
+            auto writer_kernel_id = writer_kernel_ids.at(i);
+            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+
+            writer_runtime_args[3] = dst_buffer;
+            if (gamma_tensor.has_value()) {
+                writer_runtime_args[4] = gamma_tensor.value().buffer()->address();
+            }
+            if (beta_tensor.has_value()) {
+                writer_runtime_args[5] = beta_tensor.value().buffer()->address();
+            }
+            if (mask_tensor.has_value()) {
+                writer_runtime_args[6] = mask_tensor.value().buffer()->address();
+            }
+        }
+        uint32_t sender_index = 0;
+        uint32_t receiver_index = 0;
+        for (int i = 0; i < mcast_groups.size(); ++i) {
+            const auto& group = mcast_groups[i];
+            for (int j = 0; j < group.size(); ++j) {
+                CoreCoord core = group[j];
+                if (j == 0) {
+                    auto reader_sender_kernel_id = reader_sender_kernel_ids.at(sender_index);
+                    auto& reader_sender_runtime_args = GetRuntimeArgs(program, reader_sender_kernel_id, core);
+                    reader_sender_runtime_args[0] = src_buffer_a;
+                    reader_sender_runtime_args[1] = dst_buffer;
+                    sender_index++;
+                } else {
+                    auto reader_receiver_kernel_id = reader_receiver_kernel_ids.at(receiver_index);
+                    auto& reader_receiver_runtime_args = GetRuntimeArgs(program, reader_receiver_kernel_id, core);
+                    reader_receiver_runtime_args[0] = src_buffer_a;
+                    reader_receiver_runtime_args[1] = dst_buffer;
+                    receiver_index++;
                 }
             }
-            uint32_t sender_index = 0;
-            uint32_t receiver_index = 0;
-            for (int i = 0; i < mcast_groups.size(); ++i) {
-                const auto& group = mcast_groups[i];
-                for (int j = 0; j < group.size(); ++j) {
-                    CoreCoord core = group[j];
-                    if (j == 0) {
-                        auto reader_sender_kernel_id = reader_sender_kernel_ids.at(sender_index);
-                        auto& reader_sender_runtime_args = GetRuntimeArgs(program, reader_sender_kernel_id, core);
-                        reader_sender_runtime_args[0] = src_buffer_a;
-                        reader_sender_runtime_args[1] = dst_buffer;
-                        sender_index++;
-                    } else {
-                        auto reader_receiver_kernel_id = reader_receiver_kernel_ids.at(receiver_index);
-                        auto& reader_receiver_runtime_args = GetRuntimeArgs(program, reader_receiver_kernel_id, core);
-                        reader_receiver_runtime_args[0] = src_buffer_a;
-                        reader_receiver_runtime_args[1] = dst_buffer;
-                        receiver_index++;
-                    }
-                }
-            }
-        };
+        }
+    };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
