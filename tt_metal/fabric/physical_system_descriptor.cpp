@@ -262,9 +262,13 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     auto my_rank = *(distributed_context.rank());
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
+        std::cout << "remove unresolved nodes" << std::endl;
         this->remove_unresolved_nodes();
+        std::cout << "generate cross host connections" << std::endl;
         this->generate_cross_host_connections();
+        std::cout << "validate graphs" << std::endl;
         this->validate_graphs();
+        std::cout << "Done with global discovery" << std::endl;
     }
     this->exchange_metadata(false);
     distributed_context.barrier();
