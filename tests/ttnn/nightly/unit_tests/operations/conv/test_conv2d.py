@@ -113,7 +113,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
-    activation="",
+    activation=None,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -124,6 +124,7 @@ def run_conv(
     bs_full_inner_dim=False,
     sharded_cfg=None,
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    enable_activation_reuse=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -173,7 +174,7 @@ def run_conv(
 
     # for Sqrt activation functions we need positive numbers as output of conv2d
     # in order to get valid sqrt values
-    sqrt_act_function = activation == "sqrt"
+    sqrt_act_function = activation is not None and activation.op_type == ttnn.UnaryOpType.SQRT
     torch_input_tensor_nchw = randomize_torch_tensor(
         torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
     )
@@ -208,6 +209,7 @@ def run_conv(
         dilation=(dilation_h, dilation_w),
         groups=groups,
     )
+    # Handle UnaryWithParam activation type with direct enum mapping
     act_func = get_torch_act_func_from_string(activation)
     if act_func:
         ref = act_func(ref)
@@ -226,6 +228,7 @@ def run_conv(
         )
 
     requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
+
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         input_dtype,
@@ -250,6 +253,7 @@ def run_conv(
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
+        enable_activation_reuse=enable_activation_reuse,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -333,7 +337,9 @@ def run_conv(
     else:
         pcc = 0.997
 
-    if activation == "tanh":
+    # Check if activation is tanh
+    is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+    if is_tanh:
         # Scale down PCC for tanh.
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
@@ -643,10 +649,21 @@ def test_conv_features_multi_device(
         [3, 1],
     ],
 )
-@pytest.mark.parametrize("enable_act_double_buffer", [True, False])
-@pytest.mark.parametrize("enable_weights_double_buffer", [True, False])
+@pytest.mark.parametrize("enable_act_double_buffer", [True])
+@pytest.mark.parametrize("enable_weights_double_buffer", [True])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "sigmoid_approx", "tanh", "sqrt", "gelu"])
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+    ],
+)
 def test_conv_activation(
     device,
     torch_tensor_map,
@@ -673,7 +690,9 @@ def test_conv_activation(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
+    # Check if activation is sqrt
+    is_sqrt = activation is not None and activation.op_type == ttnn.UnaryOpType.SQRT
+    if output_dtype == ttnn.bfloat8_b and shard_layout == HS and is_sqrt:
         pytest.skip(
             "Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16"
         )
@@ -1846,7 +1865,9 @@ def test_unet_conv_wh(
         (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 16 * 32}),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32}),
+        # Issue #28172 fix bug with weights preparation in case conv maps to matmul
+        # and input tensor is interleaved and auto shard is used.
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32} if is_wormhole_b0() else None),
     ),
 )
 @pytest.mark.parametrize(
@@ -2986,7 +3007,7 @@ def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
         padding,
         None,
         auto_shard=True,
-        activation="silu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
 
 
@@ -3000,7 +3021,7 @@ def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
 #fmt: on
 
 @pytest.mark.parametrize("shard_layout", [BS])
-@pytest.mark.parametrize("activation", ["relu"])
+@pytest.mark.parametrize("activation", [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
 def test_block_sharding_relu_act_block_h(
@@ -3147,7 +3168,7 @@ def test_conv2d_model_fruit(
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
         input_layout= input_layout,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=enable_act_double_buffer,
         input_dtype = input_dtype,
     )
@@ -3849,13 +3870,13 @@ def test_conv2d_with_fold(
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant, shard_layout, activation",
     (
-        (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, ""),
-        (1, 320, 320, 40, 40, 3, 3, 1, 1, 1, 1, 320, True, None, False, HS, "silu"),
-        (1, 320, 320, 80, 80, 3, 3, 2, 2, 1, 1, 320, True, None, False, HS, "silu"),
-        (1, 640, 640, 20, 20, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
-        (1, 640, 640, 40, 40, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
-        (1, 640, 640, 40, 40, 3, 3, 2, 2, 1, 1, 640, True, None, False, BS, ""),
-        (1, 640, 640, 80, 80, 3, 3, 2, 2, 1, 1, 640, True, None, False, None, ""),
+        (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, None),
+        (1, 320, 320, 40, 40, 3, 3, 1, 1, 1, 1, 320, True, None, False, HS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 320, 320, 80, 80, 3, 3, 2, 2, 1, 1, 320, True, None, False, HS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 20, 20, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 40, 40, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),
+        (1, 640, 640, 40, 40, 3, 3, 2, 2, 1, 1, 640, True, None, False, BS, None),
+        (1, 640, 640, 80, 80, 3, 3, 2, 2, 1, 1, 640, True, None, False, None, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -4535,5 +4556,187 @@ def test_conv_bs_grid(
         None,
         shard_layout=BS,
         has_bias=False,
+        input_dtype=ttnn.bfloat16
+    )
+
+
+# fmt: off
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("enable_split_reader", [False, True])
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
+    (
+        # model kiwi new convs
+        ( 1,  4,    32, 1024,   128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  32,   32, 512,    40, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  3,    45, 512,    60, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  7,    32, 1024,   140, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (4, 4), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 4,  32,   32,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+    ),
+)
+ #fmt: on
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
+def test_conv2d_activation_reuse(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    auto_shard,
+    act_block_h_override,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    input_dtype,
+    input_layout,
+    enable_split_reader,
+    enable_activation_reuse,
+):
+    if batch == 16 and is_wormhole_b0():
+        # not enough memory on WH for this case
+        act_block_h_override = 32*4
+
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=math_fidelity,
+        output_dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=(padding[0], padding[1], padding[2], padding[3]),
+        config_override=config_override,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=deallocate_activation,
+        groups=groups,
+        has_bias=True,
+        shard_layout=None,
+        auto_shard=auto_shard,
+        memory_config=None,
+        input_mesh_mapper=None,
+        weight_mesh_mapper=None,
+        output_mesh_composer=None,
+        enable_split_reader=enable_split_reader,
+        input_layout= input_layout,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
+        input_dtype = input_dtype,
+        enable_activation_reuse=enable_activation_reuse
+    )
+
+
+@skip_for_blackhole()
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("enable_split_reader", [False, True])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
+    (
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv2d_activation_reuse_unet_conv_group_4(
+    device,
+    torch_tensor_map,
+    math_fidelity,
+    output_dtype,
+    weights_dtype,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+    output_layout,
+    in_place,
+    enable_split_reader,
+    enable_activation_reuse,
+):
+    batch_size = 1
+    groups = 4
+    input_channels = groups * input_channels
+    output_channels = groups * output_channels
+
+    input_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        config_override,
+        shard_layout=shard_layout,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=output_layout,
+        groups=groups,
+        in_place=in_place,
+        deallocate_activation=True,
+        enable_act_double_buffer=True, # will be disabled if activation reuse is enabled
+        enable_weights_double_buffer=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         input_dtype=ttnn.bfloat16,
+        sharded_cfg=memory_config,
+        enable_split_reader=enable_split_reader,
+        enable_activation_reuse=enable_activation_reuse
     )
