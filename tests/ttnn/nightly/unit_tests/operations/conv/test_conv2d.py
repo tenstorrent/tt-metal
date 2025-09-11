@@ -1865,9 +1865,7 @@ def test_unet_conv_wh(
         (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 16 * 32}),
-        # Issue #28172 fix bug with weights preparation in case conv maps to matmul
-        # and input tensor is interleaved and auto shard is used.
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32} if is_wormhole_b0() else None),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32}),
     ),
 )
 @pytest.mark.parametrize(
@@ -1910,6 +1908,19 @@ def test_unet_conv_groups_2_wh(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
         pytest.skip("OOM")
+    # Issue #28172 fix bug with weights preparation in case conv maps to matmul
+    # and input tensor is interleaved and auto shard is used.
+    if (
+        filter_height == 1
+        and filter_width == 1
+        and stride_h == 1
+        and stride_w == 1
+        and pad_h == 0
+        and pad_w == 0
+        and is_blackhole()
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < 130  # P100
+    ):
+        config_override = None
     run_conv(
         device,
         torch_tensor_map,
