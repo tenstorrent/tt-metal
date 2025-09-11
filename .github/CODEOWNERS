@@ -31,6 +31,9 @@ tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu 
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt @tenstorrent/metalium-developers-infra
 
+# Scaleout Tools
+tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu
+
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
@@ -300,6 +303,7 @@ models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar @marty1885
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @pgkeller @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # misc

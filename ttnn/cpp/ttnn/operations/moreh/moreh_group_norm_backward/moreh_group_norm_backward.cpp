@@ -55,8 +55,8 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
             gamma_grad_memory_config,
             beta_grad_memory_config,
             compute_kernel_config);
-        outputs.push_back(std::move(dgamma_dbeta[0]));
-        outputs.push_back(std::move(dgamma_dbeta[1]));
+        outputs.push_back(dgamma_dbeta[0]);
+        outputs.push_back(dgamma_dbeta[1]);
 
     } else {
         outputs.push_back(std::nullopt);
