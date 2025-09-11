@@ -56,7 +56,7 @@ jobs:
             elif [ "$tagType" = "dev" ]; then
               dateInt=$(date +%Y%m%d)
               gitHash=$(git rev-parse --short=8 HEAD)
-              version="$baseVersion-dev$dateInt+$gitHash"
+              version="$baseVersion-dev$dateInt"
             else
               version="$baseVersion"
             fi
