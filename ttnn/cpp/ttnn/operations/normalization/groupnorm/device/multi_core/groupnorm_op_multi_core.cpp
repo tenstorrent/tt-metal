@@ -2229,15 +2229,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, repack_cb_config);
     }
     // x
-    uint32_t x_cb_index = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
-        tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
-            .set_page_size(x_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
-    tt::tt_metal::CircularBufferConfig x_cb_config_group_2 =
-        tt::tt_metal::CircularBufferConfig(x_CB_size_group_2, {{x_cb_index, cb_data_format}})
-            .set_page_size(x_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, x_cb_config_group_2);
+    if (!use_welford) {
+        uint32_t x_cb_index = tt::CBIndex::c_24;
+        tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
+            tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
+                .set_page_size(x_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
+        tt::tt_metal::CircularBufferConfig x_cb_config_group_2 =
+            tt::tt_metal::CircularBufferConfig(x_CB_size_group_2, {{x_cb_index, cb_data_format}})
+                .set_page_size(x_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, x_cb_config_group_2);
+    }
     // xmm
     uint32_t xmm_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig xmm_cb_config_group_1 =
@@ -2320,12 +2322,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     // reciprocal
     uint32_t cb_reciprocals = tt::CBIndex::c_18;
+    CBHandle cb_reciprocals_handle = 0;
     if (reciprocals.has_value()) {
         tt::tt_metal::CircularBufferConfig reciprocal_cb_config =
             tt::tt_metal::CircularBufferConfig(reciprocal_CB_size, {{cb_reciprocals, reciprocal_cb_data_format}})
                 .set_page_size(cb_reciprocals, reciprocal_CB_size)
                 .set_globally_allocated_address(*reciprocals.value().buffer());
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, reciprocal_cb_config);
+        cb_reciprocals_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores, reciprocal_cb_config);
     }
 
     // Runtime Args
@@ -2578,7 +2581,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                            grid_size,
                                            mcast_groups,
                                            groupnorm_mode,
-                                           cb_reciprocals](
+                                           cb_reciprocals_handle](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -2595,7 +2598,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         // This is one where reciprocals are used
         if (groupnorm_mode == 2) {
             auto reciprocals_buffer = reciprocals_tensor.value().buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_reciprocals, *reciprocals_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_reciprocals_handle, *reciprocals_buffer);
         }
 
         for (uint32_t i = 0; i < core_coords.size(); ++i) {

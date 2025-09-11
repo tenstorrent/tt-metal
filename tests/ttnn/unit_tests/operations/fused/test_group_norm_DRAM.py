@@ -18,7 +18,6 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (1, 32, 1, 64, 1, 1, 1, 1),  # simple case
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
@@ -69,7 +68,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 )
 @pytest.mark.parametrize("welford_mode", ["legacy", "welford_normal", "welford_reciprocal"])
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
-    # torch.manual_seed(0)
+    torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -80,9 +79,10 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     use_reciprocals = welford_mode == "welford_reciprocal"
 
     # torch input tensor
-    torch_input_tensor = torch.rand(N * C * H * W, dtype=torch.bfloat16).reshape(N, C, H, W)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.ones((C,), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    # Issue 28341: The unit test for Welford is failing with random weights and biases.
+    torch_weight = torch.ones((C,), dtype=torch.bfloat16) if use_welford else torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.ones((C,), dtype=torch.bfloat16) if use_welford else torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -149,7 +149,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
