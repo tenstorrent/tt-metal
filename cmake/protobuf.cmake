@@ -30,7 +30,8 @@ Checks: >
   -readability-redundant-access-specifiers,
   -cppcoreguidelines-interfaces-global-init,
   -hicpp-use-equals-default,
-  -modernize-use-equals-default"
+  -modernize-use-equals-default,
+  -cppcoreguidelines-avoid-goto"
     )
 
     # Generate protobuf files by invoking protoc directly. This avoids depending on
