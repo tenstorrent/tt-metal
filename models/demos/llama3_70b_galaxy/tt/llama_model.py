@@ -207,6 +207,8 @@ class TtTransformer(LightweightModule):
         if page_table is not None:
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
+                # we only want to update the kv cache for 8 users per 4 devices
+                # pad with -1 for the seqlen of all other users
                 devices = 4
                 batch_size_per_device = batch_size // devices
                 page_table_padded = torch.ones((devices, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
@@ -413,6 +415,7 @@ class TtTransformer(LightweightModule):
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
         if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
             batch_size = len(last_token_idx)
             x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
         else:
