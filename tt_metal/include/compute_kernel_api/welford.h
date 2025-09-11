@@ -43,7 +43,8 @@ namespace ckernel {
  * @param num_skip_rows   Number of initial rows to skip in the update. Must be >= 0. Default is 0.
  *                        Setting this to a value greater than 0 skips the first num_skip_rows rows of the update.
  *                        Should follow 0 <= num_skip_rows <= 32.
- * @param reciprocal_lut_ptr       The reciprocal lookup table pointer for optimized speed
+ * @param reciprocal_lut_ptr       The pointer to the reciprocal lookup table. If nullptr, the reciprocal will
+ *                        be computed using float division.
  *
  * @note All 32 rows of the input tile are processed by this function.
  *
@@ -78,7 +79,8 @@ ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_sk
  *
  * @param scale_factor The reciprocal of this value (1/scale_factor) is multiplied with the M2 value in the DST register
  * at tile offset 2 to compute the variance.
- * @param reciprocal_lut_ptr The reciprocal lookup table pointer for optimized speed
+ * @param reciprocal_lut_ptr The pointer to the reciprocal lookup table. If nullptr, the reciprocal will
+ *                        be computed using float division.
  *
  * @return None. The mean and variance tiles are updated in place. 32 values each are written to the DST register.
  *         All 32 values are written to the first face of the DST register. Each valid value is followed by an invalid
