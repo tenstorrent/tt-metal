@@ -112,9 +112,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
             - All input tensors must be on-device.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
-            - `weight`/`bias` tensors:
-              - If TILE: last padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
-              - If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.
+            - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+            - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
             - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
 
         Example:
