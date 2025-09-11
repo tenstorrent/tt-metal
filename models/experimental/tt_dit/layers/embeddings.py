@@ -198,22 +198,22 @@ class PatchEmbed:
         spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
         return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache proj_weight
-        proj_weight_path = path_prefix + "proj_weight"
+        proj_weight_path = path_prefix + "proj_weight" + path_suffix
         ttnn.dump_tensor(proj_weight_path, self.proj_weight)
         cache_dict["proj_weight"] = proj_weight_path
 
         # Cache proj_bias if it exists
         if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "proj_bias"
+            proj_bias_path = path_prefix + "proj_bias" + path_suffix
             ttnn.dump_tensor(proj_bias_path, self.proj_bias)
             cache_dict["proj_bias"] = proj_bias_path
 
         # Cache pos_embed
-        pos_embed_path = path_prefix + "pos_embed"
+        pos_embed_path = path_prefix + "pos_embed" + path_suffix
         ttnn.dump_tensor(pos_embed_path, self.pos_embed)
         cache_dict["pos_embed"] = pos_embed_path
 
