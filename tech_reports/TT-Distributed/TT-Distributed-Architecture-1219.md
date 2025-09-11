@@ -991,7 +991,7 @@ MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0,
 MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}};
 
 DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
-DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
 ```
 
 *Directly create raw handles to two Devices.*
@@ -1717,7 +1717,7 @@ TT-Distributed is the proposed solution for interfacing with a mesh of accelerat
 
 ![](images/image038.png)
 
-## 4.2. Offline System Descriptor: Caching UMD Queries <a id="offline-system-descriptor"></a>
+## 4.1 Offline System Descriptor: Caching UMD Queries <a id="offline-system-descriptor"></a>
 
 TT-Metal exposes several APIs to query physical device state through the tt\_cluster interface during runtime. Additionally, setting up the local or distributed session requires the ability to query system parameters, not directly exposed to users, through tt\_cluster.
 
