@@ -62,7 +62,7 @@ class EfficientNetb0Conv2D:
             enable_split_reader=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
-            reshard_if_not_optimal=False,
+            reshard_if_not_optimal=True,
         )
 
         return conv_config
@@ -230,7 +230,7 @@ class MBConvBlock:
             device=device,
             parameters=parameters["_depthwise_conv"],
             conv_params=conv_params._depthwise_conv,
-            shard_layout=self.shard_layout,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             skip=skip,
             deallocate_activation=deallocate_activation,
         )
