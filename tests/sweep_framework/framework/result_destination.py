@@ -115,7 +115,6 @@ class PostgresResultDestination(ResultDestination):
                     testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
                     exception_text = result.get("exception", None)
                     error_sig = generate_error_signature(exception_text)
-                    error_hash = generate_error_hash(exception_text)
 
                     testcase_values = (
                         test_id,
