@@ -53,7 +53,7 @@ def is_unsupported_case(
             L1_util = L1_util + tensor_size_bytes / num_devices
 
     if L1_util > num_l1_banks * 1536 * 1024:
-        return True, "TI_SKIP L1 test requires more memory than the total available in the device"
+        return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
 
     # Check that each chip has a non-zero amount of data available
     if input_shape[dim] < num_devices:
