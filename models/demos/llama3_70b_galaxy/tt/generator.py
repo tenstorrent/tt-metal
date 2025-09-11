@@ -158,7 +158,7 @@ class Generator:
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
             if use_batched_prefill:
-                output_toks = torch.cat(tt_tok, dim=0)
+                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)
             else:
                 output_toks[id] = tt_tok
 
@@ -227,6 +227,7 @@ class Generator:
             tokens,
             user_id,
             page_table=page_table,
+            batch_size=batch_size,
         )
         toks = self.model.process_output_prefill(
             tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
@@ -250,7 +251,7 @@ class Generator:
         # self.prefill_forward_single_user_text(tokens, page_table, user_id, last_token_idx, kv_cache)
 
         # Get inputs ready for trace run
-        host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table)
+        host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table, batch_size=batch_size)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
 
@@ -288,11 +289,12 @@ class Generator:
         tokens,
         user_id,
         page_table=None,
+        batch_size=1,
     ):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table)
+        host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
 
         device_inputs = copy_host_to_device(
             host_tensors=host_inputs,

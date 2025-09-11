@@ -207,9 +207,17 @@ class TtTransformer(LightweightModule):
         if page_table is not None:
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
-                page_table_padded = torch.ones((4, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
-                for i in range(4):
-                    page_table_padded[i] = page_table[i * 8 : (i + 1) * 8, :].reshape(1, -1)
+                devices = 4
+                batch_size_per_device = batch_size // devices
+                page_table_padded = torch.ones((devices, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
+                for i in range(devices):
+                    page_table_padded[
+                        i,
+                        (i * batch_size_per_device)
+                        * page_table.shape[1] : (i + 1)
+                        * batch_size_per_device
+                        * page_table.shape[1],
+                    ] = page_table[i * batch_size_per_device : (i + 1) * batch_size_per_device, :].reshape(1, -1)
 
             else:
                 # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
@@ -404,9 +412,9 @@ class TtTransformer(LightweightModule):
         NOTE: In this model, prefill always uses get_last_token
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
-        if is_instance(last_token_idx, list):
+        if isinstance(last_token_idx, list):
             batch_size = len(last_token_idx)
-            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=-2)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
         else:
             x_split = [x]
         toks_list = []
