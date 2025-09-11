@@ -240,7 +240,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             auto dst_chan = std::get<1>(remote_info);
             auto phys_eth_chan = logical_to_physical_eth_chan[*local_unique_id][eth_chan];
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
-                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
+                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(phys_eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
