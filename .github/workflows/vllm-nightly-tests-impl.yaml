@@ -229,14 +229,10 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          python3 vllm/benchmarks/benchmark_serving.py \
+          python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
-            --dataset-name random \
             --num-prompts 32 \
-            --random-input-len 100 \
-            --random-output-len 100 \
-            --ignore-eos \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
