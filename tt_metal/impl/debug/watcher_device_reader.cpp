@@ -886,7 +886,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
         fprintf(reader_.f, "D");
     } else if (launch_msg_->kernel_config.mode == DISPATCH_MODE_HOST) {
         fprintf(reader_.f, "H");
-    } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_NONE) {
+    } else if (launch_msg_->kernel_config.mode == DISPATCH_MODE_NONE) {
         fprintf(reader_.f, "N");
     } else {
         LogRunningKernels();
