@@ -77,6 +77,8 @@ def prepare_conv_weights_func(
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
+    if slice_config:
+        compute_config.throttle_level = ttnn.ThrottleLevel(3)
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -106,7 +108,7 @@ def prepare_conv_weights_func(
         "slice_config": slice_config,
     }
 
-    input_memory_config = ttnn.L1_MEMORY_CONFIG if slice_config else ttnn.DRAM_MEMORY_CONFIG
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG if slice_config else ttnn.L1_MEMORY_CONFIG
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
@@ -133,8 +135,8 @@ def prepare_conv_weights_func(
     (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
     tt_output_tensor_on_device = ttnn.conv2d(
         input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor,
-        bias_tensor=tt_bias_tensor,
+        weight_tensor=tt_weight_tensor_formatted,
+        bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
         compute_config=compute_config,
         dtype=ttnn.bfloat16,
