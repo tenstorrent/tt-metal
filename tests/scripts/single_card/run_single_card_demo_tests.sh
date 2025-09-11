@@ -99,7 +99,7 @@ run_llama3_func() {
   # Llama3.1-8B (11B weights are the same)
   llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
