@@ -59,7 +59,7 @@ bool RunCustomCycle(std::shared_ptr<distributed::MeshDevice> mesh_device, int lo
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    ReadMeshDeviceProfilerResults(*mesh_device.get());
+    ReadMeshDeviceProfilerResults(*mesh_device);
 
     return pass;
 }
