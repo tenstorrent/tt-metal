@@ -2235,7 +2235,7 @@ void FabricUnicastCommon(
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
     std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program> receiver_programs;
-    for (auto recv_dev : receiver_devices) {
+    for (const auto& recv_dev : receiver_devices) {
         receiver_programs[recv_dev] = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_programs[recv_dev],
@@ -2276,7 +2276,7 @@ void FabricUnicastCommon(
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
     std::vector<uint32_t> receiver_status;
-    for (auto recv_dev : receiver_devices) {
+    for (const auto& recv_dev : receiver_devices) {
         tt_metal::detail::ReadFromDeviceL1(
             recv_dev->get_devices()[0],
             receiver_logical_core,

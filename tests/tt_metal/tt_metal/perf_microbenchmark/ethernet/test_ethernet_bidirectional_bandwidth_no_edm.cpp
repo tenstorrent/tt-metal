@@ -67,7 +67,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
+        for (const auto& [device_id, device_ptr] : devices_) {
             device_ptr->close();
         }
     }
