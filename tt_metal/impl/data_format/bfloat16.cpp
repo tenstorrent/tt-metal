@@ -150,11 +150,6 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16(
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
 
-        // std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << static_cast<float>(num_1_bfloat16) <<
-        // ",
-        // \t\t"; std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " <<
-        // static_cast<float>(num_2_bfloat16) << std::endl;
-
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
