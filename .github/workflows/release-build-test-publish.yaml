@@ -29,13 +29,9 @@ on:
         type: string
 
 permissions:
-  actions: read
   contents: write
-  pull-requests: write
-  pages: write
-  id-token: write
   packages: write
-  checks: write
+  id-token: write
 
 jobs:
   build-artifact:
