@@ -115,8 +115,6 @@ class Conv2dDynamicSamePadding:
         shard_layout,
         conv_params,
         batch=1,
-        is_width_sharded=False,
-        skip=True,
         deallocate_activation=False,
     ):
         self.device = device
@@ -137,39 +135,25 @@ class Conv2dDynamicSamePadding:
         self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
 
-        self.skip = skip
         if self.pad_h > 0 or self.pad_w > 0:
-            if skip == False:
-                conv_params.input_width = conv_params.input_width + self.pad_w // 2 + self.pad_w - self.pad_w // 2
-                conv_params.input_height = conv_params.input_height + self.pad_h // 2 + self.pad_h - self.pad_h // 2
+            pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
+            pad_offset_height = self.pad_h // 2 + self.pad_h - self.pad_h // 2
+            if pad_offset_width % 2 == 0 and pad_offset_height % 2 == 0:
+                conv_params.padding = (pad_offset_height // 2, pad_offset_width // 2)
             else:
-                pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
-                pad_offset_height = self.pad_h // 2 + self.pad_h - self.pad_h // 2
-                if pad_offset_width % 2 == 0 and pad_offset_height % 2 == 0:
-                    conv_params.padding = (pad_offset_height // 2, pad_offset_width // 2)
-                else:
-                    pad_top = pad_offset_height // 2
-                    pad_bottom = pad_top + pad_offset_height % 2
-                    pad_left = pad_offset_width // 2
-                    pad_right = pad_left + pad_offset_width % 2
-                    conv_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
+                pad_top = pad_offset_height // 2
+                pad_bottom = pad_top + pad_offset_height % 2
+                pad_left = pad_offset_width // 2
+                pad_right = pad_left + pad_offset_width % 2
+                conv_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
 
-        if is_width_sharded:
-            self.dynamic_conv = EfficientNetb0Conv2D(
-                parameters,
-                conv_params,
-                device,
-                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                deallocate_activation=deallocate_activation,
-            )
-        else:
-            self.dynamic_conv = EfficientNetb0Conv2D(
-                parameters,
-                conv_params,
-                device=device,
-                shard_layout=self.shard_layout,
-                deallocate_activation=deallocate_activation,
-            )
+        self.dynamic_conv = EfficientNetb0Conv2D(
+            parameters,
+            conv_params,
+            device=device,
+            shard_layout=self.shard_layout,
+            deallocate_activation=deallocate_activation,
+        )
 
         self.parameters_conv = conv_params
 
@@ -178,21 +162,6 @@ class Conv2dDynamicSamePadding:
             padded_shape = [self.batch, self.parameters_conv.input_height, self.parameters_conv.input_width, x.shape[3]]
             input_height = int(math.sqrt((x.shape[2] // self.batch)))
             input_width = int(math.sqrt((x.shape[2] // self.batch)))
-
-            if self.skip == False:
-                x = ttnn.sharded_to_interleaved(x)
-                x = ttnn.reshape(x, (self.batch, input_height, input_width, x.shape[3]))
-                x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-                x = ttnn.pad(
-                    x,
-                    padding=[
-                        (0, 0),
-                        ((padded_shape[1] - x.shape[1]) // 2, (padded_shape[1] - x.shape[1] + 1) // 2),
-                        ((padded_shape[2] - x.shape[2]) // 2, (padded_shape[2] - x.shape[2] + 1) // 2),
-                        (0, 0),
-                    ],
-                    value=0.0,
-                )
 
         return self.dynamic_conv(x)
 
@@ -208,7 +177,6 @@ class MBConvBlock:
         is_height_sharded=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         id=1,
-        skip=True,
         deallocate_activation=False,
     ):
         self.parameters = parameters
@@ -231,7 +199,6 @@ class MBConvBlock:
             parameters=parameters["_depthwise_conv"],
             conv_params=conv_params._depthwise_conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            skip=skip,
             deallocate_activation=deallocate_activation,
         )
 
@@ -375,7 +342,6 @@ class Efficientnetb0:
             conv_params=conv_params._blocks8,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=8,
-            skip=False,
             deallocate_activation=True,
         )
         self._blocks9 = MBConvBlock(
