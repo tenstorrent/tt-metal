@@ -199,6 +199,7 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
+            --num_scheduler_steps 1 \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
