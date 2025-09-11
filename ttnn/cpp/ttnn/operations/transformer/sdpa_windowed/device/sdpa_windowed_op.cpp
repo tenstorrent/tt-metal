@@ -170,7 +170,6 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     // Similar to regular SDPA performance model but accounting for windowed pattern
     auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
