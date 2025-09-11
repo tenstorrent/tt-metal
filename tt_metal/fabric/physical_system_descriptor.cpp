@@ -414,13 +414,15 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                     continue;
                 }
                 for (auto& eth_conn : eth_conns) {
+                    std::cout << "update src chan for " << *src_asic << src_host << std::endl;
                     eth_conn.src_chan = physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(eth_conn.src_chan);
+                    std::cout << "update dst chan for " << *dst_asic << dst_host << std::endl;
                     eth_conn.dst_chan = physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
+                    std::cout << "Done update dst chan" << std::endl;
                 }
             }
         }
     }
-
     for (auto& [src_host, host_edges] : system_graph_.host_connectivity_graph) {
         for (auto& host_edge : host_edges) {
             const auto& dst_host = host_edge.first;
