@@ -380,6 +380,11 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
             if (host == candidate_host) {
                 continue;  // Skip self connections
             }
+            bool print_debug = false;
+            if (host == "tt-quietbox-4" and candidate_host == "tt-quietbox-5") {
+                print_debug = true;
+            }
+
             const auto& remote_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(candidate_host);
 
             for (std::size_t exit_node_idx = 0; exit_node_idx < exit_nodes.size(); exit_node_idx++) {
@@ -391,6 +396,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                     auto local_asic = exit_node.src_exit_node;
                     auto remote_asic = exit_node.dst_exit_node;
                     if (local_asic == candidate_node.dst_exit_node && candidate_node.src_exit_node == remote_asic) {
+                        std::cout << "ASICs match" << std::endl;
                         uint8_t local_dst_chan = exit_node.eth_conn.dst_chan;
                         uint8_t candidate_dst_chan = candidate_node.eth_conn.dst_chan;
 
@@ -398,10 +404,18 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                             remote_physical_to_logical_eth_chan.at(*remote_asic).end()) {
                             local_dst_chan = remote_physical_to_logical_eth_chan.at(*remote_asic).at(local_dst_chan);
                         }
+
                         if (local_physical_to_logical_eth_chan.at(*local_asic).find(candidate_dst_chan) !=
                             local_physical_to_logical_eth_chan.at(*local_asic).end()) {
                             candidate_dst_chan =
                                 local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_dst_chan);
+                        }
+                        if (print_debug) {
+                            std::cout << "Local dst chan: " << +local_dst_chan
+                                      << " Candidate dst chan: " << +candidate_dst_chan << std::endl;
+                            std::cout << "Src chans: " << +exit_node.eth_conn.src_chan << " -> "
+                                      << +candidate_node.eth_conn.src_chan << std::endl;
+                            std::cout << "ASICs: " << *local_asic << " -> " << *remote_asic << std::endl;
                         }
                         if (exit_node.eth_conn.src_chan == candidate_dst_chan &&
                             candidate_node.eth_conn.src_chan == local_dst_chan) {
