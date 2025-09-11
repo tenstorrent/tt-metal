@@ -153,6 +153,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     tt::tt_metal::KernelHandle compute_kernel_group_1 = 0;
     tt::tt_metal::KernelHandle compute_kernel_group_2 = 0;
 
+    const bool is_output_tiled = false;
+    const bool is_output_block_format = false;
+    const uint32_t pre_tilize_cb_id =
+        32;  // Unused CB for pool compute kernel for grid sample, we don't have tiled output in gridsample
+
     // Kernel for core group 1
     if (core_group_1.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_1 = {
@@ -175,6 +180,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                                         // 16: Index Output CB (unused)
             one_scalar_per_core,                                 // 17: Scalar mode
             false,                                               // 18: Return Indices (unused)
+            pre_tilize_cb_id,                                    // 19: Pre-tilize CB (unused)
+            is_output_tiled,                                     // 20: is_output_tiled (unused)
+            is_output_block_format                               // 21: is_output_block_format (unused)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -211,6 +219,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                                         // 16: Index Output CB (unused)
             one_scalar_per_core,                                 // 17: Scalar mode
             false,                                               // 18: Return Indices (unused)
+            pre_tilize_cb_id,                                    // 19: Pre-tilize CB (unused)
+            is_output_tiled,                                     // 20: is_output_tiled (unused)
+            is_output_block_format                               // 21: is_output_block_format (unused)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
