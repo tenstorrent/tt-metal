@@ -32,7 +32,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
     uint32_t Ht{H / tt::constants::TILE_HEIGHT};
     uint32_t HtWt{Ht * Wt};
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    [[maybe_unused]] uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     auto num_cols{other_dims_product * Wt};
 
     // check mask for h-dim
