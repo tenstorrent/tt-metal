@@ -92,9 +92,8 @@ void py_module(nb::module_& m) {
         tt::tt_metal::ShapeBase::Container shape_container(data.ndim());
         for (size_t i = 0; i < data.ndim(); ++i) {
             const auto shape = data.shape(i);
-            if (shape < std::numeric_limits<uint32_t>::min() || shape > std::numeric_limits<uint32_t>::max()) {
-                TT_THROW("Invalid shape parameter encountered");
-            }
+            TT_FATAL(shape >= std::numeric_limits<uint32_t>::min(), "Invalid shape parameter encountered");
+            TT_FATAL(shape <= std::numeric_limits<uint32_t>::max(), "Invalid shape parameter encountered");
             shape_container[i] = shape;
         }
         tt::tt_metal::Shape tensor_shape(shape_container);
@@ -131,12 +130,10 @@ void py_module(nb::module_& m) {
         }
     });
     py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
-        // TODO
-        throw std::runtime_error("no impl");
-        // auto const & tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
+        auto const& tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
+        auto const& tensor_spec = tensor.tensor_spec();
 
-        // return nb::ndarray(
-        //     tensor.buffer(),
+        nb::ndarray<int32_t, nb::numpy> numpy_tensor;
     });
 
     auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
@@ -152,6 +149,18 @@ void py_module(nb::module_& m) {
     py_auto_context.def("close_device", &AutoContext::close_device);
     // TODO: argv's char** not supported
     // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
+    py_auto_context.def(
+        "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
+            auto const argc = args.size();
+            std::vector<char const*> argv(argc);
+
+            for (auto const& arg : args) {
+                argv.push_back(arg.c_str());
+            }
+            argv.push_back(nullptr);
+
+            auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+        });
     py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
     py_auto_context.def("get_profiler", &AutoContext::get_profiler);
     py_auto_context.def("close_profiler", &AutoContext::close_profiler);
