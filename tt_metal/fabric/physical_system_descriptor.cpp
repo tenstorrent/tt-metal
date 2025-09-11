@@ -404,6 +404,10 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                         std::cout << "Found matching asics: " << *local_asic << " and " << *remote_asic << " between "
                                   << host << " and " << candidate_host << std::endl;
                         std::cout << "Candidate's Dst Chan: " << +candidate_node.eth_conn.dst_chan << std::endl;
+                        if (local_physical_to_logical_eth_chan.at(*local_asic).find(candidate_node.eth_conn.dst_chan) ==
+                            local_physical_to_logical_eth_chan.at(*local_asic).end()) {
+                            continue;
+                        }
                         std::cout
                             << "Local Chan: " << +exit_node.eth_conn.src_chan << " "
                             << +local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_node.eth_conn.dst_chan)
