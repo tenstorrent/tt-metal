@@ -18,6 +18,7 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  actions: write
 
 
 # Some explanation:
