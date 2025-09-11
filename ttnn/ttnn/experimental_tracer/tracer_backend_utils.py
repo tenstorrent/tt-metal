@@ -113,13 +113,19 @@ class Operation:
         else:
             return str(value)
 
+    def output_var_name(self) -> str:
+        """Get the variable name for the output of this operation."""
+        return to_valid_variable_name(self.unique_name)
+
     def generate_code(self) -> str:
         """Generate PyTorch code for this operation."""
         serialized_args = ", ".join(self._serialize(arg) for arg in self.args)
         serialized_kwargs = ", ".join(f"{k}={self._serialize(v)}" for k, v in self.kwargs.items())
         if serialized_kwargs:
             serialized_kwargs = ", " + serialized_kwargs
-        return f"{to_valid_variable_name(self.unique_name)} = {self.function_call_name}({serialized_args}{serialized_kwargs}){self.postfix}"
+        return (
+            f"{self.output_var_name()} = {self.function_call_name}({serialized_args}{serialized_kwargs}){self.postfix}"
+        )
 
     def generate_import_code(self) -> List[str]:
         """Generate import statements for this operation."""
@@ -837,19 +843,67 @@ class AtenScaledDotProductFlashAttentionForCPU(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.rsqrt")
+class AtenRsqrt(WrappedOperation):
+    """Represents the rsqrt operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.neg")
+class AtenNeg(WrappedOperation):
+    """Represents the neg operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.sin")
+class AtenSin(WrappedOperation):
+    """Represents the sin operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.cos")
+class AtenCos(WrappedOperation):
+    """Represents the cos operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.mul.Scalar")
+class AtenMulScalar(WrappedOperation):
+    """Represents the mul.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.embedding")
+class AtenEmbedding(WrappedOperation):
+    """Represents the embedding operation."""
+
+    pass
+
+
+@dataclass
 class InputOp(Operation):
     """Represents an input operation in the graph."""
 
     counter: ClassVar[int] = 0
 
     def __post_init__(self):
-        self.unique_name = to_valid_variable_name(self.unique_name)
+        self.unique_name = self.output_var_name()
         self.input_identifier = f"INPUT{InputOp.counter}"
         InputOp.counter += 1
 
     def generate_code(self):
         serialized_args = [self._serialize(arg) for arg in self.args]
-        return f"{to_valid_variable_name(self.unique_name)} = {self.input_identifier}.reshape({serialized_args[0]})"
+        return f"{self.output_var_name()} = {self.input_identifier}.reshape({serialized_args[0]})"
 
     def to_operation(self, New_type) -> "Operation":
         """Convert this operation to a generic Operation type."""
@@ -861,12 +915,12 @@ class TupleOp(Operation):
     """Represents a tuple operation in the graph."""
 
     def __post_init__(self):
-        self.unique_name = to_valid_variable_name(self.unique_name)
+        self.unique_name = self.output_var_name()
 
     def generate_code(self) -> str:
         """Generate PyTorch code for this operation."""
         index = self.kwargs["index"]
-        return f"{to_valid_variable_name(self.unique_name)} = {self.args[index].generate_code()}[{index}]{self.postfix}"
+        return f"{self.output_var_name()} = {self.args[index].generate_code()}[{index}]{self.postfix}"
 
     def get_unique_representation(self) -> Dict[str, Any]:
         """Get a unique representation of the operation for hashing."""

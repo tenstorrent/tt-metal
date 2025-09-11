@@ -40,6 +40,7 @@ allowed_modes = [
     "swin_transformer",
     "swin_transformer_v2",
     "open_vla",
+    "meta-llama/Llama-2-7b-hf",
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
@@ -243,12 +244,16 @@ def main(args_dict):
                 )
 
         torch_model = OpenVLA()
+    elif args.model == "meta-llama/Llama-2-7b-hf":
+        from transformers import AutoTokenizer, AutoModelForCausalLM
 
+        model_name = "meta-llama/Llama-2-7b-hf"
+        torch_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
     # torch_model = CustomClass()
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
         print("Started torch summary: ")
-        summary(torch_model, input_size=args.input_shape)
+        summary(torch_model, input_size=args.input_shape, dtypes=[eval(f"torch.{dtype}") for dtype in args.input_dtype])
         print("Finished torch summary.\n\n\n")
     print("Started info tracing: ")
     operation_graph = trace_torch_model(

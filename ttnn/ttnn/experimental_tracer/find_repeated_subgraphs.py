@@ -58,6 +58,9 @@ class CompositeOperation(Operation):
     code_lines: Optional[List[str]] = None
     vars: Optional[List[str]] = None
     consts: Optional[List[str]] = None
+    local_var_names: Optional[List[str]] = None
+    append_var_names_to_end: Optional[List[str]] = None
+    is_const_fold_composite: bool = False
     counter: ClassVar[int] = 0
     generated_code: ClassVar[Dict[str, str]] = None
     duplicate_ops: ClassVar[Dict[str, str]] = None
@@ -79,59 +82,104 @@ class CompositeOperation(Operation):
 
         return base
 
+    def reorder_args(self, append_var_name_to_end):
+        if self.append_var_names_to_end is None:
+            self.append_var_names_to_end = append_var_name_to_end
+        else:
+            self.append_var_names_to_end.extend(append_var_name_to_end)
+        self.append_var_names_to_end = list(set(self.append_var_names_to_end))
+        _, _, arg_all_args, arg_consts = self.get_code_lines_and_args()
+        arg_all_args_none_consts = [arg for arg in arg_all_args if arg not in self.append_var_names_to_end]
+        arg_all_args_consts = [arg for arg in arg_all_args if arg in self.append_var_names_to_end]
+        arg_all_args = arg_all_args_none_consts + arg_all_args_consts
+        self.vars = arg_all_args
+        for op in self.sub_operations:
+            if isinstance(op, CompositeOperation):
+                op.reorder_args(self.append_var_names_to_end)
+
     def get_code_lines_and_args(self) -> Tuple[List[str], List[str]]:
         """Get the variable names and arguments for this operation."""
 
-        if self.code_lines is not None and self.vars is not None and self.consts is not None:
-            return self.code_lines, self.vars, self.consts
+        if (
+            self.code_lines is not None
+            and self.vars is not None
+            and self.consts is not None
+            and self.local_var_names is not None
+        ):
+            return self.local_var_names, self.code_lines, self.vars, self.consts
 
-        code_lines = []
         args = []
         consts = []
+        local_var_names = []
+        append_var_names_to_end = []
+        append_arg_names_to_end = []
         for op in self.sub_operations:
-            code_line = op.generate_code()
-            code_lines.append(code_line)
+            var_name = op.output_var_name().strip()
+            arg_list = []
             if isinstance(op, CompositeOperation):
-                _, _, arg_consts = op.get_code_lines_and_args()
-                all_args = code_line.split("=")[1].split("(")[1][:-1].strip().split(",")
-                args.extend([arg.strip() for arg in all_args if arg not in arg_consts])
+                arg_local_var_names, _, arg_vars, arg_consts = op.get_code_lines_and_args()
+                all_args = list(set(arg_vars + arg_consts) - set(arg_local_var_names))
+                ## If the composite op is const folded, or if all its args are local vars, we can move its var to the end.
+                if (
+                    op.is_const_fold_composite
+                    or len([l_arg for l_arg in arg_vars if l_arg not in arg_local_var_names]) == 0
+                ):
+                    append_var_names_to_end.append(var_name)
+                    var_name = None
+                    append_arg_names_to_end.extend([arg.strip() for arg in all_args if arg not in arg_consts])
+                else:
+                    arg_list.extend([arg.strip() for arg in all_args if arg not in arg_consts])
                 consts.extend([arg.strip() for arg in arg_consts if arg not in consts])
             elif isinstance(op, TupleOp):
-                args.append(op.generate_code().split("=")[1].split("[")[0].strip())
+                arg_list.append(op.generate_code().split("=")[1].split("[")[0].strip())
             elif isinstance(op, InputOp):
-                args.append(op.generate_code().split("=")[1].split(".")[0].strip())
+                arg_list.append(op.generate_code().split("=")[1].split(".")[0].strip())
             else:
                 for arg in op.args:
                     if isinstance(arg, PlaceholderTensor):
-                        args.append(arg.generate_code())
+                        arg_list.append(arg.generate_code())
                     elif isinstance(arg, (list, tuple)):
                         for a in arg:
                             if isinstance(a, PlaceholderTensor):
-                                args.append(a.generate_code())
+                                arg_list.append(a.generate_code())
                             elif isinstance(a, ConstantTensor):
                                 CompositeOperation.ALL_CONSTANTS[a.id] = a
                                 consts.append(a.generate_code())
                     elif isinstance(arg, ConstantTensor):
                         CompositeOperation.ALL_CONSTANTS[arg.id] = arg
                         consts.append(arg.generate_code())
-        self.code_lines, self.vars, self.consts = code_lines, args, consts
-        return code_lines, args, consts
+            if var_name is not None:
+                local_var_names.append(var_name)
+            if len(arg_list) > 0:
+                args.extend(arg_list)
+
+        # need to call op.generate_code() again to get the correct code line after reordering args
+        code_lines = []
+        for op in self.sub_operations:
+            if isinstance(op, CompositeOperation):
+                op.reorder_args(append_var_names_to_end)
+            code_line = op.generate_code()
+            code_lines.append(code_line)
+        self.append_var_names_to_end = append_var_names_to_end
+        local_var_names.extend(append_var_names_to_end)
+        args.extend(append_arg_names_to_end)
+        self.local_var_names, self.code_lines, self.vars, self.consts = local_var_names, code_lines, args, consts
+        return local_var_names, code_lines, args, consts
 
     def generate_code(self) -> str:
         """Generate PyTorch code for this operation."""
         _, fun_body = self.get_fun_body()
-        code_lines, arg_names, consts = self.get_code_lines_and_args()
-        var_names = [line.split("=")[0].strip() for line in code_lines if "=" in line]
-        args_not_in_var_names = set(arg for arg in arg_names if arg not in var_names)
+        var_names, code_lines, arg_names, consts = self.get_code_lines_and_args()
+        args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
         args_not_in_var_names = list(args_not_in_var_names) + consts
         if not self.is_duplicate(fun_body):
             CompositeOperation.generated_code[fun_body] = self.id
         else:
             CompositeOperation.duplicate_ops[self.id] = CompositeOperation.generated_code[fun_body]
         if not self.is_duplicate(fun_body) or not CompositeOperation.prune:
-            result = f"{to_valid_variable_name(self.unique_name)} = {self.id}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
+            result = f"{self.output_var_name()} = {self.id}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
         else:
-            result = f"{to_valid_variable_name(self.unique_name)} = {CompositeOperation.generated_code[fun_body]}({','.join(args_not_in_var_names) if len(args_not_in_var_names) > 0 else ''})"
+            result = f"{self.output_var_name()} = {CompositeOperation.generated_code[fun_body]}({','.join(args_not_in_var_names) if len(args_not_in_var_names) > 0 else ''})"
         return result
 
     def get_fun_body(self) -> str:
@@ -141,15 +189,14 @@ class CompositeOperation(Operation):
         if self.fun_body is not None and self.func is not None:
             return self.func, self.fun_body
 
-        code_lines, arg_names, consts = self.get_code_lines_and_args()
-        var_names = [line.split("=")[0].strip() for line in code_lines if "=" in line]
-        args_not_in_var_names = set([arg for arg in arg_names if arg not in var_names])
+        var_names, code_lines, arg_names, consts = self.get_code_lines_and_args()
+        args_not_in_var_names = list(dict.fromkeys([arg for arg in arg_names if arg not in var_names]))
         args_not_in_var_names = list(args_not_in_var_names)
         new_line = "\n    "
         orig_func = f"""
 def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_names) > 0 else ""}{"*args" if len(consts) > 0 else ""}):
     {new_line.join(code_lines)}
-    return {to_valid_variable_name(self.unique_name)} END
+    return {self.output_var_name()} END
 """
         new_func = str(orig_func)
 
@@ -304,6 +351,9 @@ def merge_nodes_as_composite(
     if len(set([out_edge[0] for out_edge in outgoing if out_edge[0] != main_output])) != 0:
         return None
 
+    if len(ancestors) == 0 and isinstance(G.nodes[main_output]["operation"], CompositeOperation):
+        return None
+
     composite_node = f"COMPOSITE_{CompositeOperation.counter}"
     if composite_node in G.nodes:
         # If the composite node already exists, we cannot merge
@@ -329,9 +379,10 @@ def merge_nodes_as_composite(
     G.add_node(composite_node, operation=composite_op)
 
     # 4. Add edges from outside predecessors to composite node
-    for pred, _ in incoming:
-        if pred not in nodes_to_merge:
-            G.add_edge(pred, composite_node)
+    for child in order:
+        for pred, orig_child in incoming:
+            if pred not in nodes_to_merge or child != orig_child:
+                G.add_edge(pred, composite_node)
     # 5. Add edges from composite node to outside successors
     for _, succ in outgoing:
         if succ not in nodes_to_merge:
@@ -427,18 +478,43 @@ def combine_tuple_get_item_scaled_attention_tuple_get_item(operation_graph: Oper
 
 
 def get_predecessor_ordering(G, op, predecessors):
-    args = {}
-    for pred in predecessors:
-        try:
-            # TODO: add proper parsing. Support List of Lists (concat)
-            args[G.nodes[pred]["operation"].meta_data.res.name] = pred
-        except:
+    op_args = [arg for arg in op.args if isinstance(arg, PlaceholderTensor)]
+    op_args_list = [arg for arg in op.args if isinstance(arg, (list, tuple))]
+    op_args_list_flatten = []
+    for arg_list in op_args_list:
+        place_holders = [a for a in arg_list if isinstance(a, PlaceholderTensor)]
+        if len(place_holders) == 0:
             continue
+        if len(op_args_list_flatten):
+            print(f"Found multiple list/tuple args in operation {op}. This may cause issues in pattern matching.")
+        op_args_list_flatten.extend(place_holders)
+    if len(op_args) > 0 and len(op_args_list_flatten) > 0:
+        print(
+            f"Found both single PlaceholderTensor args and list/tuple args in operation {op}. This may cause issues in pattern matching."
+        )
+        return predecessors
+    elif len(op_args_list_flatten) > 0:
+        op_args = op_args_list_flatten
     actual_args = []
-    for arg in op.args:
+    for arg in op_args:
         try:
             actual_args.append(arg.name)
         except:
+            continue
+    args = {}
+    for pred in predecessors:
+        try:
+            if isinstance(G.nodes[pred]["operation"], CompositeOperation):
+                args[G.nodes[pred]["operation"].unique_name] = pred
+            else:
+                res = G.nodes[pred]["operation"].meta_data.res
+                if isinstance(res, (list, tuple)):
+                    res = [r for r in res if isinstance(r, PlaceholderTensor)]
+                    for r in res:
+                        args[r.name] = pred
+                else:
+                    args[res.name] = pred
+        except Exception as e:
             continue
     result = []
     for i in actual_args:
@@ -449,8 +525,36 @@ def get_predecessor_ordering(G, op, predecessors):
     return predecessors
 
 
+def no_intersection_between_patterns(custom_patterns):
+    all_nodes = {}
+    for pattern_idx, pattern in enumerate(custom_patterns):
+        queue = [pattern]
+        nodes = set()
+        while queue:
+            pat = queue[0]
+            queue = queue[1:]
+            if pat in nodes:
+                continue
+            nodes.add(pat)
+            for par in pat.parents:
+                queue.append(par)
+        all_nodes[pattern_idx] = (pattern, nodes)
+    for i in all_nodes:
+        for j in all_nodes:
+            if i >= j:
+                continue
+            inter = all_nodes[i][1].intersection(all_nodes[j][1])
+            if len(inter) > 0:
+                print(
+                    f"Patterns {i} and {j} have intersection nodes {inter}. This is not allowed. Each pattern must be disjoint."
+                )
+                return False
+    return True
+
+
 def combine_custom_patterns(operation_graph, custom_patterns):
     G = operation_graph.graph
+    assert no_intersection_between_patterns(custom_patterns), "Custom patterns cannot have intersection between them."
     for pattern_idx, pattern in enumerate(custom_patterns):
         assert isinstance(
             pattern, WrappedOpPatternObj
@@ -495,6 +599,64 @@ def combine_custom_patterns(operation_graph, custom_patterns):
                     else:
                         print(f"COULD NOT MERGE {set(ancestors)} AS COMPOSITE OPERATION")
 
+    return operation_graph
+
+
+def combine_constants(operation_graph):
+    G = operation_graph.graph
+    nodes_with_only_constant_predecessors = set()
+    for node in list(nx.topological_sort(G)):
+        op = G.nodes[node]["operation"]
+        predecessors = list(G.predecessors(node))
+        if isinstance(op, InputOp):
+            continue
+        if len(predecessors) == 0:
+            nodes_with_only_constant_predecessors.add(node)
+        elif len([pred for pred in predecessors if pred not in nodes_with_only_constant_predecessors]) == 0:
+            nodes_with_only_constant_predecessors.add(node)
+
+    def get_leaf_nodes(list_of_nodes):
+        leaf_nodes = set()
+        for node in list_of_nodes:
+            successors = list(G.successors(node))
+            if len([suc for suc in successors if suc in list_of_nodes]) == 0:
+                leaf_nodes.add(node)
+        return leaf_nodes
+
+    composites = {leaf: set() for leaf in get_leaf_nodes(nodes_with_only_constant_predecessors)}
+    for node in composites:
+        ancestors = nx.ancestors(G, node)
+        composites[node] = ancestors
+
+    # Make sure no two composite sets intersect. If they do, create new composite sets of the intersection and remove those nodes from the original sets.
+    # composites will contain all the nodes that can be merged into a composite operation, with the key being the main output node.
+    change = True
+    while change:
+        change = False
+        for suc1 in list(composites):
+            for suc2 in list(composites):
+                if suc1 == suc2:
+                    continue
+                inter = composites[suc1].intersection(composites[suc2])
+                if len(inter) > 0:
+                    intersection_leaf_nodes = get_leaf_nodes(inter)
+                    composites[suc1] = composites[suc1] - inter
+                    composites[suc2] = composites[suc2] - inter
+                    for inter_leaf in intersection_leaf_nodes:
+                        inter.remove(inter_leaf)
+                    for inter_leaf in intersection_leaf_nodes:
+                        composites[inter_leaf] = inter
+                        print(f"Created new composite set for intersection nodes {inter} with leaf node {inter_leaf}")
+                    change = True
+                if change:
+                    break
+            if change:
+                break
+    for suc, nodes in composites.items():
+        composite_op = merge_nodes_as_composite(operation_graph, main_output=suc, ancestors=list(nodes))
+        if composite_op is not None:
+            composite_op.is_const_fold_composite = True
+            print(f"Merged constant nodes {nodes} into {suc} as composite operation {composite_op.id}")
     return operation_graph
 
 
@@ -593,6 +755,7 @@ def find_repeated_subgraphs(
     print("Setting ConstantTensor.ConstantTensorFromModel to True")
     composite_ops: Dict[str, CompositeOperation] = {}
     new_operation_graph = OperationGraph.from_operation_graph(operation_graph)
+    combine_constants(new_operation_graph)
     if custom_patterns is not None:
         combine_custom_patterns(new_operation_graph, custom_patterns)
         json_structure = create_graph_json_structure(new_operation_graph)

@@ -163,7 +163,7 @@ params = LazyParams(
         else:
             code_lines[
                 "main"
-            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=True)"
+            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=not fake)"
             code_lines["main"] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)"
             code_lines[
                 "main"
