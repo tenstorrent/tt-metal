@@ -253,6 +253,7 @@ Buffer::Buffer(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const bool owns_data,
+    uint32_t allocator_state_id,
     Private) :
     device_(device),
     size_(size),
@@ -262,6 +263,7 @@ Buffer::Buffer(
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
+    allocator_state_id_(allocator_state_id),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
@@ -283,11 +285,21 @@ std::shared_ptr<Buffer> Buffer::create(
     const BufferType buffer_type,
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<uint32_t> allocator_state_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(
-        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        true /* owns data */,
+        allocator_state_id.value_or(0),
+        Private());
 
     if (buffer->size_ == 0) {
         buffer->allocation_status_ = AllocationStatus::ALLOCATED;
@@ -319,7 +331,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const BufferType buffer_type,
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<uint32_t> allocator_state_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -330,6 +343,7 @@ std::shared_ptr<Buffer> Buffer::create(
         bottom_up,
         sub_device_id,
         false /* owns data */,
+        allocator_state_id.value_or(0),
         Private());
 
     buffer->address_ = address;
@@ -389,7 +403,7 @@ void Buffer::allocate_impl() {
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
-        address_ = allocator_->allocate_buffer(this);
+        address_ = allocator_->allocate_buffer(this, allocator_state_id_);
 
         // Assertion here because buffer class returns a u32 when address is queried
         // Requires updating all use cases of buffer address to accept a u64 to remove
@@ -434,7 +448,7 @@ void Buffer::deallocate_impl() {
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
-            allocator_->deallocate_buffer(this);
+            allocator_->deallocate_buffer(this, allocator_state_id_);
         }
 
         // Capture deallocates here instead of higher levels.

@@ -190,6 +190,25 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(config_.worker_l1_size) - config_.l1_unreserved_base - config_.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
+    // Convert lightweight config dependencies to BankManager dependencies
+    tt::tt_metal::BankManager::AllocatorDependencies bm_deps;
+    if (!config_.allocator_dependencies.dependencies.empty()) {
+        std::unordered_map<
+            tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID,
+            tt::stl::SmallVector<tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID>>
+            deps_map;
+        for (uint32_t src = 0; src < config_.allocator_dependencies.dependencies.size(); ++src) {
+            tt::stl::SmallVector<tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID> neighbors;
+            for (uint32_t dst : config_.allocator_dependencies.dependencies[src]) {
+                neighbors.push_back(tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{dst});
+            }
+            if (!neighbors.empty()) {
+                deps_map.insert(
+                    {tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{src}, std::move(neighbors)});
+            }
+        }
+        bm_deps = tt::tt_metal::BankManager::AllocatorDependencies(deps_map);
+    }
     l1_manager_ = std::make_unique<BankManager>(
         BufferType::L1,
         bank_id_to_bank_offset,
@@ -197,7 +216,8 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         interleaved_address_limit,
         config_.l1_alignment,
         config_.l1_unreserved_base,
-        config_.disable_interleaved);
+        config_.disable_interleaved,
+        bm_deps);
     log_debug(
         tt::LogMetal,
         "Configured partition params: mem_mailbox_base:0x{:X}, storage_core_bank_size:0x{:X}, worker_l1_size:0x{:X}, "
@@ -233,7 +253,8 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         small_interleaved_address_limit,
         config_.l1_alignment,
         small_alloc_offset,
-        config_.disable_interleaved);
+        config_.disable_interleaved,
+        bm_deps);
 }
 
 L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
@@ -248,7 +269,8 @@ AllocatorConfig L1BankingAllocator::generate_config(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    BankMapping l1_bank_remap) {
+    BankMapping l1_bank_remap,
+    const AllocatorDependenciesConfig& dependencies) {
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
@@ -279,7 +301,8 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .l1_alignment = hal.get_alignment(HalMemType::L1),
-         .disable_interleaved = false});
+         .disable_interleaved = false,
+         .allocator_dependencies = dependencies});
     TT_FATAL(
         config.l1_small_size < (config.storage_core_bank_size.has_value()
                                     ? config.storage_core_bank_size.value()

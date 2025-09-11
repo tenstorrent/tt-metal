@@ -35,9 +35,9 @@ public:
 
     ~Allocator();
 
-    DeviceAddr allocate_buffer(Buffer* buffer);
+    DeviceAddr allocate_buffer(Buffer* buffer, uint32_t allocator_state_id = 0);
 
-    void deallocate_buffer(Buffer* buffer);
+    void deallocate_buffer(Buffer* buffer, uint32_t allocator_state_id = 0);
     void deallocate_buffers();
 
     std::unordered_set<Buffer*> get_allocated_buffers() const;
@@ -79,7 +79,7 @@ public:
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks
     void init_one_bank_per_channel();
-    void init_one_bank_per_l1();
+    void init_one_bank_per_l1();  // TODO: Remove this; it's not used
     void init_compute_and_storage_l1_bank_manager();
 
     void validate_bank_assignments() const;

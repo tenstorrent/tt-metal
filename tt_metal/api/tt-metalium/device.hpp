@@ -44,6 +44,7 @@ enum class BufferType;
 class Buffer;
 class Program;
 class SubDevice;
+class SubDeviceManagerTracker;
 
 class CommandQueue;
 class SystemMemoryManager;
@@ -164,7 +165,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) = 0;
+        bool minimal = false,
+        std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker = nullptr) = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 

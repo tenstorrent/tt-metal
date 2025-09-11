@@ -95,7 +95,7 @@ Device::Device(
     worker_thread_core_(worker_thread_core),
     completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScoped;
-    this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+    this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal, nullptr);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
@@ -181,7 +181,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         l1_small_size,
         trace_region_size,
         worker_l1_unreserved_start,
-        {l1_bank_remap.begin(), l1_bank_remap.end()});
+        {l1_bank_remap.begin(), l1_bank_remap.end()},
+        {});
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
@@ -415,7 +416,8 @@ bool Device::initialize(
     size_t trace_region_size,
     size_t worker_l1_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    bool minimal) {
+    bool minimal,
+    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker) {
     ZoneScoped;
     // Every initialization call should enable program cache
     this->program_cache_.enable();

@@ -280,8 +280,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    // Helper for clamping ranges in-place according to address_limit
-    // This is needed because the allocator's available_addresses method does not clamp to address_limit
+    // Helper for clamping ranges in-place according to address_limit (now absolute)
+    // Allocator available_addresses returns absolute ranges; clamp directly.
     auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>>& ranges) {
         if (address_limit == 0) {
             return;
@@ -441,8 +441,7 @@ uint64_t BankManager::allocate_buffer(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
         this->compute_available_addresses(allocator_id, size_per_bank, address_limit);
 
-    // Choose an address from the allowed ranges respecting alignment and direction
-    // Addresses should already be aligned to alignment_bytes_
+    // Choose an address from the allowed ranges respecting alignment and direction (absolute addresses)
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
         for (const auto& r : available_ranges) {
@@ -477,6 +476,7 @@ uint64_t BankManager::allocate_buffer(
         chosen.value(),
         alignment_bytes_);
 
+    // Ranges are absolute; request placement at the chosen absolute address
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());

@@ -93,6 +93,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
+        uint32_t allocator_state_id = mesh_device->submesh_allocator_state_id();
         std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
             device_local_size,
@@ -100,7 +101,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.buffer_type,
             device_local_config.sharding_args,
             device_local_config.bottom_up,
-            device_local_config.sub_device_id);
+            device_local_config.sub_device_id,
+            allocator_state_id);
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
@@ -116,6 +118,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
+        uint32_t allocator_state_id = 0;
+        if (auto mesh_device_ptr = mesh_device_.lock()) {
+            allocator_state_id = mesh_device_ptr->submesh_allocator_state_id();
+        }
         std::shared_ptr<Buffer> buffer = Buffer::create(
             device()->get_device(coord),
             address_,
@@ -124,7 +130,8 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_config_.buffer_type,
             device_local_config_.sharding_args,
             device_local_config_.bottom_up,
-            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+            /*sub_device_id=*/std::nullopt,
+            allocator_state_id);  // TODO: sub_device_id is unsupported
         return buffer;
     };
 
