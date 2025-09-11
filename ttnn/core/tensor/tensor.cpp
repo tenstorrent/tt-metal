@@ -117,11 +117,11 @@ Tensor& Tensor::operator=(const Tensor& other) {
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
-    this->tensor_id = std::move(other.tensor_id);
+    this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
-    this->mesh_device_ = std::move(other.mesh_device_);
+    this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 

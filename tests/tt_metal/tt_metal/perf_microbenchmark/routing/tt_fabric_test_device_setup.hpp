@@ -562,13 +562,7 @@ inline void TestDevice::create_sync_kernel() {
     }
 
     // create sync kernel with local args
-    sync_sender.create_kernel(
-        coord_,
-        std::move(ct_args),
-        std::move(rt_args),
-        std::move(local_args),
-        sender_memory_map_->get_local_args_address(),
-        {});
+    sync_sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
     log_info(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
@@ -648,13 +642,7 @@ inline void TestDevice::create_sender_kernels() {
         }
 
         // create kernel with local args
-        sender.create_kernel(
-            coord_,
-            std::move(ct_args),
-            std::move(rt_args),
-            std::move(local_args),
-            sender_memory_map_->get_local_args_address(),
-            {});
+        sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
         log_info(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
@@ -692,12 +680,7 @@ inline void TestDevice::create_receiver_kernels() {
         }
 
         receiver.create_kernel(
-            coord_,
-            std::move(ct_args),
-            std::move(rt_args),
-            std::move(local_args),
-            receiver_memory_map_->get_local_args_address(),
-            {});
+            coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
         log_info(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }

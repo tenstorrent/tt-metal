@@ -24,7 +24,7 @@ inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_progra
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
-    return {std::move(syncer_program), std::move(syncer_coord), std::move(global_sem)};
+    return {std::move(syncer_program), syncer_coord, std::move(global_sem)};
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_program(
