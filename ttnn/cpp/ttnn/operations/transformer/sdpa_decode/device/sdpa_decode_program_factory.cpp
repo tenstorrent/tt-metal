@@ -516,7 +516,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto c_tilized_q_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
                                   .set_page_size(CBIndex::c_10, q_tile_size)
                                   .set_tile_dims(CBIndex::c_10, q_tile);
-    auto cb_tilized_q_id = CreateCircularBuffer(program, core_grid, c_tilized_q_config);
+    CreateCircularBuffer(program, core_grid, c_tilized_q_config);
 
     // cb_col_identity
     auto col_identity_tile = full_tile;
