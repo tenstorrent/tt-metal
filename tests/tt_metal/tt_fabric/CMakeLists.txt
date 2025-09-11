@@ -122,7 +122,7 @@ target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric
 add_executable(
     bench_unicast
     ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/bench_unicast_main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/bench_fabric_unicast.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/run_unicast_once.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
 )
 

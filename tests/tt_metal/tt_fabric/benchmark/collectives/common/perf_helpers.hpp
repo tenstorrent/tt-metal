@@ -40,7 +40,7 @@ struct PerfStats {
     double mean_gbps{};
 };
 
-PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p);
+PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p);
 
 // Helpers implemented in perf_helpers.cpp
 double mean_of(const std::vector<double>& v);

@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/ring_buffer.h"
-
-
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
@@ -419,12 +416,6 @@ FORCE_INLINE void send_next_data(
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
     pkt_header->src_ch_id = sender_channel_index;
 
-    WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
-    WATCHER_RING_BUFFER_PUSH(pkt_header->noc_send_type);
-    WATCHER_RING_BUFFER_PUSH(pkt_header->command_fields.unicast_seminc.noc_address & 0xffffffff);
-    WATCHER_RING_BUFFER_PUSH(pkt_header->command_fields.unicast_seminc.noc_address >> 32);
-    WATCHER_RING_BUFFER_PUSH(pkt_header->command_fields.unicast_seminc.val);
-
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
@@ -458,7 +449,6 @@ FORCE_INLINE void send_next_data(
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
-    WATCHER_RING_BUFFER_PUSH(0x00c0ffee);
 }
 
 /////////////////////////////////////////////
@@ -521,8 +511,6 @@ FORCE_INLINE bool can_forward_packet_completely(
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     invalidate_l1_cache();
-
-    WATCHER_RING_BUFFER_PUSH(0x22222222);
     if (packet_header->is_mcast_active) {
         // mcast downstream needs to check if downstream has space (lookup from set direction field)
         // forward to local and remote
@@ -556,11 +544,6 @@ FORCE_INLINE bool can_forward_packet_completely(
                 for (size_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
                     if (packet_header->mcast_params[i]) {
                         mcast_active = true;
-                        bool _space = downstream_edm_interface[i].edm_has_space_for_packet();
-                        if (!_space) {
-                            WATCHER_RING_BUFFER_PUSH(0x33333333);
-                            WATCHER_RING_BUFFER_PUSH(i);
-                        }
                         has_space &= downstream_edm_interface[i].edm_has_space_for_packet();
                     }
                 }
@@ -572,12 +555,6 @@ FORCE_INLINE bool can_forward_packet_completely(
                 auto downstream_channel = routing_table->intra_mesh_table.dest_entry[(uint8_t)dest_chip_id];
                 ASSERT(downstream_channel != INVALID_DIRECTION);
                 auto downstream_direction = port_direction_table[downstream_channel];
-                bool _space = downstream_edm_interface[downstream_direction].edm_has_space_for_packet();
-                if (!_space) {
-                    WATCHER_RING_BUFFER_PUSH(0x44444444);
-                    WATCHER_RING_BUFFER_PUSH(downstream_direction);
-                }
-                return _space;
             }
         }
     }
@@ -598,10 +575,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         downstream_edm_interface) {
     bool ret_val = false;
     switch (hop_cmd) {
-        case LowLatencyMeshRoutingFields::NOOP: 
-            WATCHER_RING_BUFFER_PUSH(0x12345678);
-            ASSERT(false);
-        break;
+        case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::EAST>(downstream_edm_interface);
             break;
@@ -695,14 +669,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             ret_val = downstreams_have_space<SENDER_NUM_BUFFERS, eth_chan_directions::WEST, eth_chan_directions::NORTH>(
                 downstream_edm_interface);
             break;
-        default: 
-#ifdef WATCHER_ENABLED
-            WATCHER_RING_BUFFER_PUSH(0x87654321);
-            ASSERT(false);
-#else
-            __builtin_unreachable();
-#endif
-        break;
+        default: __builtin_unreachable();
     }
     return ret_val;
 }
@@ -1399,7 +1366,6 @@ void run_receiver_channel_step_impl(
     }
 
     if (unwritten_packets) {
-        WATCHER_RING_BUFFER_PUSH(0x99998888);
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -1446,7 +1412,6 @@ void run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
         if (can_send_to_all_local_chip_receivers) {
-            WATCHER_RING_BUFFER_PUSH(0x11111111);
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);

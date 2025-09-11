@@ -66,16 +66,6 @@ void kernel_main() {
         /*dst_mesh_id*/ dst_mesh_id,
         /*ew_dim*/ 0);
 
-    WATCHER_RING_BUFFER_PUSH(0x55555555);
-    WATCHER_RING_BUFFER_PUSH(dst_dev_id);
-    WATCHER_RING_BUFFER_PUSH(dst_mesh_id);
-    WATCHER_RING_BUFFER_PUSH(2);
-
-    for (size_t i = 0; i < 5; i++) {
-        WATCHER_RING_BUFFER_PUSH(mh->route_buffer[i]);
-    }
-    WATCHER_RING_BUFFER_PUSH(0xc0ffee);
-
     DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
 
     sender.open<true>();
@@ -127,8 +117,6 @@ void kernel_main() {
 
         fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        WATCHER_RING_BUFFER_PUSH((uint32_t)(header->command_fields.unicast_seminc.noc_address & 0x00FFFFFFu));
-        WATCHER_RING_BUFFER_PUSH((uint32_t)(header->command_fields.unicast_seminc.noc_address >> 32));
 
         DPRINT << "[WR] sem-inc dst noc_hi=0x" << HEX() << sem_hi << " noc_lo=0x" << sem_lo << DEC() << " rx_xy=("
                << rx_noc_x << "," << rx_noc_y << ")\n";

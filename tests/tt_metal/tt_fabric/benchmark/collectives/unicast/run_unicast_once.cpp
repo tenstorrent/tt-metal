@@ -16,13 +16,9 @@
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-using tt::DevicePool;
 
 namespace tt::tt_fabric::bench {
-
-using Fixture = ::tt::tt_fabric::fabric_router_tests::Fabric2DFixture;
-
-PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p) {
+PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
@@ -42,7 +38,7 @@ PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p)
     tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
-    // Allocate simple flat buffers (you control size via p.tensor_bytes)
+    // Allocate simple flat buffers
     tt::tt_metal::BufferConfig src_cfg{
         .device = src_dev,
         .size = p.tensor_bytes,
@@ -204,145 +200,4 @@ PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p)
         .gbps = gbps,
     };
 }
-
-TEST_F(Fixture, UnicastConn_CodeControlled) {
-    PerfParams p;
-    p.mesh_id = 0;
-    p.src_chip = 0;
-    p.dst_chip = 1;
-    p.use_dram_dst = false;
-    p.page_size = 2048;
-    p.tensor_bytes = 100 * p.page_size;
-
-    RunUnicastConnWithParams(this, p);
-}
-
-TEST_F(Fixture, UnicastConn_SweepTensorSize) {
-    PerfParams base;
-    base.mesh_id = 0;
-    base.src_chip = 0;
-    base.dst_chip = 1;
-    base.use_dram_dst = false;
-    base.page_size = 2048;
-    base.sender_core = {0, 0};
-    base.receiver_core = {0, 0};
-
-    // global warmup (once) for this src/dst pair
-    warmup_once(this, base, /*iters=*/1);
-
-    std::vector<uint32_t> sizes_bytes = {
-        1 * base.page_size,
-        2 * base.page_size,
-        4 * base.page_size,
-        8 * base.page_size,
-        16 * base.page_size,
-        32 * base.page_size,
-        64 * base.page_size,
-        128 * base.page_size,
-        256 * base.page_size};
-
-    const int repeats = 5;          // measure each size 5 times
-    const int warmup_per_size = 1;  // one per-size warmup
-
-    std::vector<PerfPoint> results;
-    results.reserve(sizes_bytes.size());
-
-    for (auto sz : sizes_bytes) {
-        PerfParams p = base;
-        p.tensor_bytes = sz;
-
-        auto stats = run_repeated(this, p, /*warmup_iters=*/warmup_per_size, /*iters=*/repeats);
-
-        results.push_back(PerfPoint{
-            .bytes = static_cast<uint64_t>(sz),
-            .sec = 0.0,
-            .ms = stats.p50_ms,
-            .gbps = stats.mean_gbps,
-        });
-
-        std::cout << "[perf] size=" << sz << " bytes median_ms=" << stats.p50_ms << " p95_ms=" << stats.p95_ms
-                  << " mean_gbps=" << stats.mean_gbps << " (n=" << stats.iters << ")\n";
-    }
-
-    std::filesystem::create_directories("artifacts");
-    const auto now = std::chrono::system_clock::now();
-    const auto ts = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    const std::string csv_name = fmt::format(
-        "artifacts/unicast_sweep_m{}_s{}_d{}_p{}_t{}.csv",
-        base.mesh_id,
-        base.src_chip,
-        base.dst_chip,
-        base.page_size,
-        ts);
-
-    std::ofstream ofs(csv_name);
-    ofs << std::fixed << std::setprecision(6);
-    ofs << "bytes,ms,gbps\n";
-    for (const auto& r : results) {
-        ofs << r.bytes << "," << r.ms << "," << r.gbps << "\n";
-    }
-    ofs.close();
-    std::cout << "[perf] wrote " << results.size() << " points -> " << csv_name << "\n";
-}
-
-TEST_F(Fixture, UnicastConn_HeatmapDstCore) {
-    PerfParams base;
-    base.mesh_id = 0;
-    base.src_chip = 0;
-    base.dst_chip = 1;
-    base.use_dram_dst = false;
-    base.page_size = 2048;
-    base.sender_core = {0, 0};
-    base.receiver_core = {0, 0};
-    base.tensor_bytes = 64 * base.page_size;
-
-    // global warmup for this src/dst chip pair
-    warmup_once(this, base, /*iters=*/1);
-
-    // Discover available worker cores on the destination device
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{base.mesh_id}, base.dst_chip};
-    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
-    auto* dst_dev = find_device_by_id(dst_phys);
-    ASSERT_NE(dst_dev, nullptr);
-
-    auto dst_workers =
-        dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0});
-
-    const int repeats = 3;          // measure each core a few times
-    const int warmup_per_core = 1;  // one per-core warmup
-
-    std::filesystem::create_directories("artifacts");
-    const auto ts =
-        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    const std::string csv_name = fmt::format(
-        "artifacts/unicast_dstcore_heatmap_m{}_s{}_d{}_p{}_B{}_t{}.csv",
-        base.mesh_id,
-        base.src_chip,
-        base.dst_chip,
-        base.page_size,
-        base.tensor_bytes,
-        ts);
-
-    std::ofstream ofs(csv_name);
-    ofs << std::fixed << std::setprecision(6);
-    ofs << "x,y,ms,gbps\n";
-
-    for (const auto& rect : dst_workers.ranges()) {
-        for (auto it = rect.begin(); it != rect.end(); ++it) {
-            tt::tt_metal::CoreCoord rc = *it;  // logical dest worker core (x,y)
-
-            PerfParams p = base;
-            p.receiver_core = rc;
-
-            auto stats = run_repeated(this, p, /*warmup_iters=*/warmup_per_core, /*iters=*/repeats);
-
-            ofs << rc.x << "," << rc.y << "," << stats.p50_ms << "," << stats.mean_gbps << "\n";
-        }
-    }
-
-    ofs.close();
-    std::cout << "[perf] wrote heatmap CSV -> " << csv_name << "\n";
-}
-
 }  // namespace tt::tt_fabric::bench
