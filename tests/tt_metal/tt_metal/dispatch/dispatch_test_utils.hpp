@@ -7,7 +7,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "mesh_device.hpp"

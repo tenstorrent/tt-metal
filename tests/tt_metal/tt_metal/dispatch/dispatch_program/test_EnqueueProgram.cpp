@@ -34,7 +34,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -59,6 +58,7 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt {
 namespace tt_metal {
