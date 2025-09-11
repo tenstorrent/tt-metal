@@ -13,7 +13,6 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
-#include <math.h>
 #include <google/protobuf/text_format.h>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
@@ -687,10 +686,10 @@ CableLength calc_cable_length(Host host1, Host host2) {
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
-    double rack_distance = fabs(rack_0 - rack_1) * standard_rack_w;
-    double u_distance = (fabs(shelf_u_0 - shelf_u_1)) * standard_rack_u_h;
+    double rack_distance = std::abs(rack_0 - rack_1) * standard_rack_w;
+    double u_distance = std::abs(shelf_u_0 - shelf_u_1) * standard_rack_u_h;
 
-    double cable_length = sqrt(rack_distance * rack_distance + u_distance * u_distance) + 150;  // 150mm slack
+    double cable_length = std::sqrt(rack_distance * rack_distance + u_distance * u_distance) + 150;  // 150mm slack
 
     if (cable_length <= 500.0) {
         return CableLength::CABLE_0_5;
