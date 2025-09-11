@@ -71,23 +71,6 @@ jobs:
           echo "GITHUB_TOKEN Permissions:"
           echo "${{ toJson(github) }}"
 
-      - name: Create or update tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.get-tag-version.outputs.version }}"     # set dynamically as you like
-          SHA="${{ github.sha }}"
-
-          # If tag exists, move it; otherwise create it.
-          if gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "Updating existing tag $TAG -> $SHA"
-            gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/$TAG" -f sha="$SHA" -F force=true
-          else
-            echo "Creating tag $TAG -> $SHA"
-            gh api -X POST "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
-          fi
-
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
