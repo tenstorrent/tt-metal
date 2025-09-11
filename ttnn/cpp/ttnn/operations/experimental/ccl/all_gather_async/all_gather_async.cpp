@@ -261,6 +261,50 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     }
 }
 
+std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    const int32_t dim,
+    const std::vector<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    bool use_optimal_ccl_for_llama,
+    const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
+    // TODO alternatively uncomment this, and instead throw a TT_FATAL that the composite case is not supported
+    // bool composite_all_gather_case = use_composite_all_gather(input_tensors.at(0), dim, memory_config);
+    // bool all_gather_async_llama_sharded_case =
+    //    use_all_gather_async_llama_sharded(input_tensors.at(0),
+    //    memory_config.value_or(input_tensors.at(0).memory_config()));
+    // if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+    //    return composite_all_gather(input_tensors, dim, num_links, memory_config, subdevice_id, cluster_axis);
+    //} else {
+    return ttnn::operations::experimental::ccl::all_gather_async(
+        input_tensors,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id,
+        cluster_axis,
+        mesh_device,
+        false,  // all_gather_async_llama_sharded_case,
+        use_optimal_ccl_for_llama,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
+    //}
+}
+
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
