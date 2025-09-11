@@ -31,21 +31,6 @@ def _rand_shape(dim_size, choices=(8, 16, 32, 64, 128, 256)):
     return ret
 
 
-# def _rand_slice_params(shape):
-#     begins, ends, strides = [], [], []
-#     ndim = len(shape)
-#     for dim, size in enumerate(shape):
-#         # pick a random start < size
-#         b = random.randint(0, size - 1)
-#         # choose a random end > b, ≤ size
-#         e = random.randint(b + 1, size)
-#         begins.append(b)
-#         ends.append(e)
-#         slice_area = e - b
-#         possible_strides = [s for s in range(1, slice_area + 1) if slice_area % s == 0 and s <= slice_area // 2]
-#         s = 1 if len(possible_strides) == 0 else random.choice(possible_strides)
-#         strides.append(s)
-#     return begins, ends, strides
 
 
 def _rand_slice_params(
