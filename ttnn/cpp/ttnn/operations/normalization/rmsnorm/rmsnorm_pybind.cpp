@@ -22,6 +22,13 @@ void bind_normalization_rms_norm(py::module& module) {
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
+            .. math::
+              \text{RMS_norm}(x, \gamma, \beta, \epsilon) = \frac{x}{\sqrt{\epsilon+\frac{1}{N}\sum_{i=1}^{N}x^{2}}} \cdot \gamma + \beta
+
+            Where:
+                - :math:`\gamma` and :math:`\beta` are optional scale and shift parameters
+                - :math:`\epsilon` is a small constant
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
