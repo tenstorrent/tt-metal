@@ -419,10 +419,12 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
 
     const auto start = std::chrono::steady_clock::now();
-    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
 
+    // Below steps can be skipped if we already have a heartbeat from the base firmware
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
+        // Try sending the stop message again
+        tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
         previous_heartbeat_val = heartbeat_val;
         tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
         if (timeout_ms > 0) {
