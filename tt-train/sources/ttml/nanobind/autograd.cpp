@@ -14,19 +14,14 @@
 #include "autograd/graph.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 
 namespace ttml::autograd {
 
 void py_module_types(nb::module_& m) {
-    nb::enum_<GradMode>(m, "GradMode")
-        .value("ENABLED", GradMode::ENABLED)
-        .value("DISABLED", GradMode::DISABLED)
-        .export_values();
-    nb::enum_<PreferredPrecision>(m, "PreferredPrecision")
-        .value("HALF", PreferredPrecision::HALF)
-        .value("FULL", PreferredPrecision::FULL)
-        .export_values();
-    nb::enum_<RunMode>(m, "RunMode").value("TRAIN", RunMode::TRAIN).value("EVAL", RunMode::EVAL).export_values();
+    nb::export_enum<GradMode>(m);
+    nb::export_enum<PreferredPrecision>(m);
+    nb::export_enum<RunMode>(m);
 
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<Graph>(m, "Graph");
@@ -86,30 +81,44 @@ void py_module(nb::module_& m) {
     // py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
     py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& data) {
         const auto data_type = data.dtype();
-        // TT_FATAL(!(data_type.bits % 8), fmt::format("Unsupported precision: {}", data_type.bits));
-        TT_FATAL(!(data_type.bits % 8), "Unsupported precision");
+        TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
 
         tt::tt_metal::ShapeBase::Container shape_container(data.ndim());
-        for (size_t i = 0; i < data.ndim(); ++i) {
-            const auto shape = data.shape(i);
-            TT_FATAL(shape >= std::numeric_limits<uint32_t>::min(), "Invalid shape parameter encountered");
-            TT_FATAL(shape <= std::numeric_limits<uint32_t>::max(), "Invalid shape parameter encountered");
-            shape_container[i] = shape;
+        for (size_t dimension = 0; dimension < data.ndim(); ++dimension) {
+            const auto dimension_size = data.shape(dimension);
+            TT_FATAL(
+                dimension_size >= std::numeric_limits<uint32_t>::min(),
+                "Invalid shape parameter for dimension {}: {} is too small",
+                dimension,
+                dimension_size);
+            TT_FATAL(
+                dimension_size <= std::numeric_limits<uint32_t>::max(),
+                "Invalid shape parameter for dimension {}: {} is too large",
+                dimension,
+                dimension_size);
+            shape_container[dimension] = dimension_size;
         }
         tt::tt_metal::Shape tensor_shape(shape_container);
         tt::tt_metal::MemoryConfig tensor_memory_config{};
         tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
 
+        auto* device = &ttml::autograd::ctx().get_device();
+        device->enable_program_cache();
+
         const auto set_autocast_tensor = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
-            // TT_FATAL(data_type.bits == (sizeof(T) * 8), fmt::format("Unsupported precision: expected {} bits, got {}
-            // bits", sizeof(T) * 8, data_type.bits));
-            TT_FATAL(data_type.bits == (sizeof(T) * 8), "Unsupported precision");
+            TT_FATAL(
+                data_type.bits == (sizeof(T) * 8),
+                "Unsupported precision: expected {} bits, got {} bits",
+                sizeof(T) * 8,
+                data_type.bits);
 
             tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
             tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+            tt::tt_metal::Tensor&& tensor = tt::tt_metal::Tensor::from_span(
+                tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
+            tensor = tensor.to_device(device, tensor_memory_config);
 
-            autocast_tensor.set_tensor(tt::tt_metal::Tensor::from_span(
-                tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec));
+            autocast_tensor.set_tensor(tensor);
         };
 
         switch (static_cast<nb::dlpack::dtype_code>(data_type.code)) {
@@ -130,10 +139,21 @@ void py_module(nb::module_& m) {
         }
     });
     py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
-        auto const& tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
-        auto const& tensor_spec = tensor.tensor_spec();
+        const tt::tt_metal::Tensor& tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
+        const tt::tt_metal::TensorSpec& tensor_spec = tensor.tensor_spec();
+        const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
 
-        nb::ndarray<int32_t, nb::numpy> numpy_tensor;
+        switch (tensor_spec.data_type()) {
+            case tt::tt_metal::DataType::INT32: break;
+            case tt::tt_metal::DataType::UINT32: break;
+            case tt::tt_metal::DataType::FLOAT32: break;
+            case tt::tt_metal::DataType::BFLOAT16: break;
+            case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+            case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+            case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+            case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+            case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+        }
     });
 
     auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
@@ -147,6 +167,7 @@ void py_module(nb::module_& m) {
     py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode);
     py_auto_context.def("open_device", &AutoContext::open_device);
     py_auto_context.def("close_device", &AutoContext::close_device);
+    py_auto_context.def("get_device", &AutoContext::get_device);
     // TODO: argv's char** not supported
     // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
     py_auto_context.def(
