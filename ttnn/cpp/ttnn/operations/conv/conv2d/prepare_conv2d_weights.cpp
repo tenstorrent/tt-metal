@@ -1003,8 +1003,12 @@ static OptimizedConvBlockConfig get_opt_block_config(
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
-    const uint32_t in_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
+    const uint32_t in_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(),
+        input_layout,
+        input_memory_config.buffer_type(),
+        mm_conv,
+        input_memory_config);
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1173,8 +1177,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
-    const uint32_t input_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(),
+        input_layout,
+        input_memory_config.buffer_type(),
+        mm_conv,
+        input_memory_config);
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
