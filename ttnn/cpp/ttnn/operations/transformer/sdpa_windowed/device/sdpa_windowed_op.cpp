@@ -169,8 +169,6 @@ operation::ProgramWithCallbacks WindowedScaledDotProductAttention::create_progra
 operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_performance_model(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     // Similar to regular SDPA performance model but accounting for windowed pattern
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_v = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
