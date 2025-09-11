@@ -444,7 +444,7 @@ void PhysicalSystemDescriptor::update_asic_graph() {
                         std::cout << "Updated dst chan for " << *src_asic << " to " << *dst_asic << " from "
                                   << +eth_conn.dst_chan << " to "
                                   << +physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan)
-                                  << std::endl;
+                                  << " src chan: " << +eth_conn.src_chan << std::endl;
                         eth_conn.dst_chan =
                             physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
                     }
@@ -616,8 +616,9 @@ void PhysicalSystemDescriptor::validate_graphs() {
                                    exit_node_conn.eth_conn.src_chan == eth_conn.src_chan &&
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
-                    std::cout << "Connection: " << *src_asic << " -> " << *dst_asic << " with chan "
-                              << +eth_conn.dst_chan << " found: " << exit_conn_found << std::endl;
+                    std::cout << "Connection: " << *src_asic << " -> " << *dst_asic << " with chans "
+                              << +eth_conn.src_chan << " -> " << +eth_conn.dst_chan << " found: " << exit_conn_found
+                              << std::endl;
                     TT_FATAL(
                         exit_conn_found,
                         "Physical Discovery Error: Global Connection between {} and {} is not found in the "
