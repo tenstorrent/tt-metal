@@ -63,7 +63,7 @@ function(ParseGitDescribe)
     set(major "([0-9]+)")
     set(segment "\\.[0-9]+")
     set(status "\\-([a-zA-Z]+[0-9]+)") # eg: alpha, beta, RC
-    set(tagRegex "^[^0-9]*(${major}(${segment}(${segment}(${segment})?)?)?)(${status})?(-([0-9A-Fa-f]{7,10}))?$")
+    set(tagRegex "^[^0-9]*(${major}(${segment}(${segment}(${segment})?)?)?)(${status})?$")
     if(NOT "${tagname}" MATCHES "${tagRegex}")
         message(WARNING "Cannot parse tag ${tagname}")
         return()
