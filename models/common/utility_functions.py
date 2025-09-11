@@ -964,6 +964,13 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
+def is_blackhole_p100(device):
+    is_p100 = (
+        is_blackhole() and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
+    )
+    return is_p100
+
+
 def skip_for_blackhole(reason_str="not working for Blackhole"):
     return pytest.mark.skipif(is_blackhole(), reason=reason_str)
 

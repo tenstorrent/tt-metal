@@ -8,11 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
-    get_conv_input_memory_config,
-    is_blackhole_p100,
-)
-from models.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
+from models.utility_functions import _nearest_y, is_blackhole, is_blackhole_p100, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -366,12 +363,7 @@ class resnet50Bottleneck:
             ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
             # p100 case
-            if (
-                is_blackhole_p100(device)
-                and batch_size == 32
-                and layer_module
-                and (layer_module == "layer1_module2" or layer_module == "layer2_module2")
-            ):
+            if is_blackhole_p100(device) and batch_size == 32 and layer_module and (layer_module == "layer1_module2"):
                 conv_kwargs_2["conv_config"].act_block_h_override = 32
 
         out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
@@ -581,7 +573,7 @@ class resnet50:
             act_block_h_override = 1568
 
         if is_blackhole() and self.batch_size == 32:
-            act_block_h_override = 49 * 32
+            act_block_h_override = 32 * 32 if is_blackhole_p100(device) else 49 * 32
 
         self.conv1_config = ttnn.Conv2dConfig(
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -606,9 +598,6 @@ class resnet50:
                 self.conv1_config.act_block_h_override = 64
             else:
                 self.conv1_config.act_block_h_override = 49 * 32
-
-        if is_blackhole_p100(device) and batch_size == 32:
-            self.conv1_config.act_block_h_override = 32
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
