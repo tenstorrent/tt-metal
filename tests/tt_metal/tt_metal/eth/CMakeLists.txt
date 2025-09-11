@@ -49,8 +49,11 @@ target_link_libraries(test_raw_exerciser PRIVATE tt_metal)
 target_include_directories(
     test_raw_exerciser
     PRIVATE
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
 
 add_test(NAME test_raw_exerciser COMMAND test_raw_exerciser)
