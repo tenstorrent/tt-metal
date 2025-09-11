@@ -193,6 +193,20 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
                 {320, 32},
                 ShardOrientation::ROW_MAJOR}}));
 
+// Height-sharded variants for Conv2d tests
+const auto g_height_shard_1_1_1568_256_tiled_to_16_cores = ttnn::TensorSpec(
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1568, 256}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        tt::tt_metal::MemoryConfig{
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            tt::tt_metal::BufferType::L1,
+            tt::tt_metal::ShardSpec{
+                CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 3}}}},
+                {224, 256},
+                ShardOrientation::ROW_MAJOR}}));
+
 // ============================================================================
 // Unary tests
 // ============================================================================
@@ -791,14 +805,18 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
-TEST_F(Conv2dOpIfTest, Conv2d) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 50176, 3},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice,
+                      public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>> {};
+
+TEST_P(Conv2dOpIfTest, Conv2d) {
+    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& conv2d_config = std::get<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>(GetParam());
+
+    // Skip if input shape doesn't match Conv2d test parameters (expecting 50176 x 3)
+    if (input_spec.logical_shape()[-2] != 50176 || input_spec.logical_shape()[-1] != 3) {
+        GTEST_SKIP() << "Input shape " << input_spec.logical_shape() << " not compatible with Conv2d test";
+    }
+
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
@@ -825,6 +843,14 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     // Run the test
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Print conv2d_config value before calling query_op_constraints
+        if (conv2d_config.has_value()) {
+            std::cerr << "Conv2d config: deallocate_activation=" << conv2d_config.value().deallocate_activation << std::endl;
+        } else {
+            std::cerr << "Conv2d config: std::nullopt" << std::endl;
+        }
+
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -843,8 +869,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             groups,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
-            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
+            conv2d_config,
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
@@ -865,13 +890,15 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     }
 }
 
-TEST_F(Conv2dOpIfTest, Conv2dOOM) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 802816, 3},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+TEST_P(Conv2dOpIfTest, Conv2dOOM) {
+    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& conv2d_config = std::get<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>(GetParam());
+
+    // Skip if input shape doesn't match Conv2dOOM test parameters (expecting 802816 x 3)
+    if (input_spec.logical_shape()[-2] != 802816 || input_spec.logical_shape()[-1] != 3) {
+        GTEST_SKIP() << "Input shape " << input_spec.logical_shape() << " not compatible with Conv2dOOM test";
+    }
+
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{64, 3, 3, 3},
         tt::tt_metal::TensorLayout(
@@ -901,6 +928,14 @@ TEST_F(Conv2dOpIfTest, Conv2dOOM) {
     // Run the test
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Print conv2d_config value before calling query_op_constraints
+        if (conv2d_config.has_value()) {
+            std::cerr << "Conv2d config: deallocate_activation=" << conv2d_config.value().deallocate_activation << std::endl;
+        } else {
+            std::cerr << "Conv2d config: std::nullopt" << std::endl;
+        }
+
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -919,8 +954,7 @@ TEST_F(Conv2dOpIfTest, Conv2dOOM) {
             groups,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
-            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
+            conv2d_config,
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
         if (query.status == ttnn::graph::ExecutionStatus::Error) {
@@ -940,13 +974,15 @@ TEST_F(Conv2dOpIfTest, Conv2dOOM) {
 
 /* %134 = "ttnn.conv2d"(%133, %arg136, %9) <\{batch_size = 8 : i32, conv2d_config = #ttnn.conv2d_config<weights_dtype = bf16>, dilation = array<i32: 1, 1>, groups = 1 : i32, in_channels = 256 : i32, input_height = 14 : i32, input_width = 14 : i32, kernel_size = array<i32: 3, 3>, out_channels = 256 : i32, output_dtype = #ttcore.supportedDataTypes<bf16>, padding = array<i32: 1, 1, 1, 1>, stride = array<i32: 1, 1>\}> : (tensor<1x1x1568x256xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 1568 + d1 * 1568 + d2, d3), <1x1>, memref<49x8x!ttcore.tile<32x32, bf16>, #ttnn.buffer_type<dram>>, <interleaved>>>, tensor<256x256x3x3xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 768 + d1 * 3 + d2, d3), <1x1>, memref<196608x3xbf16, #ttnn.buffer_type<system_memory>>>>, !ttnn.device) -> tensor<1x1x1568x256xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 1568 + d1 * 1568 + d2, d3), <1x1>, memref<49x8x!ttcore.tile<32x32, bf16>, #ttnn.buffer_type<dram>>, <interleaved>>>\
 */
-TEST_F(Conv2dOpIfTest, Conv2dOg) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 1568, 256},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+TEST_P(Conv2dOpIfTest, Conv2dOg) {
+    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& conv2d_config = std::get<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>(GetParam());
+
+    // Skip if input shape doesn't match Conv2dOg test parameters (expecting 1568 x 256)
+    if (input_spec.logical_shape()[-2] != 1568 || input_spec.logical_shape()[-1] != 256) {
+        GTEST_SKIP() << "Input shape " << input_spec.logical_shape() << " not compatible with Conv2dOg test";
+    }
+
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{256, 256, 3, 3},
         tt::tt_metal::TensorLayout(
@@ -976,6 +1012,14 @@ TEST_F(Conv2dOpIfTest, Conv2dOg) {
     // Run the test
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Print conv2d_config value before calling query_op_constraints
+        if (conv2d_config.has_value()) {
+            std::cerr << "Conv2d config: deallocate_activation=" << conv2d_config.value().deallocate_activation << std::endl;
+        } else {
+            std::cerr << "Conv2d config: std::nullopt" << std::endl;
+        }
+
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -994,8 +1038,7 @@ TEST_F(Conv2dOpIfTest, Conv2dOg) {
             groups,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
-            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
+            conv2d_config,
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
         if (query.status == ttnn::graph::ExecutionStatus::Error) {
@@ -1013,6 +1056,69 @@ TEST_F(Conv2dOpIfTest, Conv2dOg) {
         EXPECT_EQ(query_success, true);
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    QueryOpConstraints,    // Prefix for the instantiated test suite
+    Conv2dOpIfTest,        // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            // Conv2d test input specs (only interleaved - last dim 3 not tile-aligned)
+            ttnn::TensorSpec(
+                ttnn::Shape{1, 1, 50176, 3},
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                    ttnn::L1_MEMORY_CONFIG)),
+            // Conv2dOOM test input specs (only interleaved - last dim 3 not tile-aligned)
+            ttnn::TensorSpec(
+                ttnn::Shape{1, 1, 802816, 3},
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                    ttnn::DRAM_MEMORY_CONFIG)),
+            // Conv2dOg test input specs (interleaved + height-sharded - last dim 256 is tile-aligned)
+            ttnn::TensorSpec(
+                ttnn::Shape{1, 1, 1568, 256},
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                    ttnn::L1_MEMORY_CONFIG)),
+            g_height_shard_1_1_1568_256_tiled_to_16_cores
+        ),
+        ::testing::Values(
+            std::nullopt,
+            ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true}
+        )
+    ),
+    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>>& info) {
+        std::stringstream ss;
+
+        // Generate unique ID
+        static int uid = 0;
+        ss << uid++;
+
+        // Add tensor shape info
+        const auto& tensor_spec = std::get<ttnn::TensorSpec>(info.param);
+        ss << "_shape_";
+        for (size_t i = 0; i < tensor_spec.logical_shape().rank(); i++) {
+            if (i != 0) ss << "x";
+            ss << tensor_spec.logical_shape()[i];
+        }
+
+        // Add memory layout info
+        using detail::operator<<;
+        ss << "_" << tensor_spec.tensor_layout();
+
+        // Add config info
+        const auto& config = std::get<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>>(info.param);
+        if (config.has_value()) {
+            ss << "_deallocate_activation_true";
+        } else {
+            ss << "_nullopt";
+        }
+
+        return ss.str();
+    });
 
 }  // namespace test
 }  // namespace binary
