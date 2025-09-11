@@ -190,7 +190,8 @@ public:
         BufferType buffer_type,
         const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        std::optional<uint32_t> allocator_state_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -199,7 +200,8 @@ public:
         BufferType buffer_type,
         const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        std::optional<uint32_t> allocator_state_id = std::nullopt);
 
     // Creates a view of the region of the buffer.
     // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
@@ -277,6 +279,7 @@ public:
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
+        uint32_t allocator_state_id,
         Private);
 
 private:
@@ -305,6 +308,7 @@ private:
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     Allocator* allocator_;
+    uint32_t allocator_state_id_ = 0;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;

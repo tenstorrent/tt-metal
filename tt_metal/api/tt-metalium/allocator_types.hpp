@@ -35,6 +35,12 @@ enum class AllocCoreType {
 using BankMapping = std::vector<uint32_t>;
 
 //! Allocator configuration -- decouples allocation from soc-desc - Up to user to populate from soc_desc
+// Lightweight representation of allocator dependencies to avoid including BankManager in this header.
+struct AllocatorDependenciesConfig {
+    // Adjacency list indexed by allocator state id; each entry lists neighbor ids
+    std::vector<std::vector<uint32_t>> dependencies{{}};  // Default single allocator (0) with no deps
+};
+
 struct AllocatorConfig {
     //! DRAM specific configuration
     size_t num_dram_channels = 0;
@@ -57,6 +63,8 @@ struct AllocatorConfig {
     CoreRangeSet compute_grid = {};
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
+    // Dependencies between allocator states for overlapped submeshes
+    AllocatorDependenciesConfig allocator_dependencies{};
     void reset();
     ~AllocatorConfig() { reset(); }
 };

@@ -232,6 +232,20 @@ void py_module(py::module& module) {
             py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
+            "create_overlapped_submeshes",
+            &MeshDevice::create_overlapped_submeshes,
+            py::arg("submesh_ranges"),
+            py::keep_alive<1, 0>(),  // Keep MeshDevice alive as long as SubmeshDevices are alive
+            R"doc(
+              Create overlapped submeshes from the given coordinate ranges.
+
+              Args:
+                  submesh_ranges (List[MeshCoordinateRange]): The coordinate ranges for each submesh.
+
+              Returns:
+                  List[MeshDevice]: The overlapped submeshes created from the ranges.
+        )doc")
+        .def(
             "get_submeshes",
             &MeshDevice::get_submeshes,
             R"doc(

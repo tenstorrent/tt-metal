@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class SubmeshState;
 
 using DeviceIds = std::vector<int>;
 
@@ -116,7 +117,7 @@ private:
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
-    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -124,6 +125,9 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+
+    std::shared_ptr<SubmeshState> submesh_state_;
+
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -137,11 +141,16 @@ private:
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
+    // Helper functions for initialization
+    std::shared_ptr<SubDeviceManagerTracker> create_subdevice_manager_tracker_();
+    void initialize_cq_();
+
 public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {},
+        std::shared_ptr<SubmeshState> submesh_state = {});
     ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;
@@ -218,7 +227,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker = nullptr) override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
@@ -252,6 +262,9 @@ public:
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
+    // Submesh allocation state helpers
+    uint32_t submesh_allocator_state_id() const;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
@@ -305,6 +318,8 @@ public:
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
+    std::vector<std::shared_ptr<MeshDevice>> create_overlapped_submeshes(
+        const std::vector<MeshCoordinateRange>& submesh_ranges);
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods

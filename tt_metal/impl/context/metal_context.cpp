@@ -734,7 +734,8 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
         DEFAULT_L1_SMALL_SIZE,      // Not required for noc table gen
         DEFAULT_TRACE_REGION_SIZE,  // Not required for noc table gen
         worker_l1_unreserved_start_,
-        l1_bank_remap_);
+        l1_bank_remap_,
+        {});
     const auto allocator = L1BankingAllocator(config);
     const auto& soc_d = cluster_->get_soc_desc(device_id);
     const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);

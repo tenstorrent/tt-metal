@@ -514,7 +514,13 @@ void DevicePool::activate_device(chip_id_t id) {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(
-                num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
+                num_hw_cqs,
+                this->l1_small_size,
+                this->trace_region_size,
+                this->worker_l1_size,
+                this->l1_bank_remap,
+                false,
+                nullptr);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
