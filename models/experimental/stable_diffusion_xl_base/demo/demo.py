@@ -77,20 +77,13 @@ def run_demo_inference(
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
-    (
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
-    ) = tt_sdxl.encode_prompts([""] * batch_size, None)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
+        prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
+        pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
+        negative_prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
+        negative_pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
     )
-
     tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
