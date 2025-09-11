@@ -508,6 +508,9 @@ inline std::string op_meta_data_serialized_json(
             /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
             /* regression tests well-formed data. */                                                           \
             /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
+            if (!mesh_device->is_local(coord)) {                                                               \
+                continue;                                                                                      \
+            }                                                                                                  \
             ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto device_id = mesh_device->get_device(coord)->id();                                             \
             auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
