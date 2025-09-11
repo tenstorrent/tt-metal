@@ -88,12 +88,12 @@ inline void apply_tweaks() {
 }
 
 inline void service_base_fw() {
-    // Base fw only uses noc0
-    ncrisc_noc_full_sync<0>();
+    // Base fw only uses noc0. Only do the reinit for noc0
+    ncrisc_noc_full_sync<1>();
     service_eth_msg();
     update_boot_results_eth_link_status_check();
-    noc_init<0>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    ncrisc_noc_counters_init<0>();
+    noc_init<1>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    ncrisc_noc_counters_init<1>();
     apply_tweaks();
 }
 
@@ -138,11 +138,10 @@ void __attribute__((noinline)) Application(void) {
     }
     apply_tweaks();
     ncrisc_noc_full_sync();
-    ncrisc_noc_counters_init();
 
     deassert_all_reset();
     wait_subordinate_eriscs();
-    gEnableFwFlag[0] = 1;
+    flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
@@ -156,7 +155,7 @@ void __attribute__((noinline)) Application(void) {
             lite_fabric::service_lite_fabric_channels();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (gEnableFwFlag[0] != 1) {
+            if (flag_disable[0] != 1) {
                 return;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
@@ -190,13 +189,12 @@ void __attribute__((noinline)) Application(void) {
 
             apply_tweaks();
             uint32_t enables = launch_msg_address->kernel_config.enables;
-            constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             run_subordinate_eriscs(enables);
+
+            constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
 
-                constexpr int index =
-                    static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);

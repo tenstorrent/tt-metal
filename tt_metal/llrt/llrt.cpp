@@ -399,7 +399,8 @@ void send_msg_to_eth_mailbox(
     }
 }
 
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
+void return_to_base_firmware_and_wait_for_heartbeat(
+    chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
@@ -410,12 +411,20 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     uint32_t heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
-    uint32_t previous_heartbeat_val = heartbeat_val;
-    const auto start = std::chrono::steady_clock::now();
-    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
 
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+    std::this_thread::sleep_for(k_sleep_time);
+
+    uint32_t previous_heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+
+    const auto start = std::chrono::steady_clock::now();
+
+    // Below steps can be skipped if we already have a heartbeat from the base firmware
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
+        // Try sending the stop message again
+        tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
