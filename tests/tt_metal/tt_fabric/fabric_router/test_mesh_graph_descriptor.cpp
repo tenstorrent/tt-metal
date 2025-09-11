@@ -997,6 +997,92 @@ TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
     }
 }
 
-// TODO: Test directional connections
+TEST(MeshGraphDescriptorTests, BidirectionalConnections) {
+    // Test that when directional=false, connections exist in both directions
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels: { count: 2 }
+            directional: false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    const auto& pod_instance = desc.get_instance(pod_id);
+    auto mesh_0_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(0);
+    auto mesh_1_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(1);
+
+    // Check that both devices have outgoing connections (bidirectional)
+    const auto& connections_from_mesh_0 = desc.connections_by_source_device_id(mesh_0_device_0);
+    const auto& connections_from_mesh_1 = desc.connections_by_source_device_id(mesh_1_device_0);
+
+    ASSERT_EQ(connections_from_mesh_0.size(), 1);
+    ASSERT_EQ(connections_from_mesh_1.size(), 1);
+}
+
+TEST(MeshGraphDescriptorTests, DirectionalConnections) {
+    // Test that when directional=true, only one direction exists
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels: { count: 3 }
+            directional: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    const auto& pod_instance = desc.get_instance(pod_id);
+    auto mesh_0_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(0);
+    auto mesh_1_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(1);
+
+    // Check that only one device has outgoing connections (directional)
+    const auto& connections_from_mesh_0 = desc.connections_by_source_device_id(mesh_0_device_0);
+    const auto& connections_from_mesh_1 = desc.connections_by_source_device_id(mesh_1_device_0);
+
+    ASSERT_EQ(connections_from_mesh_0.size(), 1);
+    ASSERT_EQ(connections_from_mesh_1.size(), 0);
+}
 
 }  // namespace tt::tt_fabric::fabric_router_tests
