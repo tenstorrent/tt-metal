@@ -364,6 +364,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
+    const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
         .shard_layout = a.memory_config().memory_layout(),
@@ -380,6 +381,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.dtype(),
         output.dtype(),
         a.memory_config().shard_spec().value().shape,
+        output_image_width,
         has_bias,
         false,
         skip_activation_mcast);
