@@ -33,6 +33,7 @@
 #include "profiler.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
+#include "profiler_analysis.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt-metalium/profiler_types.hpp"
@@ -1151,7 +1152,7 @@ void DeviceProfiler::readRiscProfilerResults(
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::CORE_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            riscType = static_cast<tracy::RiscType>(pow(2, riscEndIndex));
         } else {
             riscType = tracy::RiscType::ERISC;
         }
@@ -1170,7 +1171,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     device_id,
                     worker_core.x,
                     worker_core.y,
-                    enchantum::to_string(static_cast<tracy::RiscType>(riscEndIndex)),
+                    enchantum::to_string(static_cast<tracy::RiscType>(pow(2, riscEndIndex))),
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
@@ -1596,6 +1597,29 @@ DeviceProfiler::~DeviceProfiler() {
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map);
 
     auto t = std::thread([this]() { dumpDeviceResults(); });
+
+    auto result = parse_timeseries_markers(
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .result_type = AnalysisResultType::DURATION,
+            .dimension = AnalysisDimension::OP,
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+        },
+        device_markers_vec);
+
+    for (auto& [runtime_id, durations] : result) {
+        log_info(tt::LogMetal, "Runtime ID: {}, Duration: {}", runtime_id, durations[2]);
+    }
+
     pushTracyDeviceResults(device_markers_vec);
     for (auto& tracyCtx : device_tracy_contexts) {
         TracyTTDestroy(tracyCtx.second);
