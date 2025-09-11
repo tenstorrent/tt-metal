@@ -20,6 +20,7 @@ namespace ttnn::operations::experimental {
 ttnn::Tensor SliceWriteOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
+    // ttnn::Tensor& output_tensor,
     const ttnn::SmallVector<uint32_t>& begins,
     const ttnn::SmallVector<uint32_t>& ends,
     const ttnn::SmallVector<uint32_t>& step) {
@@ -29,7 +30,15 @@ ttnn::Tensor SliceWriteOperation::invoke(
 
     bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
-    TT_FATAL(no_step, "Slice Write does not support strides");
+    // TT_FATAL(no_step, "Slice Write does not support strides");
+
+    // bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE)
+    //                             && !(input_tensor.is_sharded() || output_tensor.is_sharded());
+    // std::cout << "rm_only_not_sharded: " << rm_only_not_sharded << std::endl; // --- IGNORE ---
+    // ttnn::Tensor input = input_tensor;
+    // if (rm_only_not_sharded) {
+    //     input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+    // }
 
     bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
@@ -126,6 +135,10 @@ ttnn::Tensor SliceWriteOperation::invoke(
         }
         log_debug(tt::LogOp, "Invoking SliceWriteDeviceOperation");
 
+        // If the operation has stride and output is tiled, convert output to RM
+        // if (rm_only_not_sharded) {
+        //     output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
+        // }
         (void)tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
             {input},
