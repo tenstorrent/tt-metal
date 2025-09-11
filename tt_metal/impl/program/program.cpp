@@ -517,7 +517,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
-        for (auto [id, kernel] : handle_to_kernel) {
+        for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 if (core.x > grid_extent_[programmable_core_type_index].x) {
                     grid_extent_[programmable_core_type_index].x = core.x;
@@ -540,7 +540,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         size_t grid_size = grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y;
         std::vector<bool> valid(grid_size, false);
         std::vector<std::set<KernelHandle>> grid(grid_size);
-        for (auto [id, kernel] : handle_to_kernel) {
+        for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 valid[core_index] = true;
@@ -945,7 +945,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
         auto& kernels = this->kernels_[programmable_core_type_index];
         cores_in_program.push_back({});
         unique_cores.push_back({});
-        for (auto [id, kernel] : kernels) {
+        for (const auto& [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
                 if (unique_cores[programmable_core_type_index].find(core) !=
                     unique_cores[programmable_core_type_index].end()) {
