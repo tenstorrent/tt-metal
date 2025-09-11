@@ -21,6 +21,7 @@ struct ExecuteGroupNorm {
         const std::optional<ttnn::Tensor>& input_mask = std::nullopt,
         const std::optional<ttnn::Tensor>& weight = std::nullopt,
         const std::optional<ttnn::Tensor>& bias = std::nullopt,
+        const std::optional<ttnn::Tensor>& reciprocals = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<CoreGrid> core_grid = std::nullopt,
