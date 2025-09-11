@@ -339,84 +339,109 @@ FORCE_INLINE void send_next_data(
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    constexpr size_t src_ch_id_offset = offsetof(PacketHeaderBase<PACKET_HEADER_TYPE>, src_ch_id);
+    const uint32_t src_ch_id_addr = src_addr + src_ch_id_offset;
+    const uint32_t base_word_addr = src_ch_id_addr & ~0x3;  // make it 4B aligned
+    const uint32_t src_ch_id_offset_bits = (src_ch_id_addr - base_word_addr) * 8;
+    volatile uint32_t* ptr_to_word_with_src_ch_id = reinterpret_cast<volatile uint32_t*>(base_word_addr);
+
+    auto word_with_src_ch_id = *ptr_to_word_with_src_ch_id;
     volatile auto* src_ch_id_ptr =
         reinterpret_cast<volatile uint8_t*>(src_addr + offsetof(PacketHeaderBase<PACKET_HEADER_TYPE>, src_ch_id));
-    // WATCHER_RING_BUFFER_PUSH(
-    //     (uint)pkt_header
-    //         ->src_ch_id);  // messes up timing or instruction schedule enough to make the asserts below never trip
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     ASSERT(dest_addr == receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
 
     prev_dest_addr = dest_addr;
 
+    word_with_src_ch_id = word_with_src_ch_id & ~(0xFF << src_ch_id_offset_bits);
     if constexpr (sender_channel_index == 0) {
-        *src_ch_id_ptr = 7;
+        word_with_src_ch_id = word_with_src_ch_id | (7 << src_ch_id_offset_bits);
+        *ptr_to_word_with_src_ch_id = word_with_src_ch_id;
     } else if constexpr (sender_channel_index == 1) {
-        *src_ch_id_ptr = 31;
+        word_with_src_ch_id = word_with_src_ch_id | (31 << src_ch_id_offset_bits);
+        *ptr_to_word_with_src_ch_id = word_with_src_ch_id;
     } else if constexpr (sender_channel_index == 2) {
-        *src_ch_id_ptr = 65;
+        word_with_src_ch_id = word_with_src_ch_id | (65 << src_ch_id_offset_bits);
+        *ptr_to_word_with_src_ch_id = word_with_src_ch_id;
     } else {
         ASSERT(false);
     }
 
     asm volatile("fence" ::: "memory");
-    auto ch_id = *src_ch_id_ptr;
+    auto ch_id = *ptr_to_word_with_src_ch_id >> src_ch_id_offset_bits;
     if constexpr (sender_channel_index == 0) {
         if (ch_id != 7) {
-            WATCHER_RING_BUFFER_PUSH((uint)0xABABABAB);
-            WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            WATCHER_RING_BUFFER_PUSH((uint)0xABAB0000 | ch_id);
             invalidate_l1_cache();
-            *src_ch_id_ptr = 7;
-            *src_ch_id_ptr = 7;
-            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
-            *src_ch_id_ptr = 7;
-            *src_ch_id_ptr = 7;
-            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
-            *src_ch_id_ptr = 7;
-            *src_ch_id_ptr = 7;
-            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
-            *src_ch_id_ptr = 7;
-            *src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
+            asm volatile("nop");  //*src_ch_id_ptr = 7;
             WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
             ASSERT(false);
         }
     } else if constexpr (sender_channel_index == 1) {
         if (ch_id != 31) {
-            WATCHER_RING_BUFFER_PUSH((uint)0xCBCBCBCB);
-            WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            WATCHER_RING_BUFFER_PUSH((uint)0xCBCB0000 | ch_id);
             // Got this capture: 0x00000007,0xcbcbcbcb,0x00000007; means the value was not written through
             invalidate_l1_cache();
 
             WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (OLD) INCORRECT VALUE
             // With invalidation, we get this capture: 0x00000007,0xcbcbcbcb,0x0000001f; means the value was not written
             // through
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
-            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (NEW) CORRECT VALUE
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
-            *src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
+            asm volatile("nop");                             //*src_ch_id_ptr = 31;
             WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (NEW) CORRECT VALUE
             ASSERT(false);
         }
 
     } else if constexpr (sender_channel_index == 2) {
         if (ch_id != 65) {  // not hit?
-            WATCHER_RING_BUFFER_PUSH((uint)0xDCDCDCDC);
-            WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            WATCHER_RING_BUFFER_PUSH((uint)0xDCDC0000 | ch_id);
             invalidate_l1_cache();
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
-            *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
+            asm volatile("nop");  // *src_ch_id_ptr = 65;
             WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
             ASSERT(false);
         }
