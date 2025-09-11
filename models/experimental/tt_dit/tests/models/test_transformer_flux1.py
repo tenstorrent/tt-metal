@@ -380,7 +380,9 @@ def test_transformer(
     tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
     tt_prompt = bf16_tensor(prompt, device=submesh_device)
     tt_pooled = bf16_tensor(pooled, device=submesh_device)
-    tt_timestep = bf16_tensor(timestep.unsqueeze(0), device=submesh_device)
+    tt_timestep = ttnn.from_torch(
+        timestep.unsqueeze(0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=submesh_device
+    )
     tt_guidance = bf16_tensor(guidance.unsqueeze(0), device=submesh_device) if guidance is not None else None
 
     tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
