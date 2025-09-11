@@ -108,13 +108,13 @@ def run_generate(
     ttnn_linear_weight,
     device,
     generation_config,
+    input_mesh_mapper,
+    output_mesh_composer,
+    weights_mesh_mapper,
     kv_cache=None,
     stream_generation=False,
     feature_dtype_to_use=torch.bfloat16,
     return_perf_metrics=False,
-    mesh_mapper=None,
-    mesh_composer=None,
-    weights_mesh_mapper=None,
 ):
     all_input_features = []
     start_encode = time.time()
@@ -126,6 +126,7 @@ def run_generate(
         )
         all_input_features.append(inputs.input_features)
     input_features = torch.cat(all_input_features, dim=0)  # [B, x, y]
+    del all_input_features
     unpadded_batch_size = input_features.shape[0]
     total_batch = unpadded_batch_size * device.get_num_devices()
     assert (
@@ -138,7 +139,7 @@ def run_generate(
         parameters=parameters.encoder,
         device=device,
         weights_mesh_mapper=weights_mesh_mapper,
-        inputs_mesh_mapper=mesh_mapper,
+        input_mesh_mapper=input_mesh_mapper,
     )
     # Run encoder
     encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
@@ -150,14 +151,16 @@ def run_generate(
     def _run_generate():
         # Input ids
         input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
-        input_ids = input_ids.repeat(len(all_input_features), 1)
+        input_ids = input_ids.repeat(input_features.shape[0], 1)
         logits_processor = get_logits_processor(input_ids, config)
         if not kv_cache:
             input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
             decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
         # Initial decode position
         current_decode_pos = (
-            ttnn.from_torch(torch.zeros(unpadded_batch_size), device=device, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
+            ttnn.from_torch(
+                torch.zeros(unpadded_batch_size), device=device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
+            )
             if kv_cache
             else None
         )
@@ -175,7 +178,7 @@ def run_generate(
                 device=device,
                 decode_pos=i if kv_cache else None,
                 create_attention_mask=(not kv_cache),
-                mesh_mapper=mesh_mapper,
+                input_mesh_mapper=input_mesh_mapper,
             )
 
             output = ttnn_model.decoder(
@@ -198,7 +201,7 @@ def run_generate(
                 output_idx = 0
 
             output = output @ ttnn_linear_weight
-            logits_to_torch = ttnn.to_torch(output, mesh_composer=mesh_composer)
+            logits_to_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             next_token_logits = logits_to_torch[:, output_idx, :]
             next_tokens_scores = logits_processor(input_features, next_token_logits)
             next_tokens = torch.argmax(next_tokens_scores, dim=-1)
@@ -218,7 +221,7 @@ def run_generate(
                 ttnn.plus_one(current_decode_pos)
 
             total_decode_time += time.time() - start_iter
-            avg_decode_throughput = ((i + 1) * total_batch) / total_decode_time
+            avg_decode_throughput = (i + 1) / total_decode_time
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
             if print_each_iter:
                 logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True))
@@ -235,19 +238,20 @@ def run_generate(
         logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
         logger.info(f"Total decode time: {total_decode_time:.3f}s")
         logger.info(f"Total generate time: {total_generate_time:.3f}s")
-        logger.info(f"Average decode throughput: {avg_decode_throughput:.3f} t/s")
+        logger.info(f"Average decode throughput (per user): {avg_decode_throughput:.3f} t/s/u")
+        logger.info(f"Average decode throughput (total batch): {(avg_decode_throughput * total_batch):.3f} t/s")
 
     # conditionally return generator or full response
     if stream_generation:
         return _run_generate()
     else:
-        output = [[] for _ in range(len(all_input_features))]
+        output = [[] for _ in range(input_features.shape[0])]
         for x in _run_generate():
             if return_perf_metrics:
                 out_cur, ttft, avg_decode_throughput = x
             else:
                 out_cur = x
-            for idx in range(len(all_input_features)):
+            for idx in range(input_features.shape[0]):
                 output[idx].append(out_cur[idx])
         output = ["".join(tokens) for tokens in output]
         if return_perf_metrics:
@@ -257,7 +261,7 @@ def run_generate(
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
-    ttnn_model, device, model_repo, mesh_mapper=None, mesh_composer=None, weights_mesh_mapper=None
+    ttnn_model, device, model_repo, input_mesh_mapper, output_mesh_composer, weights_mesh_mapper
 ):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
@@ -277,11 +281,11 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
 
     def _model_pipeline(
         current_batch,
+        input_mesh_mapper,
+        output_mesh_composer,
+        weights_mesh_mapper,
         stream=False,
         return_perf_metrics=False,
-        mesh_mapper=None,
-        mesh_composer=None,
-        weights_mesh_mapper=None,
     ):
         durations = [audio_array.shape[0] / sampling_rate for (sampling_rate, audio_array) in current_batch]
         logger.info(
@@ -301,8 +305,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             kv_cache=kv_cache,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
-            mesh_mapper=mesh_mapper,
-            mesh_composer=mesh_composer,
+            input_mesh_mapper=input_mesh_mapper,
+            output_mesh_composer=output_mesh_composer,
             weights_mesh_mapper=weights_mesh_mapper,
         )
 
@@ -315,14 +319,14 @@ def run_demo_whisper_for_conditional_generation_inference(
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
-    mesh_mapper, weights_mapper, mesh_composer = get_mesh_mappers(device)
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
         ttnn_model,
         device,
         model_repo,
-        weights_mesh_mapper=weights_mapper,
-        mesh_mapper=mesh_mapper,
-        mesh_composer=mesh_composer,
+        weights_mesh_mapper=weights_mesh_mapper,
+        input_mesh_mapper=input_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
     )
 
     # load data
@@ -337,7 +341,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     total_ttft = 0
     total_decode_throughput = 0
     num_warmup_runs = 1
-    for i in range(0, total_inputs, batch_size):
+    for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
         current_batch = []
         for j in range(current_batch_size):
@@ -350,9 +354,9 @@ def run_demo_whisper_for_conditional_generation_inference(
             current_batch,
             stream=False,
             return_perf_metrics=True,
-            mesh_mapper=mesh_mapper,
-            mesh_composer=mesh_composer,
-            weights_mesh_mapper=weights_mapper,
+            input_mesh_mapper=input_mesh_mapper,
+            output_mesh_composer=output_mesh_composer,
+            weights_mesh_mapper=weights_mesh_mapper,
         )
         if i >= num_warmup_runs:  # Exclude first compile run
             total_ttft += ttft
@@ -426,60 +430,32 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, mode
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
-    input_path, ttnn_model, device, num_inputs, model_repo, is_ci_env, batch_size_per_device
-):
-    ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
-        input_path, ttnn_model, device, num_inputs, model_repo, batch_size_per_device
-    )
-    total_batch = device.get_num_devices() * batch_size_per_device
-    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
-        if is_blackhole():
-            if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 8.28, "decode_t/s": 89.17, "decode_t/s/u": 89.17}
-            else:
-                expected_perf_metrics = {"prefill_t/s": 8.35, "decode_t/s": 91.13, "decode_t/s/u": 91.13}
-        else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 1.53, "decode_t/s": 12.96, "decode_t/s/u": 12.96}
-        measurements = {
-            "prefill_t/s": (1 / ttft) * total_batch,
-            "decode_t/s": decode_throughput,
-            "decode_t/s/u": decode_throughput / total_batch,
-        }
-        verify_perf(measurements, expected_perf_metrics)
-
-
-@pytest.mark.parametrize(
-    "ttnn_model",
-    (ttnn_optimized_functional_whisper,),
-)
-@pytest.mark.parametrize(
-    "num_inputs,batch_size_per_device",
-    [(2, 1)],
-)
-@pytest.mark.parametrize(
-    "model_repo",
-    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dp(
     input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device
 ):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
     total_batch = mesh_device.get_num_devices() * batch_size_per_device
+    # to remove this
+    measurements = {
+        "prefill_t/s": (1 / ttft) * total_batch,
+        "decode_t/s": decode_throughput * total_batch,
+        "decode_t/s/u": decode_throughput,
+    }
+    print("measurements are", measurements)
     if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 8.33, "decode_t/s": 88.6, "decode_t/s/u": 88.6}
+                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
             else:
-                expected_perf_metrics = {"prefill_t/s": 8.45, "decode_t/s": 91.03, "decode_t/s/u": 91.03}
+                expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 2.69, "decode_t/s": 37.86, "decode_t/s/u": 18.93}
+            expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
+        expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
             "prefill_t/s": (1 / ttft) * total_batch,
-            "decode_t/s": decode_throughput,
-            "decode_t/s/u": decode_throughput / total_batch,
+            "decode_t/s": decode_throughput * total_batch,
+            "decode_t/s/u": decode_throughput,
         }
         verify_perf(measurements, expected_perf_metrics)
 
@@ -574,7 +550,7 @@ def run_demo_whisper_for_audio_classification_inference(
 
         # Combine input features into batch tensor
         input_features = torch.cat(all_input_features, dim=0)  # Shape: [current_batch_size, x, y]
-
+        del all_input_features
         # Encode inputs
         input_embedding = ttnn_model.preprocess_encoder_inputs(
             config=config,
