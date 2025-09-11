@@ -1427,7 +1427,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
@@ -1580,7 +1580,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
@@ -1737,8 +1737,7 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    # TODO: Rename to is_llama_vision
-    def is_vision(self):
+    def is_llama_vision(self):
         return ("vision" in self.CKPT_DIR.lower()) and ("llama" in self.model_name.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
@@ -1841,7 +1840,7 @@ class ModelArgs:
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
-                if "llama" in self.CKPT_DIR.lower():
+                if self.is_llama_vision():
                     state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
                 else:
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
