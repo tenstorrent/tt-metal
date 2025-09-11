@@ -143,7 +143,7 @@ void MetalContext::initialize(
         if (rtoptions_.get_clear_dram()) {
             clear_dram_state(device_id);
         }
-        int ai_clk = cluster_->get_device_aiclk(device_id);
+        [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
 
@@ -254,8 +254,8 @@ MetalContext::MetalContext() {
         cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
     }
 
-    bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
+    bool is_base_routing_fw_enabled = Cluster::is_base_routing_fw_enabled(
+        Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     rtoptions_.ParseAllFeatureEnv(*hal_);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
@@ -740,11 +740,10 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled =
-        cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
-        noc_translation_enabled &&
-        (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end());
+        noc_translation_enabled && (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                    hal_->get_virtualized_core_types().end());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
@@ -894,7 +893,7 @@ void MetalContext::initialize_firmware(
                                 .get_firmware_build_state(device_id, core_type_idx, processor_class, eriscv_id)
                                 .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
-                        uint32_t fw_size = binary_mem.get_text_size();
+                        [[maybe_unused]] uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);

@@ -1082,8 +1082,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
     const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
                                            ? params.output_height
                                            : params.output_width;
@@ -1237,7 +1235,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         const uint32_t output_slice_size =
             slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
-        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
