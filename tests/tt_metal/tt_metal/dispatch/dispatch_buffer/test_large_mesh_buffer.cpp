@@ -83,7 +83,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
 class InterleavedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
                                        public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
-TEST_P(InterleavedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
