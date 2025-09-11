@@ -177,16 +177,6 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
     return img
 
 
-def load_class_names(namesfile):
-    class_names = []
-    with open(namesfile, "r") as fp:
-        lines = fp.readlines()
-    for line in lines:
-        line = line.rstrip()
-        class_names.append(line)
-    return class_names
-
-
 class YoloLayer(nn.Module):
     """Yolo layer
     model_out: while inference,is post-processing inside or outside the model

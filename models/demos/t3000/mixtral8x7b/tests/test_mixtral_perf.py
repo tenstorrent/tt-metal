@@ -40,6 +40,7 @@ class Emb(torch.nn.Module):
         (2048, 150, 0.085),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_perf(
     t3k_mesh_device,
     generation_start_pos,
@@ -186,7 +187,7 @@ def test_mixtral_model_with_prefill_perf(
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
-    # Prompt with size with a bit more than 128 tokens. increase the prompt based on the prefill seqlen to accomodate every seqlen.
+    # Prompt with size with a bit more than 128 tokens. increase the prompt based on the prefill seqlen to accommodate every seqlen.
     prompts = [
         "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness, it was the spring of hope, it was the winter of despair, we had everything before us, we had nothing before us, we were all going direct to Heaven, we were all going direct the other way – in short, the period was so far like the present period, that some of its noisiest authorities insisted on its being received, for good or for evil, in the superlative degree of comparison only."
         * (prefill_seqlen // 128)

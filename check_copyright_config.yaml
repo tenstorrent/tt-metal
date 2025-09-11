@@ -5,6 +5,7 @@ DEFAULT:
   # when setting this option in a section, you need to list all the allowed licenses
   allowed_licenses:
     - Apache-2.0
+    - Apache-2.0 WITH LLVM-exception
   license_for_new_files: Apache-2.0  # license to be used when inserting a new copyright notice
   new_notice_c: |  # notice for new C, CPP, H, HPP and LD files
     // SPDX-FileCopyrightText: © {years} Tenstorrent AI ULC

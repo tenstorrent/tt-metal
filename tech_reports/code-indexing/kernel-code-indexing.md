@@ -7,7 +7,7 @@ Add `-e` or `--export-compile-commands` to `./build_metal.sh` to generate `compi
 Kernels are compiled and linked in runtime with `runtime/sfpi/compiler/bin/riscv32-tt-elf-g++`, and they naturally aren't part of the CMake project, so code indexing doesn't work there.
 
 ## 1. Create a fake CMake target to enable kernel code indexing
-Add `--fake-kernels-target` to `build_metal.sh`
+Add `--enable-fake-kernels-target` to `build_metal.sh`
 
 - This approach doesn't work very well:
   - many kernels depend on different defines and compile-time arguments

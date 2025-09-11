@@ -51,7 +51,7 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
 
         y = tt2torch_tensor(t3)
     except Exception as exc:
-        logger.warning(f"run_addcdiv RuntimeError occured {exc}")
+        logger.warning(f"run_addcdiv RuntimeError occurred {exc}")
 
     ttnn.experimental.device.DeallocateBuffers(device)
     ttnn.close_device(device)

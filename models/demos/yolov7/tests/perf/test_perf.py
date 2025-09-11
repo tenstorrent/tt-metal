@@ -19,7 +19,7 @@ sys.modules["models.yolo"] = yolov7_model
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 73.8],
+        [1, 121.7],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

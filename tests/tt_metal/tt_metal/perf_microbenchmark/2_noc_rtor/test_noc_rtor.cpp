@@ -36,6 +36,8 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -137,9 +139,9 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        int clock_freq_mhz = get_tt_npu_clock(device);
+        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
         auto grid_coord = device->compute_with_storage_grid_size();
         num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
         num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
@@ -149,7 +151,13 @@ int main(int argc, char** argv) {
 
         // limit size of the L1 buffer to do not exceed global L1 size
         uint32_t l1_buffer_size = num_cores_r * num_cores_c * (num_tiles > 256 ? 256 : num_tiles) * page_size;
-        auto l1_buffer = tt_metal::Buffer::create(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
+        tt::tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
+            .page_size = page_size,
+            .buffer_type = tt_metal::BufferType::L1,
+        };
+        tt::tt_metal::distributed::ReplicatedBufferConfig global_buffer_config{.size = l1_buffer_size};
+        auto l1_mesh_buffer =
+            tt::tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device.get());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -162,14 +170,13 @@ int main(int argc, char** argv) {
 
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
-                int core_index = i * num_cores_c + j;
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t cb_index = 0;
                 uint32_t cb_tiles = 32;
                 tt_metal::CircularBufferConfig cb_src0_config =
                     tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
                         .set_page_size(cb_index, single_tile_size);
-                auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+                tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
             }
         }
 
@@ -189,7 +196,7 @@ int main(int argc, char** argv) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t core_index = i * num_cores_c + j;
-                uint32_t l1_buffer_addr = l1_buffer->address();
+                uint32_t l1_buffer_addr = l1_mesh_buffer->address();
 
                 const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
                 SetRuntimeArgs(program, noc_kernel, core, noc_runtime_args);
@@ -199,26 +206,29 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
-
         log_info(LogTest, "Num tests {}", num_tests);
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
-            Finish(device->command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
             auto t_end = std::chrono::steady_clock::now();
             elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
             log_info(LogTest, "Time elapsed for NOC transfers: {}us", elapsed_us[i]);
 
             if (use_device_profiler) {
-                elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                elapsed_cc = get_t0_to_any_riscfw_end_cycle(
+                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
                 elapsed_us.push_back((double)elapsed_cc / clock_freq_mhz);
                 log_info(LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
             }
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

@@ -16,6 +16,8 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
+
 // Defines to include tt_metal/hw/inc/accessor/tensor_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
@@ -23,13 +25,6 @@ template <int N>
 constexpr auto get_ct_arg();
 #define get_compile_time_arg_val(arg_idx) get_ct_arg<arg_idx>()
 
-template <typename T>
-constexpr T get_arg_val(size_t idx);
-
-template <typename T>
-constexpr T get_common_arg_val(size_t idx);
-
-constexpr uint32_t get_arg_val(int arg_idx);
 namespace tensor_accessor {
 uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
 }
@@ -98,6 +93,7 @@ constexpr auto make_struct_from_array_wrapper(F, std::index_sequence<Is...>) -> 
     };                                                      \
     using name =                                            \
         decltype(make_struct_from_array_wrapper<Wrapper>(name##_fn{}, std::make_index_sequence<(arr).size()>{}))
+// NOLINTEND(bugprone-macro-parentheses)
 
 namespace sharded_accessor_tests {
 

@@ -272,13 +272,6 @@ def get_updated_device_params(device_params):
 
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
-    # Special env to force worker dispatch to test dispatch from worker cores
-    if "TT_TEST_USE_WORKER_DISPATCH" in os.environ:
-        dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-
-    # Special env to force ethernet dispatch to test dispatch from ethernet cores
-    if "TT_TEST_USE_ETH_DISPATCH" in os.environ:
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
 
     if ttnn.device.is_blackhole() and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
         logger.warning("blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead.")

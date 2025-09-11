@@ -37,8 +37,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coord = connection.receiver_core.core_coord;
-            receiver_fabric_node_id =
-                output_tensor.mesh_device()->get_fabric_node_id(connection.sender_core.device_coord);
+            receiver_fabric_node_id = output_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord);
             sender_fabric_node_id = mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord);
             break;

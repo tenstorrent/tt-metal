@@ -79,7 +79,6 @@ GROUPNORM_DECODER_NUM_BLOCKS = 32
 def get_default_conv_config():
     return ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        activation="",
         deallocate_activation=True,
     )
 

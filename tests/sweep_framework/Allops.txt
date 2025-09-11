@@ -13,7 +13,6 @@ ttnn.addcdiv
 ttnn.addcdiv_bw
 ttnn.addcmul
 ttnn.addcmul_bw
-ttnn.all_gather
 ttnn.allocate_tensor_on_device
 ttnn.angle
 ttnn.angle_bw
@@ -363,7 +362,6 @@ ttnn.real_bw
 ttnn.reallocate
 ttnn.reciprocal
 ttnn.reciprocal_bw
-ttnn.reduce_scatter
 ttnn.reglu
 ttnn.relu
 ttnn.relu6

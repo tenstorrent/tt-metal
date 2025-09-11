@@ -33,7 +33,7 @@ void validate(
         "{} op requires a fifo size greater than or equal to the input tensor page size",
         op_name);
 
-    auto device_ids = input_tensor.mesh_device()->get_device_ids();
+    auto device_ids = input_tensor.device()->get_device_ids();
     std::unordered_set<chip_id_t> found_device_ids;
     for (const auto& connection : socket_connection_config) {
         chip_id_t device_id;

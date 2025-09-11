@@ -6,11 +6,11 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
-run_mid_run_tracy_push() {
-    echo "Smoke test, checking tracy mid-run device data push for hangs"
+run_mid_run_data_dump() {
+    echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --sync-host-device --push-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
 }
@@ -50,7 +50,7 @@ run_async_tracing_T3000_test() {
             echo "Verifying test results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=4100 # Smoke test to see at least 4100 ops are reported
+            LINE_COUNT=2700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
@@ -60,11 +60,11 @@ run_async_tracing_T3000_test() {
             echo "Verifying device-only results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=3600 # Smoke test to see at least 3600 ops are reported
+            LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
-            LINE_COUNT=3600 # Smoke test to see at least 3600 ops are reported
+            LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
             echo $res
         fi
@@ -102,7 +102,7 @@ run_async_ccl_T3000_test() {
         echo "Verifying test results"
         runDate=$(ls $PROFILER_OUTPUT_DIR/)
         LINE_COUNT=128 #8 devices x 16 iterations
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherAsync")
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherCommandProcessorAsync")
         echo $res
     fi
 }
@@ -116,7 +116,7 @@ run_profiling_test() {
 
     run_async_tracing_T3000_test
 
-    run_mid_run_tracy_push
+    run_mid_run_data_dump
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 

@@ -7,6 +7,7 @@ import ttnn
 
 from typing import Literal
 
+from ttnn.device import is_wormhole_b0
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -65,6 +66,7 @@ def create_unet_model_parameters(
     parameters.c1["conv_blocking_and_parallelization_config_override"] = None
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
+    parameters.c1["enable_activation_reuse"] = True
     parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
@@ -72,21 +74,26 @@ def create_unet_model_parameters(
     parameters.c2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c2["use_split_reader"] = True
     parameters.c2["use_activation_double_buffer"] = True
+    parameters.c2["enable_activation_reuse"] = True
     parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c2_2["use_split_reader"] = True
     parameters.c2_2["use_activation_double_buffer"] = True
+    parameters.c2_2["enable_activation_reuse"] = True
 
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3["use_split_reader"] = True
     parameters.c3["use_activation_double_buffer"] = True
+    parameters.c3["enable_activation_reuse"] = is_wormhole_b0(device)
     parameters.c3_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3_2["use_split_reader"] = True
     parameters.c3_2["use_activation_double_buffer"] = True
 
     parameters.c4["conv_blocking_and_parallelization_config_override"] = None
     parameters.c4["use_activation_double_buffer"] = True
+    parameters.c4["enable_activation_reuse"] = is_wormhole_b0(device)
     parameters.c4_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c4_2["use_activation_double_buffer"] = True
+    parameters.c4_2["enable_activation_reuse"] = is_wormhole_b0(device)
 
     parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
     parameters.bnc["use_activation_double_buffer"] = False
@@ -116,9 +123,11 @@ def create_unet_model_parameters(
     parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c7_2["use_split_reader"] = True
     parameters.c7_2["use_activation_double_buffer"] = True
+    parameters.c7_2["enable_activation_reuse"] = True
     parameters.c7_3["conv_blocking_and_parallelization_config_override"] = None
     parameters.c7_3["use_split_reader"] = True
     parameters.c7_3["use_activation_double_buffer"] = True
+    parameters.c7_3["enable_activation_reuse"] = True
 
     parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 4 * 32}
     parameters.c8["use_activation_double_buffer"] = True

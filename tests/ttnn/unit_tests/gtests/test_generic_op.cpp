@@ -76,17 +76,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
 
     const auto src_buffer = device_input_tensor.buffer();
     const auto dst_buffer = device_output_tensor.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
 
-    const KernelDescriptor::CompileTimeArgs compile_time_args = {
+    KernelDescriptor::CompileTimeArgs compile_time_args = {
         (uint32_t)src_cb_idx,
         (uint32_t)dst_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         outer_dim_units,
@@ -94,6 +90,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         red_dim_units,
         (uint32_t)(reduce_all),
     };
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+
     const KernelDescriptor::CoreRuntimeArgs runtime_args = {
         src_buffer->address(),
         dst_buffer->address(),
@@ -540,10 +539,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram, last_ktile_w};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -687,7 +686,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         device_input_tensor.device());
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
-    uint32_t is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};

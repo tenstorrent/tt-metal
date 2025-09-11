@@ -28,7 +28,7 @@ from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict
 
 script_config = ScriptConfig(
-    depends=["check_per_device"],
+    depends=["check_per_device", "dispatcher_data"],
 )
 
 

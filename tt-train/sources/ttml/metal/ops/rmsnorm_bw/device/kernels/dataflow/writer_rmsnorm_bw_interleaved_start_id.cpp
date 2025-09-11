@@ -25,12 +25,9 @@ constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
 constexpr uint32_t onetile = 1;
 
+template <typename AddrGen>
 inline void write_cb_block_to_dram(
-    uint32_t cb_idx,
-    const InterleavedAddrGenFast</* is dram */ true>& addr_gen,
-    uint32_t start_idx,
-    uint32_t block_size,
-    uint32_t tile_bytes) {
+    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {
     cb_wait_front(cb_idx, block_size);
     uint32_t l1_read_addr = get_read_ptr(cb_idx);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -47,13 +44,10 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
-    const DataFormat data_format = get_dataformat(cb_dL_da_idx);
-
-    const InterleavedAddrGenFast</* is dram */ true> da_output_addr_generator = {
-        .bank_base_address = da_output_addr, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is dram */ true> dgamma_output_addr_generator = {
-        .bank_base_address = dgamma_output_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto da_args = TensorAccessorArgs<2>();
+    constexpr auto dgamma_args = TensorAccessorArgs<da_args.next_compile_time_args_offset()>();
+    const auto da_output_addr_generator = TensorAccessor(da_args, da_output_addr, tile_bytes);
+    const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr, tile_bytes);
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {

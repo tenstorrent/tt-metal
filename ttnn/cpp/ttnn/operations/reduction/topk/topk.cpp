@@ -28,7 +28,7 @@ uint32_t get_nearest_supported_k_value(uint32_t k) {
 }
 
 // one stop for all transformations needed after executing top-k
-// do we need seperate function for each case? revisit this later
+// do we need separate function for each case? revisit this later
 std::vector<Tensor> post_topk_transform_tensor(
     const Tensor& input_tensor,
     std::vector<Tensor>& result,
@@ -138,7 +138,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         0);
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
 

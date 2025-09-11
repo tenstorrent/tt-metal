@@ -11,10 +11,8 @@
 #include <bitset>
 #include <cstddef>
 #include <map>
-#include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
 
 #include "assert.hpp"
@@ -52,6 +50,8 @@ BuildEnvManager::BuildEnvManager() {
         }
     }
 }
+
+namespace {
 
 std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t device_id, uint8_t num_hw_cqs) {
     std::map<std::string, std::string> device_kernel_defines;
@@ -136,67 +136,16 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
     return build_key;
 }
 
-JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
+std::vector<JitBuildState> create_build_state(
+    JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
     uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
     // Prepare the container for build states
     const auto& hal = MetalContext::instance().hal();
     uint32_t num_build_states = hal.get_total_num_risc_processors();
-    std::vector<std::shared_ptr<JitBuildState>> build_states(num_build_states);
-
-    // Helper lambda to create a build state based on the core type and processor info.
-    auto create_jit_build_state = [&](HalProgrammableCoreType core_type,
-                                      uint32_t processor_class,
-                                      uint32_t processor_type,
-                                      bool is_compute_processor) -> std::shared_ptr<JitBuildState> {
-        switch (core_type) {
-            case HalProgrammableCoreType::TENSIX: {
-                if (is_compute_processor) {
-                    return std::make_shared<JitBuildCompute>(
-                        build_env,
-                        JitBuiltStateConfig{
-                            .processor_id = processor_type,
-                            .is_fw = is_fw,
-                            .dispatch_message_addr = dispatch_message_addr});
-                } else {
-                    // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one
-                    // processor class
-                    return std::make_shared<JitBuildDataMovement>(
-                        build_env,
-                        JitBuiltStateConfig{
-                            .processor_id = processor_class,
-                            .is_fw = is_fw,
-                            .dispatch_message_addr = dispatch_message_addr});
-                }
-                break;
-            }
-            case HalProgrammableCoreType::ACTIVE_ETH: {
-                // Cooperative means active erisc FW needs to context switch to base FW
-                return std::make_shared<JitBuildActiveEthernet>(
-                    build_env,
-                    JitBuiltStateConfig{
-                        .processor_id = processor_class,
-                        .is_fw = is_fw,
-                        .dispatch_message_addr = dispatch_message_addr,
-                        .is_cooperative = hal.get_eth_fw_is_cooperative()});
-                break;
-            }
-            case HalProgrammableCoreType::IDLE_ETH: {
-                return std::make_shared<JitBuildIdleEthernet>(
-                    build_env,
-                    JitBuiltStateConfig{
-                        .processor_id = processor_class,
-                        .is_fw = is_fw,
-                        .dispatch_message_addr = dispatch_message_addr});
-                break;
-            }
-            default:
-                TT_THROW(
-                    "Unsupported programable core type {} to initialize build states",
-                    enchantum::to_string(core_type));
-        }
-    };
+    std::vector<JitBuildState> build_states;
+    build_states.reserve(num_build_states);
 
     // Loop through programmable core types and their processor classes/types.
     uint32_t index = 0;
@@ -205,19 +154,36 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
         auto core_type = *enchantum::index_to_enum<HalProgrammableCoreType>(programmable_core);
         uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+            JitBuiltStateConfig config{
+                .core_type = static_cast<HalProgrammableCoreType>(programmable_core),
+                .processor_class = HalProcessorClassType::DM,
+                // TODO(HalProcessorClassType): Current hal implementation (and its user) processor_class = DM / DM+1
+                // to distinguish brisc and ncrisc.  This should be changed to processor_class = DM and processor_id =
+                // 0/1.
+                .processor_id = processor_class,
+                .is_fw = is_fw,
+                .dispatch_message_addr = dispatch_message_addr,
+                .is_cooperative = hal.get_eth_fw_is_cooperative(),
+            };
             auto compute_proc_class = enchantum::cast<HalProcessorClassType>(processor_class);
             bool is_compute_processor =
                 compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                build_states[index++] =
-                    create_jit_build_state(core_type, processor_class, processor_type, is_compute_processor);
+                if (programmable_core == static_cast<uint32_t>(HalProgrammableCoreType::TENSIX) &&
+                    processor_class == static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
+                    config.processor_class = HalProcessorClassType::COMPUTE;
+                    config.processor_id = processor_type;
+                }
+                build_states.emplace_back(build_env, config);
             }
         }
     }
-
+    TT_ASSERT(build_states.size() == num_build_states);
     return build_states;
 }
+
+}  // namespace
 
 void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
@@ -242,24 +208,23 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(chip_id_t device_id)
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
-    return *get_device_build_env(device_id).firmware_build_states[state_idx];
+    return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
-    return *get_device_build_env(device_id).kernel_build_states[state_idx];
+    return get_device_build_env(device_id).kernel_build_states[state_idx];
 }
 
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class) {
-    std::pair<int, int> b_id_and_count = get_build_index_and_state_count(programmable_core, processor_class);
-    JitBuildStateSubset subset = {
-        &get_device_build_env(device_id).kernel_build_states[b_id_and_count.first], b_id_and_count.second};
-    return subset;
+    auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
+    auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
+    return {kernel_build_states.begin() + b_id, count};
 }
 
-std::pair<int, int> BuildEnvManager::get_build_index_and_state_count(
+BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
     uint32_t programmable_core, uint32_t processor_class) {
     const std::lock_guard<std::mutex> lock(this->lock);
     TT_ASSERT(
@@ -275,7 +240,7 @@ std::pair<int, int> BuildEnvManager::get_build_index_and_state_count(
 
 void BuildEnvManager::build_firmware(chip_id_t device_id) {
     ZoneScoped;
-    jit_build_set(get_device_build_env(device_id).firmware_build_states, nullptr);
+    jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
 }  // namespace tt::tt_metal

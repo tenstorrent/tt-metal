@@ -14,19 +14,15 @@ void bind_reduction_topk_operation(py::module& module) {
     auto doc =
         R"doc(topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
 
-            Returns the ``k`` largest or ``k`` smallest elements of the given input tensor along a given dimension.
+            Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
-            If ``dim`` is not provided, the last dimension of the input tensor is used.
+            If :attr:`dim` is not provided, the last dimension of the :attr:`input_tensor` is used.
 
-            If ``largest`` is True, the k largest elements are returned. Otherwise, the k smallest elements are returned.
+            If :attr:`largest` is True, the :attr:`k` largest elements are returned. Otherwise, the :attr:`k` smallest elements are returned.
 
-            The boolean option ``sorted`` if True, will make sure that the returned k elements are sorted.
+            The boolean option :attr:`sorted` if True, will make sure that the returned :attr:`k` elements are sorted.
 
-            Input tensor must have BFLOAT8 or BFLOAT16 data type and TILE_LAYOUT layout.
-
-            Output value tensor will have the same data type as input tensor and output index tensor will have UINT16 data type.
-
-            Equivalent pytorch code:
+            Equivalent PyTorch code:
 
             .. code-block:: python
 
@@ -48,6 +44,37 @@ void bind_reduction_topk_operation(py::module& module) {
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor` supports the following data type and layout:
+
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT8, BFLOAT16
+                        - TILE
+
+                .. list-table:: index_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT16, UINT32
+                        - TILE
+
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+
+            Limitations:
+                - :attr:`input_tensor` must be 4D
+                - For :attr:`input_tensor`, N*C*H must be a multiple of 32 and W must be ≥64.
+                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - All shape validations are performed on padded shapes.
+
+            Example:
+                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
+                topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
 
         )doc";
 

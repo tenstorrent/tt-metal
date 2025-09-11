@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <optional>
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <tt-metalium/control_plane.hpp>
@@ -100,6 +100,12 @@ public:
     // and workers that only need the header only channel are specified in the downstream kernels.
     // Throws if not found
     int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
+
+    // Get the link index used by dispatch for coordination with fabric tensix
+    static uint32_t get_dispatch_link_index(
+        tt::tt_fabric::FabricNodeId src_fabric_node_id,
+        tt::tt_fabric::FabricNodeId dst_fabric_node_id,
+        IDevice* device);
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args

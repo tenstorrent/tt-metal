@@ -1,0 +1,120 @@
+arch:
+  0: wormhole_b0
+  1: wormhole_b0
+  2: wormhole_b0
+  3: wormhole_b0
+chips:
+  0:
+    - 1
+    - 0
+    - 0
+    - 0
+  1:
+    - 1
+    - 1
+    - 0
+    - 0
+  2:
+    - 2
+    - 1
+    - 0
+    - 0
+  3:
+    - 2
+    - 0
+    - 0
+    - 0
+chip_unique_ids:
+  3: 10226782261
+  2: 10226774114
+  1: 10226774041
+  0: 9957417446
+ethernet_connections:
+  -
+    - chip: 0
+      chan: 6
+    - chip: 3
+      chan: 6
+  -
+    - chip: 0
+      chan: 7
+    - chip: 3
+      chan: 7
+  -
+    - chip: 0
+      chan: 14
+    - chip: 1
+      chan: 14
+  -
+    - chip: 0
+      chan: 15
+    - chip: 1
+      chan: 15
+  -
+    - chip: 1
+      chan: 0
+    - chip: 2
+      chan: 0
+  -
+    - chip: 1
+      chan: 1
+    - chip: 2
+      chan: 1
+  -
+    - chip: 2
+      chan: 14
+    - chip: 3
+      chan: 14
+  -
+    - chip: 2
+      chan: 15
+    - chip: 3
+      chan: 15
+ethernet_connections_to_remote_devices:
+    []
+chips_with_mmio:
+    - 0: 0
+    - 2: 2
+harvesting:
+  0:
+    noc_translation: true
+    harvest_mask: 65
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  1:
+    noc_translation: true
+    harvest_mask: 528
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  2:
+    noc_translation: true
+    harvest_mask: 520
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  3:
+    noc_translation: true
+    harvest_mask: 513
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+chip_to_boardtype:
+  0: n300
+  1: n300
+  2: n300
+  3: n300
+boards:
+  -
+    - board_id: 72058990196040166
+    - board_type: n300
+    - chips:
+        - 1
+        - 0
+  -
+    - board_id: 72058994491928601
+    - board_type: n300
+    - chips:
+        - 2
+        - 3

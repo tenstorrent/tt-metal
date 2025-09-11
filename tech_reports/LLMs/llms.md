@@ -90,7 +90,7 @@ Fused operation uses a different parallelization scheme internally depending on 
 
 
 #### 2.2.2 Decode mode specifics
-The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
+The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at initialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
 
 The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
@@ -113,7 +113,7 @@ transformation_mats_decode = rope_setup_decode.get_trans_mats()
 position_ids = torch.arange(batch)
 
 
-# Step 3: Retreive the relevant cos/sin matrices
+# Step 3: Retrieve the relevant cos/sin matrices
 cos_sin_matrices = rope_setup_decode.get_rot_mats(position_ids)
 cos_matrix, sin_matrix = cos_sin_matrices
 
@@ -1223,7 +1223,6 @@ The second key concept to scaling a model to multiple devices are Collective Com
 - ReduceScatter
 - AllReduce
 
-See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage about CCL and their implementation details. Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
 #### 3.3.1 AllGather
 The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).

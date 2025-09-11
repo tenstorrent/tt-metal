@@ -9,8 +9,8 @@ import torch
 import ttnn
 import itertools
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole, skip_for_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from models.utility_functions import is_blackhole
 
 
 def random_torch_tensor(dtype, shape):
@@ -38,7 +38,7 @@ def test_permute(device, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -83,10 +83,7 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_on_less_than_4D(device, perm, dtype):
@@ -109,9 +106,7 @@ def test_permute_on_less_than_4D(device, perm, dtype):
 @pytest.mark.parametrize("s", [8])
 @pytest.mark.parametrize("h", [1500])
 @pytest.mark.parametrize("w", [64])
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-# #24347: Looks like we have a non-det issue on N150 + N300
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_permute_for_specific_case(device, b, s, h, w, dtype):
     torch.manual_seed(2005)
     shape = (b, s, h, w)
@@ -158,7 +153,7 @@ def test_permute_negative_dim(device, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 def test_permute_bfloat8(device):
@@ -186,7 +181,7 @@ def test_permute_5d(device, shape, perm, dtype):
 
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize("pad_value", [float("-inf"), None])
@@ -200,7 +195,7 @@ def test_permute_pad_value(device, pad_value):
     tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_output = ttnn.permute(tt_input, (3, 2, 1, 0), pad_value=pad_value)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output, tt_output)
 
 
 def generate_permutations(N):
@@ -229,7 +224,12 @@ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
 
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, tt_output, 0.9999)
+    else:
+        assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
@@ -240,10 +240,7 @@ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
     [
         ttnn.bfloat16,
         ttnn.float32,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
@@ -258,7 +255,12 @@ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, tt_output, 0.9999)
+    else:
+        assert_equal(torch_output, tt_output)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
@@ -270,7 +272,7 @@ def test_permute_nd(device, dtype):
     output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 5, 1))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 2, 4, 3, 5, 1))
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
@@ -281,7 +283,7 @@ def test_permute_squeeze(device, dtype):
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (0, 1, 2))
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(output_tensor, ttnn.to_torch(input_tensor), 0.9999)
+    assert_equal(output_tensor, ttnn.to_torch(input_tensor))
 
 
 @pytest.mark.parametrize("shape", [(1, 49, 768)])
@@ -293,10 +295,7 @@ def test_permute_squeeze(device, dtype):
     [
         ttnn.bfloat16,
         ttnn.float32,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_3D(device, shape, perm, layout, memory_config, dtype):
@@ -306,8 +305,12 @@ def test_permute_3D(device, shape, perm, layout, memory_config, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
@@ -320,7 +323,6 @@ def test_nil_volume_permute(device, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
     assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
@@ -332,8 +334,7 @@ def test_permute_5d_tiled_basic(device, dtype):
     output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 3, 4))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (2, 1, 0, 3, 4))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
@@ -345,8 +346,7 @@ def test_permute_5d_tiled_swap(device, dtype):
     output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 4, 3))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (2, 1, 0, 4, 3))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -360,8 +360,7 @@ def test_permute_4d_cn(device, shape, dtype):
     output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (1, 0, 2, 3))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -375,8 +374,7 @@ def test_permute_4d_wh(device, shape, dtype):
     output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -386,10 +384,7 @@ def test_permute_4d_wh(device, shape, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_4d_cnwh(device, shape, dtype):
@@ -399,8 +394,7 @@ def test_permute_4d_cnwh(device, shape, dtype):
     output_tensor = ttnn.permute(input_tensor, (1, 0, 3, 2))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (1, 0, 3, 2))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[2, 2, 2, 2, 2, 2, 32, 32]])
@@ -409,10 +403,7 @@ def test_permute_4d_cnwh(device, shape, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_8d_swapped(device, shape, dims, dtype):
@@ -422,8 +413,7 @@ def test_permute_8d_swapped(device, shape, dims, dtype):
     output_tensor = ttnn.permute(input_tensor, dims)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, dims)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32]])
@@ -435,8 +425,7 @@ def test_permute_identity(device, shape, dtype):
     output_tensor = ttnn.permute(input_tensor, (0, 1, 2, 3))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[2, 2, 67, 67, 65]])
@@ -449,8 +438,12 @@ def test_permute_5d_xh_pad(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)
 
 
 def generate_fixed_w_permutations(N):
@@ -469,8 +462,12 @@ def test_permutations_5d_fixed_w(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
@@ -483,8 +480,7 @@ def test_permute_adversarial(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -499,8 +495,7 @@ def test_permute_4d_fixed_w(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
@@ -522,8 +517,12 @@ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
     output_tensor = ttnn.to_torch(ttnn_output)
     torch_output = torch.permute(torch_tensor, perm)
 
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)
 
     if pad_value != None:
         logical_shape = torch_output.shape
@@ -540,10 +539,7 @@ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
     [
         ttnn.bfloat16,
         ttnn.float32,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_5d_yw_permutations(device, shape, perm, dtype):
@@ -553,8 +549,12 @@ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
@@ -563,10 +563,7 @@ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_4d_yw_permutations(device, shape, perm, dtype):
@@ -576,8 +573,7 @@ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
@@ -586,10 +582,7 @@ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
@@ -599,8 +592,7 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
@@ -609,10 +601,7 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
     "dtype",
     [
         ttnn.bfloat16,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_4d_other_permutations(device, shape, perm, dtype):
@@ -622,8 +611,7 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
@@ -633,10 +621,7 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
     [
         ttnn.bfloat16,
         ttnn.float32,
-        pytest.param(
-            ttnn.int32,
-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
-        ),
+        ttnn.int32,
     ],
 )
 def test_permute_5d_wyh(device, shape, perm, dtype):
@@ -646,5 +631,9 @@ def test_permute_5d_wyh(device, shape, perm, dtype):
     output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    if dtype == ttnn.float32:
+        # float32 permute internally truncates to tf32 at the moment
+        # https://github.com/tenstorrent/tt-metal/issues/23663
+        assert_with_pcc(torch_output, output_tensor, 0.9999)
+    else:
+        assert_equal(torch_output, output_tensor)

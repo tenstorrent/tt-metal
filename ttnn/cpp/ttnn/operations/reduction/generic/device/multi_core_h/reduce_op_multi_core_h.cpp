@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);

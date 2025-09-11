@@ -71,7 +71,7 @@ constexpr inline int mpi_dtype_size(DType dt) noexcept {
         case DType::FLOAT32: return 4;
         case DType::INT64:
         case DType::UINT64:
-        case DType::FLOAT64: return 8;
+        case DType::FLOAT64:
         case DType::COMPLEX_FLOAT: return 8;
         case DType::COMPLEX_DOUBLE: return 16;
     }
@@ -503,7 +503,7 @@ void MPIContext::revoke_and_shrink() {
 
     MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
 
-    // overall probably I don't neet MPI_CHECK, we are recovering here. If we cannot recover, we should abort
+    // overall probably I don't need MPI_CHECK, we are recovering here. If we cannot recover, we should abort
     // and not throw an exception.
     int new_rank = 0;
     int new_size = 0;

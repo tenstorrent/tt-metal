@@ -31,7 +31,7 @@ public:
     void disable();
 
 private:
-    bool m_enabled = true;
+    bool m_enabled = false;
 };
 
 }  // namespace ttml::core

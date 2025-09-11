@@ -41,7 +41,7 @@ struct L1MemoryMap {
 
 struct Context {
     std::map<chip_id_t, IDevice*> devices;
-    L1MemoryMap device_address;
+    L1MemoryMap device_address{};
     uint32_t total_size{0};
     uint32_t page_size{0};
     int threads{0};

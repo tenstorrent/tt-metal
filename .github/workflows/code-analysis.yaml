@@ -66,7 +66,7 @@ jobs:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on: tt-beta-ubuntu-2204-xlarge
+    runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
@@ -154,7 +154,7 @@ jobs:
       - name: 🛠️ Baseline Build
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -187,7 +187,7 @@ jobs:
 
       - name: 🔍 Analyze code with clang-tidy
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         run: |

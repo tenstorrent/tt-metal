@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
@@ -69,14 +70,14 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
+    tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
         input_tensor_mesh,
         dim,
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
-        subdevice_id=subdevice_id,
+        sub_device_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -84,14 +85,14 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
             input_tensor_mesh,
             dim,
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
-            subdevice_id=subdevice_id,
+            sub_device_id=subdevice_id,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -145,9 +146,7 @@ def run_all_gather_impl(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -252,27 +251,26 @@ def run_all_gather_impl(
     else:
         for i in range(num_iters):
             if use_cluster_axis_api:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor_mesh_list[i],
                     dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    subdevice_id=worker_sub_device_id,
-                    num_preferred_links=num_links,
+                    sub_device_id=worker_sub_device_id,
+                    num_links=num_links,
                 )
 
             else:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor_mesh_list[i],
                     dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
+                    sub_device_id=worker_sub_device_id,
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 

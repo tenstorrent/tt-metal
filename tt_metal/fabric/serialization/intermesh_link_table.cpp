@@ -4,7 +4,7 @@
 
 #include <vector>
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
-#include "intermesh_link_table_generated.h"
+#include "flatbuffers/intermesh_link_table_generated.h"
 
 namespace tt::tt_fabric {
 
@@ -13,7 +13,7 @@ std::vector<uint8_t> serialize_to_bytes(const IntermeshLinkTable& intermesh_link
 
     auto mesh_id = tt::tt_fabric::flatbuffer::CreateMeshId(builder, *(intermesh_link_table.local_mesh_id));
     auto host_rank_id =
-        tt::tt_fabric::flatbuffer::CreateHostRankId(builder, *(intermesh_link_table.local_host_rank_id));
+        tt::tt_fabric::flatbuffer::CreateMeshHostRankId(builder, *(intermesh_link_table.local_host_rank_id));
 
     // Create vector of EthernetLink objects (flatbuffers dont support std::unordered_map directly)
     std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::EthernetLink>> ethernet_links;
@@ -60,7 +60,7 @@ IntermeshLinkTable deserialize_from_bytes(const std::vector<uint8_t>& data) {
     }
 
     if (intermesh_link_table->local_host_rank_id()) {
-        result.local_host_rank_id = HostRankId{intermesh_link_table->local_host_rank_id()->value()};
+        result.local_host_rank_id = MeshHostRankId{intermesh_link_table->local_host_rank_id()->value()};
     }
 
     // Extract intermesh links into unordered_map

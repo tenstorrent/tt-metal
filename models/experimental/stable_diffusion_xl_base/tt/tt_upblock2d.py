@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 
 
-class TtUpBlock2D(nn.Module):
+class TtUpBlock2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
 
@@ -22,7 +22,6 @@ class TtUpBlock2D(nn.Module):
                     f"{module_path}.resnets.{i}",
                     model_config,
                     True,
-                    2 if i == 0 else 1,
                 )
             )
 

@@ -2,8 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import nltk
+import pytest
 
 from models.tt_transformers.tt.model_config import parse_optimizations
+
+
+@pytest.fixture(autouse=True)
+def ensure_nltk():
+    try:
+        nltk.data.find("tokenizers/punkt_tab")
+    except LookupError:
+        nltk.download("punkt_tab", quiet=True)
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.

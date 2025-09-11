@@ -13,8 +13,8 @@ from models.utility_functions import run_for_blackhole
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10113.0],
-        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 11842.0],
+        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10193.0],
+        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 12000.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

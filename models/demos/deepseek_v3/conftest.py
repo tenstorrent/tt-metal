@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 from transformers import AutoConfig
 
@@ -70,6 +72,14 @@ def hf_config(model_path):
     return config
 
 
+@pytest.fixture(scope="session")
+def hf_config_short(request, hf_config):
+    hf_config_out = deepcopy(hf_config)
+    hf_config_out.num_hidden_layers = getattr(request, "param", 1)
+    hf_config_out.max_seq_len = 3 * 1024
+    return hf_config_out
+
+
 @pytest.fixture
 def mesh_row(mesh_device):
     """
@@ -92,3 +102,13 @@ def ccl(mesh_device):
     This is used to test distributed operations in DeepSeek modules.
     """
     return CCL1D(mesh_device)
+
+
+@pytest.fixture(scope="function")
+def set_deterministic_env():
+    """
+    Fixture to set seeds and enable deterministic algorithms for DeepSeek tests.
+    This ensures reproducible results across test runs.
+    """
+    torch.manual_seed(5)
+    torch.use_deterministic_algorithms(True)

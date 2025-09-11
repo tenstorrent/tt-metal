@@ -21,6 +21,13 @@ void kernel_main() {
     constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
     constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
+    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
+    constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
@@ -35,33 +42,22 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
 
-    constexpr bool is_dram = true;
-
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
-    constexpr DataFormat q_data_format = get_dataformat(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
-    constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
-    constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const InterleavedAddrGenFast<is_dram> q_reader = {
-        .bank_base_address = q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
-    const InterleavedAddrGenFast<is_dram> k_reader = {
-        .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
-    const InterleavedAddrGenFast<is_dram> v_reader = {
-        .bank_base_address = v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
-    const InterleavedAddrGenFast<is_dram> joint_q_reader = {
-        .bank_base_address = joint_q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
-    const InterleavedAddrGenFast<is_dram> joint_k_reader = {
-        .bank_base_address = joint_k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
-    const InterleavedAddrGenFast<is_dram> joint_v_reader = {
-        .bank_base_address = joint_v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
+    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
+    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
+    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr, q_tile_bytes);
+    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr, k_tile_bytes);
+    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
 
     const auto input_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);

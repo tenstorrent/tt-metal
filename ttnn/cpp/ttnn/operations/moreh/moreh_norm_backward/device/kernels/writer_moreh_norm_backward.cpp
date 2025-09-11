@@ -8,7 +8,7 @@
 
 void kernel_main() {
     // compile time args
-    constexpr bool input_grad_is_dram = (get_compile_time_arg_val(0) == 1);
+    constexpr auto input_grad_args = TensorAccessorArgs<0>();
 
     int i{0};
     const auto input_grad_addr = get_arg_val<uint32_t>(i++);
@@ -20,12 +20,7 @@ void kernel_main() {
 
     // input_grad
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
-    const auto input_grad_data_format = get_dataformat(cb_id_input_grad);
-
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
 
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {

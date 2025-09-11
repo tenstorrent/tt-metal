@@ -1,0 +1,43 @@
+Tests:
+  - name: "SimpleUnicastWriteLinear"
+    fabric_setup:
+      topology: Mesh
+      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+
+    senders:
+      # Cross Galaxy row
+      - device: [0, 3]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 4]
+      # Within Galaxy 0 col
+      - device: [0, 1]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 17]
+      # Within Galaxy 1 col
+      - device: [0, 4]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 20]
+      # Traverse corner to corner
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 63]

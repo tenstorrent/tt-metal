@@ -85,7 +85,7 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
-template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool fp32_transpose = false>
+template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -98,7 +98,7 @@ inline void llk_unpack_AB_reduce_init(
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
 
-    if constexpr (fp32_transpose) {
+    if constexpr (enforce_fp32_accumulation) {
         // Set necessary config regs for MOVB2D hi16/lo16 to work
         _llk_unpack_dbg_feature_disable_();
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);

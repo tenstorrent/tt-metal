@@ -33,6 +33,7 @@ const std::string default_built_tests_dump_file = "built_tests.yaml";
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
+using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
@@ -55,6 +56,10 @@ using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 using Topology = tt::tt_fabric::Topology;
 using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
+using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
+
+// Access to internal API: ProgramImpl::num_kernel
+#include "impl/program/program_impl.hpp"
 
 // Bandwidth measurement result structures
 struct BandwidthResult {
@@ -84,12 +89,12 @@ struct GoldenCsvEntry {
     std::string ntype;
     std::string topology;
     std::string num_devices;
-    uint32_t num_links;
-    uint32_t packet_size;
-    uint64_t cycles;
-    double bandwidth_gb_s;
-    double packets_per_second;
-    double tolerance_percent;  // Per-test tolerance percentage
+    uint32_t num_links{};
+    uint32_t packet_size{};
+    uint64_t cycles{};
+    double bandwidth_gb_s{};
+    double packets_per_second{};
+    double tolerance_percent{};  // Per-test tolerance percentage
 };
 
 struct ComparisonResult {
@@ -98,12 +103,12 @@ struct ComparisonResult {
     std::string ntype;
     std::string topology;
     std::string num_devices;
-    uint32_t num_links;
-    uint32_t packet_size;
-    double current_bandwidth_gb_s;
-    double golden_bandwidth_gb_s;
-    double difference_percent;
-    bool within_tolerance;
+    uint32_t num_links{};
+    uint32_t packet_size{};
+    double current_bandwidth_gb_s{};
+    double golden_bandwidth_gb_s{};
+    double difference_percent{};
+    bool within_tolerance{};
     std::string status;
 };
 
@@ -180,8 +185,8 @@ public:
                             .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
                             .mcast_start_hops = sync_pattern.mcast_start_hops,
                             .seed = config.seed,
-                            .topology = config.fabric_setup.topology,
-                            .routing_type = config.fabric_setup.routing_type.value(),
+                            .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                            .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
                         };
 
@@ -197,11 +202,20 @@ public:
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
+                        // for 2d, we need to spcify the mcast start node id
+                        std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
+                        if (fixture_->is_2D_routing_enabled() &&
+                            sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                            mcast_start_node_id =
+                                fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
+                        }
+
                         TestTrafficSenderConfig sync_config = {
                             .parameters = sync_traffic_parameters,
                             .src_node_id = sync_sender.device,
                             .dst_node_ids = dst_node_ids,   // Empty for multicast sync
                             .hops = single_direction_hops,  // Use already single-direction hops
+                            .mcast_start_node_id = mcast_start_node_id,
                             .dst_logical_core = dummy_dst_core,
                             .target_address = sync_address,
                             .atomic_inc_address = sync_address,
@@ -255,8 +269,8 @@ public:
                     .atomic_inc_wrap = pattern.atomic_inc_wrap,
                     .mcast_start_hops = pattern.mcast_start_hops,
                     .seed = config.seed,
-                    .topology = config.fabric_setup.topology,
-                    .routing_type = config.fabric_setup.routing_type.value(),
+                    .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                    .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
                 };
 
@@ -282,7 +296,7 @@ public:
         }
     }
 
-    void open_devices(Topology topology, RoutingType routing_type) { fixture_->open_devices(topology, routing_type); }
+    void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
 
     void initialize_sync_memory() {
         if (!global_sync_) {
@@ -338,7 +352,7 @@ public:
 
             test_device.create_kernels();
             auto& program_handle = test_device.get_program_handle();
-            if (program_handle.num_kernels()) {
+            if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
             }
         }
@@ -534,9 +548,17 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            if (!(fixture_->use_dynamic_routing())) {
+            if (!(fixture_->is_dynamic_routing_enabled())) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
+        }
+
+        // for 2d, we need to spcify the mcast start node id
+        // TODO: in future, we should be able to specify the mcast start node id in the traffic config
+        std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
+        if (fixture_->is_2D_routing_enabled() &&
+            traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());
         }
 
         uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
@@ -550,6 +572,7 @@ private:
             .src_node_id = traffic_config.src_node_id,
             .dst_node_ids = dst_node_ids,
             .hops = hops,
+            .mcast_start_node_id = mcast_start_node_id,
             .dst_logical_core = dst_logical_core,
             .target_address = target_address,
             .atomic_inc_address = atomic_inc_address,
@@ -639,8 +662,6 @@ private:
     }
 
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
         // Use proper topology detection from fixture
         if (fixture_->get_topology() == Topology::Ring) {
             // Ring topology - use ring traversal logic with boundary turning
@@ -771,7 +792,7 @@ private:
         log_debug(tt::LogTest, "Performance profiling results:");
         // Results are automatically sorted by device ID and core coordinates
         for (const auto& [device_id, core_cycles] : device_core_cycles_) {
-            for (const auto& [core, cycles] : core_cycles) {
+            for ([[maybe_unused]] const auto& [core, cycles] : core_cycles) {
                 log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
             }
         }
@@ -865,7 +886,8 @@ private:
                         bool found_connected_core = false;
                         for (const auto& [core, sender] : test_device.get_senders()) {
                             for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                                RoutingDirection config_direction =
+                                    fixture_->get_forwarding_direction(config.hops.value());
                                 uint32_t config_link_id = config.link_id.value_or(0);
                                 if (config_direction == direction && config_link_id == link_id) {
                                     uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
@@ -900,10 +922,10 @@ private:
                     double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
                     double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
 
-                    // TODO: need to fugure out a better way to show the number of devices in a test.
-                    // Ex, we compute number of devices for linear topology test as NS and EW seperated.
-                    // But in a mesh topology setup, how do we run linear topology and still show seperate
-                    // number of devices? There will be even more choices for arbitary unicast setups.
+                    // TODO: need to figure out a better way to show the number of devices in a test.
+                    // Ex, we compute number of devices for linear topology test as NS and EW separated.
+                    // But in a mesh topology setup, how do we run linear topology and still show separate
+                    // number of devices? There will be even more choices for arbitrary unicast setups.
                     uint32_t num_devices = 0;
                     const auto mesh_shape = fixture_->get_mesh_shape();
                     const auto topology = fixture_->get_topology();
@@ -1022,6 +1044,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
             double tolerance = get_tolerance_percent(
                 config.name,
@@ -1049,6 +1072,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string cluster_name = enchantum::to_string(cluster_type).data();
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
@@ -1170,6 +1194,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
 
             // Find matching golden entry
@@ -1191,6 +1216,7 @@ private:
             comp_result.packet_size = summary_result.packet_size;
             comp_result.current_bandwidth_gb_s = summary_result.bandwidth_gb_s;
 
+            double test_tolerance = 1.0;  // Default tolerance for no golden case
             if (golden_it != golden_csv_entries_.end()) {
                 comp_result.golden_bandwidth_gb_s = golden_it->bandwidth_gb_s;
                 comp_result.difference_percent =
@@ -1199,24 +1225,32 @@ private:
                     100.0;
 
                 // Use per-test tolerance from golden CSV instead of global tolerance
-                double test_tolerance = golden_it->tolerance_percent;
+                test_tolerance = golden_it->tolerance_percent;
                 comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
 
                 if (comp_result.within_tolerance) {
                     comp_result.status = "PASS";
                 } else {
                     comp_result.status = "FAIL";
-                    failed_tests_.push_back(
-                        config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
-                        ") - diff: " + std::to_string(comp_result.difference_percent) +
-                        "%, tolerance: " + std::to_string(test_tolerance) + "%");
                 }
             } else {
                 comp_result.golden_bandwidth_gb_s = 0.0;
                 comp_result.difference_percent = 0.0;
                 comp_result.within_tolerance = false;
                 comp_result.status = "NO_GOLDEN";
-                failed_tests_.push_back(config.name + " (NO GOLDEN ENTRY)");
+            }
+
+            // Create common CSV format string for any failure case
+            if (!comp_result.within_tolerance) {
+                std::ostringstream tolerance_stream;
+                tolerance_stream << std::fixed << std::setprecision(1) << test_tolerance;
+                std::string csv_format_string =
+                    config.name + "," + ftype_str + "," + ntype_str + "," + topology_str + ",\"" + num_devices_str +
+                    "\"," + std::to_string(config.fabric_setup.num_links) + "," +
+                    std::to_string(summary_result.packet_size) + "," + std::to_string(summary_result.cycles) + "," +
+                    std::to_string(comp_result.current_bandwidth_gb_s) + "," +
+                    std::to_string(summary_result.packets_per_second) + "," + tolerance_stream.str();
+                failed_tests_.push_back(csv_format_string);
             }
 
             comparison_results_.push_back(comp_result);

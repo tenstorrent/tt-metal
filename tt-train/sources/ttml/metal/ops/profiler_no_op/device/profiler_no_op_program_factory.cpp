@@ -5,11 +5,11 @@
 #include "profiler_no_op_program_factory.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
-
-#include <enchantum/enchantum.hpp>
 
 namespace {
 
@@ -108,7 +108,6 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // compile arguments
@@ -124,7 +123,7 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     const uint32_t twice_block_size = 2U * block_size;
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    auto cb_dataflow = create_circular_buffer(
+    [[maybe_unused]] auto cb_dataflow = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
@@ -147,16 +146,17 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     std::map<std::string, std::string> defines;
 
     CrossEntropyBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt},
-        defines,
-        kReaderKernelPath);
+    {
+        std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    }
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    {
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    }
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for profiler_no_op
@@ -203,8 +203,6 @@ void ProfilerNoopProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& profiler_no_op_reader_kernel_id = shared_variables.reader_kernel_id;
     auto& profiler_no_op_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;

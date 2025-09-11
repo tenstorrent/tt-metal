@@ -161,7 +161,7 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
                 matmul_output_tensors,
                 second_weight_tensor}};
     } else {
-        auto new_rs_tensor = rs_tensor.value();
+        const auto& new_rs_tensor = rs_tensor.value();
         return {
             operation_attributes_t{
                 rs_struct,

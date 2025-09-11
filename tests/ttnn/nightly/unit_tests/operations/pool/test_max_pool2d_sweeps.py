@@ -33,17 +33,6 @@ def test_ttnn_pytorch_sweep(device, dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    if (
-        is_wormhole_b0()
-        and device.core_grid.y < 8
-        and in_n == 1
-        and in_c == 64
-        and in_h == 360
-        and in_w == 640
-        and dtype == ttnn.bfloat16
-    ):
-        pytest.skip("OOM (N300)")
-
     run_max_pool2d(
         in_n,
         in_c,

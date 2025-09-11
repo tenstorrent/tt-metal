@@ -6,7 +6,7 @@
  * This kernel computes layernorm or rmsnorm, dependent on the RMSNORM define.
  * For layernorm it receives E(x**2) and E(x) and computes the remaining normalization based on gamma, beta and epsilon.
  *   E(x**2) and E(x) are contained in a two tile wide tensor containing E(x**2) and E(x) in the left most columns per
- * tile. For rmsnorm it receives E(x**2) and computes teh remaining normalization based on gamma, beta and epsilon.
+ * tile. For rmsnorm it receives E(x**2) and computes the remaining normalization based on gamma, beta and epsilon.
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  */
 
@@ -185,10 +185,8 @@ void MAIN {
         add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
-        sqrt_tile_init();
-        sqrt_tile(0);
-        recip_tile_init();
-        recip_tile(0);
+        rsqrt_tile_init<true>();
+        rsqrt_tile<true>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

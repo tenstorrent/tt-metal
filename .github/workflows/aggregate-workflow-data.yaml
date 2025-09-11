@@ -20,19 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
-      - name: Set rolling cache index
-        id: cache-index
-        run: echo "CACHE_INDEX=$(( ${{ github.run_number }} % 3 ))" >> $GITHUB_ENV
-
-      - name: Restore workflow data cache
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
-        with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}
-          restore-keys: |
-            metal-workflow-data-${{ github.ref }}-
-            metal-workflow-data-
-
       - name: Install fetch-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/fetch-workflow-data
@@ -42,7 +29,6 @@ jobs:
         uses: ./.github/actions/fetch-workflow-data
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
           days: ${{ github.event.inputs.days || 15 }}
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
@@ -50,12 +36,6 @@ jobs:
           name: workflow-data
           path: ${{ github.workspace }}/workflow-data.json
           retention-days: 1
-
-      - name: Save workflow data cache
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
-        with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}-${{ github.run_id }}
 
       - name: Debug cache file
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
@@ -67,10 +47,56 @@ jobs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - name: Discover previous successful run id
+        id: prev
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const workflow_id = '.github/workflows/aggregate-workflow-data.yaml';
+            const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+              owner,
+              repo,
+              workflow_id,
+              branch: 'main',
+              status: 'completed',
+              per_page: 2
+            });
+            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule');
+            const run = runs[0];
+            const selectedId = run ? String(run.id) : '';
+            core.info(`Selected previous run id: ${selectedId || 'none'}`);
+            core.setOutput('run_id', selectedId);
       - name: Install analyze-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/analyze-workflow-data
         run: npm install
+      - name: Download previous workflow data artifact (if any)
+        if: ${{ steps.prev.outputs.run_id != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+        with:
+          name: workflow-data
+          path: ${{ github.workspace }}/prev
+          run-id: ${{ steps.prev.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Echo selected previous run id
+        run: |
+          echo "Selected previous run id: ${{ steps.prev.outputs.run_id }}"
+      - name: List artifacts for selected previous run (debug)
+        if: ${{ steps.prev.outputs.run_id != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run_id = Number('${{ steps.prev.outputs.run_id }}');
+            const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id, per_page: 100 });
+            core.info(`Artifacts for run ${run_id}:`);
+            for (const a of arts.data.artifacts) {
+              core.info(`- name=${a.name} id=${a.id} expired=${a.expired} size=${a.size_in_bytes}`);
+            }
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download workflow data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
         with:
@@ -83,6 +109,7 @@ jobs:
           days: ${{ github.event.inputs.days || 15 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
+          previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
@@ -98,6 +125,19 @@ jobs:
               {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
               {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
             ]
+      - name: Upload status changes artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-status-changes
+          path: ${{ steps.analyze.outputs.status_changes_path }}
+          retention-days: 1
+
+      - name: Post regressions to Slack
+        if: ${{ steps.analyze.outputs.regressed_workflows != '[]' }}
+        uses: ./.github/actions/slack-report-analyze-workflow-data
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_PIPELINE_STATUS_ALERT }}
+          regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
 
   handle-failures:
     needs: analyze-data

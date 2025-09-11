@@ -50,7 +50,6 @@ TEST(IntermeshAPIs, BasicQueries) {
 }
 
 TEST(IntermeshAPIs, ConsistencyChecks) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Get all links via get_all_intermesh_eth_links

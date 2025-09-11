@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   t3000-unit-tests:
@@ -19,11 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 10, owner_id: UJ45FEC7M}, # Allan Liu
+          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 15, owner_id: UJ45FEC7M}, # Allan Liu
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-beta-ubuntu-2204-N300-llmbox-large-stable
+      - tt-ubuntu-2204-N300-llmbox-stable
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -31,6 +35,8 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -48,6 +54,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

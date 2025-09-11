@@ -14,6 +14,57 @@ from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multico
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 128, 64, 64],
+        [2, 64, 32, 32],
+        [5, 32, 96, 96],
+        [1, 96, 32, 32],
+        [2, 32, 80, 32],
+    ],
+)
+@pytest.mark.parametrize("scale_h", [2, 3])
+@pytest.mark.parametrize("scale_w", [2, 3])
+@pytest.mark.parametrize("memory_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "dtype_torch, dtype_ttnn",
+    [[torch.bfloat16, ttnn.bfloat8_b], [torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]],
+)
+def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn):
+    # Skip block datatypes if memory layout is not tiled
+    if dtype_ttnn == ttnn.bfloat8_b and memory_layout != ttnn.TILE_LAYOUT:
+        pytest.skip("Block datatypes require TILE_LAYOUT")
+
+    batch_size, num_channels, height, width = input_shapes
+    torch.manual_seed(0)
+
+    # Generate appropriate test data based on dtype
+    input = torch.rand(input_shapes, dtype=dtype_torch)
+    tt_input = input.permute(0, 2, 3, 1)
+    input_tensor = ttnn.from_torch(
+        tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
+    )
+
+    if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
+
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = torch_upsample(input)
+
+    scale_factor = (scale_h, scale_w)
+
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, 0.9999)
+    logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
     (
         (1, 1280, 8, 8, 2, 2),

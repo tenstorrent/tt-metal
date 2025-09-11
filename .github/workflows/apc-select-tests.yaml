@@ -25,15 +25,20 @@ on:
       tests-json:
         description: |
           JSON object specifying which tests to run.
-          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}
+          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-apc-fast-tests":true,"test-ttnn-tutorials":true}
         required: false
         type: string
-        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}'
+        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-apc-fast-tests":true,"test-ttnn-tutorials":true}'
       commit:
         required: false
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      enable-watcher:
+        description: "Enable watcher for long-running tests"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   parse-tests-json:
@@ -94,6 +99,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   fast-dispatch-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -112,6 +118,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   fabric-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -130,6 +137,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   ttnn-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -149,6 +157,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   models-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -167,6 +176,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   cpp-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -186,6 +196,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   tt-train-cpp-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -204,6 +215,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   run-profiler-regression:
     needs: [parse-tests-json, build-artifact-profiler]
@@ -223,33 +235,37 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
-  t3000-fast-tests:
+  t3000-apc-fast-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-fast-tests') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-apc-fast-tests') }}
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
-  tg-demo-apc-tests:
+  galaxy-apc-fast-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'tg-demo-apc-tests') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'galaxy-apc-fast-tests') }}
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service-dedicated-apc },
+          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
         ]
-    uses: ./.github/workflows/tg-demo-all-post-commit-impl.yaml
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      topology: ${{ matrix.test-group.topology }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]
@@ -268,3 +284,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}

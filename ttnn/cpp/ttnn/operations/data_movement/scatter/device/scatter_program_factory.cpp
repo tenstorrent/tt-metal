@@ -52,11 +52,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto src_buffer = src_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
-    const uint32_t input_tensor_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t index_tensor_is_dram = index_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
-
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
@@ -82,22 +77,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
-    // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
-    const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
-    const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
-    const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
-    const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
-
-    // for InterleavedAddrGen
-    const uint32_t input_stick_size_bytes_log2 =
-        is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;
-    const uint32_t index_stick_size_bytes_log2 =
-        is_index_stick_size_bytes_pow2_min_32 ? std::log2(index_stick_size_bytes) : 0;
-    const uint32_t source_stick_size_bytes_log2 =
-        is_source_stick_size_bytes_pow2_min_32 ? std::log2(source_stick_size_bytes) : 0;
-    const uint32_t output_stick_size_bytes_log2 =
-        is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
-
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
@@ -107,10 +86,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
-    const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
     const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
-    const uint32_t index_chunk_size_bytes = index_and_source_chunk_size * index_datum_size;
-    const uint32_t source_chunk_size_bytes = index_and_source_chunk_size * source_datum_size;
+    const uint32_t index_chunk_size_bytes = index_chunk_size * index_datum_size;
+    const uint32_t source_chunk_size_bytes = source_chunk_size * source_datum_size;
 
     // pad pages to 32
     const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
@@ -144,7 +124,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         input_stick_size_bytes,
         index_stick_size_bytes,
         source_stick_size_bytes,
-        output_stick_size_bytes};
+        output_stick_size_bytes,
+        input_shape.rank()};
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
@@ -171,23 +152,30 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel,
-            core,
-            {input_buffer->address(),
-             index_buffer->address(),
-             src_buffer->address(),
-             stick_offset,
-             sticks_per_core,
-             input_and_output_chunk_size,
-             index_and_source_chunk_size});
+        std::vector<uint32_t> reader_runtime_args{
+            input_buffer->address(),
+            index_buffer->address(),
+            src_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+            index_chunk_size,
+            source_chunk_size};
+        std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(reader_runtime_args));
+        std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(reader_runtime_args));
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel,
-            core,
-            {output_buffer->address(), stick_offset, sticks_per_core, input_and_output_chunk_size});
+        SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
+
+        std::vector<uint32_t> writer_runtime_args{
+            output_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+        };
+        // std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(writer_runtime_args));
+        // std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(writer_runtime_args));
+
+        SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 
         stick_offset += sticks_per_core;
     }

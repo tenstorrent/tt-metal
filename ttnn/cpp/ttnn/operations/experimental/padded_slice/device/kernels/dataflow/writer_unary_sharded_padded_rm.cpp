@@ -11,21 +11,33 @@ void kernel_main() {
     const uint32_t pad_size_bytes = padded_row_size_bytes - unpadded_row_size_bytes;
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(1);
+    constexpr uint32_t output_elem_size = get_compile_time_arg_val(2);
 
     const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
     const uint32_t out_addr = get_read_ptr(cb_id_out);
-
+    if (pad_size_bytes == 0) {
+        return;  // No padding needed, exit early
+    }
 #ifdef DEBUG
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
            << ", padded_row_size_bytes: " << padded_row_size_bytes << ", pad_size_bytes: " << pad_size_bytes << ENDL();
     DPRINT << "CB Temp Pad " << cb_temp_pad << "pad_addr: " << pad_addr << ", out_addr: " << out_addr << ENDL();
+    DPRINT << "Output Elem Size " << output_elem_size << ENDL();
 #endif
 
-    volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
-    for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-        pad_ptr[i] = 0;
+    if constexpr (output_elem_size == 2) {
+        volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
+        for (uint32_t i = 0; i < num_elements_per_row; ++i) {
+            pad_ptr[i] = 0;
+        }
+    } else if constexpr (output_elem_size == 4) {
+        volatile tt_l1_ptr uint32_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_addr);
+        for (uint32_t i = 0; i < num_elements_per_row; ++i) {
+            pad_ptr[i] = 0;
+        }
     }
+
     uint32_t write_addr = out_addr + unpadded_row_size_bytes;
     uint64_t pad_noc_addr = get_noc_addr(pad_addr + unpadded_row_size_bytes);
 

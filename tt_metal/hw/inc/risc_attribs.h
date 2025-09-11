@@ -18,6 +18,12 @@ union tt_uint64_t {
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr __attribute__((rvtt_reg_ptr))
 
+// This enum is used to specify the dest location type for inline writes.
+// It is needed because inline writes use all 4 memory ports and may hang on Blackhole when there is back-pressure.
+// This hang only manifests when the inline writes are issued to a L1 location. The workaround on BH is for inline
+// writes to L1 to use noc async writes.
+enum class InlineWriteDst : uint8_t { DEFAULT = 0, L1 = 1, REG = 2 };
+
 inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr* p) {
     tt_uint64_t v;
 

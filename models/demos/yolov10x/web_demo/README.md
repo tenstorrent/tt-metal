@@ -1,4 +1,4 @@
-# Yolov10 Web Demo
+# Yolov10x Web Demo
 
 ## How to run the web demo
 

@@ -30,7 +30,7 @@ A state checker script can only check state (see `check_noc_locations` for an ex
 
 To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing.
 
-If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception. Critical error means that script cannot advance without that check and that all dependent scrips shouldn't be executed.
+If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception. Critical error means that script cannot advance without that check and that all dependent scripts shouldn't be executed.
 
 ### Data visualization
 

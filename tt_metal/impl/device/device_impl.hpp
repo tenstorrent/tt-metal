@@ -20,8 +20,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-class go_msg_t;
-class launch_msg_t;
+struct go_msg_t;
+struct launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
@@ -125,9 +125,6 @@ public:
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
 
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
-
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(
@@ -157,15 +154,14 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
-    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(
-        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const override;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
 
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
@@ -216,6 +212,7 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
 

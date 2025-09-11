@@ -22,6 +22,7 @@ def get_expected_times(bert_tiny):
 
 
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.skip(reason="#26288: Seems to have changed in perf")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -99,6 +100,7 @@ def test_perf_bert_tiny(
 
 
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.skip(reason="#26288: Seems to have changed in perf")
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [

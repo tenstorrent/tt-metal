@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+Tests:
+  # ======================================================================================
+  # Test 1: Parameterized All to AllUnicast Test
+  # ======================================================================================
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [512, 1024, 2048]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
+        iterations: 25

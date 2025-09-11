@@ -28,21 +28,6 @@ struct SplitFusedQKVAndSplitHeadsOperation {
             queue_id);
         return {result.at(0), result.at(1), result.at(2)};
     }
-
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const uint32_t num_heads = 16,
-        std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors = std::nullopt) {
-        return invoke(
-            DefaultQueueId,
-            input_tensor,
-            compute_with_storage_grid_size,
-            memory_config,
-            num_heads,
-            optional_output_tensors);
-    }
 };
 
 }  // namespace operations::experimental::transformer

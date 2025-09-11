@@ -1,16 +1,11 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
     dispatch/benchmark_rw_buffer.cpp
-    ethernet/test_ethernet_read_and_send_data.cpp
-    ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
-    routing/test_tt_fabric_sanity.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
-    routing/test_tt_fabric_multi_hop_sanity.cpp
-    routing/test_tt_fabric_socket_sanity.cpp
     routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp

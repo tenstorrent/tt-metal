@@ -1,14 +1,13 @@
 # Built as outlined in Tracy documentation (pg.12)
 set(TRACY_HOME ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy)
 
-option(ENABLE_TRACY_TIMER_FALLBACK "Enable Tracy timer fallback" OFF)
-
-if(NOT ENABLE_TRACY)
-    # Stub Tracy::TracyClient to provide the headers which themselves provide stubs
-    add_library(TracyClient INTERFACE)
-    add_library(Tracy::TracyClient ALIAS TracyClient)
-    target_include_directories(TracyClient SYSTEM INTERFACE "$<BUILD_INTERFACE:${TRACY_HOME}/public>")
-    return()
+# Propagate ENABLE_TRACY to TRACY_ENABLE (Tracy build option)
+# CMake options are propagated as PUBLIC compile definitions to tracy build
+if(ENABLE_TRACY)
+    set(TRACY_ENABLE ON)
+else()
+    set(TRACY_ENABLE OFF)
+    set(TRACY_TIMER_FALLBACK ON)
 endif()
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
@@ -29,20 +28,19 @@ set_target_properties(
             "tracy"
 )
 
-target_compile_definitions(
-    TracyClient
-    PUBLIC
-        TRACY_ENABLE
-        "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
-)
-target_compile_options(
-    TracyClient
-    PUBLIC
-        -fno-omit-frame-pointer
-    PRIVATE
-        "$<$<CXX_COMPILER_ID:Clang>:-Wno-conditional-uninitialized>" # FIXME: Fix this upstream
-)
-target_link_options(TracyClient PUBLIC -rdynamic)
+if(ENABLE_TRACY)
+    # This setup ensures that when someone links against TracyClient:
+    # Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+    # Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+    target_compile_options(
+        TracyClient
+        PUBLIC
+            -fno-omit-frame-pointer
+        PRIVATE
+            "$<$<CXX_COMPILER_ID:Clang>:-Wno-conditional-uninitialized>" # FIXME: Fix this upstream
+    )
+    target_link_options(TracyClient PUBLIC -rdynamic)
+endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this

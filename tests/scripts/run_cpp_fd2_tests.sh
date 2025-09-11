@@ -63,6 +63,8 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5 -spre -sdis" # Host Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 5 -spre -sdis" # Packed Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 8 -i 5 -spre -sdis"  # Ringbuffer Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 9 -i 5 -spre" # Raw Copy Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 9 -i 5 -spre -sdis" # Raw Copy Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -rb -spre -sdis"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -rb -spre -sdis"  # Random Test
 

@@ -97,11 +97,9 @@ int main(int argc, char** argv) {
             auto l1_buffer = distributed::MeshBuffer::create(global_buffer_config, local_l1_config, device.get());
             auto input_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
-            const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
-            const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
             Program program = CreateProgram();
             auto mesh_workload = distributed::MeshWorkload();

@@ -32,7 +32,7 @@ TEST(StrongTypeTest, Basic) {
     EXPECT_EQ(my_int_id1, my_int_id2);
 }
 
-TEST(StrongTypeTest, GuarenteedUnique) {
+TEST(StrongTypeTest, GuaranteedUnique) {
     StrongType<int> one{1};
     StrongType<int> otherone{1};
 
