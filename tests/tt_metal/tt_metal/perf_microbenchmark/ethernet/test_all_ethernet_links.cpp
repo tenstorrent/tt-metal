@@ -310,8 +310,8 @@ private:
                     .receiver = receiver_eth,
                     .sender_tensix = sender_tensix,
                     .receiver_tensix = receiver_tensix,
-                    .sender_buffer = std::move(sender_buffer),
-                    .receiver_buffer = std::move(receiver_buffer)});
+                    .sender_buffer = sender_buffer,
+                    .receiver_buffer = receiver_buffer});
             }
         }
     }

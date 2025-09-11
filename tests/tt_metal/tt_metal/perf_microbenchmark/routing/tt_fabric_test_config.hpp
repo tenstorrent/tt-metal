@@ -1870,7 +1870,7 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns)};
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
