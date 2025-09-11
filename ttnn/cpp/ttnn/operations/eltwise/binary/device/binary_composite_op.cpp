@@ -753,7 +753,7 @@ Tensor ExecutePower::invoke(
         exponent,
         std::nullopt,
         memory_config,
-        std::move(optional_output_tensor),
+        optional_output_tensor,
         post_activations,
         lhs_activations,
         rhs_activations,

@@ -574,7 +574,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         data["dy"] = phys_coord.y;
                     }
 
-                    json_events_by_opname[runtime_id].push_back(std::move(data));
+                    json_events_by_opname[runtime_id].push_back(data);
                 }
             } else if (std::holds_alternative<FabricEventMarkers>(marker)) {
                 // coalesce fabric event markers into a single logical trace event with extra 'fabric_send' metadata
@@ -746,7 +746,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     continue;
                 }
 
-                json_events_by_opname[runtime_id].push_back(std::move(fabric_event_json));
+                json_events_by_opname[runtime_id].push_back(fabric_event_json);
             }
         }
     }
@@ -783,7 +783,7 @@ void dumpJsonNocTraces(
             std::ofstream file(rpt_path);
             if (file.is_open()) {
                 // Write the final processed events for this op
-                file << nlohmann::json(std::move(events)).dump(2);
+                file << nlohmann::json(events).dump(2);
             } else {
                 log_error(tt::LogMetal, "Could not write profiler noc json trace to '{}'", rpt_path);
             }

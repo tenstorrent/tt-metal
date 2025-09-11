@@ -873,12 +873,12 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
-        std::move(memory_config),
-        std::move(slice_config_),
+        dtype,
+        bias_tensor,
+        conv_config_,
+        compute_config_,
+        memory_config,
+        slice_config_,
         return_output_dim,
         return_weights_and_bias);
 }

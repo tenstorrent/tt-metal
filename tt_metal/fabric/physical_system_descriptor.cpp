@@ -272,7 +272,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         host_to_mobo_name_[host_name] = std::move(mobo_name);
     }
     for (auto& [host_name, rank] : other.get_host_to_rank_map()) {
-        host_to_rank_[host_name] = std::move(rank);
+        host_to_rank_[host_name] = rank;
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
