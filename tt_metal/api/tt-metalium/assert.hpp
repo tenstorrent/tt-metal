@@ -64,7 +64,7 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
-    if (strings == NULL) {
+    if (strings == nullptr) {
         std::cout << "backtrace_symbols error." << std::endl;
         return bt;
     }

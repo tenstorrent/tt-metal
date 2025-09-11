@@ -451,7 +451,7 @@ class Efficientnetb0:
         x = self._blocks15(x)
         x = self._conv_head(x)
 
-        x = x * ttnn.sigmoid(x)
+        x = x * ttnn.sigmoid_accurate(x)
 
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
