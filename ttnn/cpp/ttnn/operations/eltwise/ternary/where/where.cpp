@@ -179,7 +179,7 @@ Tensor WhereOperation::invoke(
             return ttnn::operations::unary::Unary_chain::invoke(
                 queue_id,
                 predicate,
-                {unary::EltwiseUnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
+                {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
                 memory_config,
                 output);
         }

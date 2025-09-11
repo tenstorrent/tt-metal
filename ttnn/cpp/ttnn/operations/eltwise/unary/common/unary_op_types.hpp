@@ -149,6 +149,10 @@ struct BasicUnaryWithParam {
 
     BasicUnaryWithParam(UnaryOpType op_type) : base{std::in_place_index<0>, op_type} {}
 
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(const BasicUnaryWithParam<T>& other) : base{other} {}
+
     UnaryOpType type() const noexcept {
         constexpr ttsl::overloaded visitor = {std::mem_fn(&BasicUnaryWithParam<Ts>::type)...};
         return std::visit(visitor, base);

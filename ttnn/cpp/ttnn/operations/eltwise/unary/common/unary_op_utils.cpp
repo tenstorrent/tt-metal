@@ -100,7 +100,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, const std::vector<T>& params, const std::string& idst, std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
-    auto param0 = params[0];
+    std::same_as<T> auto param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
@@ -426,7 +426,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         }
         case UnaryOpType::CLAMP_TSS: {
-            float param1 = params[1];
+            std::same_as<T> auto param1 = params[1];
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {

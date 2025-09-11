@@ -1047,7 +1047,6 @@ std::vector<Tensor> ExecuteUnaryBackwardAsin::invoke(
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
     std::vector<EltwiseUnaryWithParam> ops_chain = {
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::NEG},

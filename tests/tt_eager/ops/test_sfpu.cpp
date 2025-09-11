@@ -56,8 +56,8 @@ using std::vector;
 std::map<std::string, std::map<std::string, std::string>> sfpu_op_to_hlk_op_name = {};
 
 void update_sfpu_op_to_hlk_op() {
-    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     for (const std::string& sfpu_op_name : sfpu_op) {
         std::string unary_op_name{sfpu_op_name};
@@ -73,14 +73,14 @@ void update_sfpu_op_to_hlk_op() {
         if (ttnn::operations::unary::utils::is_parametrized_type(unary_op_type)) {
             if (unary_op_type == UnaryOpType::EXP) {
                 sfpu_op_to_hlk_op_name[sfpu_op_name] =
-                    ttnn::operations::unary::utils::get_block_defines({EltwiseUnaryWithParam{unary_op_type, 1.0f}});
+                    ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 1.0}});
             } else {
                 sfpu_op_to_hlk_op_name[sfpu_op_name] =
-                    ttnn::operations::unary::utils::get_block_defines({EltwiseUnaryWithParam{unary_op_type, 0.5f}});
+                    ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type, 0.5}});
             }
         } else {
             sfpu_op_to_hlk_op_name[sfpu_op_name] =
-                ttnn::operations::unary::utils::get_block_defines({EltwiseUnaryWithParam{unary_op_type}});
+                ttnn::operations::unary::utils::get_block_defines({UnaryWithParam{unary_op_type}});
         }
     }
 }
