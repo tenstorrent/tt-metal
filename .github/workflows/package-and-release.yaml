@@ -17,6 +17,7 @@ permissions:
   contents: write
   packages: write
   actions: write
+  id-token: write
 
 
 # Some explanation:
