@@ -68,8 +68,9 @@ def fuse_conv_bn_weights_ttnn(
     # Compute the fused bias: (conv_bias - bn_running_mean) * scale + bn_bias
     fused_bias = (conv_bias - bn_running_mean) * scale + bn_bias
 
-    # Convert back to TTNN tensors with proper device placement
-    fused_weight_ttnn = ttnn.from_torch(fused_weight, device=conv_weight_ttnn.device(), dtype=ttnn.bfloat16)
+    # Convert back to TTNN tensors
+    # Weights stay on host for now
+    fused_weight_ttnn = ttnn.from_torch(fused_weight, dtype=ttnn.bfloat16)
 
     # Handle bias tensor shape for TTNN (reshape to [1, 1, 1, -1] if needed)
     if len(fused_bias.shape) == 1:
