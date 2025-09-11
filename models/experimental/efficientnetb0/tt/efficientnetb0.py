@@ -94,15 +94,7 @@ class EfficientNetb0Conv2D:
 
 
 class Conv2dDynamicSamePadding:
-    def __init__(
-        self,
-        device,
-        parameters,
-        shard_layout,
-        conv_params,
-        batch=1,
-        is_width_sharded=False,
-    ):
+    def __init__(self, device, parameters, shard_layout, conv_params, batch=1, is_width_sharded=False, skip=True):
         self.device = device
         self.batch = batch
         self.parameters = parameters
@@ -121,12 +113,9 @@ class Conv2dDynamicSamePadding:
         self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
 
+        self.skip = skip
         if self.pad_h > 0 or self.pad_w > 0:
-            if (
-                (self.pad_h, self.pad_w) != (3, 3)
-                and (self.pad_h, self.pad_w) != (2, 2)
-                and (self.pad_h, self.pad_w) != (1, 1)
-            ):
+            if skip == False:
                 conv_params.input_width = conv_params.input_width + self.pad_w // 2 + self.pad_w - self.pad_w // 2
                 conv_params.input_height = conv_params.input_height + self.pad_h // 2 + self.pad_h - self.pad_h // 2
             else:
@@ -164,11 +153,7 @@ class Conv2dDynamicSamePadding:
             input_height = int(math.sqrt((x.shape[2] // self.batch)))
             input_width = int(math.sqrt((x.shape[2] // self.batch)))
 
-            if (
-                (self.pad_h, self.pad_w) != (3, 3)
-                and (self.pad_h, self.pad_w) != (1, 1)
-                and (self.pad_h, self.pad_w) != (2, 2)
-            ):
+            if self.skip == False:
                 x = ttnn.sharded_to_interleaved(x)
                 x = ttnn.reshape(x, (self.batch, input_height, input_width, x.shape[3]))
                 x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -197,6 +182,7 @@ class MBConvBlock:
         is_height_sharded=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         id=1,
+        skip=True,
     ):
         self.parameters = parameters
         self.batch = batch
@@ -217,6 +203,7 @@ class MBConvBlock:
             parameters=parameters["_depthwise_conv"],
             conv_params=conv_params._depthwise_conv,
             shard_layout=self.shard_layout,
+            skip=skip,
         )
 
         self._se_reduce = Conv2dDynamicSamePadding(
@@ -341,6 +328,7 @@ class Efficientnetb0:
             conv_params=conv_params._blocks8,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=8,
+            skip=False,
         )
         self._blocks9 = MBConvBlock(
             device,
