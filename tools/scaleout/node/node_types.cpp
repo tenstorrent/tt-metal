@@ -4,6 +4,8 @@
 
 #include "node_types.hpp"
 
+#include <stdexcept>
+#include <string>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 
