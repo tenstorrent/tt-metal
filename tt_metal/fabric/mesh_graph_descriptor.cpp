@@ -631,7 +631,8 @@ void MeshGraphDescriptor::populate_descriptors() {
     }
 }
 
-const GlobalNodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy) {
+GlobalNodeId MeshGraphDescriptor::populate_instance(
+    const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy) {
     GlobalNodeId global_id;
     if (node_ref.has_mesh()) {
         global_id = populate_mesh_instance(node_ref.mesh(), hierarchy);
@@ -653,7 +654,8 @@ const GlobalNodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& 
     return global_id;
 }
 
-const GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy) {
+GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
+    const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy) {
     const std::string & descriptor_name = mesh_ref.mesh_descriptor();
     const auto it = mesh_desc_by_name_.find(descriptor_name);
     TT_FATAL(it != mesh_desc_by_name_.end(), "Mesh descriptor {} not found in instance", descriptor_name);
@@ -695,7 +697,7 @@ const GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(const proto::Mesh
     return instance.global_id;
 }
 
-const GlobalNodeId MeshGraphDescriptor::populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy) {
+GlobalNodeId MeshGraphDescriptor::populate_device_instance(LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy) {
     const std::string name = "D" + std::to_string(local_id);
     InstanceData data{
         .local_id = local_id,
@@ -719,7 +721,8 @@ const GlobalNodeId MeshGraphDescriptor::populate_device_instance(const LocalNode
     return instance.global_id;
 }
 
-const GlobalNodeId MeshGraphDescriptor::populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy) {
+GlobalNodeId MeshGraphDescriptor::populate_graph_instance(
+    const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy) {
     const std::string & descriptor_name = graph_ref.graph_descriptor();
     const auto it = graph_desc_by_name_.find(descriptor_name);
     TT_FATAL(it != graph_desc_by_name_.end(), "Graph descriptor {} not found in instance", descriptor_name);
@@ -879,7 +882,8 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
     }
 }
 
-const GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref) {
+GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
+    GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref) {
     auto & parent_instance = instances_.at(parent_instance_id);
 
     if (node_ref.has_mesh()) {
