@@ -350,7 +350,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 auto& single_mesh = single_meshes[dev_idx];
                 // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the
                 // workers needs to be transferred between CQs.
-                ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
+                ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id.get()));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {

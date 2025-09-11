@@ -37,7 +37,6 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
             max (ttnn.Tensor or number): Maximum value. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -709,14 +708,14 @@ void bind_unary_composite_with_default_float(
                const ttnn::Tensor& input_tensor,
                float parameter_a,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, parameter_a, memory_config, output_tensor); },
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter_a, memory_config, output_tensor);
+            },
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>

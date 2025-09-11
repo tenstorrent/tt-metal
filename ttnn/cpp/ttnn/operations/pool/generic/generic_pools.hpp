@@ -20,12 +20,7 @@ struct MaxPoolWithIndicesResult {
 };
 
 struct MaxPool2DOp {
-<<<<<<< HEAD
-    static Tensor invoke(
-=======
     static std::variant<Tensor, MaxPoolWithIndicesResult> invoke(
-        QueueId queue_id,
->>>>>>> origin/main
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
