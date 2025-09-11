@@ -1,8 +1,20 @@
 import torch
 import ttnn
+import pytest
 
 
-def test_tensor_write(mesh_device):
+@pytest.mark.parametrize(
+    "repeat_factor",
+    [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ],
+    ids=("1", "2", "3", "4", "5"),
+)
+def test_tensor_write(mesh_device, repeat_factor):
     print("Num devices: ", mesh_device.get_num_devices())
 
     tensor_1_shape = [1, 1, 16384, 4]
