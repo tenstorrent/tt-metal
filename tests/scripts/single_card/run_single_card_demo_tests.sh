@@ -102,8 +102,8 @@ run_llama3_func() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
