@@ -7,7 +7,6 @@
 #include <mesh_workload.hpp>
 #include <stddef.h>
 #include <string.h>
-#include <mutex>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
@@ -1643,38 +1642,6 @@ private:
     LaunchMessageCmds<CQDispatchWritePackedUnicastSubCmd> unicast_cmds;
 };
 
-namespace {
-
-uint32_t go_msg_u32_value(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    // Multiple things in this file assume that go_msg_t is 4B and has the same layout for all core types.
-    // This assumption is currently valid, and probably will always hold.
-    // In any case, query the size from HAL and assert that it equals sizeof(uint32_t).
-    std::once_flag once_flag;
-    std::call_once(once_flag, [&]() {
-        for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
-             ++programmable_core_type_index) {
-            auto factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index));
-            TT_FATAL(
-                factory.size_of<dev_msgs::go_msg_t>() == sizeof(uint32_t),
-                "go_msg_t size must be 4 bytes for all programmable core types.");
-        }
-    });
-    // Note: because of the assumption, we can use the dev_msgs factory for whatever core type.
-    uint32_t go_msg_u32_val = 0;
-    auto dev_msgs_factory =
-        tt::tt_metal::MetalContext::instance().hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
-    auto go_msg = dev_msgs_factory.create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
-    go_msg.signal() = signal;
-    go_msg.master_x() = master_x;
-    go_msg.master_y() = master_y;
-    go_msg.dispatch_message_offset() = dispatch_message_offset;
-    return go_msg_u32_val;
-}
-
-}  // namespace
-
 class GoSignalGenerator {
 public:
     // Determine the size of the go signal commands.
@@ -1729,7 +1696,7 @@ public:
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
-            go_msg_u32_value(
+            MetalContext::instance().hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_GO,
                 // Dispatch X/Y resolved when the program is enqueued
                 0,
@@ -2095,7 +2062,7 @@ void update_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = go_msg_u32_value(
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
@@ -2275,7 +2242,7 @@ void update_traced_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = go_msg_u32_value(
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
@@ -2526,7 +2493,7 @@ void reset_worker_dispatch_state_on_device(
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
-                go_msg_u32_value(
+                MetalContext::instance().hal().make_go_msg_u32(
                     dev_msgs::RUN_MSG_RESET_READ_PTR,
                     dispatch_core.x,
                     dispatch_core.y,

@@ -435,6 +435,11 @@ public:
         TT_ASSERT(index < this->core_info_.size());
         return this->core_info_[index].get_dev_msgs_factory();
     }
+
+    // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
+    // Code that assumes that should use this interface to create go_msg_t values,
+    // as it is otherwise not guaranteed by the HAL interface.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
