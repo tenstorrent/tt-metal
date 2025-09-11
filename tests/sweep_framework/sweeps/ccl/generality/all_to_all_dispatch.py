@@ -17,6 +17,13 @@ TIMEOUT = 60
 
 NUM_DEVICES = ttnn.get_num_devices()
 
+FABRIC_CONFIGS = [
+    ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+]
+
 
 def _pd(val: int):
     return val * NUM_DEVICES
@@ -25,7 +32,7 @@ def _pd(val: int):
 parameters = {
     "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": FABRIC_CONFIGS,
         "input_shape": [
             [_pd(1), 1, 8, 32],
             [_pd(1), 1, 32, 2880],  # GPT-OSS
@@ -47,6 +54,10 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # hardcode for 6U
+    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+        return True, "Invalid mesh shape for 6U"
+
     mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
     if cluster_axis and mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"

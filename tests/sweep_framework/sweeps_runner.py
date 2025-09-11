@@ -391,7 +391,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now()
-        validity =  deserialize(test_vector["validity"]).split(".")[-1]
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
 
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -479,7 +479,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         p.join()
                     p = None
                     reset_util.reset()
-
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
