@@ -73,6 +73,15 @@ jobs:
           echo "GITHUB_TOKEN Permissions:"
           echo "${{ toJson(github) }}"
 
+      - name: Create or update tag
+        run: |
+          TAG="v1.0.0"   # <-- replace or set via input/env
+          git fetch --tags
+          git config user.name "Tenstorrent Inc."
+          git config user.email "info@tenstorrent.com"
+          git tag -f "${{ steps.get-tag-version.outputs.version }}"
+          git push -f origin "refs/tags/${{ steps.get-tag-version.outputs.version }}"
+
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
