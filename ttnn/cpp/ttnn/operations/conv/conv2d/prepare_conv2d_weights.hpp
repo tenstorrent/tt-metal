@@ -182,6 +182,12 @@ struct Conv2dWeightsBiasPrepConfig {
     const bool interleaved_mm_conv;
 };
 
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_for_matmul(
+    QueueId queue_id,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    MeshDevice* device);
+
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
