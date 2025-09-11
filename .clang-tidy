@@ -159,7 +159,6 @@ Checks: >
   -performance-avoid-endl,
   -performance-enum-size,
   -performance-faster-string-find,
-  -performance-for-range-copy,
   -performance-inefficient-string-concatenation,
   -performance-no-int-to-ptr,
   -performance-noexcept-move-constructor,
