@@ -64,7 +64,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = tt::round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
+    while ((padded_num - num) >= (int)(padded_num / divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = tt::round_up(num, big_divisor);
@@ -772,7 +772,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {
@@ -787,8 +787,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .fuse_batch = true,
             .mcast_in0 = false};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     } else {
@@ -802,8 +802,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .transpose_mcast = transpose_mcast};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     }
@@ -1140,6 +1140,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
+            log_debug(tt::LogOp, "Conv2D DRAM Auto Slice Selected Shard Layout: {}", conv_config.shard_layout);
         }
         ShardOrientation shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -1164,14 +1165,20 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         ParallelConfig output_parallel_config = determine_output_parallel_config(
             parallel_config, params.compute_grid, params.out_channels, shard_orientation, params.mm_conv);
 
+        uint32_t padded_in_channels = tt::round_up(
+            params.in_channels,
+            tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
+        uint32_t padded_out_channels = tt::round_up(
+            params.out_channels,
+            tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
+        ttnn::Shape folded_weights_shape(
+            {1, 1, padded_in_channels * params.kernel_size[0] * params.kernel_size[1], padded_out_channels});
         auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
             conv_config,
             params.compute_kernel_config,
             parallel_config,
             output_parallel_config,
-            tt::round_up(
-                params.in_channels,
-                tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
+            padded_in_channels,
             params.out_channels,
             params.batch_size,
             output_slice_height,
@@ -1183,7 +1190,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
-            params.weights_shape,
+            folded_weights_shape,
             params.kernel_size,
             conv_config,
             params.input_datatype,
