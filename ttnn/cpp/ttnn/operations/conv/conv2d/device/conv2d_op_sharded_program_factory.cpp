@@ -40,7 +40,7 @@ struct ActivationReuseConfig {
     bool readers_process_full_image_widths = false;
     uint32_t tilized_cb_row_offset = 0;
     uint32_t tilized_cb_second_reader_offset = 0;
-    // New fields for handling multiple cores with non-meaningful work
+    // Configuration needed to handle cores with non-meaningful work
     uint32_t num_cores_with_non_meaningful_work = 0;
     std::set<CoreCoord> cores_with_non_meaningful_work;
     bool has_partial_core = false;
@@ -1017,7 +1017,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             }
         }
     } else if (enable_activation_reuse) {
-        uint32_t core_i = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
                 uint32_t reader_remaining_tiles_to_push = 0;
@@ -1030,14 +1029,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 }
                 std::vector<uint32_t> reader_rt_args{reader_remaining_tiles_to_push};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
-                core_i++;
             }
         }
     }
 
     // Setup writer mcast arguments
     // Setup sender args first
-    uint32_t core_i = 0;
     for (const CoreCoord& core : mcast_sender_cores) {
         // Calculate weight slice indices
         uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded) ? core.y : core.x;
@@ -1050,7 +1047,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             "bias_tile_offset {} should be less than bias_ntiles {}",
             bias_tile_offset,
             bias_ntiles);
-
 
         std::vector<uint32_t> sender_rt_args = {
             weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
@@ -1130,7 +1126,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
-    core_i++;
     // Setup receiver args second
     for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
         // Helper lambda to create receiver runtime args
@@ -1173,8 +1168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 }
             }
             SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
-
-            core_i++;
         }
     }
 

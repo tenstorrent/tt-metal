@@ -229,7 +229,6 @@ def run_conv(
 
     requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
 
-    tt_input_tensor = None
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         input_dtype,
@@ -4645,7 +4644,7 @@ def test_conv2d_activation_reuse(
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
         input_layout= input_layout,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
         enable_activation_reuse=enable_activation_reuse
@@ -4710,7 +4709,6 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
     )
 
-    # run conv
     run_conv(
         device,
         torch_tensor_map,
@@ -4736,7 +4734,7 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         deallocate_activation=True,
         enable_act_double_buffer=True, # will be disabled if activation reuse is enabled
         enable_weights_double_buffer=True,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         input_dtype=ttnn.bfloat16,
         sharded_cfg=memory_config,
         enable_split_reader=enable_split_reader,

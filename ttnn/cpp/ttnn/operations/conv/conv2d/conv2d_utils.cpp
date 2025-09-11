@@ -875,7 +875,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
         // Set act_block_h_override to min value to be conservative with L1 memory usage;
-        // With activation reuse, the CB usage is constant regardless of the act block h, so we can keep override to 0
+        // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
+        // and the bigger the act block height the better the reuse since we apply optimization within single act block
         if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
             conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
             // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
