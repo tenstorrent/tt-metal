@@ -411,7 +411,9 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                             local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_node.eth_conn.dst_chan);
 
                         std::cout << "Found a matching exit node connection between " << host << " and "
-                                  << candidate_host << std::endl;
+                                  << candidate_host << " " << *local_asic << " -> " << *remote_asic << " with chans "
+                                  << +exit_node.eth_conn.src_chan << " -> " << +exit_node.eth_conn.dst_chan
+                                  << std::endl;
 
                         if (visited_hosts.find(candidate_host) == visited_hosts.end()) {
                             system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
