@@ -68,7 +68,7 @@ jobs:
       arch: wormhole_b0
   t3000-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -77,7 +77,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-model-perf:
     needs: [build-artifact, build-artifact-profiler]
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
     with:
@@ -88,7 +88,7 @@ jobs:
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   galaxy-4u-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -97,7 +97,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   galaxy-6u-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -107,7 +107,7 @@ jobs:
       topology: topology-6u
   blackhole-single-card-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
@@ -121,7 +121,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-multi-card-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate ) }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
     strategy:
