@@ -655,7 +655,7 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
               runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
@@ -727,7 +727,7 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
               runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
@@ -808,7 +808,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: ubuntu-22.04
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
