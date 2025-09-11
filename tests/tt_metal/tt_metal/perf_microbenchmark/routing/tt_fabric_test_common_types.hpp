@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
@@ -105,6 +106,7 @@ struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
