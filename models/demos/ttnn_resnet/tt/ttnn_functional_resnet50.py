@@ -8,7 +8,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
+    get_conv_input_memory_config,
+    is_blackhole_p100,
+)
 from models.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
@@ -362,6 +365,14 @@ class resnet50Bottleneck:
                 and (layer_module == "layer1_module2" or layer_module == "layer1_module3")
             ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
+            # p100 case
+            if (
+                is_blackhole_p100(device)
+                and batch_size == 32
+                and layer_module
+                and (layer_module == "layer1_module2" or layer_module == "layer2_module2")
+            ):
+                conv_kwargs_2["conv_config"].act_block_h_override = 32
 
         out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
@@ -596,6 +607,9 @@ class resnet50:
             else:
                 self.conv1_config.act_block_h_override = 49 * 32
 
+        if is_blackhole_p100(device) and batch_size == 32:
+            self.conv1_config.act_block_h_override = 32
+
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
         self.conv1_padding = (0, 0)
@@ -650,6 +664,8 @@ class resnet50:
                     ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
                 }
             )
+            if is_blackhole_p100(device):
+                core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
             self.fold_compute_grid_size = core_grid
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
