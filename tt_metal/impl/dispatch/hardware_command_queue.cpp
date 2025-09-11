@@ -709,7 +709,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
 
     // Record commands using bypass mode
     this->tid_ = tid;
-    this->trace_ctx_ = std::move(ctx);
+    this->trace_ctx_ = ctx;
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
