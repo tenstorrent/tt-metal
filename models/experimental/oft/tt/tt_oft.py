@@ -110,27 +110,42 @@ class OFT:
         self.linear_bias = parameters.conv3d.bias
         self.scale = scale
         self.use_precomputed_grid = use_precomputed_grid
+        self.features_shape_hw = features_shape_hw
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
             device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
         )
 
+        # integral_image_quantization_strategy
+        # None - no quantization
+        # "to_uint32" - quantize to uint32 before integral image, dequantize after
+        # "to_float32" - quantize to float32 before integral image, dequantize after
+        self.integral_image_quantization_strategy = "to_uint32"
+        logger.info(f"Integral image quantization strategy: {self.integral_image_quantization_strategy}")
+        if self.integral_image_quantization_strategy == "to_uint32":
+            self.prescaler = ttnn.from_torch(torch.tensor(1024 * 1024), device=device, dtype=ttnn.bfloat16)
+            self.postscaler = ttnn.from_torch(torch.tensor(1 / 1024 / 1024), device=device, dtype=ttnn.bfloat16)
+
     def forward(self, device, features, calib, grid):
         if use_signpost:
             signpost(header="OFT block started")
 
+        features = ttnn.reshape(features, [1, self.features_shape_hw[0], self.features_shape_hw[1], -1])
         if features.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
             features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
 
-        # features = ttnn.mul(features, ttnn.from_torch(torch.tensor(1024*1024), device=device, dtype=ttnn.bfloat16))
-        # features = ttnn.typecast(features, ttnn.uint32)
-
-        features = ttnn.typecast(features, ttnn.float32)
-        integral_image = ttnn_integral_image_channel_last(features)
-        integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
-
-        # integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
-        # integral_image = ttnn.mul(integral_image, ttnn.from_torch(torch.tensor(1/2/1024/1024), device=device, dtype=ttnn.bfloat16))
+        if self.integral_image_quantization_strategy == None:
+            integral_image = ttnn_integral_image_channel_last(features)
+        elif self.integral_image_quantization_strategy == "to_uint32":
+            features = ttnn.mul(features, self.prescaler, dtype=ttnn.bfloat16)
+            features = ttnn.typecast(features, ttnn.uint32)
+            integral_image = ttnn_integral_image_channel_last(features)
+            integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
+            integral_image = ttnn.mul(integral_image, self.postscaler, dtype=ttnn.bfloat16)
+        elif self.integral_image_quantization_strategy == "to_float32":
+            features = ttnn.typecast(features, ttnn.float32)
+            integral_image = ttnn_integral_image_channel_last(features)
+            integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
 
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)

@@ -1,10 +1,8 @@
 import ttnn
 import torch
 
-# from models.experimental.oft.tt.common import Conv
-# from models.experimental.oft.tt.common import GroupNorm
-from models.experimental.oft.tt.common import Conv_fallback as Conv
-from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNorm
+from models.experimental.oft.tt.common import Conv
+from models.experimental.oft.tt.common import GroupNorm
 from models.experimental.oft.tt.tt_resnet import TTResNetFeatures
 from models.experimental.oft.tt.tt_oft import OFT as TtOFT
 from loguru import logger
@@ -41,13 +39,19 @@ class TTOftNet:
         scale_features=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
-        self.lat8 = Conv(parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.lat8 = Conv(
+            parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
+        )
         self.bn8 = GroupNorm(parameters.bn8, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
-        self.lat16 = Conv(parameters.lat16, conv_pt.lat16, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.lat16 = Conv(
+            parameters.lat16, conv_pt.lat16, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
+        )
         self.bn16 = GroupNorm(parameters.bn16, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
-        self.lat32 = Conv(parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.lat32 = Conv(
+            parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
+        )
         self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
         self.oft8 = TtOFT(
@@ -60,7 +64,7 @@ class TTOftNet:
             calib,
             grid,
             scale=1 / 8,
-            use_precomputed_grid=False,
+            use_precomputed_grid=True,
         )
         self.oft16 = TtOFT(
             device,
@@ -72,7 +76,7 @@ class TTOftNet:
             calib,
             grid,
             scale=1 / 16,
-            use_precomputed_grid=False,
+            use_precomputed_grid=True,
         )
         self.oft32 = TtOFT(
             device,
@@ -84,7 +88,7 @@ class TTOftNet:
             calib,
             grid,
             scale=1 / 32,
-            use_precomputed_grid=False,
+            use_precomputed_grid=True,
         )
 
         self.topdown = [
@@ -568,3 +572,14 @@ class TTOftNet:
             tt_dim_offsets,
             tt_ang_offsets,
         )
+
+
+# t:210 - ❌ Intermediate 22 ortho8: passed=False, pcc='0.9362682225553642', abs=0.020, rel=5.186
+# 2025-09-11 20:55:51.347 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 23 ortho16: passed=False, pcc='0.7590762751818536', abs=0.012, rel=8.976
+# 2025-09-11 20:55:51.480 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 24 ortho32: passed=False, pcc='0.23913996605309806', abs=0.010, rel=10.158
+# 2025-09-11 20:55:51.606 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 25 ortho: passed=False, pcc='0.8775682206383804', abs=0.038, rel=8.909
+
+# 2025-09-11 20:45:41.946 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 22 ortho8: passed=False, pcc='0.9328076630475304', abs=0.020, rel=4.501
+# 2025-09-11 20:45:42.078 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 23 ortho16: passed=False, pcc='0.8560993601442494', abs=0.012, rel=7.414
+# 2025-09-11 20:45:42.210 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 24 ortho32: passed=False, pcc='0.2889192612418983', abs=0.009, rel=18.084
+# 2025-09-11 20:45:42.347 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 25 ortho: passed=False, pcc='0.9087737732972131', abs=0.036, rel=7.714

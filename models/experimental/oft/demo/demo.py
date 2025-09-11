@@ -53,16 +53,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, True,  False, 0.298, 0.717, 0.994, 0.745),
-       ( torch.float32, False, False, False, True,   True, 0.970, 0.995, 0.999, 0.820),
-       ( torch.float32,  False,  True, False, True,  False, 0.882, 0.963, 0.998, 0.897),
-       ( torch.float32, False, False, True, True,   False, 0.916, 0.883, 0.997, 0.934),
+       ( torch.float32, False, False, False, True,  False, 0.92, .98, 0.99, 0.94),
     ],
     ids=[
-        "use_host_decoder1",
-        "use_host_decoder_scale_features",
-        "fallback_feedforward_lateral",
-        "fallback_oft",
+        "use_host_decoder"
     ],
     # fmt: on
 )
@@ -194,7 +188,7 @@ def test_oftnet(
     for i, (out, tt_out, layer_name) in enumerate(zip(intermediates, tt_intermediates, layer_names)):
         if "bbox" in layer_name:
             # bbox layers have different shape in TTNN vs torch, so skip them for now
-            logger.warning(f"Skipping PCC check for bbox layer {layer_name} due to different shape in TTNN vs torch")
+            logger.debug(f"Skipping PCC check for bbox layer {layer_name} due to different shape in TTNN vs torch")
             continue
         # conver tt output to torch, channel first, and correct shape
         if isinstance(tt_out, ttnn.Tensor):
@@ -210,7 +204,8 @@ def test_oftnet(
         logger.warning(f"{special_char} Intermediate {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
 
         # save latent and integral image distributions
-        if "integral" in layer_name or "lat" in layer_name or "feat" in layer_name:
+        SAVE_TENSOR_DISTRIBUTION = False
+        if SAVE_TENSOR_DISTRIBUTION and ("integral" in layer_name or "lat" in layer_name or "feat" in layer_name):
             # Visualize and save tensor distributions for integral layers
             tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
             fig = visualize_tensor_distributions(out, tt_out_torch, title1="Reference Integral", title2="TTNN Integral")

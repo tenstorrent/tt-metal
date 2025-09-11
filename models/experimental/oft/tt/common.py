@@ -45,7 +45,7 @@ class Conv:
             self.has_bias = False
 
         if self.has_bias:
-            print(f"Conv: bias found in parameters")
+            logger.debug(f"Conv: bias found in parameters")
 
         # handle comparison mode that requires bias
         if ttnn.CONFIG.enable_comparison_mode:
@@ -114,7 +114,7 @@ class Conv:
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            # TODO(mbezulj): explore fidelity/fp32 settings. affects on frontend, latents, scores.
+            # TODO(mbezulj): explore fidelity/fp32 settings. affects frontend, latents, scores.
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
