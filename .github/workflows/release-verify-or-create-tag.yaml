@@ -24,11 +24,13 @@ on:
         description: "New version"
         value: ${{ jobs.verify-create-new-tag.outputs.version }}
 
-permissions: write-all
+permissions:
+  contents: write
+  packages: write
+  actions: write
 
 jobs:
   verify-create-new-tag:
-    permissions: write-all
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
