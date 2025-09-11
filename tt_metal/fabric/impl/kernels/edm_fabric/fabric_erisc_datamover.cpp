@@ -400,8 +400,6 @@ FORCE_INLINE void send_next_data(
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     auto& local_sender_write_counter = sender_worker_interface.local_write_counter;
 
-
-
     // TODO: TUNING - experiment with only conditionally breaking the transfer up into multiple packets if we are
     //       a certain threshold less than full packet
     //       we can precompute this value even on host and pass it in so we can get away with a single integer
@@ -555,6 +553,7 @@ FORCE_INLINE bool can_forward_packet_completely(
                 auto downstream_channel = routing_table->intra_mesh_table.dest_entry[(uint8_t)dest_chip_id];
                 ASSERT(downstream_channel != INVALID_DIRECTION);
                 auto downstream_direction = port_direction_table[downstream_channel];
+                return downstream_edm_interface[downstream_direction].edm_has_space_for_packet();
             }
         }
     }
