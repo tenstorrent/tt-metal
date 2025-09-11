@@ -250,6 +250,33 @@ jobs:
             echo "pr-number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Parse test results
+        id: parse-results
+        run: |
+          # Parse Wormhole test results
+          WH_RESULT="${{ needs.trigger-tt-metal-tests.outputs.all-post-commit-result || '' }}"
+          if [ -n "$WH_RESULT" ]; then
+            WH_STATUS=$(echo "$WH_RESULT" | cut -d: -f1)
+            WH_URL=$(echo "$WH_RESULT" | cut -d: -f2-)
+            echo "wh-status=$WH_STATUS" >> $GITHUB_OUTPUT
+            echo "wh-url=$WH_URL" >> $GITHUB_OUTPUT
+          else
+            echo "wh-status=" >> $GITHUB_OUTPUT
+            echo "wh-url=" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse Blackhole test results
+          BH_RESULT="${{ needs.trigger-tt-metal-tests.outputs.blackhole-result || '' }}"
+          if [ -n "$BH_RESULT" ]; then
+            BH_STATUS=$(echo "$BH_RESULT" | cut -d: -f1)
+            BH_URL=$(echo "$BH_RESULT" | cut -d: -f2-)
+            echo "bh-status=$BH_STATUS" >> $GITHUB_OUTPUT
+            echo "bh-url=$BH_URL" >> $GITHUB_OUTPUT
+          else
+            echo "bh-status=" >> $GITHUB_OUTPUT
+            echo "bh-url=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Find tt-metal workflow run
         id: find-run
         if: needs.trigger-tt-metal-tests.result == 'success'
@@ -296,6 +323,62 @@ jobs:
             echo "run-id=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Format test results
+        id: format-results
+        run: |
+          # Function to format test result line
+          format_test_result() {
+            local test_name="$1"
+            local run_flag="$2"
+            local status="$3"
+            local url="$4"
+            local workflow_result="$5"
+
+            if [ "$workflow_result" != "success" ] && [ "$workflow_result" != "failure" ]; then
+              echo ""
+              return
+            fi
+
+            local result=""
+            if [ "$run_flag" != "true" ]; then
+              result="⚪ Not run"
+            elif [ "$status" = "success" ]; then
+              result="🎯 Passed - [View run]($url)"
+            elif [ "$status" = "failure" ]; then
+              result="🛑 Failed - [View run]($url)"
+            elif [ "$status" = "timeout" ]; then
+              result="⏰ Timed out - [View run]($url)"
+            elif [ -n "$status" ]; then
+              result="⚪ $status - [View run]($url)"
+            elif [ "$workflow_result" = "failure" ]; then
+              result="🛑 Workflow Failed - Check logs for details"
+            else
+              result="⏳ Running..."
+            fi
+
+            echo "- $test_name tests: $result"
+          }
+
+          # Format Wormhole results
+          WH_RESULT=$(format_test_result "Wormhole" \
+            "${{ needs.detect-changes.outputs.run-wormhole }}" \
+            "${{ steps.parse-results.outputs.wh-status }}" \
+            "${{ steps.parse-results.outputs.wh-url }}" \
+            "${{ needs.trigger-tt-metal-tests.result }}")
+          echo "wormhole-result<<EOF" >> $GITHUB_OUTPUT
+          echo "$WH_RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Format Blackhole results
+          BH_RESULT=$(format_test_result "Blackhole" \
+            "${{ needs.detect-changes.outputs.run-blackhole }}" \
+            "${{ steps.parse-results.outputs.bh-status }}" \
+            "${{ steps.parse-results.outputs.bh-url }}" \
+            "${{ needs.trigger-tt-metal-tests.result }}")
+          echo "blackhole-result<<EOF" >> $GITHUB_OUTPUT
+          echo "$BH_RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Post comment on PR
         uses: mshick/add-pr-comment@v2
         with:
@@ -312,22 +395,10 @@ jobs:
                   needs.detect-changes.outputs.run-blackhole == 'true' &&
                   '🟢 Enabled' || '⚪ Disabled' }}
 
-            ${{
-              needs.detect-changes.outputs.should-skip == 'true' &&
-              '**Status:** ⏭️ **Skipped** - No relevant changes in LLK directories' ||
-              format('**Status:** {0}',
-                needs.trigger-tt-metal-tests.result == 'success' &&
-                '🎯 Tests succeeded' ||
-                needs.trigger-tt-metal-tests.result == 'skipped' &&
-                '⏭️ Skipped' ||
-                '🛑 Tests failed')
-            }}
+            **Test Results:**
+            ${{ steps.format-results.outputs.wormhole-result }}
+            ${{ steps.format-results.outputs.blackhole-result }}
 
             ## 🔗 Links
             📊 **Post-commit workflow:** [#${{ github.run_id }}](${{
               github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-            ${{
-              needs.trigger-tt-metal-tests.result == 'failure' &&
-              '⚠️ Some of the post-commit tests have failed. Please check the logs above.' || ''
-            }}
