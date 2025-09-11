@@ -214,18 +214,3 @@ target_link_libraries(
         test_common_libs
 )
 target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric_edm.cpp)
-
-# Find protobuf package
-find_package(Protobuf REQUIRED)
-
-# Generate C++ code from protobuf definitions
-protobuf_generate_cpp(
-    PROTO_SRCS
-    PROTO_HDRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/pod_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/cluster_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/deployment/deployment.proto
-)
-
-
