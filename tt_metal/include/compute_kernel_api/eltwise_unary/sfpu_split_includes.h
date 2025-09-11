@@ -28,6 +28,10 @@
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #endif
 
+#if SFPU_OP_RSQRT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#endif
+
 #if SFPU_OP_RECIP_INCLUDE
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #endif

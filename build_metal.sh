@@ -32,6 +32,7 @@ show_help() {
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
+    echo "  --build-telemetry                Build tt-telemetry server."
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
@@ -75,6 +76,7 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
+build_telemetry="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
 light_metal_trace="ON"
@@ -118,6 +120,7 @@ build-umd-tests
 build-programming-examples
 build-tt-train
 build-packages
+build-telemetry
 build-static-libs
 disable-unity-builds
 disable-light-metal-trace
@@ -187,6 +190,8 @@ while true; do
             build_tt_train="ON";;
         --build-packages)
             build_packages="ON";;
+        --build-telemetry)
+            build_telemetry="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -346,6 +351,10 @@ if [ "$build_tt_train" = "ON" ]; then
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi
 
+if [ "$build_telemetry" = "ON" ]; then
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
+fi
+
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
@@ -368,6 +377,7 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then
