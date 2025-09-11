@@ -12,13 +12,11 @@ on:
     # dev testing and builds for beginning of work week
     - cron: "0 0 * * *"
 
-
 permissions:
   contents: write
   packages: write
   actions: write
   id-token: write
-
 
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
@@ -31,28 +29,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
-      tag_type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag_type }}
+      tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Get is-release-candidate and tag_type
+      - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
           # A workflow dispatch on a tag is considered a release run for us.
           isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
 
-          # Set tag_type
+          # Set tag-type
           if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
             if [[ "$isReleaseCandidate" == "true" ]]; then
-              echo "tag_type=rc" >> "$GITHUB_OUTPUT"
+              echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
-              echo "tag_type=" >> "$GITHUB_OUTPUT"
+              echo "tag-type=" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "tag_type=dev" >> "$GITHUB_OUTPUT"
+            echo "tag-type=dev" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Get should-create-release
@@ -74,8 +72,8 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      # tag_type is now set in release-precheck and passed as output
-      tag_type: ${{ needs.release-precheck.outputs.tag_type }}
+      # tag-type is now set in release-precheck and passed as output
+      tag-type: ${{ needs.release-precheck.outputs.tag-type }}
       dry-run: ${{ inputs.dry-run }}
 
 

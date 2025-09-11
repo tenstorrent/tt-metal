@@ -24,11 +24,6 @@ on:
         description: "New version"
         value: ${{ jobs.verify-create-new-tag.outputs.version }}
 
-permissions:
-  contents: write
-  packages: write
-  actions: write
-
 jobs:
   verify-create-new-tag:
     runs-on: ubuntu-latest
