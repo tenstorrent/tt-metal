@@ -121,18 +121,12 @@ def test_slice_write_nd(rank, layout, device):
 
     shape = _rand_shape(rank)
     begins, ends, strides = _rand_slice_params(shape)
-    print(f"begins: {begins}")
-    print(f"ends: {ends}")
-    print(f"strides: {strides}")
-    print(f"shape: {shape}")
     # Build PyTorch reference slice
     slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, strides))
 
     # Destination and source (match slice shape)
     torch_out_ref = torch.zeros(shape, dtype=torch.bfloat16)
-    # torch_src = offset_increment_tensor(torch_out_ref[slices].shape, dtype=torch.bfloat16)
     torch_src = torch.full(torch_out_ref[slices].shape, 1, dtype=torch.bfloat16)
-    print(f"torch_src.shape: {torch_src.shape}")
 
     # PyTorch ground truth
     torch_out_ref[slices] = torch_src

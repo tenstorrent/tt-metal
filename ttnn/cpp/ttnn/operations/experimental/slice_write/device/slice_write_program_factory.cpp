@@ -113,7 +113,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
 
     std::vector<uint32_t> common_writer_kernel_args = {
-        // output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
         output_buffer->address(),
         output_row_size_bytes,
         input_row_size_bytes,
@@ -128,11 +127,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         common_writer_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
-
-    std::cout << "num_input_sticks_per_dim: " << unpadded_sticks_str << std::endl;
-    std::cout << "num_output_sticks_per_dim: " << padded_sticks_str << std::endl;
-    std::cout << "accumulated_total_per_dim: " << accumulated_str << std::endl;
-    std::cout << "rev_stride: " << rev_stride_str << std::endl;
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
@@ -158,27 +152,18 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
         }
-        id_per_dim[0] =
-            num_sticks_read %
-            num_input_sticks_per_dim[0];  // is num_input_sticks_per_dim[0] always 1? Which means this is always 0
-        // std::cout << "Core: (" << core.x << "," << core.y << ") id_per_dim[0]: " << id_per_dim[0] << std::endl;
-        // std::cout << "num_sticks_read: " << num_sticks_read << std::endl;
-        uint32_t unpadded_written = num_sticks_read / num_input_sticks_per_dim[0];  // is this always num_sticks_read?
+        id_per_dim[0] = num_sticks_read %
+                        num_input_sticks_per_dim[0];  // if num_input_sticks_per_dim[0] is always 1, this is always 0
+        uint32_t unpadded_written =
+            num_sticks_read /
+            num_input_sticks_per_dim[0];  // if num_input_sticks_per_dim[0] is always 1, this is always num_sticks_read?
         uint32_t start_id = id_per_dim[0] + start_offset;
 
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_sticks_per_dim[j];
             unpadded_written = unpadded_written / num_input_sticks_per_dim[j];
-            // std::cout << "start_id = " << start_id;
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1] * rev_stride[j];
-            // std::cout << " + " << id_per_dim[j] << " * " << accumulated_total_per_dim[j - 1] << " = " << start_id <<
-            // std::endl;
         }
-        // std::cout << "Core: (" << core.x << "," << core.y << ") id_per_dim: " << start_id << std::endl;
-        // for(auto id : id_per_dim) {
-        //     std::cout << id << ", ";
-        // }
-        // std::cout << std::endl;
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
 
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims

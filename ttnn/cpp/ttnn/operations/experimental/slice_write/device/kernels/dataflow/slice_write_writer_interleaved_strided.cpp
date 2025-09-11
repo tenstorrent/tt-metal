@@ -40,6 +40,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim + num_dims;
+
+#ifdef DEBUG
     DPRINT << "num_input_sticks_per_dim: ";
     for (uint32_t i = 0; i < num_dims; i++) {
         DPRINT << num_unpadded_sticks[i] << ", ";
@@ -60,6 +62,7 @@ void kernel_main() {
         DPRINT << id_per_dim[i] << ", ";
     }
     DPRINT << ENDL();
+#endif
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t alignment_offset = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
@@ -91,9 +94,7 @@ void kernel_main() {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
                     id_per_dim[j] = 0;
-                    DPRINT << "dst_stick_id: " << src_stick_id << " + " << (num_padded_sticks[j]) << " = ";
                     src_stick_id += num_padded_sticks[j];
-                    DPRINT << src_stick_id << ENDL();
                 } else {
                     break;
                 }
@@ -146,9 +147,7 @@ void kernel_main() {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
                     id_per_dim[j] = 0;
-                    DPRINT << "dst_stick_id: " << dst_stick_id << " + " << (num_padded_sticks[j]) << " = ";
                     dst_stick_id += num_padded_sticks[j];
-                    DPRINT << dst_stick_id << ENDL();
                 } else {
                     break;
                 }
