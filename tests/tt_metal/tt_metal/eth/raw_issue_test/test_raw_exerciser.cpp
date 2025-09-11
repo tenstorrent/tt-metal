@@ -1,5 +1,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include "impl/context/metal_context.hpp"
 #include <cstdint>
 #include <stdexcept>
 
@@ -23,12 +26,12 @@ int main(int argc, char** argv) {
 
     try {
         // Device setup
-        tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(0);
+        tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(0);
 
         tt::tt_metal::Program program{};
 
         // Get HAL instance for L1 address queries
-        auto& hal = tt::tt_metal::Hal::instance();
+        auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
         uint32_t unreserved_l1_start = hal.get_dev_size(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
@@ -59,7 +62,7 @@ int main(int argc, char** argv) {
             logical_exerciser_core,
             tt::tt_metal::EthernetConfig{});
 
-        KernelHandle emitter_kernel = tt::tt_metal::CreateKernel(
+        auto emitter_kernel = tt::tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/eth/raw_issue_test/noc_noise_emitter_kernel.cpp",
             logical_emitter_core,

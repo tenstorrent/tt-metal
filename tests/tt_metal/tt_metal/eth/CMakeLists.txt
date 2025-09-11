@@ -45,4 +45,7 @@ add_executable(test_raw_exerciser raw_issue_test/test_raw_exerciser.cpp)
 
 target_link_libraries(test_raw_exerciser PRIVATE tt_metal)
 
+# Add include directories for impl headers
+target_include_directories(test_raw_exerciser PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
+
 add_test(NAME test_raw_exerciser COMMAND test_raw_exerciser)
