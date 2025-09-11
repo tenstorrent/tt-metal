@@ -62,21 +62,44 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
+# Creates a tensor with specified mode:
+# - "random": fills tensor with random values using torch.randn
+# - "stick": each stick has same values starting from 0 and increasing
+# - "single": fills entire tensor with the provided value
 def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
+    mode="random",
+    fill_value=None,
 ):
-    if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-        torch_tensor = torch.abs(torch_tensor)
-        return torch_tensor
+    tensor_shape = tuple(tensor_shape)
+    cache_key = (tensor_shape, generate_positive_numbers, mode, fill_value)
+
+    if cache_key in torch_tensor_map.keys():
+        torch_tensor = torch_tensor_map[cache_key]
     else:
-        if tensor_shape in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[tensor_shape]
-        else:
+        if mode == "random":
             torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-            torch_tensor_map[tensor_shape] = torch_tensor
+            if generate_positive_numbers:
+                torch_tensor = torch.abs(torch_tensor)
+        elif mode == "stick":
+            torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16).float()
+            for n in range(tensor_shape[0]):
+                for c in range(tensor_shape[1]):
+                    for h in range(tensor_shape[2]):
+                        for w in range(tensor_shape[3]):
+                            torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
+            if generate_positive_numbers:
+                torch_tensor = torch.abs(torch_tensor)
+        elif mode == "single":
+            if fill_value is None:
+                raise ValueError("fill_value must be provided when mode is 'single'")
+            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16).float()
+        else:
+            raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
+
+        torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
