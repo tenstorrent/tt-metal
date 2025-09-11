@@ -27,6 +27,7 @@
 #include "allocator.hpp"
 #include "assert.hpp"
 #include "buffer.hpp"
+#include "submesh_manager.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "host_api.hpp"
@@ -217,11 +218,13 @@ void MeshDevice::mark_allocations_safe() { this->allocator()->mark_allocations_s
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
-    std::shared_ptr<MeshDevice> parent_mesh) :
+    std::shared_ptr<MeshDevice> parent_mesh,
+    std::shared_ptr<SubmeshState> submesh_state) :
     scoped_devices_(std::move(mesh_handle)),
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
+    submesh_state_(std::move(submesh_state)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
@@ -276,16 +279,17 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         }
     }();
 
-    auto local_root_devices = extract_locals(scoped_devices->root_devices());
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : local_root_devices) {
+    for (auto device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -319,10 +323,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         fabric_node_ids.push_back(fabric_node_id);
     }
+
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    auto root_devices = scoped_devices->root_devices();
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
@@ -457,6 +463,61 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
         submeshes.push_back(create_submesh(submesh_shape, MeshCoordinate(offset_coords)));
     }
 
+    return submeshes;
+}
+
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes(
+    const std::vector<MeshCoordinateRange>& submesh_ranges) {
+    auto lock_api = this->lock_api();
+
+    // Create submesh states with ranges - dependencies are created internally
+    auto submesh_states = SubmeshState::create_states_for_ranges(submesh_ranges);
+
+    std::vector<std::shared_ptr<MeshDevice>> submeshes;
+    const auto& submesh_dependencies = submesh_states[0]->get_dependencies();
+    for (size_t i = 0; i < submesh_dependencies.num_allocators(); ++i) {
+        std::cout << "Allocator " << i << ": " << submesh_dependencies.dependencies[i] << std::endl;
+    }
+
+    for (size_t i = 0; i < submesh_ranges.size(); ++i) {
+        const auto& submesh_range = submesh_ranges[i];
+        auto submesh_shape = submesh_range.shape();
+
+        // Use the pre-created submesh state
+        auto submesh_state = submesh_states[i];
+
+        // Create mesh device view for the submesh.
+        std::vector<MaybeRemote<IDevice*>> submesh_devices;
+        std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
+        for (const auto& coord : submesh_range) {
+            if (view_->is_local(coord)) {
+                submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->get_device(coord)));
+            } else {
+                submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
+            }
+            submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
+        }
+        auto submesh = std::make_shared<MeshDevice>(
+            scoped_devices_,
+            std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
+            shared_from_this(),
+            submesh_state);
+
+        const auto& allocator_config = reference_device()->allocator()->get_config();
+        submesh->initialize(
+            num_hw_cqs(),
+            allocator_config.l1_small_size,
+            allocator_config.trace_region_size,
+            allocator_config.worker_l1_size,
+            allocator_config.l1_bank_remap);
+        // TODO #20966: Remove these calls
+        for (auto device : submesh->get_devices()) {
+            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+        }
+
+        submeshes.push_back(submesh);
+        submeshes_.push_back(submesh);
+    }
     return submeshes;
 }
 
