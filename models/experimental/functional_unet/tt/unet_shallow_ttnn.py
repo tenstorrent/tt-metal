@@ -182,6 +182,7 @@ class UNetConv2D:
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
             enable_weights_double_buffer=True,
+            enable_activation_reuse=(conv.enable_activation_reuse if "enable_activation_reuse" in conv else False),
         )
 
         if override_core_grid is not None:
