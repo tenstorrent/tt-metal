@@ -408,6 +408,11 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                             local_physical_to_logical_eth_chan.at(*local_asic).end()) {
                             continue;
                         }
+                        if (remote_physical_to_logical_eth_chan.at(*remote_asic).find(exit_node.eth_conn.dst_chan) ==
+                            remote_physical_to_logical_eth_chan.at(*remote_asic).end()) {
+                            continue;
+                        }
+
                         std::cout
                             << "Local Chan: " << +exit_node.eth_conn.src_chan << " "
                             << +local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_node.eth_conn.dst_chan)
