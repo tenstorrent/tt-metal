@@ -645,7 +645,7 @@ GlobalNodeId MeshGraphDescriptor::populate_instance(
 
     auto & instance = instances_.at(global_id);
 
-    // Check that graph descriptor type is not alreadyt in the hierarchy
+    // Check that graph descriptor type is not already in the hierarchy
     for (const auto& id : hierarchy) {
         auto & instance_in_hierarchy = instances_.at(id);
         TT_FATAL(instance_in_hierarchy.type != instance.type, "Graph descriptor type {} already exists in hierarchy", instance.type);
