@@ -38,12 +38,9 @@ def randomize_torch_tensor(tensor_map, tensor_shape, mode="random", fill_value=N
         if mode == "random":
             torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
         elif mode == "stick":
-            torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-            for n in range(tensor_shape[0]):
-                for c in range(tensor_shape[1]):
-                    for h in range(tensor_shape[2]):
-                        for w in range(tensor_shape[3]):
-                            torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
+            h, w = tensor_shape[2], tensor_shape[3]
+            stick = torch.arange(h * w, dtype=torch.bfloat16).reshape(1, 1, h, w)
+            torch_tensor = stick.expand(tensor_shape)
         elif mode == "single":
             if fill_value is None:
                 raise ValueError("fill_value must be provided when mode is 'single'")
