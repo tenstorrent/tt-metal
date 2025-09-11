@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-logger/tt-logger.hpp>
 #include "llrt_common/mailbox.hpp"
 #define COMPILE_FOR_ERISC
 
