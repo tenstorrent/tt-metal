@@ -560,14 +560,17 @@ void ElfFile::Impl::XIPify() {
             auto const* symbol = &symbols[sym_ix];
             bool is_to_text = IsTextSymbol(*symbol);
 
-            // Check add/sub relocs are paired and do not cross text/non-text boundary.
-            if (bool(sub_reloc) != (type == R_RISCV_ADD32) || (sub_reloc && sub_reloc->r_offset != reloc.r_offset)) {
-            unpaired_sub:
+            auto throw_unpaired = [&]() {
                 TT_THROW(
                     "{}: unpaired {} reloc at {}",
                     path_,
                     sub_reloc ? "sub32" : "add32",
                     (sub_reloc ? sub_reloc : &reloc)->r_offset);
+            };
+
+            // Check add/sub relocs are paired and do not cross text/non-text boundary.
+            if (bool(sub_reloc) != (type == R_RISCV_ADD32) || (sub_reloc && sub_reloc->r_offset != reloc.r_offset)) {
+                throw_unpaired();
             }
             if (type == R_RISCV_ADD32) {
                 auto const* sub_symbol = &symbols[ELF32_R_SYM(sub_reloc->r_info)];
@@ -581,7 +584,7 @@ void ElfFile::Impl::XIPify() {
             if (type == R_RISCV_SUB32) {
                 sub_reloc = &reloc;
                 if (!ix) {
-                    goto unpaired_sub;
+                    throw_unpaired();
                 }
             }
 
