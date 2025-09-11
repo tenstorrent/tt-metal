@@ -190,8 +190,7 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
 
     // Get main dimensions
     auto q_shape = input_tensor_q.logical_shape();
-    auto k_shape = input_tensor_k.logical_shape();
-    auto v_shape = input_tensor_v.logical_shape();
+       auto v_shape = input_tensor_v.logical_shape();
 
     // For windowed attention, we only compute attention within windows
     // Calculate total number of attention computations based on windows
