@@ -106,10 +106,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)
                  - TILE
 
-            Rank: input rank must be >= 1. See Limitations for additional sharding/distributed constraints.
-
         Limitations:
-            - All input tensors must be on-device.
+            - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).

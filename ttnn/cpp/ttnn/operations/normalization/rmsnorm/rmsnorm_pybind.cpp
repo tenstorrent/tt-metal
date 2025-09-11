@@ -79,10 +79,8 @@ void bind_normalization_rms_norm(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
                  - TILE
 
-            Rank: input rank must be >= 1.
-
         Limitations:
-            - All input tensors must be on-device.
+            - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - `weight`/`bias` tensors:
