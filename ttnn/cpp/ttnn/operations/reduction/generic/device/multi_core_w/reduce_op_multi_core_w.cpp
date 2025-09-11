@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
