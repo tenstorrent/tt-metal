@@ -38,6 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// Access to internal API: ProgramImpl::get_kernel
+#include "impl/program/program_impl.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -126,7 +129,6 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
 Program create_simple_datamovement_program(
     const Buffer& input, const Buffer& output, const Buffer& l1_buffer, bool rt_arg_per_core_vec = false) {
     Program program = Program();  // Verify Program constructor can be used.
-    IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
     std::vector<uint32_t> compile_time_args;
@@ -142,8 +144,6 @@ Program create_simple_datamovement_program(
             .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    const uint32_t input_bank_id = 0;
-    const uint32_t output_bank_id = 0;
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
@@ -165,7 +165,6 @@ Program create_simple_datamovement_program(
 // Copied from test_EnqueueTrace.cpp
 Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_input_buffer = nullptr) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -179,7 +178,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,
@@ -198,15 +197,12 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
-    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
-    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
-    *writer_runtime_args = {&output, (uint32_t)0, output.num_pages()};
+    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
+    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
 
-    *reader_runtime_args = {&input, (uint32_t)0, input.num_pages()};
-
-    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
-    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
+    SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                                 .set_page_size(tt::CBIndex::c_16, 2048);

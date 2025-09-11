@@ -18,7 +18,7 @@ class TtnnSPPF:
             device,
             parameters.cv1.conv,
             self.conv_pt.cv1.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
@@ -27,7 +27,7 @@ class TtnnSPPF:
             device,
             parameters.cv2.conv,
             self.conv_pt.cv2.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=True,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
@@ -39,7 +39,7 @@ class TtnnSPPF:
         y = [cv1]
 
         TILE_WIDTH = 32
-        in_c = self.parameters.cv2.conv.in_channels
+        in_c = self.parameters.cv1.conv.out_channels
         in_c_padded = in_c
         if in_c % TILE_WIDTH != 0 and in_c != 16:
             in_c_padded = in_c + (TILE_WIDTH - in_c % TILE_WIDTH)

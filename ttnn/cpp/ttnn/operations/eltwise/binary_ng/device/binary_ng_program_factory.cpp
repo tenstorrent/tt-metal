@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -127,10 +128,10 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
-    bool row_major;
-    TensorMemoryLayout memory_layout;
-    std::array<uint32_t, 2> shard_shape;
-    std::array<uint32_t, 2> last_shard_shape;
+    bool row_major{};
+    TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
+    std::array<uint32_t, 2> shard_shape{};
+    std::array<uint32_t, 2> last_shard_shape{};
 
 public:
     ShardShapeGenerator() = default;
@@ -464,19 +465,37 @@ void overwrite_compute_kernel_name_and_defines(
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
     std::map<std::string, std::string>& compute_defines) {
-    compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-    compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-    kernel_name = KernelName::ComputeRowBcastNg;
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        kernel_name = KernelName::ComputeRowBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        kernel_name = KernelName::ComputeRowColBcastNg;
+    }
 }
 
-bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
-    if (not(subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-            subtile_broadcast_type == SubtileBroadcastType::ROW_B)) {
-        return false;
+bool is_llk_bcast(
+    const SubtileBroadcastType subtile_broadcast_type,
+    const DataType a_dtype,
+    const DataType b_dtype,
+    const DataType c_dtype) {
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
-    if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
-        return true;
+
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
+
     return false;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -494,6 +513,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
+    // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
+    // used.
+    const auto input_dtype = operation_attributes.input_dtype;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
     }
@@ -574,10 +596,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
         }
     }
 
@@ -626,10 +648,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }
 
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
     }
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
@@ -642,16 +666,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_data_format,
         c_sharded ? c_buffer : nullptr);
 
-    uint32_t a_is_dram = a_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    uint32_t b_is_dram = false;
-    uint32_t c_is_dram = c_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
-        b_is_dram = b_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
@@ -674,11 +693,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             operation_attributes.subtile_broadcast_type, reader_defines);
         writer_kernel = KernelName::WriterNoBcastNg;
     }
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+    tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -712,7 +734,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype)) {
+    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";
@@ -730,11 +752,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             .defines = std::move(compute_kernel_defines)});
 
     // READER KERNEL
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+    tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

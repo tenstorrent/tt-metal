@@ -88,12 +88,6 @@ def create_custom_preprocessor(device):
 
 
 def create_swinv2_model_parameters(torch_model, device):
-    # model = models.swin_v2_s(weights="IMAGENET1K_V1")
-    # state_dict = model.state_dict()
-
-    # torch_model.load_state_dict(state_dict)
-    # torch_model.eval()
-
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
@@ -140,3 +134,15 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
         attn_mask_tuple += (attn_mask,)
 
     return attn_mask_tuple
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

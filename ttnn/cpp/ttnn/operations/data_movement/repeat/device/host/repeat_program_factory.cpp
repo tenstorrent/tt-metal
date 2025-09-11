@@ -55,7 +55,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the begining of a read and
+    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_pages = input_log_shape[-2];
     uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
@@ -159,7 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the begining of a read and
+    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_higher_pages = input_log_shape[0];
     uint32_t number_of_lower_pages = input_log_shape[2];

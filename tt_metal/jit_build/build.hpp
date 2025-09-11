@@ -4,23 +4,17 @@
 
 #pragma once
 #include <stdint.h>
+#include <span>
 #include <tt_stl/aligned_allocator.hpp>
 #include <functional>
 #include <future>
 #include <map>
-#include <memory>
 #include <string>
-#include <string_view>
-#include <thread>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_format.hpp"
-#include "hostdevcommon/common_values.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
-#include "tracy/Tracy.hpp"
-#include "tt_backend_api_types.hpp"
-#include "utils.hpp"
 
 namespace tt {
 enum class ARCH;
@@ -38,6 +32,8 @@ using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_
 class JitBuildSettings;
 
 struct JitBuiltStateConfig {
+    HalProgrammableCoreType core_type{};
+    HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
@@ -52,10 +48,6 @@ struct JitBuiltStateConfig {
 // Device specific
 class JitBuildEnv {
     friend class JitBuildState;
-    friend class JitBuildDataMovement;
-    friend class JitBuildCompute;
-    friend class JitBuildActiveEthernet;
-    friend class JitBuildIdleEthernet;
 
 public:
     JitBuildEnv();
@@ -67,9 +59,7 @@ public:
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:
-    tt::ARCH arch_;
-    std::string arch_name_;
-    std::string aliased_arch_name_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
 
     // Paths
     std::string root_;
@@ -97,7 +87,7 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile;
+    bool process_defines_at_compile_{};
 
     std::string out_path_;
     std::string target_name_;
@@ -132,61 +122,26 @@ protected:
     void weaken(const std::string& log_file, const std::string& out_path) const;
     void copy_kernel(const std::string& kernel_in_path, const std::string& op_out_path) const;
     void extract_zone_src_locations(const std::string& log_file) const;
+    void finish_init(HalProgrammableCoreType core_type, HalProcessorClassType processor_class);
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-    virtual ~JitBuildState() = default;
-    void finish_init();
 
     void build(const JitBuildSettings* settings) const;
-
-    const std::string& get_out_path() const { return this->out_path_; };
+    const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; };
+    ;
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
 };
 
-// Set of build states
-// Used for parallel builds, builds all members in one call
-using JitBuildStateSet = std::vector<std::shared_ptr<JitBuildState>>;
-
-// Exracts a slice of builds from a JitBuildState
-// Used for parallel building a subset of the builds in a JitBuildStateSet
-struct JitBuildStateSubset {
-    const std::shared_ptr<JitBuildState>* build_ptr;
-    int size;
-};
-
-// Specific build types
-// These specialize a JitBuildState with everything need to build for a target
-class JitBuildDataMovement : public JitBuildState {
-private:
-public:
-    JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-};
-
-class JitBuildCompute : public JitBuildState {
-private:
-public:
-    JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-};
-
-class JitBuildActiveEthernet : public JitBuildState {
-private:
-public:
-    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-};
-
-class JitBuildIdleEthernet : public JitBuildState {
-private:
-public:
-    JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
-};
+// Exracts a slice of builds from JitBuildStates
+// Used for parallel building a subset of the builds, builds all members in one call
+using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
-void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
-void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
+void jit_build_subset(JitBuildStateSubset builds, const JitBuildSettings* settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);

@@ -45,21 +45,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::invoke(
-    const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const std::optional<uint32_t> num_kv_heads,
-    const bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor,
-        num_q_heads,
-        num_kv_heads,
-        transpose_k_heads,
-        memory_config,
-        std::move(optional_output_tensors));
-}
-
 }  // namespace ttnn::operations::experimental::transformer

@@ -4,7 +4,7 @@
 
 #pragma once
 
-enum SfpuType {
+enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
@@ -114,8 +114,11 @@ enum SfpuType {
     cpy_values,
     gcd,
     lcm,
+    softshrink,
     hardsigmoid,
+    threshold,
     where,
     softsign,
     celu,
+    max_pool_with_indices,
 };

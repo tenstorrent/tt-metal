@@ -66,6 +66,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!this->use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
@@ -83,7 +90,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
-        std::array<uint32_t, 2> shard_shape;
+        std::array<uint32_t, 2> shard_shape{};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.tensor_spec().tile();

@@ -6,7 +6,7 @@ allowing the freedom to try new ideas and improve performance using Tenstorrent 
 to be showcased, we have a few important questions to answer before it is moved to our ``models/demos`` folder.
 What you see below highlights the expectations for all our models that successfully migrate into the ``models/demos`` folder.
 
-1. Does your model have good documenation?
+1. Does your model have good documentation?
     - We expect a ``README.md`` file within your model's folder that describes what the model is doing and how to run the model. This documentation should also include:
         - The origin of the model and credit to the originating authors, as appropriate.
         - Examples of how to use the model, including any necessary installation steps or dependencies.

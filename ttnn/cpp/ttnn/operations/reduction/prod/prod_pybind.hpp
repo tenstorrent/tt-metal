@@ -19,11 +19,12 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
     auto doc = fmt::format(
         R"doc(
 
-            Computes the product of all elements on specified ``dim`` of the ``input`` tensor.
+            Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
 
-            If no ``dim`` is provided (or ``dim`` is set to `None`), it will compute the product of all elements in the ``input`` tensor.
-            If ``keepdim`` is `True`, the resulting tensor will have a similar shape as the ``input`` tensor, but with the specified ``dim`` reduced to 1. This is not supported when taking the product across all dimensions.
-            Otherwise, the target ``dim`` will be squeezed, resulting in an output tensor with one less dimension than the ``input`` tensor.
+            If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.
+
+            If :attr:`keepdim` is `True`, the resulting tensor will have the same rank as the :attr:`input_tensor` tensor, but with the specified :attr:`dim` reduced to 1.
+            Otherwise, the target :attr:`dim` will be squeezed, resulting in an output tensor with one less dimension than the :attr:`input_tensor` tensor.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -36,11 +37,34 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
             Returns:
                 List of ttnn.Tensor: the output tensor.
 
-            Example::
+            Note:
+                The :attr:`input_tensor` supports the following data type and layout:
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, dim=0)
-                >>> output_all_dims = {1}(tensor)
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE, ROW_MAJOR
+
+                The :attr:`output_tensor` will be in the following data type and layout:
+
+                .. list-table:: output_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - BFLOAT16
+                        - TILE
+
+            Limitations:
+                - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
+
+            Example::
+                tensor = ttnn.rand((1,2), device=device)
+                output = {1}(tensor, dim=0)
+                output_all_dims = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());

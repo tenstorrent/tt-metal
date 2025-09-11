@@ -78,15 +78,21 @@ run_t3000_qwen25_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_qwen25_tests"
-  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
-  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
-  qwen25_coder_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-Coder-32B
+  export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
-  HF_MODEL=$qwen25_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  echo "LOG_METAL: Running run_t3000_qwen25_tests"
+  qwen25_7b=Qwen/Qwen2.5-7B-Instruct
+  tt_cache_7b=$HF_HOME/tt_cache/Qwen--Qwen2.5-7B-Instruct
+  qwen25_72b=Qwen/Qwen2.5-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-72B-Instruct
+  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  tt_cache_coder_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-Coder-32B
+
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
+  HF_MODEL=$qwen25_72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
   pip install -r models/tt_transformers/requirements.txt
-  HF_MODEL=$qwen25_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  HF_MODEL=$qwen25_coder_32b TT_CACHE_PATH=$tt_cache_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -101,20 +107,23 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
   # Qwen2.5-VL-32B
-  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
-  # Qwen2.5-VL-72B
-  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+  qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
+  tt_cache_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-32B-Instruct
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
 
-  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
-    echo "LOG_METAL: Tests for $qwen_dir on T3K completed"
-  done
+  # Qwen2.5-VL-72B
+  qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+
+  echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -133,7 +142,7 @@ run_t3000_qwen3_tests() {
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
-  HF_MODEL=$qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
+  HF_MODEL=$qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -156,7 +165,7 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$n300" "$t3k"; do
+  for mesh_device in "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
     MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
@@ -327,6 +336,19 @@ run_t3000_llama3_load_checkpoints_tests() {
   fi
 }
 
+run_t3000_gemma3_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  echo "LOG_METAL: Gemma3 27B tests completed (text only)"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+}
+
 run_t3000_tests() {
   # Run llama3 load checkpoints tests
   run_t3000_llama3_load_checkpoints_tests
@@ -369,6 +391,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run gemma3 tests
+  run_t3000_gemma3_tests
 }
 
 fail=0

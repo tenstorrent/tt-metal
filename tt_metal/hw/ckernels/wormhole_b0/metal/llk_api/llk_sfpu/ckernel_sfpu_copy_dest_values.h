@@ -13,15 +13,12 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool IDST0_BIGGER, int ITERATIONS = 8>
-void copy_dest_value(const uint dst_offset) {
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+void copy_dest_value(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out /* unused */) {
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size = 32;
-        if constexpr (IDST0_BIGGER) {
-            dst_reg[dst_offset * dst_tile_size] = dst_reg[0];
-        } else {
-            dst_reg[0] = dst_reg[dst_offset * dst_tile_size];
-        }
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        constexpr uint dst_tile_size_sfpi = 32;
+        dst_reg[dst_index_in0 * dst_tile_size_sfpi] = dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         dst_reg++;
     }
 }

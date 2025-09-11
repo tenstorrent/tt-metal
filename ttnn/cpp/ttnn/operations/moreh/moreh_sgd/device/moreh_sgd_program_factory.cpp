@@ -89,28 +89,28 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     std::map<std::string, std::string> compute_defines;
 
     if (weight_decay != 0) {
-        reader_defines["WEIGHT_DECAY"] = 1;
-        compute_defines["WEIGHT_DECAY"] = 1;
+        reader_defines["WEIGHT_DECAY"] = "1";
+        compute_defines["WEIGHT_DECAY"] = "1";
     }
 
     if (momentum != 0) {
-        reader_defines["MOMENTUM"] = 1;
-        compute_defines["MOMENTUM"] = 1;
-        writer_defines["MOMENTUM"] = 1;
+        reader_defines["MOMENTUM"] = "1";
+        compute_defines["MOMENTUM"] = "1";
+        writer_defines["MOMENTUM"] = "1";
     }
 
     if (momentum_initialized) {
-        reader_defines["MOMENTUM_INITIALIZED"] = 1;
-        compute_defines["MOMENTUM_INITIALIZED"] = 1;
+        reader_defines["MOMENTUM_INITIALIZED"] = "1";
+        compute_defines["MOMENTUM_INITIALIZED"] = "1";
     }
 
     if (nesterov) {
-        reader_defines["NESTEROV"] = 1;
-        compute_defines["NESTEROV"] = 1;
+        reader_defines["NESTEROV"] = "1";
+        compute_defines["NESTEROV"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
@@ -185,7 +185,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         union {
             float f;
             uint32_t u;
-        } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;
+        } u_lr{}, u_momentum{}, u_dampening{}, u_weight_decay{}, u_one{};
         u_lr.f = lr;
         u_momentum.f = momentum;
         u_dampening.f = dampening;
@@ -233,7 +233,7 @@ void MorehSgdOperation::ProgramFactory::override_runtime_arguments(
     auto param_in_buffer = tensor_args.param_in.buffer();
     auto grad_buffer = tensor_args.grad.buffer();
     auto momentum_buffer_in_buffer =
-        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : 0;
+        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : nullptr;
 
     auto param_out_buffer = tensor_return_value.at(0)->buffer();
     auto momentum_buffer_out_buffer = tensor_return_value.at(1)->buffer();

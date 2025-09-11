@@ -18,7 +18,7 @@ struct PageRange {
 
 struct CorePageRange {
     CoreCoord core;
-    PageRange range;
+    PageRange range{};
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(

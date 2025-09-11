@@ -78,7 +78,7 @@ def window_reverse(windows, window_size, height, width, device, put_on_device=Tr
 
 
 def get_shape(shape):
-    """Insert 1's in the begining of shape list until the len(shape) = 4"""
+    """Insert 1's in the beginning of shape list until the len(shape) = 4"""
     if len(shape) <= 4:
         new_shape = [1 for i in range(4 - len(shape))]
         new_shape.extend(shape)

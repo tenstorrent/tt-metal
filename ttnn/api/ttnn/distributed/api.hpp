@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed {
@@ -45,7 +44,5 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 // Combines tensor shards allocated on individual devices into a single multi-device tensor.
 // All tensors shards must be allocated on the same mesh buffer.
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards);
-
-std::vector<int> get_t3k_physical_device_ids_ring();
 
 }  // namespace ttnn::distributed

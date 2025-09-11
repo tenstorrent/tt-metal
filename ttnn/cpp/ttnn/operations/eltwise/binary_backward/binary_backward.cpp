@@ -231,7 +231,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardXlogy::invoke(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad1_result = ttnn::log(other, output_mem_config);
+    Tensor grad1_result = ttnn::log(other, true, output_mem_config);
     grad1_result = ttnn::where(
         ttnn::logical_and(
             ttnn::eqz(input, output_mem_config),

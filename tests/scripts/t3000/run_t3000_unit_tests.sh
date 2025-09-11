@@ -15,18 +15,18 @@ run_t3000_ttmetal_tests() {
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
   ./build/test/tt_metal/distributed/distributed_unit_tests
 
-  echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
+  echo "LOG_METAL: Testing TT_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
 
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleDevice*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQMultiDevice*Fixture.*" ; fail+=$?
-  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
+  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.*:MeshWatcherFixture.*" ; fail+=$?
 
   # Programming examples
   ./build/programming_examples/distributed/distributed_program_dispatch
@@ -43,10 +43,6 @@ run_t3000_ttmetal_tests() {
   fi
 }
 
-run_t3000_dual_rank_big_mesh_tests() {
-  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
-}
-
 run_t3000_ttfabric_tests() {
   # Record the start time
   fail=0
@@ -56,6 +52,11 @@ run_t3000_ttfabric_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+
+  # originally were in TT-NN, now promoted to TT-Metal (Fabric)
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
+  # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
+  TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DFixture.TestUnicast*"
 
   # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
@@ -112,14 +113,28 @@ run_t3000_ttnn_tests() {
 }
 
 run_t3000_tt_metal_multiprocess_tests() {
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
-  tt-run --mpi-args "--allow-run-as-root --tag-output" --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
+  local mpi_args="--allow-run-as-root --tag-output"
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2.yaml
+
+  # Big-Mesh 2x4 Regression tests
+  # Tests are disabled for now due to ND hangs
+  local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
+  #tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTest*"
 }
 
 run_t3000_ttnn_multiprocess_tests() {
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
+  local mpi_args="--allow-run-as-root --tag-output"
+
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
+
+  # Big-Mesh 2x4 Regression tests
+  local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
 }
 
 run_t3000_falcon7b_tests() {
@@ -160,6 +175,10 @@ run_t3000_falcon40b_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_gemma3-small_tests() {
+  pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {
@@ -452,50 +471,34 @@ run_t3000_unet_shallow_tests() {
 
 run_t3000_qwen25_vl_unit_tests() {
   # Record the start time
-  fail=0
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
-  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
-  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+  # Qwen2.5-VL-72B provides good enough coverage for other model variants -- 3B, 32B
+  qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
 
-  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
-    # test_mlp.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 400 || fail=1
-    echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
-    # test_rms_norm.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_rms_norm.py for $qwen_dir on T3K completed"
-    # test_vision_attention.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_attention.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_vision_attention.py for $qwen_dir on T3K completed"
-    # test_vision_block.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_block.py --timeout 600 || fail=1
-    echo "LOG_METAL: Unit tests in test_vision_block.py for $qwen_dir on T3K completed"
-    # test_patch_merger.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_patch_merger.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_patch_merger.py for $qwen_dir on T3K completed"
-    # test_model.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_model.py -k two_layers --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_model.py for $qwen_dir on T3K completed"
-    # test_wrapped_model.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_wrapped_model.py -k two_layers --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_wrapped_model.py for $qwen_dir on T3K completed"
-  done
+  # run unit tests
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
 
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
+
+  # Run ttfabric tests
+  run_t3000_ttfabric_tests
 
   # Run ttnn tests
   run_t3000_ttnn_tests

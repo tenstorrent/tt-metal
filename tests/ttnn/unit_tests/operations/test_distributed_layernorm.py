@@ -8,10 +8,11 @@ import torch
 
 import ttnn
 
-from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull
+from models.utility_functions import tt2torch_tensor, skip_for_grayskull
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
@@ -27,14 +28,17 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
 
 
 def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kernel_config, stats_dtype):
+    pytest.skip(LEGACY_CCL_SKIP)
     # Run layernorm part 1
     if is_rmsnorm:
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
     else:
         tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
 
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    assert False, "Legacy ccl call removed until new implementation is done"
     # AllGather stats
-    tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Run layernorm part 2
     if is_rmsnorm:

@@ -53,7 +53,7 @@ class MeshDeviceData:
         ), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
         linear_index = 0
         for dim in range(len(coordinate.coordinates)):
-            linear_index = linear_index + coordinate.coordinates[dim] * self.shape[dim]
+            linear_index = linear_index + coordinate.coordinates[dim] * (1 if dim == 0 else self.shape[dim - 1])
         return self.devices[linear_index]
 
 

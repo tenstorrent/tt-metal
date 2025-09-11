@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from framework.permutations import *
-from framework.serialize import serialize, serialize_for_postgres
+from framework.serialize import serialize, serialize_structured
 from framework.statuses import VectorValidity, VectorStatus
 from framework.sweeps_logger import sweeps_logger as logger
 
@@ -65,10 +65,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     for i in range(len(vectors)):
         vector = dict()
         for elem in vectors[i].keys():
-            if DATABASE == "postgres":
-                vector[elem] = serialize_for_postgres(vectors[i][elem], warnings)
-            else:
-                vector[elem] = serialize(vectors[i][elem], warnings)
+            vector[elem] = serialize_structured(vectors[i][elem], warnings)
         input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
@@ -156,16 +153,35 @@ def export_suite_vectors(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name):
+def generate_tests(module_name, skip_modules=None):
+    skip_modules_set = set()
+    if skip_modules:
+        skip_modules_set = {name.strip() for name in skip_modules.split(",")}
+        logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
+
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
+            if module_name in skip_modules_set:
+                logger.info(f"Skipping module {module_name} (in skip list).")
+                continue
             logger.info(f"Generating test vectors for module {module_name}.")
-            generate_vectors(module_name)
-            logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
+            try:
+                generate_vectors(module_name)
+                logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
+            except Exception as e:
+                logger.error(f"Failed to generate vectors for module {module_name}: {e}")
+                logger.info(f"Skipping module {module_name} due to import/generation error.\n\n")
     else:
+        if module_name in skip_modules_set:
+            logger.info(f"Skipping module {module_name} (in skip list).")
+            return
         logger.info(f"Generating test vectors for module {module_name}.")
-        generate_vectors(module_name)
+        try:
+            generate_vectors(module_name)
+        except Exception as e:
+            logger.error(f"Failed to generate vectors for module {module_name}: {e}")
+            raise
 
 
 def clean_module(module_name):
@@ -211,7 +227,7 @@ if __name__ == "__main__":
         "--tag",
         required=False,
         default=os.getenv("USER"),
-        help="Custom tag for the vectors you are generating. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
+        help="Custom tag for the vectors you are generating. This is to keep copies separate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
     )
     parser.add_argument("--explicit", required=False, action="store_true")
     parser.add_argument(
@@ -221,10 +237,9 @@ if __name__ == "__main__":
         help="If set, dumps the results to disk in JSON instead of using ES",
     )
     parser.add_argument(
-        "--database",
+        "--skip-modules",
         required=False,
-        default="elastic",
-        help="To specify which database the test results will be stored in. Affects serialization of test vectors.",
+        help="Comma-separated list of module names to skip during generation",
     )
 
     args = parser.parse_args(sys.argv[1:])
@@ -239,9 +254,6 @@ if __name__ == "__main__":
         DUMP_FILE = False
     else:
         DUMP_FILE = True
-
-    global DATABASE
-    DATABASE = args.database
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
@@ -258,4 +270,4 @@ if __name__ == "__main__":
     elif args.clean:
         clean_module(args.module_name)
 
-    generate_tests(args.module_name)
+    generate_tests(args.module_name, args.skip_modules)

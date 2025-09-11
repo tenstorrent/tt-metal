@@ -14,7 +14,6 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
-#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -25,6 +24,7 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
 #include <vector>
 
 #include "assert.hpp"
@@ -32,6 +32,7 @@
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
 #include "fmt/base.h"
+#include "hal_types.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
@@ -57,7 +58,7 @@ using std::uint32_t;
 
 using namespace tt;
 
-#define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
+#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 namespace {
 
@@ -73,20 +74,33 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
-            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
-            case DPRINT_RISCV_INDEX_ER1:
+            case 0: return abbreviated ? "ER" : "ERISC";
+            case 1:
                 return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
-        switch (risc_id) {
-            case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
-            case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
-            case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
-            case DPRINT_RISCV_INDEX_TR2: return abbreviated ? "TR2" : "TRISC2";
-            case DPRINT_RISCV_INDEX_BR:
-                return abbreviated ? "BR" : "BRISC";
-                // Default case falls through and handled at end.
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        auto [processor_class, processor_type] =
+            hal.get_processor_class_and_type_from_index(tt::tt_metal::HalProgrammableCoreType::TENSIX, risc_id);
+        switch (processor_class) {
+            case tt::tt_metal::HalProcessorClassType::DM:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "BR" : "BRISC";
+                    case 1:
+                        return abbreviated ? "NC" : "NCRISC";
+                        // Default case falls through and handled at end.
+                }
+                break;
+            case tt::tt_metal::HalProcessorClassType::COMPUTE:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "TR0" : "TRISC0";
+                    case 1: return abbreviated ? "TR1" : "TRISC1";
+                    case 2:
+                        return abbreviated ? "TR2" : "TRISC2";
+                        // Default case falls through and handled at end.
+                }
+                break;
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
@@ -100,15 +114,10 @@ void AssertSize(uint8_t sz, uint8_t expected_sz) {
         expected_sz);
 }
 
-inline bool RiscEnabled(const CoreDescriptor& core, int risc_index) {
-    uint32_t risc_mask =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
-    if (core.type == CoreType::ETH) {
-        // For ethernet cores, need to adjust the index up since the mask flags are successive. TODO(#17275): move this
-        // logic into HAL?
-        risc_index += DPRINT_NRISCVS;
-    }
-    return risc_mask & (1 << risc_index);
+inline bool RiscEnabled(tt_metal::HalProgrammableCoreType core_type, int risc_index) {
+    const auto& processors =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
+    return processors.contains(core_type, risc_index);
 }
 
 // A null stream for when the print server is muted.
@@ -157,7 +166,7 @@ bool StreamEndsWithNewlineChar(const ostringstream* stream) {
 }  // StreamEndsWithNewlineChar
 
 void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
-    TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
+    TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
     TT_ASSERT(
@@ -363,7 +372,7 @@ void WriteInitMagic(chip_id_t device_id, const CoreCoord& virtual_core, int risc
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
-    tt::llrt::write_hex_vec_to_core(device_id, virtual_core, initbuf, base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, initbuf, base_addr);
 
     // Prevent race conditions during runtime by waiting until the init value is actually written
     // DPrint is only used for debug purposes so this delay should not be a big issue.
@@ -373,10 +382,10 @@ void WriteInitMagic(chip_id_t device_id, const CoreCoord& virtual_core, int risc
     // 4. now we will access wpos at the starting magic which is incorrect
     uint32_t num_tries = 100000;
     while (num_tries-- > 0) {
-        auto result = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, base_addr, 4);
-        if (result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) {
-            return;
-        } else if (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled) {
+        auto result =
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
+        if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
+            (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
             return;
         }
     }
@@ -391,7 +400,7 @@ bool CheckInitMagicCleared(chip_id_t device_id, const CoreCoord& virtual_core, i
     // compute the buffer address for the requested risc
     uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
 
-    auto result = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, base_addr, 4);
+    auto result = tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
 }  // CheckInitMagicCleared
 
@@ -582,7 +591,7 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
+    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
         TT_THROW("Timed out waiting on debug print server to read data.");
     }
 }  // await
@@ -733,8 +742,9 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
         for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
-            if (RiscEnabled(logical_core, risc_index)) {
+            if (RiscEnabled(programmable_core_type, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
@@ -786,8 +796,9 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, logical_core.coord, logical_core.type);
+            auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
             for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_id++) {
-                if (RiscEnabled(logical_core, risc_id)) {
+                if (RiscEnabled(programmable_core_type, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
                         continue;
@@ -796,7 +807,8 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
                     // Check if rpos < wpos, indicating unprocessed prints.
                     constexpr int eightbytes = 8;
                     uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
-                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, eightbytes);
+                    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        chip_id, virtual_core, base_addr, eightbytes);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
@@ -944,7 +956,8 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
     // Device is filling the buffer and in the end waits on host to write rpos
-    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
+    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
     DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
     uint32_t rpos = l->aux.rpos;
     uint32_t wpos = l->aux.wpos;
@@ -989,7 +1002,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                             const uint32_t substr_len = pos_after_newline - cptr;
 
                             // strchr returns nullptr if it encounters a null terminator,
-                            // so we can guarentee that this is valid data since it was
+                            // so we can guarantee that this is valid data since it was
                             // already checked. We don't need to append a '\0' because
                             // the stream operator only takes upto '\0' when passed
                             // a char* (wrt the previous impl)
@@ -1173,7 +1186,8 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
-        tt::llrt::write_hex_vec_to_core(chip_id, virtual_core, rposbuf, base_addr + offs);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            chip_id, virtual_core, rposbuf, base_addr + offs);
 
         // Return true to signal that some print data was read
         return true;
@@ -1219,8 +1233,14 @@ void DPrintServer::Impl::poll_print_data() {
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
                 int risc_count = tt::tt_metal::GetNumRiscs(device_id, logical_core);
+                auto programmable_core_type = get_programmable_core_type(
+                    tt::tt_metal::MetalContext::instance()
+                        .get_cluster()
+                        .get_virtual_coordinate_from_logical_coordinates(
+                            device_id, logical_core.coord, logical_core.type),
+                    device_id);
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-                    if (RiscEnabled(logical_core, risc_index)) {
+                    if (RiscEnabled(programmable_core_type, risc_index)) {
                         try {
                             new_data_this_iter |=
                                 peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter);

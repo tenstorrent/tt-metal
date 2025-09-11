@@ -36,7 +36,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -218,6 +217,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -241,6 +241,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -272,6 +273,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -299,6 +301,7 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -322,6 +325,7 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -345,6 +349,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -368,6 +373,7 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -424,6 +430,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
@@ -488,6 +495,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -522,6 +530,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -556,6 +565,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -590,6 +600,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -624,6 +635,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -734,6 +746,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
@@ -808,8 +821,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
 
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-
     // Run the test
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
@@ -839,6 +850,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }

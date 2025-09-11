@@ -323,8 +323,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             .set_page_size(src0_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     uint32_t output_H = input_shape[dims[rank - 2]];
     uint32_t element_size = input_tensor.element_size();
 

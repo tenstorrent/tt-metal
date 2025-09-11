@@ -5,18 +5,22 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "device/moe_expert_token_remap_device_operation.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
 
 struct ExecuteMoeExpertTokenRemap {
-    static ttnn::Tensor invoke(
+    static constexpr auto REDUCTION_SIZE = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE;
+    static std::vector<ttnn::Tensor> invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_reduced_tensor = std::nullopt,
+        uint32_t reduction_size = REDUCTION_SIZE);
 };
 
 }  // namespace operations::data_movement

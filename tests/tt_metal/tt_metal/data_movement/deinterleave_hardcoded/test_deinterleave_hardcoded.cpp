@@ -11,8 +11,7 @@
 namespace tt::tt_metal {
 
 using namespace std;
-using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::deinterleave_hardcoded {
 
@@ -21,9 +20,9 @@ constexpr uint32_t START_ID = 200;
 // Test config, i.e. test parameters
 struct DeinterleaveConfig {
     uint32_t test_id = 0;
-    std::vector<CoreRangeSet> dest_core_set;
-    std::vector<std::vector<uint32_t>> dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> dest_core_runtime_args;
+    vector<CoreRangeSet> dest_core_set;
+    vector<vector<uint32_t>> dest_core_compile_args;
+    vector<vector<uint32_t>> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
 };
 
@@ -51,34 +50,37 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
     }
 
     // Assign unique id
-    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    // Launch program
+    // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    tt::tt_metal::detail::LaunchProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
 TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
-    if (arch_ != tt::ARCH::WORMHOLE_B0) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
+
+    if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::deinterleave_hardcoded::START_ID + 0;
     NOC noc_id = NOC::NOC_0;
-    std::vector<CoreRangeSet> send_dest_core_set;
-    std::vector<std::vector<uint32_t>> send_dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> send_dest_core_runtime_args;
+    vector<CoreRangeSet> send_dest_core_set;
+    vector<vector<uint32_t>> send_dest_core_compile_args;
+    vector<vector<uint32_t>> send_dest_core_runtime_args;
 
     {
-        std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
+        set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
         CoreRangeSet wrapper_dest_core_set(dest_core_set);
-        std::vector<uint32_t> dest_core_compile_args;
-        std::vector<uint32_t> dest_core_runtime_args;
+        vector<uint32_t> dest_core_compile_args;
+        vector<uint32_t> dest_core_runtime_args;
 
         dest_core_compile_args.push_back(0);        // src_cb_id
         dest_core_compile_args.push_back(1);        // dst_cb_id
@@ -126,33 +128,34 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-        }
+        EXPECT_TRUE(run_dm(device, test_config));
     }
 }
 
 TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
-    if (arch_ != tt::ARCH::WORMHOLE_B0) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
+
+    if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::deinterleave_hardcoded::START_ID + 1;
     NOC noc_id = NOC::NOC_0;
-    std::vector<CoreRangeSet> send_dest_core_set;
-    std::vector<std::vector<uint32_t>> send_dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> send_dest_core_runtime_args;
+    vector<CoreRangeSet> send_dest_core_set;
+    vector<vector<uint32_t>> send_dest_core_compile_args;
+    vector<vector<uint32_t>> send_dest_core_runtime_args;
 
     uint32_t offset_y_part_count = 0;
     uint32_t offset_y_part2_count = 0;
 
     for (uint32_t x = 0; x < 8; x++) {
         for (uint32_t y = 0; y < 8; y++) {
-            std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(x, y))};
+            set<CoreRange> dest_core_set = {CoreRange(CoreCoord(x, y))};
             CoreRangeSet wrapper_dest_core_set(dest_core_set);
-            std::vector<uint32_t> dest_core_compile_args;
-            std::vector<uint32_t> dest_core_runtime_args;
+            vector<uint32_t> dest_core_compile_args;
+            vector<uint32_t> dest_core_runtime_args;
 
             if (x >= 4) {
                 if (y == 3) {
@@ -220,9 +223,7 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-        }
+        EXPECT_TRUE(run_dm(device, test_config));
     }
 }
 

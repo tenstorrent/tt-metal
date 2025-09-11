@@ -9,7 +9,6 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
-    tt_adaptive_to_max_pool2d,
     ttnn_custom_normalize,
     ttnn_decode_bboxes,
 )
@@ -74,7 +73,7 @@ class TtConv:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="",
+            activation=None,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
@@ -93,7 +92,7 @@ class TtConv:
             conv_config.shard_layout = None
 
         if self.is_act_false != True:
-            conv_config.activation = "silu"
+            conv_config.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
@@ -432,7 +431,7 @@ class TtMaxSigmoidAttnBlock:
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
 
         aw = ttnn.max(aw, dim=-1, keepdim=True)
-        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
+        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the performance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
         aw = aw + ttnn.reshape(self.bias, (1, -1, 1, 1))
@@ -572,7 +571,7 @@ class TtImagePoolingAttn:
             )
             for i, in_channels in enumerate(ch)
         ]
-        self.im_pools = [ttnn.max_pool2d for i in range(nf)]
+
         self.ec = ec
         self.nh = nh
         self.nf = nf
@@ -589,42 +588,20 @@ class TtImagePoolingAttn:
         x = [
             ttnn.to_layout(
                 ttnn.reshape(
-                    pool(
+                    ttnn.adaptive_max_pool2d(
                         input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
                         batch_size=1,
                         input_h=int(math.sqrt(x.shape[2])),
                         input_w=int(math.sqrt(x.shape[2])),
                         channels=x.shape[-1],
-                        kernel_size=[
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[0],
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[0],
-                        ],
-                        stride=[
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[1],
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[1],
-                        ],
-                        padding=[0, 0],
-                        dilation=[1, 1],
+                        output_size=(3, 3),
                         memory_config=ttnn.L1_MEMORY_CONFIG,
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     ),
                     (bs, num_patches, -1),
                 ),
                 layout=ttnn.TILE_LAYOUT,
             )
-            for (x, pool) in zip(x, self.im_pools)
+            for x in x
         ]
         x = concat(x, dim=1, use_sharded_concat=False)
         q = ttnn.clone(text)
@@ -729,7 +706,7 @@ class TtDFL:
         x = ttnn.softmax(x, dim=-1)
 
         x, _, _ = self.conv(x)
-        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the perfomance of below reshape operation
+        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the performance of below reshape operation
         x = ttnn.reshape(x, (x.shape[0], 4, -1))
         return x
 

@@ -21,9 +21,34 @@ class default_setup(metaclass=MergeMetaclass):
         "NCRISC",
         "TRISC",
         "ERISC",
+        "CORE_AGG",
     ]
 
     timerAnalysis = {
+        "trace_fw_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+        },
+        "trace_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+        },
+        "trace2trace - FW": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-FW"},
+        },
+        "trace2trace - kernel": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-KERNEL"},
+        },
         "op2op": {
             "across": "core",
             "type": "adjacent",
@@ -275,11 +300,89 @@ class test_full_buffer(default_setup):
 
 class test_dispatch_cores(default_setup):
     timerAnalysis = {
-        "Tensix CQ Dispatch": {
+        "Tensix CQ Dispatch Write Offset": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
-            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
+            "start": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_SET_WRITE_OFFSET:0:CQ_DISPATCH_CMD_SET_WRITE_OFFSET",
+            },
+            "end": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_SET_WRITE_OFFSET:0:CQ_DISPATCH_CMD_SET_WRITE_OFFSET",
+            },
+        },
+        "Tensix CQ Dispatch Terminate": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_TERMINATE"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_TERMINATE"},
+        },
+        "Tensix CQ Dispatch Wait": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WAIT"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WAIT"},
+        },
+        "Tensix CQ Dispatch Write Linear": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_LINEAR"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_LINEAR"},
+        },
+        "Tensix CQ Dispatch Write Linear H Host": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST"},
+        },
+        "Tensix CQ Dispatch Write Packed Large Type Program Binaries": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:0:CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES",
+            },
+            "end": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:0:CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES",
+            },
+        },
+        "Tensix CQ Dispatch Write Packed Flag Type Event": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED:0:CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT",
+            },
+            "end": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED:0:CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT",
+            },
+        },
+        "Tensix CQ Dispatch Write Packed Flag Type Launch": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED:0:MCAST;CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH",
+            },
+            "end": {
+                "risc": "BRISC",
+                "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PACKED:0:MCAST;CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH",
+            },
+        },
+        "Tensix CQ Dispatch Write Paged": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PAGED"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_CMD_WRITE_PAGED"},
+        },
+        "Tensix CQ Dispatch Notify Subordinate Go Signal": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH:0:CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL"},
         },
         "Tensix CQ Prefetch": {
             "across": "core",

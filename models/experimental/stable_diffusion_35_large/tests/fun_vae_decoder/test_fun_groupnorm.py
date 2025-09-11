@@ -10,7 +10,7 @@ from loguru import logger
 from ...tt.fun_vae_decoder.fun_group_norm import TtGroupNormParameters, vae_group_norm
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_allclose, comp_pcc
-from ...tt.parallel_config import StableDiffusionParallelManager
+from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
 import tracy
 import time
 
@@ -94,7 +94,15 @@ def test_group_norm(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
     )
-    device = parallel_manager.vae_parallel_config.device
+    vae_device = parallel_manager.submesh_devices[0]
+
+    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
+        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
+        logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
+        vae_device.reshape(ttnn.MeshShape(1, 4))
+    vae_parallel_config = create_vae_parallel_config(vae_device, parallel_manager)
+
     # torch_dtype = torch.float32
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
@@ -108,7 +116,7 @@ def test_group_norm(
 
     parameters = TtGroupNormParameters.from_torch(
         torch_model,
-        parallel_config=parallel_manager.vae_parallel_config,
+        parallel_config=vae_parallel_config,
         mesh_sharded_input=sharded_input,
         allow_sharded_compute=True,
         core_grid=core_grid,
@@ -117,11 +125,9 @@ def test_group_norm(
     tt_inp = ttnn.from_torch(
         inp.permute(0, 2, 3, 1),
         dtype=ttnn_dtype,
-        device=parallel_manager.vae_parallel_config.device,
+        device=vae_parallel_config.device,
         # mesh_mapper=ttnn.ReplicateTensorToMesh(parallel_manager.vae_parallel_config.device),
-        mesh_mapper=ttnn.ShardTensorToMesh(parallel_manager.vae_parallel_config.device, dim=-1)
-        if sharded_input
-        else None,
+        mesh_mapper=ttnn.ShardTensorToMesh(vae_parallel_config.device, dim=-1) if sharded_input else None,
         layout=ttnn.TILE_LAYOUT,
     )
 

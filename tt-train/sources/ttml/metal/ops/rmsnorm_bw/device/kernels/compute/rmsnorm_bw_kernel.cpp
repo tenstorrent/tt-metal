@@ -63,7 +63,7 @@ inline void compute_gained_dL_dout(uint32_t col, uint32_t working_register, uint
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, col, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(working_register, tile_register);
+    mul_binary_tile(working_register, tile_register, working_register);
 }
 
 inline void compute_dL_da(
@@ -86,17 +86,17 @@ inline void compute_dL_da(
     copy_tile_init(cb_recip_rms_a_bcasted_idx);
     copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
     copy_tile_init(cb_scaler_idx);
     copy_tile(cb_scaler_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
 
     // Compute final result: dL_da = gained_dL_dout - rhs
     compute_gained_dL_dout(input_tile_idx, dL_da_register, tile_register);
     sub_binary_tile_init();
-    sub_binary_tile(dL_da_register, rhs_register);
+    sub_binary_tile(dL_da_register, rhs_register, dL_da_register);
 }
 
 inline void compute_dL_dgamma_components(
@@ -119,7 +119,7 @@ inline void compute_dL_dgamma_components(
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, /* tile_idx */ input_tile_idx, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(dL_dg_components_register, tile_register);
+    mul_binary_tile(dL_dg_components_register, tile_register, dL_dg_components_register);
 }
 
 // ============================================================================
@@ -157,7 +157,7 @@ inline void compute_scale(const uint32_t row) {
     cb_wait_front(cb_dL_out_idx, Wt);
     cb_wait_front(cb_input_idx, Wt);
     for (uint32_t col = 0; col < Wt; col++) {
-        // If col == 0, we use scale_register as the working register to aviod unnecessary copying of data.
+        // If col == 0, we use scale_register as the working register to avoid unnecessary copying of data.
         auto working_register = col == 0 ? scale_register : intermediate_register;
 
         compute_gained_dL_dout(col, working_register, tile_register);
@@ -166,7 +166,7 @@ inline void compute_scale(const uint32_t row) {
         copy_tile_init(cb_input_idx);
         copy_tile(cb_input_idx, col, tile_register);
         mul_binary_tile_init();
-        mul_binary_tile(working_register, tile_register);
+        mul_binary_tile(working_register, tile_register, working_register);
 
         // Mask the tile if needed
         if constexpr (do_mask_w) {
@@ -185,7 +185,7 @@ inline void compute_scale(const uint32_t row) {
         // Add scale_components to scale
         if (col > 0) {
             add_binary_tile_init();
-            add_binary_tile(scale_register, working_register);
+            add_binary_tile(scale_register, working_register, scale_register);
         }
     }
     tile_regs_commit();
@@ -193,7 +193,7 @@ inline void compute_scale(const uint32_t row) {
     pack_and_push(scale_register, cb_scale_idx);
 
     cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reducted_scale_register = 0U;
+    const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // Reduce scale along the inner dimension (C).
@@ -207,13 +207,13 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reducted_scale_register,
+        reduced_scale_register,
         /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
     cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reducted_scale_register, cb_scale_idx);
+    pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 #else
 inline void compute_scale(const uint32_t row) {
@@ -230,7 +230,7 @@ inline void compute_scale(const uint32_t row) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_input_idx, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
-            // If col == 0, we use scale_register as the working register to aviod unnecessary copying of data.
+            // If col == 0, we use scale_register as the working register to avoid unnecessary copying of data.
             auto working_register = col == 0 ? scale_register : intermediate_register;
 
             compute_gained_dL_dout(block_idx, working_register, tile_register);
@@ -239,7 +239,7 @@ inline void compute_scale(const uint32_t row) {
             copy_tile_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, tile_register);
             mul_binary_tile_init();
-            mul_binary_tile(working_register, tile_register);
+            mul_binary_tile(working_register, tile_register, working_register);
 
             // Mask the tile if needed
             if constexpr (do_mask_w) {
@@ -259,7 +259,7 @@ inline void compute_scale(const uint32_t row) {
             // Add scale_components to scale
             if (col > 0) {
                 add_binary_tile_init();
-                add_binary_tile(scale_register, working_register);
+                add_binary_tile(scale_register, working_register, scale_register);
             }
         }
         // Pop tiles that are not needed anymore.
@@ -272,7 +272,7 @@ inline void compute_scale(const uint32_t row) {
     pack_and_push(scale_register, cb_scale_idx);
 
     cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reducted_scale_register = 0U;
+    const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // Reduce scale along the inner dimension (C).
@@ -286,13 +286,13 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reducted_scale_register,
+        reduced_scale_register,
         /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
     cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reducted_scale_register, cb_scale_idx);
+    pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
@@ -326,7 +326,7 @@ inline void MAIN {
         cb_wait_front(cb_recip_rms_a_bcasted_idx, onetile);
         // To compute scale we must iterate over all inner dimension.
         compute_scale(row);
-        // Wait for the reducted cb_scale to be ready.
+        // Wait for the reduced cb_scale to be ready.
         cb_wait_front(cb_scale_idx, onetile);
         bcast_scale();
         cb_wait_front(cb_scale_bcasted_idx, onetile);

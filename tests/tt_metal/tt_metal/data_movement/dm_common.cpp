@@ -4,6 +4,7 @@
 
 #include "dm_common.hpp"
 #include "device_fixture.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 
 namespace tt::tt_metal::unit_tests::dm {
@@ -15,10 +16,12 @@ namespace tt::tt_metal::unit_tests::dm {
 uint32_t runtime_host_id = 0;
 
 // Static function for internal use only
-static uint32_t obtain_page_size_bytes(tt::ARCH arch) { return (arch == tt::ARCH::BLACKHOLE) ? 64 : 32; }
+static uint32_t obtain_page_size_bytes(ARCH arch) { return (arch == ARCH::BLACKHOLE) ? 64 : 32; }
 
-L1AddressInfo get_l1_address_and_size(const IDevice* device, const CoreCoord& core_coord) {
+L1AddressInfo get_l1_address_and_size(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& core_coord) {
     // Obtaining L1 address and size for a specific core //
+    const IDevice* device = mesh_device->get_device(0);
 
     CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
 
@@ -32,17 +35,23 @@ L1AddressInfo get_l1_address_and_size(const IDevice* device, const CoreCoord& co
     // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
 }
 
-DramAddressInfo get_dram_address_and_size(const IDevice* device) {
+DramAddressInfo get_dram_address_and_size(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Obtaining DRAM address and size //
 
-    auto dram_base_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    uint32_t dram_size = tt::tt_metal::MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
+    auto dram_base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_size = MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
 
     return {dram_base_address, dram_size};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(const tt::ARCH arch, const IDevice* device) {
-    auto [_, max_transmittable_bytes] = get_l1_address_and_size(device);
+std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
+    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    const IDevice* device = mesh_device->get_device(0);
+    ARCH arch = device->arch();
+
+    // Use core {0,0} as representative core for computing physical constraints
+    CoreCoord representative_core = {0, 0};
+    auto [_, max_transmittable_bytes] = get_l1_address_and_size(mesh_device, representative_core);
     uint32_t bytes_per_page = obtain_page_size_bytes(arch);
     uint32_t max_transmittable_pages = max_transmittable_bytes / bytes_per_page;
 

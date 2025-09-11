@@ -99,7 +99,8 @@ bool reader_kernel_no_send(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -114,7 +115,8 @@ bool reader_kernel_no_send(
 
     fixture->RunProgram(device, program);
 
-    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
+    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << eth_noc_xy.str() << std::endl;
@@ -161,7 +163,8 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, inputs, eth_l1_byte_address);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), eth_noc_xy, inputs, eth_l1_byte_address);
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
@@ -264,16 +267,19 @@ bool noc_reader_and_writer_kernels(
     tt_metal::detail::WriteToBuffer(reader_dram_buffer, reader_inputs);
 
     auto writer_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, writer_inputs, eth_src_l1_address);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), eth_noc_xy, writer_inputs, eth_src_l1_address);
 
     // Clear expected values at output locations
     std::vector<uint32_t> all_zeros(byte_size / sizeof(uint32_t), 0);
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
     tt_metal::detail::WriteToBuffer(writer_dram_buffer, all_zeros);
 
     tt_metal::detail::LaunchProgram(device, program);
 
-    auto eth_readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
+    auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
     pass &= (eth_readback_vec == reader_inputs);
     if (not pass) {
         log_info(

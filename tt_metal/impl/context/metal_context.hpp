@@ -10,7 +10,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "dev_msgs.h"
+#include "tt_metal/hw/inc/dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
@@ -30,6 +30,7 @@ class ControlPlane;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {
+struct ProfilerStateManager;
 
 namespace inspector {
 class Data;
@@ -62,13 +63,14 @@ public:
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
+    std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
+
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
         uint8_t num_hw_cqs,
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
         bool minimal = false);
-    void reinitialize();
     void teardown();
 
     // Control plane accessors
@@ -82,11 +84,17 @@ public:
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        std::optional<uint8_t> num_routing_planes = std::nullopt);
+        std::optional<uint8_t> num_routing_planes = std::nullopt,
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
     void initialize_fabric_config();
+    void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
-    distributed::multihost::DistributedContext& get_distributed_context();
+    distributed::multihost::DistributedContext& global_distributed_context();
+
+    // Fabric tensix configuration
+    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
+    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -101,6 +109,13 @@ private:
 
     void reset_cores(chip_id_t device_id);
     void assert_cores(chip_id_t device_id);
+
+    // Returns the ERISC Launch Flag address
+    uint32_t get_active_erisc_launch_flag_addr();
+    // Returns true if metal firmware or a kernel is running on the virtual ethernet core
+    bool erisc_app_still_running(chip_id_t device_id, CoreCoord virtual_core);
+    // Send a message to exit the erisc app
+    void erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth);
 
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord);
@@ -143,9 +158,11 @@ private:
     std::unique_ptr<inspector::Data> inspector_data_;
     std::unique_ptr<DPrintServer> dprint_server_;
     std::unique_ptr<WatcherServer> watcher_server_;
+    std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it

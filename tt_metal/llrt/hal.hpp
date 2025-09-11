@@ -9,18 +9,22 @@
 // level APIs
 //
 
+#include <sys/types.h>
+#include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <type_traits>
+#include <ostream>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "tt_memory.h"
+#include "hal/generated/dev_msgs.hpp"
 
 #include <tt_stl/overloaded.hpp>
 
@@ -32,6 +36,48 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
+
+// Struct of core type, processor class, and processor type to uniquely identify any processor.
+struct HalProcessorIdentifier {
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX;
+    HalProcessorClassType processor_class = HalProcessorClassType::DM;
+    int processor_type = 0;
+};
+
+std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
+bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// A set of processors distinguishing programmable core type and index within that core type.
+// See get_processor_index and get_processor_class_and_type_from_index.
+class HalProcessorSet {
+private:
+    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
+
+public:
+    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
+        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
+    }
+    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
+        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
+    }
+    bool empty() const {
+        for (const auto& mask : masks_) {
+            if (mask != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Returns the bitmask of processors for the given core type.
+    // Bit i set <=> processor index i is in the set.
+    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
+        return masks_[static_cast<size_t>(core_type)];
+    }
+};
+
+// Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -60,8 +106,22 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Heartbeat counter
+    HEARTBEAT,
     // Number of mailbox message types
     COUNT,
+};
+
+// Query dispatch related features depending on the arch
+enum class DispatchFeature : uint8_t {
+    // Ethernet Firmware supports the usage of the mailbox API
+    ETH_MAILBOX_API,
+    // Dispatch to Active ethernet cores utilize a kernel config buffer
+    DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Idle ethernet cores utilize a kernel config buffer
+    DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Tensix cores utilize a kernel config buffer
+    DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
 };
 
 class Hal;
@@ -80,6 +140,7 @@ private:
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
+    dev_msgs::Factory dev_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -90,14 +151,18 @@ public:
         const std::vector<uint32_t>& mem_map_sizes,
         const std::vector<uint32_t>& eth_fw_mailbox_msgs,
         bool supports_cbs,
-        bool supports_receiving_multicast_cmds);
+        bool supports_receiving_multicast_cmds,
+        dev_msgs::Factory dev_msgs_factory);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
+    uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
 template <typename T>
@@ -117,7 +182,9 @@ inline uint32_t HalCoreInfoType::get_processor_classes_count() const { return th
 
 inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_class_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    return this->processor_classes_[processor_class_idx].size();
+    uint32_t count = this->processor_classes_[processor_class_idx].size();
+    TT_ASSERT(count <= MAX_PROCESSOR_TYPES_COUNT);
+    return count;
 }
 
 inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
@@ -127,16 +194,52 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
 
+inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
+
+// HalJitBuildQueryInterface is an interface for querying arch-specific build options.
+// These are generated on demand instead of stored in HalJitBuildConfig,
+// as the options may vary based on fw build or kernel build.
+class HalJitBuildQueryInterface {
+public:
+    // The results from this query interface may vary based on these parameters.
+    struct Params {
+        bool is_fw;
+        HalProgrammableCoreType core_type;
+        HalProcessorClassType processor_class;
+        uint32_t processor_id;
+    };
+    virtual ~HalJitBuildQueryInterface() = default;
+    // Returns a list of objects to be linked; these were compiled offline.
+    // Paths are relative to the tt-metal root.
+    virtual std::vector<std::string> link_objs(const Params& params) const = 0;
+    // Returns a list of includes paths to be added to compiler command line.
+    virtual std::vector<std::string> includes(const Params& params) const = 0;
+    // Returns a list of defines to be added to compiler command line.
+    virtual std::vector<std::string> defines(const Params& params) const = 0;
+    // Returns a list of source files to be added to compiler command line.
+    virtual std::vector<std::string> srcs(const Params& params) const = 0;
+    // Returns a string of common flags to be added to compiler and linker command lines.
+    virtual std::string common_flags(const Params& params) const = 0;
+    // Returns the path to the linker script, relative to the tt-metal root.
+    virtual std::string linker_script(const Params& params) const = 0;
+    // Returns the target name for the build.
+    // Note: this is added only to keep the target names consistent with the previous
+    // implementation of build, to avoid breaking users / tools.
+    // We can migrate build to use arch-independent target names, and then this can be removed.
+    virtual std::string target_name(const Params& params) const = 0;
+};
+
 class Hal {
 public:
-    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
-    using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
+    using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
+    using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
 
 private:
     tt::ARCH arch_;
@@ -147,27 +250,27 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
-    uint32_t num_nocs_;
-    uint32_t noc_addr_node_id_bits_;
+    uint32_t num_nocs_{};
+    uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
     uint32_t noc_encoding_reg_ = 0;
-    uint32_t noc_coord_reg_offset_;
-    uint32_t noc_overlay_start_addr_;
-    uint32_t noc_stream_reg_space_size_;
-    uint32_t noc_stream_remote_dest_buf_size_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_start_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_;
+    uint32_t noc_coord_reg_offset_{};
+    uint32_t noc_overlay_start_addr_{};
+    uint32_t noc_stream_reg_space_size_{};
+    uint32_t noc_stream_remote_dest_buf_size_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
-    bool coordinate_virtualization_enabled_;
-    uint32_t virtual_worker_start_x_;
-    uint32_t virtual_worker_start_y_;
-    bool eth_fw_is_cooperative_ = false;        // set when eth riscs have to context switch
+    bool coordinate_virtualization_enabled_{};
+    uint32_t virtual_worker_start_x_{};
+    uint32_t virtual_worker_start_y_{};
+    bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
-    HalTensixHarvestAxis tensix_harvest_axis_;
+    HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -190,6 +293,8 @@ private:
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
+    DispatchFeatureQueryFunc device_features_func_;
+    std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -248,9 +353,12 @@ public:
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+
+    bool get_supports_eth_fw_mailbox() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
-    uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
+    uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
+    uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -259,6 +367,12 @@ public:
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
+    // Query device features. Returns true if the feature is enabled.
+    bool get_dispatch_feature_enabled(DispatchFeature feature) const { return this->device_features_func_(feature); }
+    // Returns true if kernel binaries for a given core type are stored in the config buffer
+    // Note, binaries which are not stored in the config buffer are written directly to L1 at the text start address.
+    // This value can be found in the ELF file.
+    bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -283,14 +397,27 @@ public:
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Returns the processor index within a core.  There is a 1-1 mapping between
+    // (processor_class, processor_type) and processor_index.  This is useful
+    // For indexing data structures on devices (only 1-d arrays are needed).
+    // Should only be used internally and not expose this index to the user.
+    uint32_t get_processor_index(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx) const;
+    // Inverse function of get_processor_index.
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
+    // Parses a string representation of a set of processor names (used by env vars).
+    HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
-        return relocate_func_(addr, local_init_addr);
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
+        return relocate_func_(addr, local_init_addr, has_shared_local_mem);
     }
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
@@ -299,6 +426,17 @@ public:
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
+
+    const HalJitBuildQueryInterface& get_jit_build_query() const {
+        TT_ASSERT(jit_build_query_ != nullptr);
+        return *jit_build_query_;
+    }
+
+    const dev_msgs::Factory& get_dev_msgs_factory(HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_dev_msgs_factory();
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -426,6 +564,19 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
     }
     return num_riscs;
 }
+inline uint32_t Hal::get_processor_index(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    uint32_t processor_type_idx) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_index(processor_class, processor_type_idx);
+}
+
+inline std::pair<HalProcessorClassType, uint32_t> Hal::get_processor_class_and_type_from_index(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_and_type_from_index(processor_index);
+}
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
@@ -435,14 +586,18 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 
+inline bool Hal::get_supports_eth_fw_mailbox() const {
+    return this->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) != 0;
+}
+
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
 }
 
-inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const {
-    return this->eth_fw_arg_addr_func_(arg_index);
+inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
+    return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
@@ -452,8 +607,32 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
 }
 
+inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    // Index 0 is the offset of the mailbox message
+    return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
+}
+
+inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const {
+    switch (programmable_core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::IDLE_ETH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
+    }
+}
+
 }  // namespace tt_metal
 }  // namespace tt
+
+template <>
+struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
+    std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
+};
 
 #define HAL_MEM_L1_BASE                                          \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \

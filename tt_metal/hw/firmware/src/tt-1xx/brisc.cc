@@ -85,6 +85,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
@@ -256,33 +257,33 @@ inline void deassert_ncrisc_trisc() {
     deassert_all_reset();
 }
 
-inline void run_triscs(dispatch_core_processor_masks enables) {
+inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
 
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0))) {
         mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
         mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
         mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
-inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables) {
+inline void start_ncrisc_kernel_run_early(uint32_t enables) {
     // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
     // kernel running. We delay it until later to give the NCRISC time to load
     // CBs before we wait on it.
 #if !defined(ARCH_WORMHOLE)
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
-inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
+inline void start_ncrisc_kernel_run(uint32_t enables) {
 #if defined(ARCH_WORMHOLE)
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
         while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
@@ -346,7 +347,7 @@ int main() {
 
     // Wait for all cores to be finished initializing before reporting initialization done.
     wait_ncrisc_trisc();
-    mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
@@ -357,6 +358,7 @@ int main() {
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
+    DeviceProfilerInit();
     while (1) {
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
@@ -366,7 +368,7 @@ int main() {
         // before mcasting the launch message (as a hang workaround), which
         // ensures that the unicast data will also have been received.
         while (
-            ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) &&
+            ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
@@ -376,12 +378,14 @@ int main() {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    DeviceTraceProfilerInit();
+                    uint32_t go_message_index = mailboxes->go_message_index;
                     // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                     // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
                     // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
                     // is not issued.
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
                     // Notify dispatcher that this has been done
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     notify_dispatch_core_done(dispatch_addr, noc_index);
@@ -400,10 +404,10 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
-            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+            if (enables &
+                (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
                 mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
@@ -447,7 +451,8 @@ int main() {
 
             // Run the BRISC kernel
             WAYPOINT("R");
-            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
+            int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+            if (enables & (1u << index)) {
                 uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
                 setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                 cb_l1_base =
@@ -457,7 +462,6 @@ int main() {
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
-                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -512,7 +516,8 @@ int main() {
             }
 #endif
 
-            mailboxes->go_message.signal = RUN_MSG_DONE;
+            uint32_t go_message_index = mailboxes->go_message_index;
+            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -520,7 +525,7 @@ int main() {
                 // if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch

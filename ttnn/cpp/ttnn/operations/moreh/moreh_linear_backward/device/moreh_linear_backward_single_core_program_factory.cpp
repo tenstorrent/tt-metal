@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -80,8 +81,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(is_dram(output_grad))};
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";

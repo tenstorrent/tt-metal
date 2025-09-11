@@ -135,6 +135,16 @@ tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoi
 
 namespace std {
 
+std::size_t hash<tt::tt_metal::distributed::SocketConnection>::operator()(
+    const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
+}
+
+std::size_t hash<tt::tt_metal::distributed::MeshCoreCoord>::operator()(
+    const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+}
+
 std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
     const tt::tt_metal::distributed::SocketConfig& config) const noexcept {
     std::optional<tt::tt_metal::distributed::multihost::Rank> distributed_context_rank = std::nullopt;

@@ -48,9 +48,6 @@ int main() {
     std::shared_ptr<Buffer> src_dram_buffer = CreateBuffer(dram_config);  // Input buffer
     std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);  // Output buffer
 
-    const bool input_tensor_is_dram = src_dram_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_tensor_is_dram = dst_dram_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     // Core synchronization semaphore setup
     const uint32_t sem_id = CreateSemaphore(program, sem_core_range, 0);
 

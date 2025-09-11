@@ -33,7 +33,13 @@ def test_wrapped_vision_model_inference(
     reset_seeds,
     ensure_gc,
     num_layers,
+    is_ci_env,
+    request,
 ):
+    test_id = request.node.callspec.id
+    if is_ci_env and "two_layers" not in test_id:
+        pytest.skip("CI only runs the two_layers test")
+
     dtype = ttnn.bfloat8_b
     pcc = (
         0.99 if num_layers and num_layers <= 3 else 0.91

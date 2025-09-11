@@ -59,6 +59,7 @@ bool runTest(
     // If we need more sofphisticate tuning, we should add tags to the
     // body of the file itself.
     auto pos = path.find_last_of('.');
+    // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
         continue;
     }
@@ -68,8 +69,8 @@ bool runTest(
         }
         expected |= 0x4000;
     }
-    std::vector<uint32_t> args =
-        tt::llrt::read_hex_vec_from_core(mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
+    std::vector<uint32_t> args = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
     unsigned result = args[0];
     bool pass = result == expected;
     if (pass) {

@@ -3,9 +3,11 @@
 
 import statistics
 import pytest
+from loguru import logger
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 
 @pytest.mark.parametrize(
@@ -45,8 +47,25 @@ def test_sd35_performance(
     topology,
     num_links,
     model_location_generator,
+    is_ci_env,
+    galaxy_type,
 ) -> None:
     """Performance test for SD35 pipeline with detailed timing analysis."""
+
+    if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            profiler = BenchmarkProfiler()
+            with profiler("run", iteration=0):
+                pass
+
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
+        pytest.skip("4U is not supported for this test")
 
     # Setup parallel manager
     cfg_factor, cfg_axis = cfg
@@ -155,12 +174,8 @@ def test_sd35_performance(
     # Performance measurement runs
     print("Running performance measurement iterations...")
     all_timings = []
+    profiler = BenchmarkProfiler()
 
-    from tracy import Profiler
-
-    profiler = Profiler()
-
-    profiler.enable()
     for i in range(3):
         print(f"Performance run {i+1}/3...")
 
@@ -169,23 +184,23 @@ def test_sd35_performance(
         pipeline.timing_collector = timer
 
         # Run pipeline
-        images = pipeline(
-            prompt_1=[prompts[i + 1]],
-            prompt_2=[prompts[i + 1]],
-            prompt_3=[prompts[i + 1]],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
-            num_inference_steps=num_inference_steps,
-            seed=0,
-            traced=True,
-        )
+        with profiler("run", iteration=i):
+            images = pipeline(
+                prompt_1=[prompts[i + 1]],
+                prompt_2=[prompts[i + 1]],
+                prompt_3=[prompts[i + 1]],
+                negative_prompt_1=[negative_prompt],
+                negative_prompt_2=[negative_prompt],
+                negative_prompt_3=[negative_prompt],
+                num_inference_steps=num_inference_steps,
+                seed=0,
+                traced=True,
+            )
         images[0].save(f"sd35_{image_w}_{image_h}_run{i}.png")
         # Collect timing data
         timing_data = timer.get_timing_data()
         all_timings.append(timing_data)
 
-    profiler.disable()
     # Calculate statistics
     clip_times = [t.clip_encoding_time for t in all_timings]
     t5_times = [t.t5_encoding_time for t in all_timings]
@@ -249,6 +264,61 @@ def test_sd35_performance(
 
     # Clean up
     pipeline.timing_collector = None
+
+    # Validate performance
+    measurements = {
+        "clip_encoding_time": statistics.mean(clip_times),
+        "t5_encoding_time": statistics.mean(t5_times),
+        "total_encoding_time": statistics.mean(total_encoding_times),
+        "denoising_steps_time": total_denoising_time,
+        "vae_decoding_time": statistics.mean(vae_times),
+        "total_time": statistics.mean(total_times),
+    }
+    if tuple(mesh_device.shape) == (2, 4):
+        expected_metrics = {
+            "clip_encoding_time": 0.09,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.2,
+            "denoising_steps_time": 10,
+            "vae_decoding_time": 2.3,
+            "total_time": 12.3,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        expected_metrics = {
+            "clip_encoding_time": 0.17,
+            "t5_encoding_time": 0.13,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 4,
+            "vae_decoding_time": 1.65,
+            "total_time": 6.2,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    if is_ci_env:
+        # In CI, dump a performance report
+        profiler_model_name = (
+            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+        )
+        benchmark_data = BenchmarkData()
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="sd35_traced",
+            ml_model_name=profiler_model_name,
+        )
+
+    pass_perf_check = True
+    for k in expected_metrics.keys():
+        if measurements[k] > expected_metrics[k]:
+            logger.warning(
+                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+            )
+            pass_perf_check = False
+    if pass_perf_check:
+        logger.info("Perf check passed!")
+    else:
+        logger.warning("Perf check failed!")
+        assert False, "Perf check failed!"
 
     for submesh_device in parallel_manager.submesh_devices:
         ttnn.synchronize_device(submesh_device)

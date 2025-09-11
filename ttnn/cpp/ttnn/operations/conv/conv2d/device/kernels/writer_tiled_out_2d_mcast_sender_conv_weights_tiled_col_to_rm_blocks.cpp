@@ -15,7 +15,6 @@ void kernel_main() {
     // This writer is for output tensor in tile format
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(6);
     constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(7);
@@ -23,7 +22,6 @@ void kernel_main() {
     constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(9);
     constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(10);
     constexpr uint32_t weight_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(12);
     constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(13);
 
     // Bias arg. Unused if bias fusion is not enabled.
@@ -31,6 +29,10 @@ void kernel_main() {
 
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
+    constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
+
+    constexpr auto s_weight_args = TensorAccessorArgs<18>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
@@ -38,11 +40,6 @@ void kernel_main() {
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     // mcast args
     const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
@@ -75,22 +72,18 @@ void kernel_main() {
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
-    constexpr DataFormat bias_df = get_dataformat(bias_cb_id);
-    const InterleavedAddrGenFast<bias_in_dram> s_bias = {
-        .bank_base_address = bias_addr, .page_size = bias_pagesize, .data_format = bias_df};
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
 
     bool load_bias = true;
 #endif
 
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    constexpr DataFormat weight_df = get_dataformat(cb_id_weight);
-    const InterleavedAddrGenFast<true> s_weight = {
-        .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
     constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
 
     // Pre-compute constants used in tile_id calculation (preserving exact original logic)
     constexpr uint32_t tiles_per_full_block =
-        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer * weight_block_width_ntiles;
+        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer_in * weight_block_width_ntiles;
     constexpr uint32_t height_stride_factor = weight_block_height_ntiles * weight_stride_h;
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.

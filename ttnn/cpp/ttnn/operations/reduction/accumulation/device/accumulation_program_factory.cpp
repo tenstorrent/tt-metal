@@ -12,6 +12,7 @@
 #include "tt-metalium/util.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::reduction::accumulation {
 
@@ -84,22 +85,25 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles);
     create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles);
 
-    const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
-    const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     std::map<std::string, std::string> defines_kernel_args = {};
     if (is_integer_format(dst_cb_data_format)) {
         // Used to switch to add_tile_int32() instead of add_tiles()
         defines_kernel_args["CUMSUM_USE_INT32"] = "1";
     }
 
-    const ReaderDataMovementConfig reader_config{{src_is_dram}};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    const ReaderDataMovementConfig reader_config{reader_compile_time_args};
     const ComputeConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = false,
         .compile_args = {},
         .defines = defines_kernel_args};
-    const WriterDataMovementConfig writer_config{{dst_is_dram}};
+
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    const WriterDataMovementConfig writer_config{writer_compile_time_args};
 
     auto accumulation_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
     auto accumulation_compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};

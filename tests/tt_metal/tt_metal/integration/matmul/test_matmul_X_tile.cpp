@@ -27,7 +27,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
@@ -117,13 +118,18 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 }
 
 void matmul_tile(
-    tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* device,
+    tt_metal::MeshDispatchFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
     vector<uint32_t> weights,
     vector<bfloat16> tensor_vals) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
 
     // num_tile == M == N == K in the case of multi_tile, conveniently they were all the same!!
@@ -138,20 +144,20 @@ void matmul_tile(
     const size_t dram_buffer_size_bfp16b = num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_out0 = num_tiles * single_tile_size_out0;
 
-    tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
-        .size = dram_buffer_size_bfp16b,
-        .page_size = dram_buffer_size_bfp16b,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device,
-        .size = dram_buffer_size_out0,
-        .page_size = dram_buffer_size_out0,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig input_buffer_config = {
+        .page_size = dram_buffer_size_bfp16b, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig input_replicated_buffer_config = {.size = dram_buffer_size_bfp16b};
 
-    auto src0_dram_buffer = CreateBuffer(input_dram_config);
-    auto src1_dram_buffer = CreateBuffer(input_dram_config);
-    auto dst_dram_buffer = CreateBuffer(output_dram_config);
+    distributed::DeviceLocalBufferConfig output_buffer_config = {
+        .page_size = dram_buffer_size_out0, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig output_replicated_buffer_config = {.size = dram_buffer_size_out0};
+
+    auto src0_dram_buffer =
+        distributed::MeshBuffer::create(input_replicated_buffer_config, input_buffer_config, mesh_device.get());
+    auto src1_dram_buffer =
+        distributed::MeshBuffer::create(input_replicated_buffer_config, input_buffer_config, mesh_device.get());
+    auto dst_dram_buffer =
+        distributed::MeshBuffer::create(output_replicated_buffer_config, output_buffer_config, mesh_device.get());
 
     uint32_t num_input_tiles = 2 * M;
 
@@ -160,58 +166,56 @@ void matmul_tile(
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size_bfp16b, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size_bfp16b);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size_bfp16b, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size_bfp16b);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
-    std::shared_ptr<tt_metal::Buffer> src2_dram_buffer;
-    std::shared_ptr<tt_metal::Buffer> dst1_dram_buffer;
+    std::shared_ptr<distributed::MeshBuffer> src2_dram_buffer;
+    std::shared_ptr<distributed::MeshBuffer> dst1_dram_buffer;
     if (cfg.with_bias) {  // with_bias only when M, N, or K > 1
-        tt_metal::InterleavedBufferConfig bias_config{
-            .device = device,
-            .size = single_tile_size_bfp16b * N,
-            .page_size = single_tile_size_bfp16b * N,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        src2_dram_buffer = CreateBuffer(bias_config);
+        distributed::DeviceLocalBufferConfig bias_buffer_config = {
+            .page_size = single_tile_size_bfp16b * N, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+        distributed::ReplicatedBufferConfig bias_replicated_buffer_config = {.size = single_tile_size_bfp16b * N};
+        src2_dram_buffer =
+            distributed::MeshBuffer::create(bias_replicated_buffer_config, bias_buffer_config, mesh_device.get());
 
         uint32_t src2_cb_index = 2;
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{src2_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src2_cb_index, single_tile_size_bfp16b);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src2_config);
     } else if (cfg.test_init_short) {  // This will be dummy input in uint16_t
         uint32_t in2_id = 2;
         uint32_t out1_id = 17;
 
-        tt_metal::InterleavedBufferConfig dummy_config{
-            .device = device,
-            .size = single_tile_size_bfp16b * N,
-            .page_size = single_tile_size_bfp16b * N,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
+        distributed::DeviceLocalBufferConfig dummy_buffer_config = {
+            .page_size = single_tile_size_bfp16b * N, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+        distributed::ReplicatedBufferConfig dummy_replicated_buffer_config = {.size = single_tile_size_bfp16b * N};
         // This will be srcB in uint16_t
-        src2_dram_buffer = CreateBuffer(dummy_config);
+        src2_dram_buffer =
+            distributed::MeshBuffer::create(dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
 
         // This will be dummy output in uint16_t
-        dst1_dram_buffer = CreateBuffer(dummy_config);
+        dst1_dram_buffer =
+            distributed::MeshBuffer::create(dummy_replicated_buffer_config, dummy_buffer_config, mesh_device.get());
 
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{in2_id, tt::DataFormat::UInt16}})
                 .set_page_size(in2_id, single_tile_size_bfp16b);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src2_config);
 
         tt_metal::CircularBufferConfig cb_dst1_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{out1_id, tt::DataFormat::UInt16}})
                 .set_page_size(out1_id, single_tile_size_bfp16b);
-        auto cb_dst1 = tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_dst1_config);
     }
 
     uint32_t ouput_cb_index = 16;
@@ -227,7 +231,7 @@ void matmul_tile(
             tt_metal::CircularBufferConfig(dram_buffer_size_out0, partials_and_out_data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size_out0)
                 .set_page_size(intermediate_cb_index, single_tile_size_out0);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
         reader_l1_args = {
             src0_dram_buffer->address(),
@@ -247,7 +251,7 @@ void matmul_tile(
                 num_output_tiles * single_tile_size_out0,
                 {{ouput_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
                 .set_page_size(ouput_cb_index, single_tile_size_out0);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
         reader_l1_args = {
             src0_dram_buffer->address(),
@@ -270,21 +274,21 @@ void matmul_tile(
     }
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         cfg.reader_kernel,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto mm_kernel = tt_metal::CreateKernel(
-        program,
+    tt_metal::CreateKernel(
+        program_,
         cfg.compute_kernel,
         core,
         tt_metal::ComputeConfig{
@@ -294,12 +298,12 @@ void matmul_tile(
             .compile_args = cfg.compute_kernel_args,
             .defines = compute_defines});
 
-    fixture->WriteBuffer(device, src0_dram_buffer, activations);
-    fixture->WriteBuffer(device, src1_dram_buffer, weights);
+    fixture->WriteBuffer(mesh_device, src0_dram_buffer, activations);
+    fixture->WriteBuffer(mesh_device, src1_dram_buffer, weights);
 
     if (cfg.with_bias || cfg.test_init_short) {
         vector<uint32_t> bias(N * 512, 0);
-        fixture->WriteBuffer(device, src2_dram_buffer, bias);
+        fixture->WriteBuffer(mesh_device, src2_dram_buffer, bias);
 
         vector<uint32_t> bias_args = {
             src2_dram_buffer->address(), 0, (std::uint32_t)N, (std::uint32_t)(N * single_tile_size_bfp16b)};
@@ -309,19 +313,19 @@ void matmul_tile(
         }
     }
 
-    tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, reader_l1_args);
+    tt_metal::SetRuntimeArgs(program_, mm_reader_kernel, core, reader_l1_args);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(), 0, num_tiles});  // this is M * N in the multi_tile case !!
 
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // This is tilized result, will not be modified
     std::vector<uint32_t> result_vec;
-    fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
+    fixture->ReadBuffer(mesh_device, dst_dram_buffer, result_vec);
 
     std::vector<bfloat16> golden = std::move(tensor_vals);
     std::vector<bfloat16> golden_tilized = tilize_swizzled(golden, M * 32, N * 32);
@@ -344,15 +348,15 @@ void matmul_tile(
     EXPECT_EQ(golden_packed.size(), result_vec.size());
     EXPECT_EQ(golden_packed, result_vec);
 
-    DeallocateBuffer(*src0_dram_buffer);
-    DeallocateBuffer(*src1_dram_buffer);
+    src0_dram_buffer->deallocate();
+    src1_dram_buffer->deallocate();
     if (cfg.with_bias || cfg.test_init_short) {
         if (cfg.test_init_short) {
-            DeallocateBuffer(*dst1_dram_buffer);
+            dst1_dram_buffer->deallocate();
         }
-        DeallocateBuffer(*src2_dram_buffer);
+        src2_dram_buffer->deallocate();
     }
-    DeallocateBuffer(*dst_dram_buffer);
+    dst_dram_buffer->deallocate();
 
     log_info(
         tt::LogTest,
@@ -377,7 +381,7 @@ using namespace unit_tests_common::matmul::test_matmul_X_tile;
 }
 */
 
-TEST_F(DispatchFixture, TensixMatmulSingleTile) {
+TEST_F(MeshDispatchFixture, TensixMatmulSingleTile) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -408,7 +412,7 @@ TEST_F(DispatchFixture, TensixMatmulSingleTile) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulMultiTile) {
+TEST_F(MeshDispatchFixture, TensixMatmulMultiTile) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -447,7 +451,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiTile) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlock) {
+TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -484,7 +488,7 @@ TEST_F(DispatchFixture, TensixMatmulBlock) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlockInitShort) {
+TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -521,7 +525,7 @@ TEST_F(DispatchFixture, TensixMatmulBlockInitShort) {
     }
 }
 
-TEST_F(DispatchFixture, TensixMatmulBlockInitShortWithDt) {
+TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShortWithDt) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;

@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
@@ -33,10 +34,6 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     ////////////////////////////////////////////////////////////////////////////
 
     Program program{};
-
-    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t index_element_size_bytes = index_tensor.element_size();
     constexpr uint32_t INPUT_SIZE = 32;
@@ -103,22 +100,17 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     // reader
 
-    bool index_stick_size_is_power_of_two = is_power_of_two_at_least_32(index_page_size);
-    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? std::log2(index_page_size) : 0;
-
     std::vector<uint32_t> reader_compile_time_args = {
-        grad_is_dram,
-        index_is_dram,
-        out_is_dram,
-        index_page_size,
-        index_stick_size_is_power_of_two,
-        index_log2_stick_size,
-        index_tensor.dtype() == DataType::BFLOAT16,  // TODO: Only supports either BFLOAT16 or UINT32
-        output.dtype() == DataType::BFLOAT16,        // TODO: Only supports either BFLOAT16 or BFLOAT8_B
-        max_tiles_per_core,
-        batch_size,
-        seq_len_tiles,
-        num_embeddings_tiles};
+        (uint32_t)max_tiles_per_core,
+        (uint32_t)batch_size,
+        (uint32_t)seq_len_tiles,
+        (uint32_t)num_embeddings_tiles,
+        (uint32_t)index_page_size,
+        (uint32_t)(index_tensor.dtype() == DataType::BFLOAT16),
+        (uint32_t)(output.dtype() == DataType::BFLOAT16)};
+    TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

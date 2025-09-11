@@ -211,10 +211,8 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_binary_sfpu_accuracy(device, dtype):
-    if ttnn.get_arch_name() == "blackhole":
-        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
-
     torch.manual_seed(0)
+
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
     torch_input_tensor_a = torch.tensor([[10.0, 10.0, 9.0, 9.0, 5.0, 100000, 10.0, 10.0, 2.0, 2.0]], dtype=torch_dtype)
@@ -267,10 +265,8 @@ def test_pow_determinism(device, dtype):
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_binary_sfpu_accuracy_pos(device, dtype):
-    if ttnn.get_arch_name() == "blackhole":
-        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
-
     torch.manual_seed(0)
+
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 

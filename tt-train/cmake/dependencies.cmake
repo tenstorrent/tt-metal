@@ -64,15 +64,13 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4)
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-include(FetchContent)
-
-FetchContent_Declare(
-    enchantum
+CPMAddPackage(
+    NAME enchantum
     GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
     GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
-
-FetchContent_MakeAvailable(enchantum)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
@@ -124,6 +122,9 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+if(tokenizers-cpp_ADDED)
+    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
+endif()
 # gersemi: on
 
 ####################################################################################################################

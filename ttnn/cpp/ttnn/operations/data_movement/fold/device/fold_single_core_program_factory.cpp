@@ -39,8 +39,6 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    bool src_is_dram = (src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM);
-    bool dst_is_dram = (dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM);
 
     // Setup CB.
     uint32_t cb_src0_index = tt::CBIndex::c_0;

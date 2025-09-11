@@ -26,19 +26,12 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t y_tile_bytes = get_tile_size(cb_y);
-    const DataFormat y_data_format = get_dataformat(cb_y);
-
     uint32_t dy_tile_bytes = get_tile_size(cb_dy);
-    const DataFormat dy_data_format = get_dataformat(cb_dy);
 
-    constexpr bool y_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool dy_is_dram = get_compile_time_arg_val(1) == 1;
-
-    const InterleavedAddrGenFast<y_is_dram> y_in = {
-        .bank_base_address = y_addr, .page_size = y_tile_bytes, .data_format = y_data_format};
-
-    const InterleavedAddrGenFast<dy_is_dram> dy_in = {
-        .bank_base_address = dy_addr, .page_size = dy_tile_bytes, .data_format = dy_data_format};
+    constexpr auto y_args = TensorAccessorArgs<0>();
+    constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+    const auto y_in = TensorAccessor(y_args, y_addr, y_tile_bytes);
+    const auto dy_in = TensorAccessor(dy_args, dy_addr, dy_tile_bytes);
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     generate_bcast_scaler(cb_scaler, scaler);

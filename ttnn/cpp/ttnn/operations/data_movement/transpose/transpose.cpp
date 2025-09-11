@@ -148,15 +148,6 @@ ttnn::Tensor ExecuteTranspose::invoke(
 }
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int64_t& dim1,
-    const int64_t& dim2,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<float>& pad_value) {
-    return invoke(DefaultQueueId, input_tensor, dim1, dim2, memory_config, pad_value);
-}
-
-ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2, const std::optional<float>& pad_value) {
     return invoke(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt, pad_value);
 }

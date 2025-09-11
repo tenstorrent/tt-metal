@@ -7,8 +7,8 @@ import torch.nn as nn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov10x.reference.yolov10x import Conv, YOLOv10
-from models.demos.yolov10x.tt.common import get_mesh_mappers
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5, weights_mesh_mapper=None):

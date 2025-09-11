@@ -18,6 +18,14 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n) {
     return (((uint64_t)n * 0xAAAAAAAB) >> 32) >> 3;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_20(uint32_t n) {
+    return (((uint64_t)n * 0xCCCCCCCD) >> 32) >> 4;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_48(uint32_t n) {
+    return (((uint64_t)n * 0xAAAAAAAB) >> 32) >> 5;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_56(uint32_t n) {
     return (((uint64_t)n * 0x24924925) >> 32) >> 3;
 }
@@ -28,6 +36,10 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_63(uint32_t n) {
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_70(uint32_t n) {
     return (((uint64_t)n * 0xEA0EA0EB) >> 32) >> 6;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_72(uint32_t n) {
+    return (((uint64_t)n * 0x38E38E39) >> 32) >> 4;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_80(uint32_t n) {
@@ -68,11 +80,18 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 12) {
         // fast divide for 12 divisor
         return fast_udiv_12(n);
+    } else if constexpr (d == 20) {
+        // fast divide for 20 divisor
+        return fast_udiv_20(n);
+    } else if constexpr (d == 48) {
+        return fast_udiv_48(n);
     } else if constexpr (d == 56) {
         // fast divide for 56 divisor. Handles Banked L1 address generation for N300
         return fast_udiv_56(n);
     } else if constexpr (d == 70) {
         return fast_udiv_70(n);
+    } else if constexpr (d == 72) {
+        return fast_udiv_72(n);
     } else if constexpr (d == 80) {
         return fast_udiv_80(n);
     } else if constexpr (d == 94) {

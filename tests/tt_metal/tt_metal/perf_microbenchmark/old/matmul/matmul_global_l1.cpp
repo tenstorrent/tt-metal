@@ -9,6 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
@@ -214,17 +215,11 @@ tt_metal::Program create_program_mcast_in0_in1(
     auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-
         // in0 tensor args
         (std::uint32_t)1,            // in0_tensor_stride_w
         (std::uint32_t)K,            // in0_tensor_stride_h
@@ -245,11 +240,8 @@ tt_metal::Program create_program_mcast_in0_in1(
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)B       // batch
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(in0_sender_compile_time_args);
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)out_is_dram,
-
         // READER
         // in1 tensor args
         (std::uint32_t)1,                // in1_tensor_stride_w
@@ -285,7 +277,10 @@ tt_metal::Program create_program_mcast_in0_in1(
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
+    tt::tt_metal::TensorAccessorArgs(in1_buffer).append_to(in1_sender_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(in1_sender_writer_compile_time_args);
     if (bias_buffer != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
         // in3 mcast args
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         // in1 tensor args
@@ -311,9 +306,6 @@ tt_metal::Program create_program_mcast_in0_in1(
         (std::uint32_t)B  // batch
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
-
         // READER
         // in1 block args
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
@@ -346,11 +338,8 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)top_left_core_physical.y);  // in1_mcast_sender_noc_y
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_sender_semaphore_id);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_receiver_semaphore_id);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
-    // no fusion
-    in1_receiver_writer_compile_time_args.push_back(0);
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -519,7 +508,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
         "bmm_large_block_zm_fused_bias_activation.cpp",
@@ -536,13 +525,13 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig src_cb0_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src_cb0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src_cb0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src_cb1_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src_cb1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src_cb1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -552,7 +541,7 @@ tt_metal::Program create_program_mcast_in0_in1(
         tt_metal::CircularBufferConfig(out_CB_size, interim_and_out_data_format_spec)
             .set_page_size(output_cb_index, output_single_tile_size)
             .set_page_size(interm0_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
+    tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
     // CB for bias
     if (bias_buffer != nullptr) {
@@ -560,13 +549,13 @@ tt_metal::Program create_program_mcast_in0_in1(
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
                 .set_page_size(src3_cb_index, bias_single_tile_size);
-        auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
 
         uint32_t interm1_cb_index = 25;
         tt_metal::CircularBufferConfig cb_interm1_config =
             tt_metal::CircularBufferConfig(interm1_CB_size, {{interm1_cb_index, output_data_format}})
                 .set_page_size(interm1_cb_index, output_single_tile_size);
-        auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm1_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_interm1_config);
     }
 
     // Parameters for last row, col, or block
@@ -1022,7 +1011,6 @@ int main(int argc, char** argv) {
         log_info(LogTest, "weights = {}x{}", Kt * 32, Nt * 32);
         log_info(LogTest, "output = {}x{}", Mt * 32, Nt * 32);
 
-        tt::DataFormat data_format = tt::DataFormat::Float16_b;
         uint32_t single_tile_size = 2 * 1024;
 
         // buffer creation
@@ -1106,7 +1094,7 @@ int main(int argc, char** argv) {
             tt::DataFormat::Float16_b,
             tt::DataFormat::Float16_b);
 
-        std::chrono::duration<double, std::nano> duration;
+        std::chrono::duration<double, std::nano> duration{};
 
         // took from run_operation.cpp
         auto start = std::chrono::high_resolution_clock::now();

@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tools/profiler/fabric_event_profiler.hpp"
 
 namespace tt::tt_fabric {
 
@@ -36,13 +37,11 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 
     auto mux_channel_credits_stream_id = get_mux_channel_stream_id_from_channel_id(fabric_mux_channel_id);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
-        true,      /* ignored, connected_to_persistent_fabric */
-        direction, /* ignored, direction */
+        true, /* ignored, connected_to_persistent_fabric */
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_base_address,
         fabric_mux_num_buffers_per_channel,
-        fabric_mux_flow_control_address,
         fabric_mux_connection_handshake_address,
         fabric_mux_connection_info_address,
         fabric_mux_channel_buffer_size_bytes,
@@ -114,6 +113,7 @@ FORCE_INLINE void fabric_async_write(
     uint32_t source_payload_address,
     uint32_t packet_payload_size_bytes) {
     connection_handle.wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     connection_handle.send_payload_without_header_non_blocking_from_address(
         source_payload_address, packet_payload_size_bytes);
     connection_handle.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -125,6 +125,7 @@ FORCE_INLINE void fabric_atomic_inc(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
     connection_handle.wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     connection_handle.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 

@@ -64,5 +64,5 @@ def test_downblock2d(device, temb_shape, input_shape, is_ci_env, reset_seeds):
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     logger.info(f"PCC is {pcc_message}")

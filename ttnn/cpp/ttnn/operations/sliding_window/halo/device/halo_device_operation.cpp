@@ -55,9 +55,12 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype = (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32)
-                                ? tt::tt_metal::DataType::FLOAT32
-                                : tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::DataType output_dtype;
+    switch (input_tensor.dtype()) {
+        case tt::tt_metal::DataType::FLOAT32: output_dtype = tt::tt_metal::DataType::FLOAT32; break;
+        case tt::tt_metal::DataType::UINT16: output_dtype = tt::tt_metal::DataType::UINT16; break;
+        default: output_dtype = tt::tt_metal::DataType::BFLOAT16; break;
+    }
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == output_memory_config_.memory_layout(),
@@ -70,7 +73,9 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         auto output_core_range = *(output_memory_config_.shard_spec()->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
-        TT_FATAL(input_core_w == output_core_w, "Error");
+
+        TT_FATAL(
+            input_core_w == output_core_w, "Input core width {} != Output core width {}", input_core_w, output_core_w);
     }
 
     if (this->in_place_) {
@@ -83,6 +88,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
+
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid,
         shard_shape,
@@ -103,12 +109,32 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
-    uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
+    const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
     auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
     Program program = CreateProgram();
 
     if (this->in_place_) {
+        // after untilize bfloat8 is converted to bfloat16
+        const tt::tt_metal::DataType dtype = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B
+                                                 ? tt::tt_metal::DataType::BFLOAT16
+                                                 : input_tensor.dtype();
+        const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+        const uint32_t nbytes = datum_size(data_format);
+        const uint32_t input_shard_width = input_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t output_shard_width = output_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t input_width_bytes = input_shard_width * nbytes;
+        const uint32_t output_width_bytes = output_shard_width * nbytes;
+        // for small stick sizes alignment can cause the shards to be larger than the number of sticks, thus
+        // we must account for alignment when computing the size delta between input and output shards
+        uint32_t aligned_delta_size =
+            align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes -
+            align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes;
+        int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
+                                              ? 0
+                                              : aligned_delta_size;  // for in place with tilized data we untilize
+                                                                     // directly into the output buffer so delta is zero
+
         auto kernel_config = sliding_window::generate_inplace_halo_kernel_config_tensors(
             tensor_metadata,
             shard_boundaries,
@@ -119,7 +145,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             device,
             max_out_nsticks_per_core_,
             in_nsticks_per_core_,
-            this->in_place_);
+            this->in_place_,
+            in_out_shard_size_delta);
 
         const auto& pad_config1 = std::get<0>(kernel_config)[0];
         const auto& local_config1 = std::get<0>(kernel_config)[2];
@@ -152,6 +179,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             config_.num_cores_c,
             max_out_nsticks_per_core_,
             max_ref_size,
+            in_out_shard_size_delta,
             pad_config_device_tensor1,
             local_config_device_tensor1,
             remote_config_device_tensor1,

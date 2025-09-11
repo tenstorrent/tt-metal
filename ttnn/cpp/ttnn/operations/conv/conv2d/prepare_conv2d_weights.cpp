@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "conv2d/conv2d_utils.hpp"
+#include "conv2d/device/conv2d_op.hpp"
 #include "tt-metalium/assert.hpp"
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
@@ -28,6 +30,89 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
+/**
+ * Common 2D threading utility
+ * Parallelizes work across two dimensions with configurable thread counts
+ */
+class WeightLayoutThreader {
+private:
+    // Runtime flag to disable threading
+    static bool threading_enabled;
+
+    static uint32_t get_max_threads_per_dim() {
+        if (!threading_enabled) {
+            return 1;
+        }
+        uint32_t hw_concurrency = std::thread::hardware_concurrency();
+        // Use sqrt to balance 2D parallelization: total threads = out_threads × in_threads ≈ sqrt(hw_concurrency - 1)²
+        // This prevents oversubscription while maintaining good load distribution across both channel dimensions
+        return std::max(1u, static_cast<uint32_t>(std::sqrt(hw_concurrency - 1)));
+    }
+
+public:
+    struct ThreadConfig {
+        uint32_t out_threads, in_threads;
+        uint32_t out_per_thread, in_per_thread;
+        uint32_t out_total, in_total;
+    };
+
+    static ThreadConfig calculate_thread_config(uint32_t out_ch, uint32_t in_ch, int MIN_WORK_PER_THREAD = 16) {
+        uint32_t max_threads = get_max_threads_per_dim();
+        uint32_t out_threads = std::min(max_threads, std::max(1u, out_ch / MIN_WORK_PER_THREAD));
+        uint32_t in_threads = std::min(max_threads, std::max(1u, in_ch / MIN_WORK_PER_THREAD));
+
+        return {out_threads, in_threads, out_ch / out_threads, in_ch / in_threads, out_ch, in_ch};
+    }
+
+    template <typename Func>
+    static void parallel_for_channels(
+        uint32_t out_ch, uint32_t in_ch, uint32_t min_work_per_thread, const Func& work_func) {
+        auto cfg = calculate_thread_config(out_ch, in_ch, min_work_per_thread);
+
+        if (cfg.out_threads == 1 && cfg.in_threads == 1) {
+            work_func(0, 0, 0, out_ch, 0, in_ch);
+            return;
+        }
+
+        std::vector<std::thread> threads;
+        std::exception_ptr exception_caught = nullptr;
+        threads.reserve(cfg.out_threads * cfg.in_threads);
+
+        for (uint32_t ot = 0; ot < cfg.out_threads; ++ot) {
+            uint32_t o_start = ot * cfg.out_per_thread;
+            uint32_t o_end = (ot == cfg.out_threads - 1) ? cfg.out_total : o_start + cfg.out_per_thread;
+
+            for (uint32_t it = 0; it < cfg.in_threads; ++it) {
+                uint32_t i_start = it * cfg.in_per_thread;
+                uint32_t i_end = (it == cfg.in_threads - 1) ? cfg.in_total : i_start + cfg.in_per_thread;
+
+                threads.emplace_back([=, &exception_caught] {
+                    try {
+                        work_func(ot, it, o_start, o_end, i_start, i_end);
+                    } catch (...) {
+                        // catch the first exception and store it
+                        if (!exception_caught) {
+                            exception_caught = std::current_exception();
+                        }
+                    }
+                });
+            }
+        }
+
+        // Wait for all threads to complete
+        for (auto& t : threads) {
+            t.join();
+        }
+
+        // Rethrow first exception if one was caught
+        if (exception_caught) {
+            std::rethrow_exception(exception_caught);
+        }
+    }
+};
+// Initialize static member
+bool WeightLayoutThreader::threading_enabled = true;
+
 template <typename T>
 static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
     tt::tt_metal::HostBuffer data, DataType output_dtype, const ttnn::Shape& output_shape) {
@@ -37,11 +122,11 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
             auto temp_tensor =
                 Tensor(std::move(data), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
 
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(temp_tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(temp_tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             return tt::tt_metal::HostBuffer(std::move(output_packed_data));
         } else {
             TT_THROW("Unsupported data type");
@@ -54,11 +139,7 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    return Tensor(
-        input_tensor.host_storage().transform(compute),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -85,11 +166,11 @@ Tensor create_tensor_from_owned_buffer(
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             auto output_uint32_buffer = tt::tt_metal::HostBuffer(std::move(output_packed_data));
             return Tensor(std::move(output_uint32_buffer), output_shape, output_dtype, Layout::TILE);
         }
@@ -104,9 +185,12 @@ Tensor create_tensor_from_owned_buffer(
 
 template <typename T>
 Tensor to_weight_special_padding_tile_layout(
-    const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    bool enable_activation_reuse,
+    DataType output_dtype) {
     auto w_shape = conv_weight_tensor.padded_shape();
-
     uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
     uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
     auto weight_matrix_cols = w_shape[0];
@@ -116,9 +200,11 @@ Tensor to_weight_special_padding_tile_layout(
             (uint32_t)std::ceil((double)weight_matrix_cols / (double)in1_block_w_datums) * in1_block_w_datums;
     }
     // height padding
-    assert(in1_block_h_datums >= w_shape[1] * w_shape[3]);
-    uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
-    auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
+    uint32_t inner_dim = enable_activation_reuse ? w_shape[1] * w_shape[2] * w_shape[3] : w_shape[1] * w_shape[3];
+    assert(in1_block_h_datums >= inner_dim);
+    uint32_t block_height_padding = enable_activation_reuse ? 0 : in1_block_h_datums - inner_dim;
+    auto weight_matrix_rows =
+        enable_activation_reuse ? in1_block_h_datums : ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
     ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
     auto compute =
@@ -127,20 +213,28 @@ Tensor to_weight_special_padding_tile_layout(
             auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
             auto output_buffer = std::vector<T>(output_shape.volume());
-            for (auto r = 0; r < w_shape[2]; r++) {
-                for (auto s = 0; s < w_shape[3]; s++) {
-                    for (auto c = 0; c < w_shape[1]; c++) {
-                        for (auto k = 0; k < w_shape[0]; k++) {
-                            auto matrix_idx =
-                                k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
-                                r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols;
-                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] +
-                                       r * w_shape[3] + s;
-                            output_buffer[matrix_idx] = input_buffer[idx];
+
+            WeightLayoutThreader::parallel_for_channels(
+                w_shape[0],
+                w_shape[1],
+                16,  // Minimum work per thread
+                [&output_buffer, &input_buffer, &w_shape, &weight_matrix_cols, &block_height_padding](
+                    uint32_t out_t, uint32_t in_t, uint32_t k_start, uint32_t k_end, uint32_t c_start, uint32_t c_end) {
+                    for (auto r = 0; r < w_shape[2]; r++) {
+                        for (auto s = 0; s < w_shape[3]; s++) {
+                            for (auto c = c_start; c < c_end; c++) {
+                                for (auto k = k_start; k < k_end; k++) {
+                                    auto matrix_idx =
+                                        k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
+                                        r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols;
+                                    auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] +
+                                               r * w_shape[3] + s;
+                                    output_buffer[matrix_idx] = input_buffer[idx];
+                                }
+                            }
                         }
                     }
-                }
-            }
+                });
             return create_host_buffer_for_conv_weight<T>(
                 tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
         };
@@ -170,27 +264,38 @@ Tensor to_weight_tile_layout(
     }
     const ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
-    auto compute = [&w_shape, weight_matrix_cols, &output_shape, output_dtype](
-                       const tt::tt_metal::HostBuffer& input_host_buffer) {
-        auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+    auto compute =
+        [&w_shape, weight_matrix_cols, &output_shape, output_dtype](const tt::tt_metal::HostBuffer& input_host_buffer) {
+            auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
-        auto output_buffer = std::vector<T>(output_shape.volume());
-        for (auto r = 0; r < w_shape[2]; r++) {
-            for (auto s = 0; s < w_shape[3]; s++) {
-                for (auto c = 0; c < w_shape[1]; c++) {
-                    for (auto k = 0; k < w_shape[0]; k++) {
-                        auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
-                                          r * w_shape[3] * w_shape[1] * weight_matrix_cols;
-                        auto idx =
-                            k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-                        output_buffer[matrix_idx] = input_buffer[idx];
+            auto output_buffer = std::vector<T>(output_shape.volume());
+            WeightLayoutThreader::parallel_for_channels(
+                w_shape[0],
+                w_shape[1],
+                16,  // Minimum work per thread
+                [&](uint32_t out_t,
+                    uint32_t in_t,
+                    uint32_t out_start,
+                    uint32_t out_end,
+                    uint32_t in_start,
+                    uint32_t in_end) {
+                    for (auto r = 0; r < w_shape[2]; r++) {
+                        for (auto s = 0; s < w_shape[3]; s++) {
+                            for (auto c = in_start; c < in_end; c++) {
+                                for (auto k = out_start; k < out_end; k++) {
+                                    auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
+                                                      r * w_shape[3] * w_shape[1] * weight_matrix_cols;
+                                    auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] +
+                                               r * w_shape[3] + s;
+                                    output_buffer[matrix_idx] = input_buffer[idx];
+                                }
+                            }
+                        }
                     }
-                }
-            }
-        }
-        return create_host_buffer_for_conv_weight<T>(
-            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
-    };
+                });
+            return create_host_buffer_for_conv_weight<T>(
+                tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
+        };
 
     const TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
@@ -217,20 +322,24 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 
 template <typename T>
 Tensor to_weight_tile_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, bool full_inner_dim, DataType output_dtype) {
+    const Tensor& conv_weight_tensor,
+    uint32_t in_num_channel_shards,
+    uint32_t out_num_channel_shards,
+    bool full_inner_dim,
+    DataType output_dtype) {
     ttnn::Shape w_shape = conv_weight_tensor.padded_shape();
     // Calculate dimensions outside lambda
     uint32_t weight_matrix_cols = w_shape[0];
-    TT_ASSERT(weight_matrix_cols % num_channel_shards == 0);
-    uint32_t conv_output_shard_width = weight_matrix_cols / num_channel_shards;
+    TT_ASSERT(weight_matrix_cols % out_num_channel_shards == 0);
+    uint32_t conv_output_shard_width = weight_matrix_cols / out_num_channel_shards;
     uint32_t conv_output_shard_width_padded = tt::round_up(conv_output_shard_width, constants::TILE_WIDTH);
     if (conv_output_shard_width < conv_output_shard_width_padded) {
         // width padding for conv output shard padding
-        weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
+        weight_matrix_cols = conv_output_shard_width_padded * out_num_channel_shards;
     }
     uint32_t weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
-    TT_ASSERT(w_shape[1] % num_channel_shards == 0);
-    uint32_t conv_input_shard_width = w_shape[1] / num_channel_shards;
+    TT_ASSERT(w_shape[1] % in_num_channel_shards == 0);
+    uint32_t conv_input_shard_width = w_shape[1] / in_num_channel_shards;
     uint32_t weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
 
     // Change for case where we use full inner dim vs slicing by kernel height
@@ -247,13 +356,14 @@ Tensor to_weight_tile_layout_block_sharded(
 
     if (weight_block_height < weight_block_height_padded) {
         // height padding for non tile multiple block height
-        weight_matrix_rows = weight_block_height_padded * num_channel_shards;
+        weight_matrix_rows = weight_block_height_padded * in_num_channel_shards;
     }
 
     ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
     auto compute = [&w_shape,
-                    num_channel_shards,
+                    in_num_channel_shards,
+                    out_num_channel_shards,
                     output_dtype,
                     &output_shape,
                     weight_matrix_cols,
@@ -273,47 +383,59 @@ Tensor to_weight_tile_layout_block_sharded(
         uint32_t height_stride_per_kernel_row =
             tt::round_up(conv_input_shard_width * (full_inner_dim ? kernel_h : 1) * kernel_w, constants::TILE_HEIGHT);
 
-        for (uint32_t ic = 0; ic < num_channel_shards; ic++) {
-            for (uint32_t r = 0; r < kernel_h; r++) {
-                for (uint32_t s = 0; s < kernel_w; s++) {
-                    for (uint32_t c_s = 0; c_s < conv_input_shard_width; c_s++) {
-                        for (uint32_t oc = 0; oc < num_channel_shards; oc++) {
-                            for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
-                                // Calculate matrix row index based on full_inner_dim flag
-                                uint32_t matrix_row;
-                                if (full_inner_dim) {
-                                    // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
-                                    // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +
-                                    // s*conv_input_shard_width + c_s
-                                    uint32_t flattened_inner_idx =
-                                        r * kernel_w * conv_input_shard_width + s * conv_input_shard_width + c_s;
-                                    matrix_row = ic * weight_block_height_padded + flattened_inner_idx;
-                                } else {
-                                    // Original logic - slice by kernel height
-                                    matrix_row = ic * weight_block_height_padded + r * height_stride_per_kernel_row +
-                                                 s * conv_input_shard_width + c_s;
-                                }
+        WeightLayoutThreader::parallel_for_channels(
+            out_num_channel_shards,
+            in_num_channel_shards,
+            1,  // Minimum work per thread
+            [&](uint32_t out_t,
+                uint32_t in_t,
+                uint32_t out_start,
+                uint32_t out_end,
+                uint32_t in_start,
+                uint32_t in_end) {
+                for (uint32_t ic = in_start; ic < in_end; ic++) {
+                    for (uint32_t r = 0; r < kernel_h; r++) {
+                        for (uint32_t s = 0; s < kernel_w; s++) {
+                            for (uint32_t c_s = 0; c_s < conv_input_shard_width; c_s++) {
+                                for (uint32_t oc = out_start; oc < out_end; oc++) {
+                                    for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
+                                        // Calculate matrix row index based on full_inner_dim flag
+                                        uint32_t matrix_row;
+                                        if (full_inner_dim) {
+                                            // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
+                                            // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +
+                                            // s*conv_input_shard_width + c_s
+                                            uint32_t flattened_inner_idx = r * kernel_w * conv_input_shard_width +
+                                                                           s * conv_input_shard_width + c_s;
+                                            matrix_row = ic * weight_block_height_padded + flattened_inner_idx;
+                                        } else {
+                                            // Original logic - slice by kernel height
+                                            matrix_row = ic * weight_block_height_padded +
+                                                         r * height_stride_per_kernel_row + s * conv_input_shard_width +
+                                                         c_s;
+                                        }
 
-                                uint32_t matrix_col = oc * conv_output_shard_width_padded + k_s;
-                                uint32_t matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
+                                        uint32_t matrix_col = oc * conv_output_shard_width_padded + k_s;
+                                        uint32_t matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
 
-                                // Calculate input tensor index [OC][IC][KH][KW]
-                                uint32_t input_oc = oc * conv_output_shard_width + k_s;
-                                uint32_t input_ic = ic * conv_input_shard_width + c_s;
-                                uint32_t idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
-                                               input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                                        // Calculate input tensor index [OC][IC][KH][KW]
+                                        uint32_t input_oc = oc * conv_output_shard_width + k_s;
+                                        uint32_t input_ic = ic * conv_input_shard_width + c_s;
+                                        uint32_t idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
+                                                       input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
 
-                                // Ensure we're within bounds before writing
-                                if (matrix_idx < output_buffer.size() && input_oc < w_shape[0] &&
-                                    input_ic < w_shape[1]) {
-                                    output_buffer[matrix_idx] = input_buffer[idx];
+                                        // Ensure we're within bounds before writing
+                                        if (matrix_idx < output_buffer.size() && input_oc < w_shape[0] &&
+                                            input_ic < w_shape[1]) {
+                                            output_buffer[matrix_idx] = input_buffer[idx];
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
+            });
 
         return create_host_buffer_for_conv_weight<T>(
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
@@ -328,17 +450,23 @@ Tensor to_weight_tile_layout_block_sharded(
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
     const Tensor& conv_weight_tensor,
-    uint32_t num_channel_shards,
+    uint32_t in_num_channel_shards,
+    uint32_t out_num_channel_shards,
     bool full_inner_dim,
     std::optional<DataType> output_dtype) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, bool, DataType)>>
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, uint32_t, bool, DataType)>>
         to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
             {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>}};
 
     return convert_tensor_to_tiled_layout_common(
-        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards, full_inner_dim);
+        conv_weight_tensor,
+        output_dtype,
+        to_w_tile_layout_map,
+        in_num_channel_shards,
+        out_num_channel_shards,
+        full_inner_dim);
 }
 
 template <typename T>
@@ -403,15 +531,16 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
+    bool enable_activation_reuse,
     std::optional<DataType> output_dtype) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, uint32_t, DataType)>>
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, uint32_t, bool, DataType)>>
         to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
             {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}};
 
     return convert_tensor_to_tiled_layout_common(
-        conv_weight_tensor, output_dtype, to_w_tile_layout_map, in1_block_h, in1_block_w);
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, in1_block_h, in1_block_w, enable_activation_reuse);
 }
 
 /*
@@ -479,22 +608,32 @@ static Tensor conv_depthwise_weight_bcast_helper(
         auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
         // Create a new buffer with the output shape
         auto output_buffer = std::vector<T>(output_weight_shape.volume());
-
-        // Copy the original weight tensor to the output tensor
-        for (int i = 0; i < output_weight_shape[0]; i++) {
-            for (int j = 0; j < output_weight_shape[1]; j++) {
-                for (int k = 0; k < output_weight_shape[2]; k++) {
-                    for (int l = 0; l < output_weight_shape[3]; l++) {
-                        auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
-                        auto value = conv_weight_tensor_buffer[value_flat_input_index];
-                        auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
-                        output_buffer[output_flat_input_index] = value;
+        WeightLayoutThreader::parallel_for_channels(
+            output_weight_shape[0],
+            output_weight_shape[1],
+            16,  // Minimum work per thread
+            [&](uint32_t out_t,
+                uint32_t in_t,
+                uint32_t out_start,
+                uint32_t out_end,
+                uint32_t in_start,
+                uint32_t in_end) {
+                for (int i = out_start; i < out_end; i++) {
+                    for (int j = in_start; j < in_end; j++) {
+                        for (int k = 0; k < output_weight_shape[2]; k++) {
+                            for (int l = 0; l < output_weight_shape[3]; l++) {
+                                auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                    ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
+                                auto value = conv_weight_tensor_buffer[value_flat_input_index];
+                                auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                    ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
+                                output_buffer[output_flat_input_index] = value;
+                            }
+                        }
                     }
                 }
-            }
-        }
+            });
+
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
     const TensorSpec output_spec(
@@ -619,32 +758,43 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             std::vector<T> output_buffer(output_shape.volume(), T(0));
             int new_h = padded_kernel_h / stride[0];
             int new_w = padded_kernel_w / stride[1];
+            WeightLayoutThreader::parallel_for_channels(
+                out_channels,
+                in_channels,
+                16,  // Minimum work per thread
+                [&](uint32_t out_t,
+                    uint32_t in_t,
+                    uint32_t out_start,
+                    uint32_t out_end,
+                    uint32_t in_start,
+                    uint32_t in_end) {
+                    for (auto oc = out_start; oc < out_end; oc++) {
+                        for (auto ic = in_start; ic < in_end; ic++) {
+                            for (auto kh = 0; kh < kernel_h; kh++) {
+                                for (auto kw = 0; kw < kernel_w; kw++) {
+                                    uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 
-            for (auto oc = 0; oc < out_channels; oc++) {
-                for (auto ic = 0; ic < in_channels; ic++) {
-                    for (auto kh = 0; kh < kernel_h; kh++) {
-                        for (auto kw = 0; kw < kernel_w; kw++) {
-                            uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
+                                    int sh = kh % stride[0];
+                                    int sw = kw % stride[1];
 
-                            int sh = kh % stride[0];
-                            int sw = kw % stride[1];
+                                    // Calculate new y,x coordinates
+                                    int y = kh / stride[0];
+                                    int x = kw / stride[1];
 
-                            // Calculate new y,x coordinates
-                            int y = kh / stride[0];
-                            int x = kw / stride[1];
+                                    // Calculate folded input channel index
+                                    int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
 
-                            // Calculate folded input channel index
-                            int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
+                                    // Calculate final destination index
+                                    int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
+                                                  folded_ic_idx * new_h * new_w + y * new_w + x;
 
-                            // Calculate final destination index
-                            int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
-                                          folded_ic_idx * new_h * new_w + y * new_w + x;
-
-                            output_buffer[dst_idx] = input_buffer[src_idx];
+                                    output_buffer[dst_idx] = input_buffer[src_idx];
+                                }
+                            }
                         }
                     }
-                }
-            }
+                });
+
             return tt::tt_metal::HostBuffer(std::move(output_buffer));
         });
         return Tensor(
@@ -652,7 +802,6 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config(),
             conv_weight_tensor.tensor_topology());
     };
 
@@ -744,6 +893,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> dilation,
+    std::array<uint32_t, 4> padding,
     MeshDevice* device,
     Conv2dConfig& conv_config,
     Layout input_layout,
@@ -771,6 +922,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         output_dtype,
         input_memory_config,
         kernel_size,
+        dilation,
+        padding,
         groups,
         has_bias,
         compute_config);
@@ -806,20 +959,10 @@ static OptimizedConvBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
-    auto output_parallel_config = parallel_config;
-    if (conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
-        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-        output_parallel_config = {
-            .grid = tt::tt_metal::num_cores_to_corerangeset(
-                find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
-                compute_grid_size,
-                true),
-            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_orientation = parallel_config.shard_orientation};
-        log_debug(tt::LogOp, "Changing width sharded output grid to  {}", output_parallel_config.grid);
-    }
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, shard_orientation, mm_conv);
 
-    auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
+    MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
             {1,
              1,
@@ -829,13 +972,15 @@ static OptimizedConvBlockConfig get_opt_block_config(
                  get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
-    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
-                                       ? output_parallel_config
-                                       : parallel_config;
-    auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(parallel_config));
+    ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
+                                                 ? output_parallel_config
+                                                 : parallel_config;
+    OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
+        determine_conv_op_parallel_config_from_conv_output_mem_config(
+            conv_out_memory_config,
+            get_num_cores_nhw_from_parallel_config(parallel_config),
+            get_num_cores_channels_from_parallel_config(parallel_config),
+            get_num_cores_channels_from_parallel_config(output_parallel_config));
 
     uint32_t in_channels_padded =
         tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
@@ -852,9 +997,10 @@ static OptimizedConvBlockConfig get_opt_block_config(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader,
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
@@ -940,6 +1086,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         kernel_size,
         stride,
+        dilation,
+        padding_n4,
         device,
         conv_config,
         input_layout,
@@ -982,7 +1130,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+        parallel_config, device->compute_with_storage_grid_size(), out_channels, shard_orientation, mm_conv);
 
     return Conv2dWeightsBiasPrepConfig(
         input_channels_alignment,
@@ -998,6 +1146,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
         conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse,
         kernel_size,
         orig_stride,
         padding_n4);
@@ -1056,6 +1205,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         out_channels);
 
     uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(params.input_parallel_config);
+    uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(params.output_parallel_config);
     uint32_t out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config);
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
     uint32_t out_channel_padding = out_channels_padded - out_channels;
@@ -1067,10 +1217,18 @@ static ttnn::Tensor prepare_conv_weights_internal(
     // for conv op, pad the weights to block shape
     if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
-            weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
+            weight_tensor_,
+            params.weight_block_h_ntiles,
+            params.weight_block_w_ntiles,
+            params.enable_activation_reuse,
+            weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-            weight_tensor_, input_num_cores_channels, params.full_inner_dim, weight_tensor_.dtype());
+            weight_tensor_,
+            input_num_cores_channels,
+            output_num_cores_channels,
+            params.full_inner_dim,
+            weight_tensor_.dtype());
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());

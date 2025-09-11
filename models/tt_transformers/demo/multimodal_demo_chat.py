@@ -25,9 +25,17 @@ from models.tt_transformers.tt.generator import Generator
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -35,6 +43,7 @@ from models.tt_transformers.tt.generator import Generator
     "target",
     ("tt", "cpu"),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_multimodal_demo_chat(
     mesh_device,
     target,

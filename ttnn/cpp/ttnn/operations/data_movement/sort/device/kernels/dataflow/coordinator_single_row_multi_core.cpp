@@ -111,6 +111,7 @@ void kernel_main() {
 
         // Set signal to start processing
         noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+        noc_async_atomic_barrier();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -123,6 +124,7 @@ void kernel_main() {
                 // Set signal to start processing next sub-stage
                 noc_semaphore_set_multicast(
                     coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+                noc_async_atomic_barrier();
 
                 // Wait until cores will process and save data
                 noc_semaphore_wait(semaphore_ptr, number_of_confirmations);

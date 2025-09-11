@@ -19,7 +19,6 @@ def convnet_mnist(
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
-        activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         reshard_if_not_optimal=True,
         deallocate_activation=True,

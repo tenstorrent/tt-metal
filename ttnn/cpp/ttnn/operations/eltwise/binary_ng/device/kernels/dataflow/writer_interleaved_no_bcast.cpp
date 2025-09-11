@@ -27,30 +27,25 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_id_src = tt::CBIndex::c_1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto cb_id_dst = tt::CBIndex::c_2;
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 #else
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
 
-    constexpr auto cb_id_dst = tt::CBIndex::c_2;
 #if !DST_SHARDED
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 #endif
 
 #if !SRC_SHARDED || !DST_SHARDED
-    constexpr bool has_sharding = get_compile_time_arg_val(2) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

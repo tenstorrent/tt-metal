@@ -5,8 +5,10 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
+@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
