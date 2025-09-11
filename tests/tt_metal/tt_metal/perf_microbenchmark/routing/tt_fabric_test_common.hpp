@@ -1480,7 +1480,18 @@ private:
         }
 
         TT_FATAL(current != src_coord, "Unicast invalid: Destination is source after hops");
-
+        // at end of compute_unicast_destinations
+        log_info(
+            tt::LogTest,
+            "Route(unicast): src=({},{}), hops E/N/S/W={}/{}/{}/{}, dst=({}, {})",
+            src_coord.coords()[0],
+            src_coord.coords()[1],
+            hops.count(RoutingDirection::E) ? hops.at(RoutingDirection::E) : 0,
+            hops.count(RoutingDirection::N) ? hops.at(RoutingDirection::N) : 0,
+            hops.count(RoutingDirection::S) ? hops.at(RoutingDirection::S) : 0,
+            hops.count(RoutingDirection::W) ? hops.at(RoutingDirection::W) : 0,
+            current.coords()[0],
+            current.coords()[1]);
         return {get_fabric_node_id(current)};
     }
 

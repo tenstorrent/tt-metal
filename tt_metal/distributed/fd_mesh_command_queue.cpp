@@ -212,23 +212,23 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    log_info(tt::LogTest, "Enqueuing MeshWorkload, within internal helper");
+    // log_info(tt::LogTest, "Enqueuing MeshWorkload, within internal helper");
     auto lock = lock_api_function_();
-    log_info(tt::LogTest, "Acquired FDMeshCommandQueue lock");
+    // log_info(tt::LogTest, "Acquired FDMeshCommandQueue lock");
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
-    log_info(tt::LogTest, "Command Hashed");
+    // log_info(tt::LogTest, "Command Hashed");
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
-    log_info(tt::LogTest, "Sub-device IDs determined");
+    // log_info(tt::LogTest, "Sub-device IDs determined");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    log_info(tt::LogTest, "Dispatch core type determined");
+    // log_info(tt::LogTest, "Dispatch core type determined");
     if (!sysmem_manager.get_bypass_mode()) {
-        log_info(tt::LogTest, "Not in bypass mode, syncing dispatch core");
+        // log_info(tt::LogTest, "Not in bypass mode, syncing dispatch core");
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
         sub_device.take_ownership(sub_device_id, this->id_);
@@ -404,11 +404,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
-    log_info(tt::LogTest, "MeshWorkload dispatched, exiting internal helper");
+    // log_info(tt::LogTest, "MeshWorkload dispatched, exiting internal helper");
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
     }
-    log_info(tt::LogTest, "Exiting FDMeshCommandQueue::enqueue_mesh_workload() internal helper");
+    // log_info(tt::LogTest, "Exiting FDMeshCommandQueue::enqueue_mesh_workload() internal helper");
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
@@ -489,19 +489,20 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
-    log_info(tt::LogTest, "Entering FDMeshCommandQueue::finish_nolock()");
+    // log_info(tt::LogTest, "Entering FDMeshCommandQueue::finish_nolock()");
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
-    log_info(tt::LogTest, "Event recorded to host");
+    // log_info(tt::LogTest, "Event recorded to host");
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    log_info(tt::LogTest, "Waiting for reads to process");
+    // log_info(tt::LogTest, "Waiting for reads to process");
+    // log_info(tt::LogTest, "Num outstanding reads: {}", num_outstanding_reads_.load());
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
-    log_info(tt::LogTest, "Reads processed");
+    // log_info(tt::LogTest, "Reads processed");
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
-    log_info(tt::LogTest, "Finished waiting for reads to process");
+    // log_info(tt::LogTest, "Finished waiting for reads to process");
     if (should_handle_exception_.load()) {
         std::lock_guard<std::mutex> exception_lock(exception_mutex_);
         if (auto exception_ptr = thread_exception_ptr_) {
@@ -513,7 +514,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
             std::rethrow_exception(exception_ptr);
         }
     }
-    log_info(tt::LogTest, "Exiting FDMeshCommandQueue::finish_nolock()");
+    // log_info(tt::LogTest, "Exiting FDMeshCommandQueue::finish_nolock()");
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -615,6 +616,7 @@ void FDMeshCommandQueue::read_shard_from_device(
 void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
     {
         std::lock_guard lock(reader_thread_cv_mutex_);
+        // log_info(tt::LogTest, "Incrementing num outstanding reads");
         num_outstanding_reads_++;
         reader_thread_cv_.notify_one();
     }

@@ -489,11 +489,15 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 // We assume the pre-specified address is valid.
                 continue;
             }
-
             if (dest.hops.has_value()) {  // process based on hops
                 std::vector<FabricNodeId> dst_node_ids =
                     route_manager_.get_dst_node_ids_from_hops(sender.device, dest.hops.value(), pattern.ftype.value());
-
+                log_info(
+                    tt::LogTest,
+                    "Alloc(hops): src={} dsts.size={} dsts(first few)={}",
+                    sender.device,
+                    dst_node_ids.size(),
+                    dst_node_ids.size() ? dst_node_ids[0].chip_id : (uint32_t)-1);
                 uint32_t chunk_size = policies_.default_payload_chunk_size;
                 TT_FATAL(
                     pattern.size.value() <= chunk_size,
@@ -612,7 +616,17 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 if (uniform_atomic_receiver.has_value()) {
                     dest.atomic_inc_address = uniform_atomic_receiver->second;
                 }
-
+                if (selected_core.has_value()) {
+                    log_info(
+                        tt::LogTest,
+                        "Alloc(hops): selected_core=({},{}), payload_addr={}, atomic_addr={}",
+                        selected_core->x,
+                        selected_core->y,
+                        uniform_payload_receiver ? uniform_payload_receiver->second : 0,
+                        uniform_atomic_receiver ? uniform_atomic_receiver->second : 0);
+                } else {
+                    log_info(tt::LogTest, "Alloc(hops): FAILED to find uniform core/addresses across dsts");
+                }
                 // Reserve resources on all destination devices
                 for (const auto& node_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(node_id);
@@ -639,7 +653,6 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                 auto& core_resources =
                     device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
-
                 bool allocate_write_address = true;
                 bool allocate_atomic_inc_address = true;
                 if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE ||
@@ -666,6 +679,14 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 if (allocate_atomic_inc_address) {
                     dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
+                log_info(
+                    tt::LogTest,
+                    "Alloc(device): dst={} core=({},{}), payload_addr={}, atomic_addr={}",
+                    dest.device.value(),
+                    dest.core->x,
+                    dest.core->y,
+                    dest.target_address.value_or(0),
+                    dest.atomic_inc_address.value_or(0));
             }
         }
     }

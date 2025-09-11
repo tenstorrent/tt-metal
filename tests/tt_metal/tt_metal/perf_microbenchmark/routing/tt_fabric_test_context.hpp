@@ -528,9 +528,16 @@ private:
     }
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
-        // This function now assumes all allocation has been done by the GlobalAllocator.
-        // It is responsible for taking the planned config and setting up the TestDevice objects.
         const auto& src_node_id = traffic_config.src_node_id;
+
+        TT_FATAL(
+            traffic_config.src_logical_core.has_value(),
+            "add_traffic_config: src_logical_core missing for src {}",
+            src_node_id);
+        TT_FATAL(
+            traffic_config.dst_logical_core.has_value(),
+            "add_traffic_config: dst_logical_core missing for src {}",
+            src_node_id);
 
         CoreCoord src_logical_core = traffic_config.src_logical_core.value();
         CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
@@ -542,29 +549,49 @@ private:
 
         if (traffic_config.hops.has_value()) {
             hops = traffic_config.hops;
+            log_info(
+                tt::LogTest,
+                "add_traffic_config: hops present E/N/S/W={}/{}/{}/{}, chip_send_type={}",
+                hops->count(RoutingDirection::E) ? hops->at(RoutingDirection::E) : 0,
+                hops->count(RoutingDirection::N) ? hops->at(RoutingDirection::N) : 0,
+                hops->count(RoutingDirection::S) ? hops->at(RoutingDirection::S) : 0,
+                hops->count(RoutingDirection::W) ? hops->at(RoutingDirection::W) : 0,
+                traffic_config.parameters.chip_send_type);
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
+            log_info(
+                tt::LogTest,
+                "add_traffic_config: resolved dst_node_ids.size()={} (first chip_id={})",
+                dst_node_ids.size(),
+                dst_node_ids.empty() ? -1 : dst_node_ids[0].chip_id);
+            const_cast<TestTrafficConfig&>(traffic_config).dst_node_ids = dst_node_ids;  // for visibility
         } else {
+            log_info(
+                tt::LogTest,
+                "add_traffic_config: hops absent; dst_node_ids provided? {}",
+                traffic_config.dst_node_ids.has_value());
+            TT_FATAL(
+                traffic_config.dst_node_ids.has_value(),
+                "add_traffic_config: neither hops nor dst_node_ids provided for src {}",
+                src_node_id);
             dst_node_ids = traffic_config.dst_node_ids.value();
 
-            // assign hops for 2d LL and 1D
             if (!(fixture_->is_dynamic_routing_enabled())) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
         }
 
-        // for 2d, we need to spcify the mcast start node id
-        // TODO: in future, we should be able to specify the mcast start node id in the traffic config
+        // mcast start for 2D CHIP_MULTICAST
         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
         if (fixture_->is_2D_routing_enabled() &&
             traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            TT_FATAL(hops.has_value(), "add_traffic_config: hops required for multicast but missing");
             mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());
         }
 
         uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
-        // Get payload buffer size from receiver memory map (cached during initialization)
         uint32_t payload_buffer_size = receiver_memory_map_.get_payload_chunk_size();
 
         TestTrafficSenderConfig sender_config = {
@@ -587,6 +614,49 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
+        // Compute canonical “equivalence signatures”
+        auto hash_vec = [](const std::vector<uint32_t>& v) {
+            uint64_t h = 1469598103934665603ull;  // FNV-1a 64-bit
+            for (auto x : v) {
+                h ^= x;
+                h *= 1099511628211ull;
+            }
+            return h;
+        };
+        const auto sender_args = sender_config.get_args(false);
+        const auto receiver_args = receiver_config.get_args();
+        uint64_t sender_sig = hash_vec(sender_args);
+        uint64_t receiver_sig = hash_vec(receiver_args);
+
+        // Summary line: identical between “hops” and “device” proves equivalence
+        log_info(
+            tt::LogTest,
+            "TrafficEquivalence: src=(M{}, D{}) dst=(M{}, D{}) dst_core=({}, {}) tgt=0x{:x} atm=0x{:x} link={} "
+            "dst_noc={} "
+            "chip_send={} noc_send={} size={} packets={} seed={} dyn={} 2D={} sender_args_len={} hash=0x{:016x} "
+            "recv_args_len={} hash=0x{:016x}",
+            *src_node_id.mesh_id,
+            src_node_id.chip_id,
+            dst_node_ids.empty() ? -1 : *dst_node_ids[0].mesh_id,
+            dst_node_ids.empty() ? -1 : dst_node_ids[0].chip_id,
+            dst_logical_core.x,
+            dst_logical_core.y,
+            target_address,
+            atomic_inc_address,
+            traffic_config.link_id.value_or(0),
+            dst_noc_encoding,
+            traffic_config.parameters.chip_send_type,
+            traffic_config.parameters.noc_send_type,
+            traffic_config.parameters.payload_size_bytes,
+            traffic_config.parameters.num_packets,
+            traffic_config.parameters.seed,
+            traffic_config.parameters.is_dynamic_routing_enabled,
+            traffic_config.parameters.is_2D_routing_enabled,
+            sender_args.size(),
+            sender_sig,
+            receiver_args.size(),
+            receiver_sig);
+
         if (fixture_->is_local_fabric_node_id(src_node_id)) {
             const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
             auto& src_test_device = this->test_devices_.at(src_coord);
@@ -599,6 +669,20 @@ private:
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
             }
         }
+        const auto src_mc = this->fixture_->get_device_coord(src_node_id);
+        const auto dst_mc = this->fixture_->get_device_coord(dst_node_ids[0]);
+
+        log_info(
+            tt::LogTest,
+            "Route(unicast, device path): src=({},{}), dst=({},{}), hops E/N/S/W={}/{}/{}/{}",
+            src_mc[0],
+            src_mc[1],
+            dst_mc[0],
+            dst_mc[1],
+            hops->count(RoutingDirection::E) ? hops->at(RoutingDirection::E) : 0,
+            hops->count(RoutingDirection::N) ? hops->at(RoutingDirection::N) : 0,
+            hops->count(RoutingDirection::S) ? hops->at(RoutingDirection::S) : 0,
+            hops->count(RoutingDirection::W) ? hops->at(RoutingDirection::W) : 0);
     }
 
     void initialize_memory_maps() {
