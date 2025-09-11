@@ -148,17 +148,13 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
             reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
-        {"output_cb_index", output_cb_index},
-    };
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t compute_kernel_id = 0;
     if (swap_hw) {
@@ -399,11 +395,11 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         {"padding_val_packed", padding_val_packed},
         {"needs_padding", needs_padding},
         {"swap_hw", swap_hw},
-        {"input_shape[rank - 1]", input_shape[rank - 1]},
-        {"input_shape[rank - 2]", input_shape[rank - 2]},
+        {"H", input_shape[rank - 1]},
+        {"W", input_shape[rank - 2]},
         {"accumulated_outer_dims", accumulated_outer_dims},
-        {"tile_shape[1]", tile_shape[1]},
-        {"tile_shape[0]", tile_shape[0]},
+        {"tile_height", tile_shape[1]},
+        {"tile_width", tile_shape[0]},
     };
 
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
