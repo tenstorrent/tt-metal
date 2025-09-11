@@ -214,7 +214,7 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        trace_key = prefill_seq_len + batch_size
+        trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id, batch_size=batch_size
