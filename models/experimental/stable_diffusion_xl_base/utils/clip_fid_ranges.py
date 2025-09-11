@@ -25,7 +25,7 @@ CLIP_DELTA_RANGE_106_PERCENT_100 = (31.639151219830346, 32.17464952450337)
 
 def accuracy_check_fid(score, num_prompts, mode):
     # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
-    assert mode in {"valid", "approx", "delta"}, "mode should be either 'valid' or 'approx' or 'delta'"
+    assert mode in {"valid", "approx", "delta"}, "mode should be either valid, approx, or delta"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
 
@@ -41,7 +41,7 @@ def accuracy_check_fid(score, num_prompts, mode):
 
 def accuracy_check_clip(score, num_prompts, mode):
     # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
-    assert mode in {"valid", "approx", "delta"}, "mode should be either 'valid', 'approx', or 'delta'"
+    assert mode in {"valid", "approx", "delta"}, "mode should be either valid, approx, or delta"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
 
@@ -65,7 +65,7 @@ def get_appr_delta_metric(score, num_prompts, score_type):
     Note:
         1.06 is used to adjust the range to the approximate range (+/- 3%)
     """
-    assert score_type in {"fid", "clip"}, "score_type should be either 'fid' or 'clip'"
+    assert score_type in {"fid", "clip"}, "score_type should be either fid or clip"
     if num_prompts not in {100, 5000}:
         return -1
 
