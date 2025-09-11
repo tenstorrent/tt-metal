@@ -162,12 +162,9 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
     this->resolve_hostname_uniqueness();
-    std::cout << "Run local discovery" << std::endl;
     this->run_local_discovery();
     if (run_global_discovery) {
-        std::cout << "Run global discovery" << std::endl;
         this->run_global_discovery();
-        std::cout << "Done with discovery" << std::endl;
     }
 }
 
@@ -262,13 +259,9 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     auto my_rank = *(distributed_context.rank());
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
-        std::cout << "remove unresolved nodes" << std::endl;
         this->remove_unresolved_nodes();
-        std::cout << "generate cross host connections" << std::endl;
         this->generate_cross_host_connections();
-        std::cout << "validate graphs" << std::endl;
         this->validate_graphs();
-        std::cout << "Done with global discovery" << std::endl;
     }
     this->exchange_metadata(false);
     distributed_context.barrier();
@@ -377,7 +370,6 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
-    std::cout << "Build Host Connectivity Graph" << std::endl;
     for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
         std::unordered_map<std::string, size_t> visited_hosts;
         for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
@@ -403,7 +395,6 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
             }
         }
     }
-    std::cout << "Done build Host Connectivity Graph" << std::endl;
 
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
@@ -414,13 +405,8 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                     continue;
                 }
                 for (auto& eth_conn : eth_conns) {
-                    std::cout << "update src chan for " << *src_asic << " " << src_host << " " << +eth_conn.src_chan
-                              << std::endl;
                     eth_conn.src_chan = physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(eth_conn.src_chan);
-                    std::cout << "update dst chan for " << *dst_asic << " " << dst_host << " " << +eth_conn.dst_chan
-                              << std::endl;
                     eth_conn.dst_chan = physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
-                    std::cout << "Done update dst chan" << std::endl;
                 }
             }
         }
@@ -435,27 +421,6 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                     exit_node_connections.eth_conn.src_chan);
                 exit_node_connections.eth_conn.dst_chan = physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(
                     exit_node_connections.eth_conn.dst_chan);
-            }
-        }
-    }
-}
-
-void PhysicalSystemDescriptor::update_asic_graph() {
-    for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
-        for (auto& [src_asic, edges] : asic_group) {
-            auto& src_host = asic_descriptors_.at(src_asic).host_name;
-            for (auto& [dst_asic, eth_conns] : edges) {
-                auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
-                if (src_host != dst_host) {
-                    for (auto& eth_conn : eth_conns) {
-                        std::cout << "Updated dst chan for " << *src_asic << " to " << *dst_asic << " from "
-                                  << +eth_conn.dst_chan << " to "
-                                  << +physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan)
-                                  << " src chan: " << +eth_conn.src_chan << std::endl;
-                        eth_conn.dst_chan =
-                            physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
-                    }
-                }
             }
         }
     }
@@ -623,9 +588,6 @@ void PhysicalSystemDescriptor::validate_graphs() {
                                    exit_node_conn.eth_conn.src_chan == eth_conn.src_chan &&
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
-                    std::cout << "Connection: " << *src_asic << " -> " << *dst_asic << " with chans "
-                              << +eth_conn.src_chan << " -> " << +eth_conn.dst_chan << " found: " << exit_conn_found
-                              << std::endl;
                     TT_FATAL(
                         exit_conn_found,
                         "Physical Discovery Error: Global Connection between {} and {} is not found in the "

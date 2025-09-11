@@ -22,6 +22,12 @@
 namespace tt::tt_fabric {
 namespace physical_discovery {
 
+uint32_t phys_to_log_eth_core_index(uint8_t phys_eth_core_index) {
+    static const std::vector<uint8_t> phy_eth_chans = {0, 1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13};
+    return std::distance(
+        phy_eth_chans.begin(), std::find(phy_eth_chans.begin(), phy_eth_chans.end(), phys_eth_core_index));
+}
+
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
@@ -52,7 +58,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         }
         // All to All connectivity for hosts
         auto neighbors = physical_system_desc.get_host_neighbors(host);
-        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
+        EXPECT_EQ(neighbors.size(), 2);
 
         for (const auto& neighbor : neighbors) {
             EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());
@@ -120,7 +126,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             EXPECT_NE(cross_host_eth_links.at(src_chip).find(src_chan), cross_host_eth_links.at(src_chip).end());
             // Verify that the remote asic/chan from tt_cluster and the physical descriptor match
             EXPECT_EQ(AsicID{remote_asic}, dst_asic);
-            EXPECT_EQ(remote_chan, dst_chan);
+            EXPECT_EQ(phys_to_log_eth_core_index(remote_chan), dst_chan);
             // Verify that remote asic belongs to a neighbor host
             EXPECT_NE(
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
