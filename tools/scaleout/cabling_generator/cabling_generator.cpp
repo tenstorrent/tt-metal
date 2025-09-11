@@ -26,6 +26,8 @@
 
 namespace tt::scaleout_tools {
 
+namespace {
+
 // Helper to load protobuf descriptors
 template <typename Descriptor>
 Descriptor load_descriptor_from_textproto(const std::string& file_path) {
@@ -301,6 +303,8 @@ void populate_deployment_hosts(
             .motherboard = node_templates.at(proto_host.node_type()).motherboard});
     }
 }
+
+}  // anonymous namespace
 
 // Constructor
 CablingGenerator::CablingGenerator(
