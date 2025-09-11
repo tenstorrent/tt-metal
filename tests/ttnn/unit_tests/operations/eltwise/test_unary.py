@@ -1725,4 +1725,5 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, input_range, devi
     golden_tensor = golden_function(in_data1, device=device)
     tt_res = ttnn.to_torch(output_tensor)
 
+    assert_with_ulp(output_tensor, golden_tensor)
     assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
