@@ -16,9 +16,8 @@
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
 #include <tt-metalium/tt_backend_api_types.hpp>
 using CommonDataFormat = tt::DataFormat;
-#else
+#else  // HW already includes tensix_types.h
 #include "core_config.h"
-#include "tensix_types.h"
 using CommonDataFormat = DataFormat;
 #endif
 
