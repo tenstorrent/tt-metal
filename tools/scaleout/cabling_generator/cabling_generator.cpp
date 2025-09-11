@@ -6,6 +6,8 @@
 
 #include <board/board.hpp>
 #include <connector/connector.hpp>
+#include <node/node_types.hpp>
+#include <node/node.hpp>
 
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
@@ -52,10 +54,8 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descripto
         return it->second;
     }
 
-    // Fallback: load from file
-    // TODO: This should be converted to factory functions
-    return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::NodeDescriptor>(
-        "tools/scaleout/cabling_descriptor/instances/" + node_descriptor_name + ".textproto");
+    auto node_type = get_node_type_from_string(node_descriptor_name);
+    return create_node_descriptor(node_type);
 }
 
 // Build node from descriptor with port connections and validation
@@ -404,6 +404,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     printer.SetUseShortRepeatedPrimitives(true);
     printer.SetUseUtf8StringEscaping(true);
     printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
 
     if (!printer.PrintToString(fsd, &output_string)) {
         throw std::runtime_error("Failed to write textproto to file: " + output_path);
