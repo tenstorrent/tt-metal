@@ -528,7 +528,10 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "q_proj.weight" in key or "k_proj.weight" in key:
+        if "vision_tower" in key:
+            # Skip conversion for vision tower weights
+            converted_weights[key] = tensor
+        elif "q_proj.weight" in key or "k_proj.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
@@ -653,8 +656,30 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+        ("patch_conv.weight", "patch_conv._linear.weight"),
     ]
     return replace_keys(loaded_weights, replacements)
+
+
+def map_vision_meta_to_hf_keys(loaded_weights):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    base_mapping = [
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+        ("_linear.weight", "weight"),
+    ]
+    mapping = base_mapping
+
+    return replace_keys(loaded_weights, mapping)
 
 
 def convert_vision_meta_to_hf(state_dict, head_dim):
