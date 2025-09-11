@@ -18,6 +18,7 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
+# TODO: Should refactor into an API directory
 target_sources(
     scaleout_tools
     PUBLIC
@@ -29,7 +30,10 @@ target_sources(
             cabling_generator/cabling_generator.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
+            node/node_types.hpp
     PRIVATE
+        node/node.cpp
+        node/node_types.cpp
         board/board.cpp
         cabling_generator/cabling_generator.cpp
         connector/connector.cpp

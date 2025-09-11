@@ -3,23 +3,23 @@ graph_templates {
   value {
     children {
       name: "node1"
-      node_ref { node_descriptor: "n300_lb_node" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     children {
       name: "node2"
-      node_ref { node_descriptor: "n300_lb_node" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     children {
       name: "node3"
-      node_ref { node_descriptor: "n300_lb_node" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     children {
       name: "node4"
-      node_ref { node_descriptor: "n300_lb_node" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     children {
       name: "node5"
-      node_ref { node_descriptor: "n300_lb_node" }
+      node_ref { node_descriptor: "N300_LB" }
     }
     internal_connections {
       key: "QSFP"

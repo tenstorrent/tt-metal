@@ -12,4 +12,5 @@ target_link_libraries(
     PRIVATE
         TT::ScaleoutTools
         gmock_main
+        enchantum::enchantum
 )

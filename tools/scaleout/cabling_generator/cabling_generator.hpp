@@ -31,6 +31,7 @@ struct Host {
     std::string aisle;
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
+    std::string motherboard;
 };
 
 struct LogicalChannelEndpoint {
@@ -55,6 +56,7 @@ struct PhysicalPortEndpoint {
     std::string aisle;
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
+    TrayId tray_id{0};
     PortType port_type = PortType::QSFP;
     PortId port_id{0};
 
@@ -69,6 +71,7 @@ using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChanne
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
 
 struct Node {
+    std::string motherboard;
     std::unordered_map<TrayId, Board> boards;
     HostId host_id{0};
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
@@ -115,6 +118,7 @@ public:
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
+    // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path) const;
 
 private:

@@ -30,7 +30,8 @@ Checks: >
   -readability-redundant-access-specifiers,
   -cppcoreguidelines-interfaces-global-init,
   -hicpp-use-equals-default,
-  -modernize-use-equals-default"
+  -modernize-use-equals-default,
+  -cppcoreguidelines-avoid-goto"
     )
 
     # Generate protobuf files by invoking protoc directly. This avoids depending on
@@ -61,6 +62,14 @@ Checks: >
         ${GENERATED_CC}
         ${GENERATED_H}
         PARENT_SCOPE
+    )
+
+    # Disable clang-tidy for generated protobuf files
+    set_source_files_properties(
+        ${GENERATED_CC}
+        PROPERTIES
+            CXX_CLANG_TIDY
+                ""
     )
 
     # Add to all_generated_files target if it exists

@@ -4,13 +4,17 @@
 
 #include "cabling_generator.hpp"
 
+#include <board/board.hpp>
+#include <connector/connector.hpp>
+#include <node/node_types.hpp>
+#include <node/node.hpp>
+
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
 #include <math.h>
 #include <google/protobuf/text_format.h>
-#include <connector/connector.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -22,6 +26,8 @@
 #include "protobuf/node_config.pb.h"
 
 namespace tt::scaleout_tools {
+
+namespace {
 
 // Helper to load protobuf descriptors
 template <typename Descriptor>
@@ -51,10 +57,8 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descripto
         return it->second;
     }
 
-    // Fallback: load from file
-    // TODO: This should be converted to factory functions
-    return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::NodeDescriptor>(
-        "tools/scaleout/cabling_descriptor/instances/" + node_descriptor_name + ".textproto");
+    auto node_type = get_node_type_from_string(node_descriptor_name);
+    return create_node_descriptor(node_type);
 }
 
 // Build node from descriptor with port connections and validation
@@ -76,6 +80,10 @@ Node build_node(
     Node template_node;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
+    if (node_descriptor.motherboard().empty()) {
+        throw std::runtime_error("Node descriptor " + node_descriptor_name + " missing motherboard");
+    }
+    template_node.motherboard = node_descriptor.motherboard();
 
     // Create boards with internal connections marked (using cached boards)
     for (const auto& board_item : node_descriptor.boards().board()) {
@@ -280,6 +288,25 @@ std::pair<Node&, HostId> resolve_node_from_path(
     }
 }
 
+void populate_deployment_hosts(
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::unordered_map<std::string, Node>& node_templates,
+    std::vector<Host>& deployment_hosts) {
+    // Store deployment hosts
+    deployment_hosts.reserve(deployment_descriptor.hosts().size());
+    for (const auto& proto_host : deployment_descriptor.hosts()) {
+        deployment_hosts.emplace_back(Host{
+            .hostname = proto_host.host(),
+            .hall = proto_host.hall(),
+            .aisle = proto_host.aisle(),
+            .rack = proto_host.rack(),
+            .shelf_u = proto_host.shelf_u(),
+            .motherboard = node_templates.at(proto_host.node_type()).motherboard});
+    }
+}
+
+}  // anonymous namespace
+
 // Constructor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
@@ -290,18 +317,6 @@ CablingGenerator::CablingGenerator(
     auto deployment_descriptor =
         load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
             deployment_descriptor_path);
-
-    // Store deployment hosts
-    deployment_hosts_.reserve(deployment_descriptor.hosts().size());
-    for (const auto& proto_host : deployment_descriptor.hosts()) {
-        deployment_hosts_.emplace_back(
-            Host{
-                .hostname = proto_host.host(),
-                .hall = proto_host.hall(),
-                .aisle = proto_host.aisle(),
-                .rack = proto_host.rack(),
-                .shelf_u = proto_host.shelf_u()});
-    }
 
     // Build cluster with all connections and port validation
     root_instance_ = build_graph_instance(
@@ -320,6 +335,9 @@ CablingGenerator::CablingGenerator(
 
     // Generate all logical chip connections
     generate_logical_chip_connections();
+
+    // Populate deployment hosts
+    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
 // Getters for all data
@@ -347,6 +365,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         host->set_aisle(deployment_host.aisle);
         host->set_rack(deployment_host.rack);
         host->set_shelf_u(deployment_host.shelf_u);
+        host->set_motherboard(deployment_host.motherboard);
     }
 
     // Add board types
@@ -390,6 +409,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     printer.SetUseShortRepeatedPrimitives(true);
     printer.SetUseUtf8StringEscaping(true);
     printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
 
     if (!printer.PrintToString(fsd, &output_string)) {
         throw std::runtime_error("Failed to write textproto to file: " + output_path);
@@ -450,6 +470,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path) co
 
     output_file.close();
 }
+
 
 // Validate that each host_id is assigned to exactly one node
 void CablingGenerator::validate_host_id_uniqueness() {
@@ -695,8 +716,8 @@ std::ostream& operator<<(std::ostream& os, const PhysicalChannelEndpoint& conn) 
 
 std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn) {
     os << "PhysicalPortEndpoint{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
-       << ", shelf_u=" << conn.shelf_u << ", port_type=" << enchantum::to_string(conn.port_type)
-       << ", port_id=" << *conn.port_id << "}";
+       << ", shelf_u=" << conn.shelf_u << ", tray_id=" << *conn.tray_id
+       << ", port_type=" << enchantum::to_string(conn.port_type) << ", port_id=" << *conn.port_id << "}";
     return os;
 }
 
@@ -724,7 +745,7 @@ template <>
 struct hash<tt::scaleout_tools::PhysicalPortEndpoint> {
     std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, conn.port_type, *conn.port_id);
+            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, *conn.tray_id, conn.port_type, *conn.port_id);
     }
 };
 

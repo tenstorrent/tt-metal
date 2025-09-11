@@ -59,8 +59,10 @@ void validate_fsd_against_gsd(
 
     // Check that all discovered hostnames are present in the generated FSD hosts
     std::set<std::string> generated_hostnames;
+    std::unordered_map<std::string, std::string> generated_motherboards;
     for (const auto& host : generated_fsd.hosts()) {
         generated_hostnames.insert(host.hostname());
+        generated_motherboards[host.hostname()] = host.motherboard();
     }
 
     std::set<std::string> discovered_hostnames;
@@ -77,6 +79,20 @@ void validate_fsd_against_gsd(
             if (generated_hostnames.find(hostname) == generated_hostnames.end()) {
                 throw std::runtime_error("Hostname not found in FSD: " + hostname);
             }
+        }
+    }
+
+    // Compare motherboards
+    for (const auto& host_entry : asic_info_node) {
+        const std::string& hostname = host_entry.first.as<std::string>();
+        const YAML::Node& host_node = host_entry.second;
+        if (!host_node["motherboard"]) {
+            throw std::runtime_error("Host " + hostname + " missing motherboard in GSD");
+        }
+        if (generated_motherboards[hostname] != host_node["motherboard"].as<std::string>()) {
+            throw std::runtime_error(
+                "Motherboard mismatch between FSD and GSD for host " + hostname +
+                ": FSD=" + generated_motherboards[hostname] + ", GSD=" + host_node["motherboard"].as<std::string>());
         }
     }
 
@@ -105,8 +121,8 @@ void validate_fsd_against_gsd(
 
     // Compare board types between GSD and FSD
     for (const auto& host_entry : asic_info_node) {
-        std::string hostname = host_entry.first.as<std::string>();
-        YAML::Node host_node = host_entry.second;
+        const std::string& hostname = host_entry.first.as<std::string>();
+        const YAML::Node& host_node = host_entry.second;
         if (!host_node["asic_info"]) {
             throw std::runtime_error("Host " + hostname + " missing asic_info");
         }
@@ -359,6 +375,7 @@ void validate_fsd_against_gsd(
                         host.aisle(),
                         host.rack(),
                         host.shelf_u(),
+                        conn.first.tray_id,
                         port_a.port_type,
                         port_a.port_id};
                     break;
@@ -373,6 +390,7 @@ void validate_fsd_against_gsd(
                         host.aisle(),
                         host.rack(),
                         host.shelf_u(),
+                        conn.second.tray_id,
                         port_b.port_type,
                         port_b.port_id};
                     break;

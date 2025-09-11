@@ -59,6 +59,13 @@ public:
         const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& internal_connections,
         const tt::umd::BoardType& board_type);
 
+    // Constructor that takes a pair of ports and connections
+    Board(
+        const std::pair<
+            std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
+            std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>& ports_and_connections,
+        const tt::umd::BoardType& board_type);
+
     const tt::umd::BoardType& get_board_type() const;
 
     // Get available port IDs for a specific port type

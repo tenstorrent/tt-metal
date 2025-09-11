@@ -3,23 +3,23 @@ graph_templates {
   value {
     children {
       name: "node1"
-      node_ref { node_descriptor: "wh_galaxy_y_torus_node" }
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     children {
       name: "node2"
-      node_ref { node_descriptor: "wh_galaxy_y_torus_node" }
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     children {
       name: "node3"
-      node_ref { node_descriptor: "wh_galaxy_y_torus_node" }
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     children {
       name: "node4"
-      node_ref { node_descriptor: "wh_galaxy_y_torus_node" }
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     children {
       name: "node5"
-      node_ref { node_descriptor: "wh_galaxy_y_torus_node" }
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     internal_connections {
       key: "QSFP"
