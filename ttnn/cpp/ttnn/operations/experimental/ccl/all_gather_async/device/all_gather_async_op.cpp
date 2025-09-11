@@ -346,7 +346,7 @@ Tensor all_gather_async_impl(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<uint32_t>& cluster_axis,
-    const MeshDevice& mesh_device,
+    const MeshDevice* mesh_device,
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
@@ -357,6 +357,7 @@ Tensor all_gather_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
 
+    std::vector<IDevice*> devices{};
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
@@ -364,7 +365,7 @@ Tensor all_gather_async_impl(
         // Use the mesh dimensions to determine the ring size
         num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     } else {
-        const std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+        devices = ttnn::ccl::get_active_physical_devices(input_tensor);
         num_devices = devices.size();
     }
 
@@ -392,7 +393,7 @@ Tensor all_gather_async_impl(
                    multi_device_global_semaphore,
                    sub_device_id,
                    cluster_axis,
-                   &mesh_device,
+                   mesh_device,
                    use_all_gather_async_llama_sharded,
                    use_optimal_ccl_for_llama,
                    barrier_semaphore,
@@ -517,7 +518,7 @@ Tensor all_gather_async(
         topology,
         sub_device_id,
         cluster_axis,
-        *(input_tensor.device()),
+        input_tensor.device(),
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
         barrier_semaphore,
@@ -530,13 +531,13 @@ std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
     const std::vector<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
     bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore,
@@ -556,10 +557,10 @@ std::vector<Tensor> all_gather_async(
             topology,
             sub_device_id,
             cluster_axis,
-            mesh_device,
+            &mesh_device,
             use_all_gather_async_llama_sharded,
             use_optimal_ccl_for_llama,
-            barrier_semaphore[i],
+            barrier_semaphore.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphore.value()[i]) : std::nullopt,
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel));

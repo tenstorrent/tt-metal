@@ -271,6 +271,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         multi_device_global_semaphore,
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
+        input_tensor.device(),
         false,
         false,
         barrier_semaphore,
