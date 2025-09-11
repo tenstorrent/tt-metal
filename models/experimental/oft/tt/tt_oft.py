@@ -122,7 +122,16 @@ class OFT:
         if features.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
             features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
 
+        # features = ttnn.mul(features, ttnn.from_torch(torch.tensor(1024*1024), device=device, dtype=ttnn.bfloat16))
+        # features = ttnn.typecast(features, ttnn.uint32)
+
+        features = ttnn.typecast(features, ttnn.float32)
         integral_image = ttnn_integral_image_channel_last(features)
+        integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
+
+        # integral_image = ttnn.typecast(integral_image, ttnn.bfloat16)
+        # integral_image = ttnn.mul(integral_image, ttnn.from_torch(torch.tensor(1/2/1024/1024), device=device, dtype=ttnn.bfloat16))
+
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)
 

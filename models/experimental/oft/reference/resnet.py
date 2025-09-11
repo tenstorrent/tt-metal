@@ -29,6 +29,31 @@ def printdebug_tensor_shape(tensor, name):
         logger.debug(f"{name} is None")
 
 
+class SequentialWithIntermediates(nn.Sequential):
+    """A sequential container that optionally returns intermediate activations."""
+
+    def __init__(self, *args, return_intermediates=False):
+        super(SequentialWithIntermediates, self).__init__(*args)
+        self.return_intermediates = return_intermediates
+
+    def forward(self, input):
+        intermediates = []
+        x = input
+
+        if self.return_intermediates:
+            intermediates.append(x.clone())
+
+        for module in self:
+            x = module(x)
+            if self.return_intermediates:
+                intermediates.append(x.clone())
+
+        if self.return_intermediates:
+            return x, intermediates
+        else:
+            return x
+
+
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -76,19 +101,26 @@ class BasicBlock(nn.Module):
 
 
 class ResNetFeatures(nn.Module):
-    def __init__(
-        self, block, layers, num_classes=1000, zero_init_residual=False, dtype=torch.float32, return_intermediates=False
-    ):
+    def __init__(self, block, layers, dtype, num_classes=1000, zero_init_residual=False, return_intermediates=False):
         super(ResNetFeatures, self).__init__()
         self.inplanes = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False, dtype=dtype)
         self.bn1 = nn.GroupNorm(16, 64)  # GroupNorm doesn't have dtype parameter
         self.dtype = dtype
+        self.return_intermediates = return_intermediates
 
-        self.layer1 = self._make_layer(block, 64, layers[0], dtype=dtype)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dtype=dtype)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dtype=dtype)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dtype=dtype)
+        self.layer1 = self._make_layer(
+            block, 64, layers[0], stride=1, dtype=dtype, return_intermediates=return_intermediates
+        )
+        self.layer2 = self._make_layer(
+            block, 128, layers[1], stride=2, dtype=dtype, return_intermediates=return_intermediates
+        )
+        self.layer3 = self._make_layer(
+            block, 256, layers[2], stride=2, dtype=dtype, return_intermediates=return_intermediates
+        )
+        self.layer4 = self._make_layer(
+            block, 512, layers[3], stride=2, dtype=dtype, return_intermediates=return_intermediates
+        )
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -107,14 +139,14 @@ class ResNetFeatures(nn.Module):
         # Convert all parameters and buffers to the specified dtype using PyTorch's to() method
         self.to(dtype)
 
-    def _make_layer(self, block, planes, blocks, stride=1, dtype=torch.float32):
+    def _make_layer(self, block, planes, blocks, stride=1, dtype=torch.float32, return_intermediates=False):
         layers = []
         layers.append(block(self.inplanes, planes, stride, dtype=dtype))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, dtype=dtype))
 
-        return nn.Sequential(*layers)
+        return SequentialWithIntermediates(*layers, return_intermediates=return_intermediates)
 
     def forward(self, x):
         if x.dtype != self.dtype:
@@ -130,14 +162,17 @@ class ResNetFeatures(nn.Module):
         conv1 = F.max_pool2d(conv1, 3, stride=2, padding=1)
         ref_conv1_maxpool = conv1.clone()
 
-        feats4 = self.layer1(conv1)
-        feats8 = self.layer2(feats4)
-        feats16 = self.layer3(feats8)
-        feats32 = self.layer4(feats16)
-
         if self.return_intermediates:
-            return [ref_x, ref_conv1f, ref_gn, ref_conv1, ref_conv1_maxpool], feats8, feats16, feats32
+            feats4, i4 = self.layer1(conv1)
+            feats8, i8 = self.layer2(feats4)
+            feats16, i16 = self.layer3(feats8)
+            feats32, i32 = self.layer4(feats16)
+            return [ref_x, i4, i8, i16, i32, ref_conv1f, ref_gn, ref_conv1, ref_conv1_maxpool], feats8, feats16, feats32
         else:
+            feats4 = self.layer1(conv1)
+            feats8 = self.layer2(feats4)
+            feats16 = self.layer3(feats8)
+            feats32 = self.layer4(feats16)
             return feats8, feats16, feats32
 
 

@@ -1,5 +1,9 @@
 import ttnn
 from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
+
+# from models.experimental.oft.tt.common import Conv
+# from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNorm
+# from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNormDRAM
 from loguru import logger
 
 try:
@@ -20,14 +24,14 @@ class TTBasicBlock:
             parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
         )
         if not is_sliced:
-            self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+            self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
-            self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+            self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
         if not is_sliced:
-            self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+            self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
-            self.bn2 = GroupNormDRAM(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+            self.bn2 = GroupNormDRAM(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         self.downsample = None
         if not is_sliced:
             if stride != 1 or inplanes != planes:
@@ -145,11 +149,24 @@ class TTResNetFeatures:
             )
         return layers
 
-    def _run_layer(self, device, x, layer, gn_shard="HS"):
-        # logger.debug(f"Running layer with gn_shard: {gn_shard}")
+    def _run_layer(self, device, x, layer, gn_shard="HS", return_intermediates=False):
+        """Run a layer with optional intermediate activation capture."""
+        intermediates = []
+
+        if return_intermediates:
+            intermediates.append(ttnn.to_torch(x).permute(0, 3, 1, 2))
+
         for block in layer:
             x = block.forward(device, x, gn_shard)
-        return x
+
+            if return_intermediates:
+                # Clone/copy each intermediate activation
+                intermediates.append(ttnn.to_torch(x).permute(0, 3, 1, 2))
+
+        if return_intermediates:
+            return x, intermediates
+        else:
+            return x
 
     def forward(self, device, x):
         if use_signpost:
@@ -164,7 +181,10 @@ class TTResNetFeatures:
         conv1 = ttnn.to_layout(conv1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
         conv1 = ttnn.relu(conv1)
-        host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
+        host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2).reshape(1, 64, 192, 640)
+
+        # import torch.nn.functional as F
+        # h_mp = F.max_pool2d(host_relu, 3, stride=2, padding=1).permute(0, 2, 3, 1).reshape(1, 1, 96 * 320, 64)
 
         cv1 = conv1[:, :, :, :32]  # Assuming conv1 has shape [N, H, W, C] and we want to keep the first 32 channels
         cv2 = conv1[:, :, :, 32:]  # The rest of the channels
@@ -180,6 +200,7 @@ class TTResNetFeatures:
             padding=[1, 1],
             dilation=[1, 1],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            ceil_mode=False,
         )
         ttnn.deallocate(cv1)
         conv2 = ttnn.max_pool2d(
@@ -193,27 +214,30 @@ class TTResNetFeatures:
             padding=[1, 1],
             dilation=[1, 1],
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            ceil_mode=False,
         )
         ttnn.deallocate(cv2)
         conv_c = ttnn.concat([conv1, conv2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(conv1)
         ttnn.deallocate(conv2)
-        conv_c = ttnn.move(conv_c)
-
+        # conv_c = ttnn.move(conv_c)
+        conv_c = ttnn.to_memory_config(conv_c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # conv_c = ttnn.from_torch(h_mp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         host_mp = ttnn.to_torch(conv_c).permute(0, 3, 1, 2)
-        feats4 = self._run_layer(device, conv_c, self.layer1)
+        feats4, i4 = self._run_layer(device, conv_c, self.layer1, return_intermediates=True)
 
         ttnn.deallocate(conv_c)
-        feats8 = self._run_layer(device, feats4, self.layer2)
+        feats8, i8 = self._run_layer(device, feats4, self.layer2, return_intermediates=True)
         feats8_interleaved = ttnn.sharded_to_interleaved(feats8, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.deallocate(feats4)
-        feats16 = self._run_layer(device, feats8, self.layer3)
+        feats16, i16 = self._run_layer(device, feats8, self.layer3, return_intermediates=True)
         feats16_interleaved = ttnn.sharded_to_interleaved(feats16, ttnn.DRAM_MEMORY_CONFIG)
 
-        ttnn.deallocate(feats8)
-        feats32 = self._run_layer(device, feats16, self.layer4, gn_shard="BS")
+        # if feats8.memory_config().buffer_type == ttnn.BufferType.DRAM:
+        # ttnn.deallocate(feats8)
+        feats32, i32 = self._run_layer(device, feats16, self.layer4, gn_shard="BS", return_intermediates=True)
         feats32_interleaved = ttnn.sharded_to_interleaved(feats32, ttnn.DRAM_MEMORY_CONFIG)
 
         if use_signpost:
@@ -221,7 +245,7 @@ class TTResNetFeatures:
 
         if self.return_intermediates:
             return (
-                [host_x, host_conv1f, host_gn, host_relu, host_mp],
+                [host_x, i4, i8, i16, i32, host_conv1f, host_gn, host_relu, host_mp],
                 feats8_interleaved,
                 feats16_interleaved,
                 feats32_interleaved,

@@ -48,7 +48,7 @@ class Conv:
                 bias_tensor = torch.zeros(conv_pt.out_channels)
                 self.bias = bias_tensor.view(1, 1, 1, -1)
                 # Convert bias to ttnn tensor
-                self.bias = ttnn.from_torch(self.bias, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
+                self.bias = ttnn.from_torch(self.bias, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
             self.has_bias = has_bias
             if self.has_bias:
@@ -98,6 +98,7 @@ class Conv:
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
+            # TODO(mbezulj): explore fidelity/fp32 settings. affects on frontend, latents, scores.
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -108,7 +109,7 @@ class Conv:
         # logger.debug(
         #     f"inpit_tensor shape: {input_tensor.shape}, conv_pt: {self.conv_pt} stride: {self.stride}, padding: {self.padding}"
         # )
-        [output_tensor, [out_h, out_w]] = ttnn.conv2d(
+        [output_tensor, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias if self.has_bias else None,
@@ -124,6 +125,7 @@ class Conv:
             conv_config=conv_config,
             compute_config=compute_config,
             return_output_dim=True,
+            return_weights_and_bias=True,
             slice_config=self.slice_config,
         )
         # logger.debug(f"Output tensor shape: {output_tensor.shape}, out_h: {out_h}, out_w: {out_w}")
@@ -134,7 +136,7 @@ class Conv:
 
 
 class GroupNorm:
-    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat8_b, is_sliced=False):
+    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat16, is_sliced=False):
         self.weight = parameters.weight
         self.bias = parameters.bias
         self.num_groups = num_groups
@@ -161,7 +163,7 @@ class GroupNorm:
         input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
         input_mask_tensor = ttnn.from_torch(
             input_mask_tensor,
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -172,14 +174,14 @@ class GroupNorm:
 
         gamma_t = ttnn.from_torch(
             gamma,
-            dtype=ttnn.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         beta_t = ttnn.from_torch(
             beta,
-            dtype=ttnn.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -220,7 +222,7 @@ class GroupNorm:
 
 
 class GroupNormDRAM:
-    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat8_b, is_sliced=False):
+    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat16, is_sliced=False):
         self.weight = parameters.weight
         self.bias = parameters.bias
         self.num_groups = num_groups
@@ -278,3 +280,93 @@ class GroupNormDRAM:
 
         # ttnn.synchronize_device(device)
         return output_tensor
+
+
+class GroupNorm_fallback:
+    def __init__(self, parameters, num_groups, channels, eps, dtype, is_sliced=False):
+        import torch.nn as nn
+
+        self.gn = nn.GroupNorm(num_groups, channels, eps=eps)
+        self.gn.weight = nn.Parameter(parameters.weight.clone())
+        self.gn.bias = nn.Parameter(parameters.bias.clone())
+
+    def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
+        torch_input_nchw = ttnn.to_torch(input_tensor, dtype=torch.float32).permute(0, 3, 1, 2)
+        torch_output_nhwc = self.gn(torch_input_nchw).permute(0, 2, 3, 1)
+        tt_output = ttnn.from_torch(torch_output_nhwc, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        return tt_output
+
+
+class Conv_fallback:
+    def __init__(
+        self,
+        parameters,
+        conv_pt,
+        *,
+        stride=1,
+        padding=1,
+        has_bias=False,
+        act_block_h=32,
+        dtype=ttnn.bfloat16,
+        activation="",
+        output_layout=ttnn.TILE_LAYOUT,
+        **kwargs,
+    ):
+        import torch.nn as nn
+
+        self.out_channels = conv_pt.out_channels
+        self.kernel_size = (parameters.weight.shape[2], parameters.weight.shape[3])
+        self.stride = conv_pt.stride
+        self.padding = conv_pt.padding
+        self.activation = activation
+        self.output_layout = output_layout
+        self.dtype = dtype
+        self.parameters = parameters
+        self.conv_pt = conv_pt
+
+        # Create PyTorch Conv2d
+        self.conv = nn.Conv2d(
+            in_channels=conv_pt.in_channels,
+            out_channels=conv_pt.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            bias=has_bias,
+        )
+
+        # Set weights
+        self.conv.weight = nn.Parameter(ttnn.to_torch(parameters.weight, dtype=torch.float32))
+        if has_bias:
+            self.conv.bias = nn.Parameter(ttnn.to_torch(parameters.bias, dtype=torch.float32))
+
+        # Handle activation
+        if self.activation == "relu":
+            self.act_fn = nn.ReLU()
+        else:
+            self.act_fn = nn.Identity()
+
+    def __call__(self, device, input_tensor):
+        # Convert NHWC to NCHW for PyTorch
+        torch_input_nchw = (
+            ttnn.to_torch(input_tensor, dtype=torch.float32)
+            .permute(0, 3, 1, 2)
+            .reshape(
+                self.conv_pt.batch_size, self.conv_pt.in_channels, self.conv_pt.input_height, self.conv_pt.input_width
+            )
+        )
+
+        # Apply convolution and activation
+        torch_output = self.conv(torch_input_nchw)
+        torch_output = self.act_fn(torch_output)
+
+        # Convert back from NCHW to NHWC for TTNN
+        torch_output_nhwc = torch_output.permute(0, 2, 3, 1)  # .reshape(1, 1, -1, self.out_channels)
+
+        # Calculate output dimensions
+        out_h = torch_output.shape[2]
+        out_w = torch_output.shape[3]
+
+        # Convert to TTNN tensor
+        tt_output = ttnn.from_torch(torch_output_nhwc, device=device, dtype=self.dtype, layout=self.output_layout)
+
+        return tt_output, out_h, out_w

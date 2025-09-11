@@ -26,8 +26,6 @@ from models.experimental.oft.tests.test_common import (
     load_checkpoint,
 )
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
-from models.experimental.oft.tt.tt_oftnet import TTOftNet
-from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
@@ -55,7 +53,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     [
        ( torch.float32, False, False, False, True,  False, 0.298, 0.717, 0.994, 0.745),
        ( torch.float32, False, False, False, True,   True, 0.970, 0.995, 0.999, 0.820),
-       ( torch.float32,  False,  True, False, True,  False, 0.882, 0.963, 0.998, 0.897),
+       ( torch.float32,  True,  True, False, True,  False, 0.882, 0.963, 0.998, 0.897),
        ( torch.float32, False, False, True, True,   False, 0.916, 0.883, 0.997, 0.934),
     ],
     ids=[
@@ -107,7 +105,7 @@ def test_oftnet(
         topdown_layers=topdown_layers,
         grid_res=GRID_RES,
         grid_height=GRID_HEIGHT,
-        dtype=model_dtype,
+        dtype=torch.float32,
         scale_features=scale_features,
     )
 
@@ -130,57 +128,67 @@ def test_oftnet(
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=model_dtype)
 
     # ========================================================
-    # TT model configuration
-
-    # Handle inputs
-    tt_input = input_tensor.permute((0, 2, 3, 1))
-    tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_calib = ttnn.from_torch(calib, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_grid = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Create TT OftNet
-    tt_module = TTOftNet(
-        device,
-        parameters,
-        parameters.conv_args,
-        TTBasicBlock,
-        [2, 2, 2, 2],
-        ref_model.mean,
-        ref_model.std,
-        input_shape_hw=input_tensor.shape[2:],
-        calib=calib,
-        grid=grid,
+    # Create lower precision model
+    test_model = OftNet(
+        num_classes=1,
+        frontend="resnet18",
         topdown_layers=topdown_layers,
         grid_res=GRID_RES,
         grid_height=GRID_HEIGHT,
-        host_fallback_model=ref_model,
-        fallback_feedforward=fallback_feedforward,
-        fallback_lateral=fallback_lateral,
-        fallback_oft=fallback_oft,  # True, #False, <----------------------------
+        dtype=torch.bfloat16,
         scale_features=scale_features,
     )
-
-    # Create TT Encoder
-    # TODO(mbezulj)
+    test_model = load_checkpoint(checkpoints_path, test_model)
 
     # ========================================================
-    # Run torch and ttnn inference pass
+    # Run torch fp32 and bfp16 inference pass
 
     intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
+
+    tt_intermediates, tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = test_model.forward(
+        input_tensor.to(torch.float32), calib, grid
+    )
     grid = grid.squeeze(0)  # TODO(mbezulj) align all shapes to get rid of squeezing/unsqueezing at random places
     ref_pred_encoded = [t.squeeze(0) for t in (scores, pos_offsets, dim_offsets, ang_offsets)]
     ref_detections, peaks = ref_encoder.forward(*ref_pred_encoded, grid)
-
-    (tt_intermediates, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
-        device, tt_input, tt_calib, tt_grid
+    layer_names = (
+        "image",
+        "feats8",
+        "feats16",
+        "feats32",
+        "lat8",
+        "lat16",
+        "lat32",
+        "integral_img8",
+        "integral_img16",
+        "integral_img32",
+        "bbox_top_left8",
+        "bbox_btm_right8",
+        "bbox_top_right8",
+        "bbox_btm_left8",
+        "bbox_top_left16",
+        "bbox_btm_right16",
+        "bbox_top_right16",
+        "bbox_btm_left16",
+        "bbox_top_left32",
+        "bbox_btm_right32",
+        "bbox_top_right32",
+        "bbox_btm_left32",
+        "ortho8",
+        "ortho16",
+        "ortho32",
+        "ortho",
+        "calib",
+        "grid",
+        "td",
     )
     ttnn_pred_encoded = [
         t.squeeze(0)
         for t in (
-            ttnn.to_torch(tt_scores, dtype=model_dtype),
-            ttnn.to_torch(tt_pos_offsets, dtype=model_dtype),
-            ttnn.to_torch(tt_dim_offsets, dtype=model_dtype),
-            ttnn.to_torch(tt_ang_offsets, dtype=model_dtype),
+            tt_scores.to(torch.float32),
+            tt_pos_offsets.to(torch.float32),
+            tt_dim_offsets.to(torch.float32),
+            tt_ang_offsets.to(torch.float32),
         )
     ]
     ttnn_detections, peaks = ref_encoder.forward(*ttnn_pred_encoded, grid)
@@ -191,19 +199,14 @@ def test_oftnet(
     # Check PCC on intermediates
     all_passed = True
     PCC_THRESHOLD = 0.990
-    for i, (out, tt_out, layer_name) in enumerate(zip(intermediates, tt_intermediates, layer_names)):
+    for i, (ref_out, test_out, layer_name) in enumerate(zip(intermediates, tt_intermediates, layer_names)):
         if "bbox" in layer_name:
             # bbox layers have different shape in TTNN vs torch, so skip them for now
             logger.warning(f"Skipping PCC check for bbox layer {layer_name} due to different shape in TTNN vs torch")
             continue
-        # conver tt output to torch, channel first, and correct shape
-        if isinstance(tt_out, ttnn.Tensor):
-            tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
-        else:
-            # logger.debug(f"Output {i} is not a ttnn.Tensor, skipping conversion")
-            tt_out_torch = tt_out.reshape(out.shape)  # assume it's already a torch tensor in the right format
-        passed, pcc = check_with_pcc(out, tt_out_torch, PCC_THRESHOLD)
-        abs, rel = get_abs_and_relative_error(out, tt_out_torch)
+
+        passed, pcc = check_with_pcc(ref_out, test_out, PCC_THRESHOLD)
+        abs, rel = get_abs_and_relative_error(ref_out, test_out)
 
         all_passed = all_passed and passed
         special_char = "✅" if passed else "❌"
@@ -212,8 +215,8 @@ def test_oftnet(
         # save latent and integral image distributions
         if "integral" in layer_name or "lat" in layer_name or "feat" in layer_name:
             # Visualize and save tensor distributions for integral layers
-            tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
-            fig = visualize_tensor_distributions(out, tt_out_torch, title1="Reference Integral", title2="TTNN Integral")
+
+            fig = visualize_tensor_distributions(ref_out, test_out, title1="Reference Integral", title2="TTNN Integral")
 
             # Create output filename with same naming pattern as other visualizations
             test_id = f"{'scaled_' if scale_features else ''}{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
@@ -223,20 +226,20 @@ def test_oftnet(
             plt.close(fig)
 
     # check PCC on the encoded outputs
-    tt_scores = ttnn.to_torch(tt_scores)
-    tt_pos_offsets = ttnn.to_torch(tt_pos_offsets)
-    tt_dim_offsets = ttnn.to_torch(tt_dim_offsets)
-    tt_ang_offsets = ttnn.to_torch(tt_ang_offsets)
+    # tt_scores = ttnn.to_torch(tt_scores)
+    # tt_pos_offsets = ttnn.to_torch(tt_pos_offsets)
+    # tt_dim_offsets = ttnn.to_torch(tt_dim_offsets)
+    # tt_ang_offsets = ttnn.to_torch(tt_ang_offsets)
 
     all_passed = []
     ref_outs = [scores, pos_offsets, dim_offsets, ang_offsets]
     tt_outs = [tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets]
     names = ["scores", "pos_offsets", "dim_offsets", "ang_offsets"]
     expected_pcc = [pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft]
-    for i, (out, tt_out, layer_name, exp_pcc) in enumerate(zip(ref_outs, tt_outs, names, expected_pcc)):
-        tt_out_torch = tt_out.reshape(out.shape)  # assume it's already a torch tensor in the right format
-        passed, pcc = check_with_pcc(out, tt_out_torch, exp_pcc)
-        abs, rel = get_abs_and_relative_error(out, tt_out_torch)
+    for i, (ref_out, tt_out, layer_name, exp_pcc) in enumerate(zip(ref_outs, tt_outs, names, expected_pcc)):
+        test_out = tt_out.reshape(ref_out.shape)  # assume it's already a torch tensor in the right format
+        passed, pcc = check_with_pcc(ref_out, test_out, exp_pcc)
+        abs, rel = get_abs_and_relative_error(ref_out, test_out)
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"

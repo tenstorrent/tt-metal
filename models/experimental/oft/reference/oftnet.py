@@ -29,7 +29,7 @@ class OftNet(nn.Module):
         self.lat8 = nn.Conv2d(128, 256, 1, dtype=dtype)
         self.lat16 = nn.Conv2d(256, 256, 1, dtype=dtype)
         self.lat32 = nn.Conv2d(512, 256, 1, dtype=dtype)
-        self.bn8 = nn.GroupNorm(16, 256)  # GroupNorm doesn't have dtype parameter
+        self.bn8 = nn.GroupNorm(16, 256)
         self.bn16 = nn.GroupNorm(16, 256)
         self.bn32 = nn.GroupNorm(16, 256)
 
@@ -122,6 +122,7 @@ class OftNet(nn.Module):
         # return scores.squeeze(2), pos_offsets, dim_offsets, ang_offsets
         return (
             [
+                image,
                 feats8,
                 feats16,
                 feats32,

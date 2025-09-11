@@ -1,6 +1,10 @@
 import ttnn
 import torch
-from models.experimental.oft.tt.common import Conv, GroupNorm
+
+# from models.experimental.oft.tt.common import Conv
+# from models.experimental.oft.tt.common import GroupNorm
+from models.experimental.oft.tt.common import Conv_fallback as Conv
+from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNorm
 from models.experimental.oft.tt.tt_resnet import TTResNetFeatures
 from models.experimental.oft.tt.tt_oft import OFT as TtOFT
 from loguru import logger
@@ -38,13 +42,13 @@ class TTOftNet:
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
         self.lat8 = Conv(parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.bn8 = GroupNorm(parameters.bn8, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
+        self.bn8 = GroupNorm(parameters.bn8, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
         self.lat16 = Conv(parameters.lat16, conv_pt.lat16, output_layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.bn16 = GroupNorm(parameters.bn16, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
+        self.bn16 = GroupNorm(parameters.bn16, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
         self.lat32 = Conv(parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
+        self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
 
         self.oft8 = TtOFT(
             device,
@@ -497,6 +501,7 @@ class TTOftNet:
         return (
             [
                 (
+                    normalized_input,
                     feats8,
                     feats16,
                     feats32,
@@ -527,6 +532,7 @@ class TTOftNet:
                     td,
                 ),
                 (
+                    "image",
                     "feats8",
                     "feats16",
                     "feats32",
