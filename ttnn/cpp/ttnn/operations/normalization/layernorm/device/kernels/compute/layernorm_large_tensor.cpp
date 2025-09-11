@@ -200,11 +200,8 @@ void MAIN {
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-
-        recip_tile_init();
-        recip_tile(dst0);
+        rsqrt_tile_init<true>();
+        rsqrt_tile<true>(dst0);
 
         tile_regs_commit();
 

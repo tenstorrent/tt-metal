@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -14,7 +15,7 @@ inline void calculate_softsign() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat tmp = sfpi::abs(v) + sfpi::vConst1;
-        tmp = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(tmp);
+        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
         sfpi::dst_reg[0] = v * tmp;
         sfpi::dst_reg++;
     }
@@ -22,7 +23,7 @@ inline void calculate_softsign() {
 
 template <bool APPROXIMATION_MODE>
 void init_softsign() {
-    _init_reciprocal_<APPROXIMATION_MODE>();
+    recip_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
