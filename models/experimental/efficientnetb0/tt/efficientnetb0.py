@@ -98,6 +98,7 @@ class EfficientNetb0Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=ttnn.bfloat8_b,
         )
 
         if use_signpost:
