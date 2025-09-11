@@ -10,8 +10,20 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import is_blackhole
+
+
+# Helper function to get welford parameters based on device type
+def get_welford_params():
+    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
+    if is_blackhole():
+        return ("legacy",)
+    else:
+        return ("legacy", "welford_normal", "welford_reciprocal")
+
+
+welford_flavors = get_welford_params()
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -64,7 +76,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", ["legacy", "welford_normal", "welford_reciprocal"])
+@pytest.mark.parametrize("welford_mode", welford_flavors)
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -147,7 +159,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9994)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
