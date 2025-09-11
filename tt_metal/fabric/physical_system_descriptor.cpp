@@ -190,18 +190,14 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto my_rank = *(distributed_context.rank());
     auto hostname = this->my_host_name();
     physical_to_logical_eth_chan_[hostname] = cluster_desc->get_physical_to_logical_eth_chan();
-    // if (*(distributed_context.rank()) == 0) {
-    //     for (const auto& [host_name, asic_chans] : physical_to_logical_eth_chan_) {
-    //         std::cout << "Physical to logical eth chan for " << host_name << std::endl;
-    //         for (const auto& [asic_id, physical_to_logical_eth_chan] : asic_chans) {
-    //             std::cout << "Asic id: " << asic_id << std::endl;
-    //             for (const auto& [physical_chan, logical_chan] : physical_to_logical_eth_chan) {
-    //                 std::cout << "Physical chan: " << +physical_chan << ", Logical chan: " << logical_chan <<
-    //                 std::endl;
-    //             }
-    //         }
-    //     }
-    // }
+    std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint8_t>> logical_to_physical_eth_chan;
+
+    for (const auto& [asic_id, chan_map] : physical_to_logical_eth_chan_.at(hostname)) {
+        for (const auto& [phys, logical] : chan_map) {
+            logical_to_physical_eth_chan[asic_id][logical] = phys;
+        }
+    }
+
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
@@ -239,17 +235,18 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
+            auto phys_eth_chan = logical_to_physical_eth_chan[*local_unique_id][eth_chan];
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
-                    EthConnection(eth_chan, dst_chan, false));
+                    EthConnection(phys_eth_chan, dst_chan, false));
             }
             exit_nodes.push_back(ExitNodeConnection{
                 .src_exit_node = local_unique_id,
                 .dst_exit_node = dst_unique_id,
-                .eth_conn = EthConnection(eth_chan, dst_chan, false)});
+                .eth_conn = EthConnection(phys_eth_chan, dst_chan, false)});
         }
     }
     system_graph_.host_connectivity_graph[hostname] = {};
@@ -373,79 +370,65 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
-    for (auto& [host, exit_nodes] : exit_node_connection_table_) {
-        const auto& local_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(host);
+    for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
         std::unordered_map<std::string, size_t> visited_hosts;
-        for (auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
+        for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
             if (host == candidate_host) {
                 continue;  // Skip self connections
             }
-            bool print_debug = false;
-            if (host == "tt-quietbox-4" and candidate_host == "tt-quietbox-5") {
-                print_debug = true;
-            }
-
-            const auto& remote_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(candidate_host);
-
-            for (std::size_t exit_node_idx = 0; exit_node_idx < exit_nodes.size(); exit_node_idx++) {
-                auto& exit_node = exit_nodes[exit_node_idx];
-                bool paired = false;
-                for (std::size_t candidate_node_idx = 0; candidate_node_idx < candidate_exit_nodes.size();
-                     candidate_node_idx++) {
-                    auto& candidate_node = candidate_exit_nodes[candidate_node_idx];
-                    auto local_asic = exit_node.src_exit_node;
-                    auto remote_asic = exit_node.dst_exit_node;
-                    if (local_asic == candidate_node.dst_exit_node && candidate_node.src_exit_node == remote_asic) {
-                        std::cout << "ASICs match" << std::endl;
-                        uint8_t local_dst_chan = exit_node.eth_conn.dst_chan;
-                        uint8_t candidate_dst_chan = candidate_node.eth_conn.dst_chan;
-
-                        if (remote_physical_to_logical_eth_chan.at(*remote_asic).find(local_dst_chan) !=
-                            remote_physical_to_logical_eth_chan.at(*remote_asic).end()) {
-                            local_dst_chan = remote_physical_to_logical_eth_chan.at(*remote_asic).at(local_dst_chan);
+            for (const auto& exit_node : exit_nodes) {
+                for (const auto& candidate_node : candidate_exit_nodes) {
+                    if (exit_node.src_exit_node == candidate_node.dst_exit_node &&
+                        candidate_node.src_exit_node == exit_node.dst_exit_node &&
+                        exit_node.eth_conn.src_chan == candidate_node.eth_conn.dst_chan &&
+                        exit_node.eth_conn.dst_chan == candidate_node.eth_conn.src_chan) {
+                        if (visited_hosts.find(candidate_host) == visited_hosts.end()) {
+                            system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
+                            visited_hosts[candidate_host] = system_graph_.host_connectivity_graph[host].size() - 1;
+                        } else {
+                            system_graph_.host_connectivity_graph[host][visited_hosts[candidate_host]].second.push_back(
+                                exit_node);
                         }
-
-                        if (local_physical_to_logical_eth_chan.at(*local_asic).find(candidate_dst_chan) !=
-                            local_physical_to_logical_eth_chan.at(*local_asic).end()) {
-                            candidate_dst_chan =
-                                local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_dst_chan);
-                        }
-                        if (print_debug) {
-                            std::cout << "Local dst chan: " << +local_dst_chan
-                                      << " Candidate dst chan: " << +candidate_dst_chan << std::endl;
-                            std::cout << "Src chans: " << +exit_node.eth_conn.src_chan << " -> "
-                                      << +candidate_node.eth_conn.src_chan << std::endl;
-                            std::cout << "ASICs: " << *local_asic << " -> " << *remote_asic << std::endl;
-                        }
-                        if (exit_node.eth_conn.src_chan == candidate_dst_chan &&
-                            candidate_node.eth_conn.src_chan == local_dst_chan) {
-                            exit_node.eth_conn.dst_chan = local_dst_chan;
-                            candidate_node.eth_conn.dst_chan = candidate_dst_chan;
-
-                            std::cout << "Found a matching exit node connection between " << host << " and "
-                                      << candidate_host << " " << *local_asic << " -> " << *remote_asic
-                                      << " with chans " << +exit_node.eth_conn.src_chan << " -> "
-                                      << +exit_node.eth_conn.dst_chan << std::endl;
-
-                            if (visited_hosts.find(candidate_host) == visited_hosts.end()) {
-                                system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
-                                visited_hosts[candidate_host] = system_graph_.host_connectivity_graph[host].size() - 1;
-                            } else {
-                                system_graph_.host_connectivity_graph[host][visited_hosts[candidate_host]]
-                                    .second.push_back(exit_node);
-                            }
-                            paired = true;
-                            break;
-                        }
+                        break;
                     }
                 }
-                // if (paired) {
-                //     continue;
-                // }
             }
         }
     }
-    this->update_asic_graph();
+
+    for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        for (auto& [src_asic, edges] : asic_group) {
+            for (auto& [src_asic, edges] : asic_group) {
+                const auto& src_host = asic_descriptors_.at(src_asic).host_name;
+                for (auto& [dst_asic, eth_conns] : edges) {
+                    const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
+                    if (src_host == dst_host) {
+                        continue;
+                    }
+                    for (auto& eth_conn : eth_conns) {
+                        eth_conn.src_chan =
+                            physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(eth_conn.src_chan);
+                        eth_conn.dst_chan =
+                            physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
+                    }
+                }
+            }
+        }
+    }
+
+    for (auto& [src_host, host_edges] : system_graph_.host_connectivity_graph) {
+        for (auto& host_edge : host_edges) {
+            const auto& dst_host = host_edge.first;
+            for (auto& exit_node_connections : host_edge.second) {
+                const auto& src_asic = exit_node_connections.src_exit_node;
+                const auto& dst_asic = exit_node_connections.dst_exit_node;
+                exit_node_connections.eth_conn.src_chan = physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(
+                    exit_node_connections.eth_conn.src_chan);
+                exit_node_connections.eth_conn.dst_chan = physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(
+                    exit_node_connections.eth_conn.dst_chan);
+            }
+        }
+    }
 }
 
 void PhysicalSystemDescriptor::update_asic_graph() {
