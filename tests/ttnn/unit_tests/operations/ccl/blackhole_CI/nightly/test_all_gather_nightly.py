@@ -18,7 +18,7 @@ def validate_test(num_devices, topology, shape, cluster_axis):
         pytest.skip("Test_Infrastructure_Skip: Test requires more devices than are available on this platform")
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
@@ -124,7 +124,7 @@ def test_all_gather_linear_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
@@ -233,7 +233,7 @@ def test_all_gather_linear_4D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(

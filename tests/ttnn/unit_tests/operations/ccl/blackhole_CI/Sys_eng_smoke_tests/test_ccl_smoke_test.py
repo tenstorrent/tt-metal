@@ -10,7 +10,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [4])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
@@ -122,7 +122,7 @@ def test_ccl_ddr_smoke_test(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",

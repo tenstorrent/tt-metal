@@ -9,7 +9,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, s
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout",
@@ -123,7 +123,7 @@ def test_rs_row_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @skip_for_n_dev(4)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
@@ -239,7 +239,7 @@ def test_rs_row_vertical_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
@@ -353,7 +353,7 @@ def test_rs_row_4D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(

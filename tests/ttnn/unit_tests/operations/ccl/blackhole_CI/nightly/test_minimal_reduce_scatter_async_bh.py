@@ -234,7 +234,7 @@ def run_reduce_scatter_impl(
     bh_1d_mesh_device.clear_loaded_sub_device_manager()
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @skip_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
@@ -351,7 +351,7 @@ def test_reduce_scatter_async_4dev_ring(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -467,7 +467,7 @@ def test_reduce_scatter_async_line(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
@@ -560,7 +560,7 @@ def test_reduce_scatter_async_training_shapes(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -705,7 +705,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -821,7 +821,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @skip_for_n_dev(2)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
