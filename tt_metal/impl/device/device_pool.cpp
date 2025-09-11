@@ -304,12 +304,6 @@ void DevicePool::initialize(
             "consider using CreateDevices API.");
     }
 
-    // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
-    // while initializing default sub device state.
-    // This call will be a no-op if fabric is disabled.
-    // May be called again below
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
@@ -317,8 +311,6 @@ void DevicePool::initialize(
                 tt::tt_fabric::FabricConfig::FABRIC_1D,
                 tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 1);
-            // Call initialize again because previously it was a no-op
-            tt::tt_metal::MetalContext::instance().initialize_fabric_config();
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
         } else {
             // Use the same mode
@@ -327,6 +319,10 @@ void DevicePool::initialize(
         }
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
+    // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
+    // while initializing default sub device state.
+    // This call will be a no-op if fabric is disabled.
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;

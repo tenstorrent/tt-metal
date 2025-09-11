@@ -420,6 +420,7 @@ public:
     void detach_devices();
     void clear_log_file();
     void clear_signals();
+    void clear_formatting();
     bool reads_dispatch_cores(chip_id_t device_id) { return device_reads_dispatch_cores_[device_id]; }
     bool hang_detected() { return server_killed_due_to_hang_; }
 
@@ -887,6 +888,20 @@ void DPrintServer::Impl::clear_signals() {
     raised_signals_.clear();
     raise_wait_lock_.unlock();
 }  // clear_signals
+
+void DPrintServer::Impl::clear_formatting() {
+    // Helper lambda to fully reset a stream to default state
+    std::ostringstream default_stream;
+    auto reset_stream = [&](std::ostream* stream) { stream->copyfmt(default_stream); };
+
+    reset_stream(stream_);
+    for (auto& [key, stream] : risc_to_intermediate_stream_) {
+        reset_stream(stream);
+    }
+    for (auto& [key, file_stream] : risc_to_file_stream_) {
+        reset_stream(file_stream);
+    }
+}  // clear_formatting
 
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
     chip_id_t device_id, const CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
@@ -1356,6 +1371,7 @@ void DPrintServer::attach_devices() { impl_->attach_devices(); }
 void DPrintServer::detach_devices() { impl_->detach_devices(); }
 void DPrintServer::clear_log_file() { impl_->clear_log_file(); }
 void DPrintServer::clear_signals() { impl_->clear_signals(); }
+void DPrintServer::clear_formatting() { impl_->clear_formatting(); }
 bool DPrintServer::reads_dispatch_cores(chip_id_t device_id) { return impl_->reads_dispatch_cores(device_id); }
 bool DPrintServer::hang_detected() { return impl_->hang_detected(); }
 }  // namespace tt::tt_metal

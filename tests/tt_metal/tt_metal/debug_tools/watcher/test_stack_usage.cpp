@@ -94,14 +94,16 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
 
 } // namespace
 
-TEST_F(MeshWatcherFixture, TestWatcherStackUsage0) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(RunTest<0>, mesh_device);
-    }
-}
-
+// TODO: Run test 16 before test 0 because we don't have a way to clear stack usage.
+// Alternative to be safe is to force re-init of context.
 TEST_F(MeshWatcherFixture, TestWatcherStackUsage16) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(RunTest<16>, mesh_device);
+    }
+}
+
+TEST_F(MeshWatcherFixture, TestWatcherStackUsage0) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(RunTest<0>, mesh_device);
     }
 }
