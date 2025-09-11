@@ -85,8 +85,50 @@ void py_module(nb::module_& m) {
     // py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
     // py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
     py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& data) {
-        // TODO
-        throw std::runtime_error("no impl");
+        const auto data_type = data.dtype();
+        // TT_FATAL(!(data_type.bits % 8), fmt::format("Unsupported precision: {}", data_type.bits));
+        TT_FATAL(!(data_type.bits % 8), "Unsupported precision");
+
+        tt::tt_metal::ShapeBase::Container shape_container(data.ndim());
+        for (size_t i = 0; i < data.ndim(); ++i) {
+            const auto shape = data.shape(i);
+            if (shape < std::numeric_limits<uint32_t>::min() || shape > std::numeric_limits<uint32_t>::max()) {
+                TT_THROW("Invalid shape parameter encountered");
+            }
+            shape_container[i] = shape;
+        }
+        tt::tt_metal::Shape tensor_shape(shape_container);
+        tt::tt_metal::MemoryConfig tensor_memory_config{};
+        tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
+
+        const auto set_autocast_tensor = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
+            // TT_FATAL(data_type.bits == (sizeof(T) * 8), fmt::format("Unsupported precision: expected {} bits, got {}
+            // bits", sizeof(T) * 8, data_type.bits));
+            TT_FATAL(data_type.bits == (sizeof(T) * 8), "Unsupported precision");
+
+            tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
+            tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+
+            autocast_tensor.set_tensor(tt::tt_metal::Tensor::from_span(
+                tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec));
+        };
+
+        switch (static_cast<nb::dlpack::dtype_code>(data_type.code)) {
+            case nb::dlpack::dtype_code::Int:
+                set_autocast_tensor.template operator()<int32_t>(tt::tt_metal::DataType::INT32);
+                break;
+            case nb::dlpack::dtype_code::UInt:
+                set_autocast_tensor.template operator()<uint32_t>(tt::tt_metal::DataType::UINT32);
+                break;
+            case nb::dlpack::dtype_code::Float:
+                set_autocast_tensor.template operator()<float>(tt::tt_metal::DataType::FLOAT32);
+                break;
+            case nb::dlpack::dtype_code::Bfloat:
+                set_autocast_tensor.template operator()<bfloat16>(tt::tt_metal::DataType::BFLOAT16);
+                break;
+            case nb::dlpack::dtype_code::Complex: TT_THROW("Unsupported type: Complex"); break;
+            case nb::dlpack::dtype_code::Bool: TT_THROW("Unsupported type: Bool"); break;
+        }
     });
     py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
         // TODO
@@ -108,18 +150,8 @@ void py_module(nb::module_& m) {
     py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode);
     py_auto_context.def("open_device", &AutoContext::open_device);
     py_auto_context.def("close_device", &AutoContext::close_device);
-    py_auto_context.def(
-        "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
-            auto const argc = args.size();
-            std::vector<char const*> argv(argc);
-
-            for (auto const& arg : args) {
-                argv.push_back(arg.c_str());
-            }
-            argv.push_back(nullptr);
-
-            auto_context.initialize_distributed_context(argc, const_cast<std::remove_const_t<char**>>(argv.data()));
-        });
+    // TODO: argv's char** not supported
+    // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
     py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
     py_auto_context.def("get_profiler", &AutoContext::get_profiler);
     py_auto_context.def("close_profiler", &AutoContext::close_profiler);
