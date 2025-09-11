@@ -179,11 +179,11 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
-            # Vision prefill
+
             image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
         else:
             # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)  # [INFO] empty tensor
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
@@ -198,12 +198,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             inputs.attention_mask,
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
+
         # Get user-specific rotary position embeddings
         cos, sin = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
-
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
@@ -211,13 +211,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-
+        rot_mat_list = [(rot_mats[0][i : i + 1], rot_mats[1][i : i + 1]) for i in range(inputs.input_ids.shape[0])]
+        super().update_cos_sin_rows(rot_mat_list)
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
-        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
-        # [INFO] update the cos/sin matrices for the current users in the batch
-        super().update_cos_sin_rows(rot_mats_list)
+        rot_mats_list: list = kwargs.pop(
+            "rot_mats_all_users", None
+        )  # [INFO] update the cos/sin matrices for the current users in the batch
+        if rot_mats_list is not None:
+            super().update_cos_sin_rows(rot_mats_list)
 
         return super().decode_forward_text(*args, **kwargs)
