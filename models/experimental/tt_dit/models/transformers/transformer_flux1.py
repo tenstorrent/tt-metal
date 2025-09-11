@@ -655,7 +655,7 @@ class Flux1Transformer:
             block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
         for i, block in enumerate(self.single_transformer_blocks):
             block.load_state_dict(substate(state_dict, f"single_transformer_blocks.{i}"))
-        self.time_embed_out.load_state_dict(substate(state_dict, "norm_out.linear"))  # TODO:  chunks=2
+        self.time_embed_out.load_state_dict(substate(state_dict, "norm_out.linear"))  # chunks=2 if sharded
         self.norm_out.load_state_dict(substate(state_dict, "norm_out.norm"))
         self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
 
@@ -680,11 +680,11 @@ class Flux1Transformer:
         Args:
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, in_channels].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
-            pooled: TODO
-            timestep: TODO
+            pooled: Tensor with shape [batch_size, pooled_projection_dim].
+            timestep: Tensor with shape [batch_size, 1].
+            guidance: Optional tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
-            combined_rope: Tuple of two tensors with shape [(spatial_sequence_length + prompt_sequence_length) / sp_factor, head_dim].
         """
         time_embed = self.time_text_embed(timestep=timestep, guidance=guidance, pooled_projection=pooled)
         ttnn.silu(time_embed, output_tensor=time_embed)
