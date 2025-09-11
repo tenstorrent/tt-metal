@@ -146,7 +146,7 @@ ALWI void atanh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atanh, ckernel::sfpu::_
 // clang-format on
 ALWI void atanh_tile(uint32_t idst) {
     MATH(
-        SFPU_THREE_PARAM_KERNEL_USEFP32_FIRST(_calculate_atanh_, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
+        SFPU_THREE_PARAM_KERNEL_FP32_FIRST(_calculate_atanh_, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
 }
 
 // clang-format off

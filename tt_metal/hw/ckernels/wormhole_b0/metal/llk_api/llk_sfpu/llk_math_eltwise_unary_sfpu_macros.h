@@ -14,13 +14,14 @@
 #define SFPU_INIT_KERNEL_CALL(OP, INIT_CB, APPROXIMATE) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>)
 
-// For ops that need a custom init callback with fast_approx template parameter
-#define SFPU_INIT_KERNEL_CALL_FAST_APPROX(OP, INIT_CB, APPROXIMATE, FAST_APPROX) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, FAST_APPROX>)
-
 // For ops that need a custom init callback but takes one extra init-parameter
 #define SFPU_ONE_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0);
+
+// For ops that need a custom init callback with two template parameters (e.g., APPROXIMATE and legacy_compat or
+// fast_approx)
+#define SFPU_TWO_TEMPLATE_PARAM_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, PARAM0>)
 
 // For ops that need a custom init callback and take two extra init-parameters
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
@@ -81,11 +82,6 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
         ckernel::sfpu::FN<APPROXIMATE, ITER>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
-// For kernels with two template params and an extra integer template param (e.g., 8).
-#define SFPU_THREE_TEMPLATE_PARAM_KERNEL(OP, APPROXIMATE, DST_ACCUM_MODE, DEFAULT_INT, DST_IDX, VECTOR_MODE) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                       \
-        ckernel::sfpu::calculate_##OP<APPROXIMATE, DST_ACCUM_MODE, DEFAULT_INT>, DST_IDX, VECTOR_MODE)
-
 // For ops where compute takes extra args
 #define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                      \
@@ -136,14 +132,28 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, T2>, DST_IDX, VECTOR_MODE, PARAM0)
 
 // For kernels whose functor takes three template parameters (e.g., <APPROXIMATE, ITER, USE_FP32>)
-#define SFPU_THREE_PARAM_KERNEL_ITER_FIRST(FN, APPROXIMATE, ITER, USE_FP32, DST_IDX, VECTOR_MODE) \
+#define SFPU_THREE_PARAM_KERNEL_ITER_FIRST(FN, APPROXIMATE, ITER, FP32, DST_IDX, VECTOR_MODE) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                            \
-        ckernel::sfpu::FN<APPROXIMATE, ITER, USE_FP32>, DST_IDX, VECTOR_MODE)
+        ckernel::sfpu::FN<APPROXIMATE, ITER, FP32>, DST_IDX, VECTOR_MODE)
 
 // For functors with <APPROXIMATE, USE_FP32, ITER>
-#define SFPU_THREE_PARAM_KERNEL_USEFP32_FIRST(FN, APPROXIMATE, USE_FP32, ITER, DST_IDX, VECTOR_MODE) \
+#define SFPU_THREE_PARAM_KERNEL_FP32_FIRST(FN, APPROXIMATE, FP32, ITER, DST_IDX, VECTOR_MODE) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                               \
-        ckernel::sfpu::FN<APPROXIMATE, USE_FP32, ITER>, DST_IDX, VECTOR_MODE)
+        ckernel::sfpu::FN<APPROXIMATE, FP32, ITER>, DST_IDX, VECTOR_MODE)
+
+// For unary ops with four template parameters (APPROXIMATE, ITER, fp32_dest_acc_en, legacy_compat)
+#define SFPU_FOUR_PARAM_KERNEL_ITER_FIRST(OP, APPROXIMATE, ITER, FP32, LEGACY_COMPAT, DST_IDX, MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE, ITER, FP32, LEGACY_COMPAT>,                              \
+        DST_IDX,                                                                                                  \
+        (int)VectorMode::MODE)
+
+// For unary ops with four template parameters (APPROXIMATE, fp32_dest_acc_en, FP32_FIRST, legacy_compat)
+#define SFPU_FOUR_PARAM_KERNEL_FP32_FIRST(OP, APPROXIMATE, FP32, ITER, LEGACY_COMPAT, DST_IDX, MODE) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                            \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE, FP32, ITER, LEGACY_COMPAT>,                              \
+        DST_IDX,                                                                                                  \
+        MODE)
 
 // For kernels which takes two extra template parameters (e.g., <V, T>)
 #define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(OP, APPROXIMATE, V, T, DST_IDX) \

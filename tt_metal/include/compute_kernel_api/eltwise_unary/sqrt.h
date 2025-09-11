@@ -19,7 +19,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, APPROX)); }
+template <bool legacy_compat = true>
+ALWI void sqrt_tile_init() {
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(sqrt, sfpu::sqrt_init, APPROX, legacy_compat));
+}
 
 // clang-format off
 /**
@@ -35,6 +38,11 @@ ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, A
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sqrt_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(sqrt, RC, APPROX, idst)); }
+// ALWI void sqrt_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(sqrt, RC, APPROX, idst)); }
+
+template <bool legacy_compat, bool fp32_dest_acc_en>
+ALWI void sqrt_tile(uint32_t idst) {
+    MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST(sqrt, APPROX, 8, fp32_dest_acc_en, legacy_compat, idst, RC));
+}
 
 }  // namespace ckernel
