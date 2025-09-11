@@ -281,10 +281,10 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         physical_to_logical_eth_chan_[host_name] = std::move(physical_to_logical_eth_chan);
     }
 
-    for (const auto& [host_name, physical_to_logical_eth_chan] : physical_to_logical_eth_chan_) {
+    for (const auto& [host_name, asic_chans] : physical_to_logical_eth_chan_) {
         std::cout << "Physical to logical eth chan for " << host_name << std::endl;
-        for (const auto& [asic_id, physical_to_logical_eth_chan] : physical_to_logical_eth_chan) {
-            std::cout << "Asic id: " << +asic_id << std::endl;
+        for (const auto& [asic_id, physical_to_logical_eth_chan] : asic_chans) {
+            std::cout << "Asic id: " << asic_id << std::endl;
             for (const auto& [physical_chan, logical_chan] : physical_to_logical_eth_chan) {
                 std::cout << "Physical chan: " << +physical_chan << ", Logical chan: " << logical_chan << std::endl;
             }
