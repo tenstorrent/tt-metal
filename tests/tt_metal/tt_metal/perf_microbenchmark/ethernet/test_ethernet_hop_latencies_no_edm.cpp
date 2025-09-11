@@ -396,8 +396,6 @@ std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(
         std::shared_ptr<tt::tt_metal::distributed::MeshDevice> next_device =
             i == mesh_devices.size() - 1 ? mesh_devices.at(0) : mesh_devices.at(i + 1);
         uint64_t edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(next_device->id());
-        bool edge_needs_tunneling =
-            !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
         std::size_t conn = n_edge_visits[edge];
         std::unordered_map<uint64_t, int> edge_link_idx;

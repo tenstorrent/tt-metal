@@ -342,7 +342,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(
         output_index_start = output_index_end + 1;
     }
 
-    for (auto& boundary : shard_boundaries) {
+    for ([[maybe_unused]] auto& boundary : shard_boundaries) {
         log_trace(
             tt::LogOp,
             "shard_boundary={}, input_size = {}",
