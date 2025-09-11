@@ -106,12 +106,13 @@ def prepare_conv_weights_func(
         "slice_config": slice_config,
     }
 
+    input_memory_config = ttnn.L1_MEMORY_CONFIG if slice_config else ttnn.DRAM_MEMORY_CONFIG
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
-        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        input_memory_config=input_memory_config,
         has_bias=has_bias,
         **conv_kwargs,
         input_dtype=ttnn.bfloat16,
@@ -119,7 +120,7 @@ def prepare_conv_weights_func(
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor,
-            input_memory_config=tt_input_tensor.memory_config(),
+            input_memory_config=input_memory_config,
             **conv_kwargs,
             input_dtype=ttnn.bfloat16,
         )
@@ -132,8 +133,8 @@ def prepare_conv_weights_func(
     (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
     tt_output_tensor_on_device = ttnn.conv2d(
         input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor_formatted,
-        bias_tensor=tt_bias_tensor_formatted,
+        weight_tensor=tt_weight_tensor,
+        bias_tensor=tt_bias_tensor,
         **conv_kwargs,
         compute_config=compute_config,
         dtype=ttnn.bfloat16,
@@ -420,7 +421,6 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
-@pytest.mark.skip("#26435: prepare weights is broken for dram sliced convs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",
