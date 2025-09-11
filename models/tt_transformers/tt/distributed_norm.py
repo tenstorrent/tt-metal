@@ -89,6 +89,8 @@ class DistributedNorm(LightweightModule):
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
+        print("Calling attention norm, input shape: ", x.shape)
+        print("Calling attention norm, input: ", x)
         x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
 
         # Distributed norm requires a gather
@@ -106,5 +108,7 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            print("Distributed norm done, output shape: ", x.shape)
+            print("Distributed norm done, output: ", x)
 
         return x

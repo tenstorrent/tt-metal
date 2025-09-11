@@ -152,7 +152,9 @@ class RMSNorm(LightweightModule):
         assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
         # Run distributed rmsnorm part 1
+        print("Calling rmsnorm pre all gather, input shape: ", inp.shape)
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        print("tt_stats shape per device: ", tt_stats.shape)
         # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
@@ -167,6 +169,7 @@ class RMSNorm(LightweightModule):
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,
@@ -175,6 +178,8 @@ class RMSNorm(LightweightModule):
             weight=weight,
             compute_kernel_config=compute_kernel_config,
         )
+        print("after rms_norm_post_all_gather, output shape: ", tt_out.shape)
+        print("after rms_norm_post_all_gather, output: ", tt_out)
         tt_stats.deallocate(True)
 
         return tt_out

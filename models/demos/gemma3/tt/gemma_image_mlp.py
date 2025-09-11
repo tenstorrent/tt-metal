@@ -73,6 +73,9 @@ class TtGemmaImageFeedForward(LightweightModule):
         """
         seq_len = x.shape[-2]
 
+        print("In gemma MLP, shape: ", x.shape)
+        print("In gemma MLP, tensor: ", x)
+
         # Depends on whether we are padding or not
         MAX_MM_SEQ_LEN = seq_len if "gemma-3" in self.args.base_model_name else self.args.VISION_MAX_MM_SEQ
 
@@ -84,6 +87,8 @@ class TtGemmaImageFeedForward(LightweightModule):
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        print("MLP fc in shape: ", x_in.shape)
+        print("MLP fc in tensor: ", x_in)
         c_fc_out = ttnn.linear(
             x_in,
             self.c_fc_weight,
@@ -95,6 +100,8 @@ class TtGemmaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
+        print("MLP fc out shape: ", c_fc_out.shape)
+        print("MLP fc out tensor: ", c_fc_out)
 
         c_proj_out = ttnn.linear(
             c_fc_out,
@@ -105,30 +112,38 @@ class TtGemmaImageFeedForward(LightweightModule):
             # program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        print("MLP proj out shape: ", c_proj_out.shape)
+        print("MLP proj out tensor: ", c_proj_out)
 
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
         # All reduce
         if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
+            print("Calling AG async in MLP, shape: ", c_proj_out.shape)
             w2_out_gathered = ttnn.experimental.all_gather_async(
                 c_proj_out,
                 persistent_output_buffer=None,
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                # topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            print("AG async done in MLP, shape: ", w2_out_gathered.shape)
 
             pre_bias_output = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            print("Fast reduce NC done in MLP, shape: ", pre_bias_output.shape)
         else:
             pre_bias_output = c_proj_out
 
         output = ttnn.add(pre_bias_output, self.c_proj_bias)
+        print("Out gemma MLP, shape: ", output.shape)
+        print("Out gemma MLP, tensor: ", output)
         return output

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from dataclasses import dataclass
 
 import torch
@@ -216,6 +217,9 @@ class Generator:
                 **kwargs,
             )
 
+            # This is calling prefill from tt-transformers
+            print("Calling prefill from tt-transformers")
+            start_time = time.time()
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=rot_mats_global_prefill,
@@ -225,6 +229,8 @@ class Generator:
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
+            end_time = time.time()
+            print("Prefill time from tt-transformers is: ", end_time - start_time)
             return tt_logits
 
     # Note: This function is called by vLLM

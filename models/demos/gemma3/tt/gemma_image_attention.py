@@ -35,6 +35,7 @@ class TtGemmaImageAttention(LightweightModule):
         self.num_devices = configuration.num_devices
 
         self.hidden_size = configuration.vision_dim
+        print("Hidden size in attention: ", self.hidden_size)
         self.n_heads = configuration.vision_attn_n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.n_kv_heads = self.n_heads
@@ -304,6 +305,8 @@ class TtGemmaImageAttention(LightweightModule):
             else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
 
+        # print("Q_heads shape following q: ", q_heads_1QSD.shape)
+        # print("Q_heads tensor following q: ", q_heads_1QSD)
         q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
 
         k_heads_1KSD = ttnn.linear(
@@ -347,6 +350,10 @@ class TtGemmaImageAttention(LightweightModule):
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
         )
+
+        # print("post sdpa shape : ", attn_output_1QSD.shape)
+        # print("post sdpa tensor : ", attn_output_1QSD)
+
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD)
         ttnn.deallocate(k_heads_1KSD)
@@ -366,19 +373,24 @@ class TtGemmaImageAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         if self.num_devices > 1:
+            print("Calling AG async in attention, shape: ", attn_output_11SH.shape)
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            print("AG done, attn_output_11SH shape: ", attn_output_11SH.shape)
+            print("AG done, attn_output_11SH tensor: ", attn_output_11SH)
 
+        print("pre do matmul shape: ", attn_output_11SH.shape)
+        print("pre do matmul tensor: ", attn_output_11SH)
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -390,6 +402,8 @@ class TtGemmaImageAttention(LightweightModule):
             if "gemma-3" in self.configuration.base_model_name
             else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
+        print("post do matmul shape: ", output_11SH.shape)
+        print("post do matmul tensor: ", output_11SH)
         if seq_len > MAX_MM_SEQ_LEN:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)

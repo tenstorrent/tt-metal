@@ -684,6 +684,9 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        print("Pre qkv matmul input shape: ", x_11SH.shape)
+        print("Pre qkv matmul input: ", x_11SH)
+
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -692,6 +695,9 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+
+        print("After qkv matmul input shape: ", xqkv_fused.shape)
+        print("After qkv matmul input: ", xqkv_fused)
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:

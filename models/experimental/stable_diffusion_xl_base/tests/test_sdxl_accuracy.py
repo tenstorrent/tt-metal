@@ -26,7 +26,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((20),),
+    ((20), (20), (20), (20), (20)),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
