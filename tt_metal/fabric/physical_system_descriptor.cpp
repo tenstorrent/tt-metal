@@ -259,6 +259,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
         system_graph_.asic_connectivity_graph[host_name] = std::move(asic_graph);
     }
