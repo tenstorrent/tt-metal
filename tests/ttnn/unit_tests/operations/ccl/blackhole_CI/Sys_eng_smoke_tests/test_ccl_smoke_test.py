@@ -11,7 +11,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [4])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
@@ -91,6 +91,7 @@ def test_ccl_ddr_smoke_test(
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
+        # Check all the rows and columns independantly within the device
         if cluster_axis == 0:
             submesh_device = bh_2d_mesh_device.create_submesh(
                 ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, i)
@@ -126,9 +127,9 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 800, 1024], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 800, 1024], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 800, 1024], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
     ids=["4 device line", "4_device_ring", "2_device_line"],
 )
@@ -239,5 +240,6 @@ def test_ccl_other_smoke_test(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             allowed_pcc=0.9999,
+            num_l1_banks=120,
         )
     ttnn.ReadDeviceProfiler(submesh_device)
