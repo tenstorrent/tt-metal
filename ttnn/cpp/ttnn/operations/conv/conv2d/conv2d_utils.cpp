@@ -1157,7 +1157,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width) {
-
         log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
