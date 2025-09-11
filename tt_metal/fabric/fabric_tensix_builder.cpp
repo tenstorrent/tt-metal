@@ -98,13 +98,15 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
 // FabricTensixDatamoverConfig implementation
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations
-    initialize_channel_mappings();
+    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    if (!initialize_channel_mappings()) {
+        return;
+    }
     calculate_buffer_allocations();
     create_mux_configs();
 }
 
-void FabricTensixDatamoverConfig::initialize_channel_mappings() {
+bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
@@ -142,8 +144,11 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     // Get maximum number of active ethernet channels from control plane across all devices
     size_t max_eth_channels = find_max_eth_channels(all_active_devices);
+    if (max_eth_channels == 0) {
+        log_warning(tt::LogMetal, "No active ethernet channels found in the system");
+        return false;
+    }
 
-    TT_FATAL(max_eth_channels > 0, "No active ethernet channels found in the system");
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "logical_fabric_mux_cores_ is empty before division");
 
     // Calculate number of configs per core and riscs needed BEFORE using them
@@ -183,6 +188,8 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
             channel_index++;
         }
     }
+
+    return true;
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
