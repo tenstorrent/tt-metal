@@ -354,27 +354,10 @@ void set_or_update_runtime_arguments(
                 // For TTS column broadcast, calculate freq and counter for dedicated kernel
 
                 uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_tw = start_t % cWt;
                 uint32_t start_th = start_t / cWt;
 
-                // Determine broadcast direction locally based on tensor shapes
-                auto pred_shape_local = predicate_tensor.logical_shape();
-                auto true_shape_local = value_true_tensor.value().logical_shape();
-                auto pred_h_local = pred_shape_local[pred_shape_local.rank() - 2];
-                auto true_h_local = true_shape_local[true_shape_local.rank() - 2];
-
-                bool is_height_broadcast = (true_h_local == 1 && pred_h_local > 1);
-
-                uint32_t freq, counter;
-                if (is_height_broadcast) {
-                    // Height broadcast: broadcast every row
-                    freq = cHt;
-                    counter = start_th;
-                } else {
-                    // Width broadcast: broadcast every column
-                    freq = cWt;
-                    counter = start_tw;
-                }
+                uint32_t freq = cHt;
+                uint32_t counter = start_th;
 
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
@@ -388,27 +371,10 @@ void set_or_update_runtime_arguments(
                 // For TST column broadcast, calculate freq and counter for dedicated kernel
 
                 uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_tw = start_t % cWt;
                 uint32_t start_th = start_t / cWt;
 
-                // Determine broadcast direction locally based on tensor shapes
-                auto pred_shape_local = predicate_tensor.logical_shape();
-                auto false_shape_local = value_false_tensor.value().logical_shape();
-                auto pred_h_local = pred_shape_local[pred_shape_local.rank() - 2];
-                auto false_h_local = false_shape_local[false_shape_local.rank() - 2];
-
-                bool is_height_broadcast = (false_h_local == 1 && pred_h_local > 1);
-
-                uint32_t freq, counter;
-                if (is_height_broadcast) {
-                    // Height broadcast: broadcast every row
-                    freq = cHt;
-                    counter = start_th;
-                } else {
-                    // Width broadcast: broadcast every column
-                    freq = cWt;
-                    counter = start_tw;
-                }
+                uint32_t freq = cHt;
+                uint32_t counter = start_th;
 
                 auto bit_cast_scalar =
                     pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
