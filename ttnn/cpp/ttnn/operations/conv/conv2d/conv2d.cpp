@@ -233,15 +233,32 @@ Result conv2d_DRAM(
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     if (mm_conv) {
-        if (!is_device_tensor(weight_tensor)) {
-            weight_tensor_on_device =
-                ttnn::operations::core::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
-            weight_tensor_on_device = ttnn::permute(weight_tensor_on_device, {2, 3, 1, 0});  // OIHW to HWIO
-            weight_tensor_on_device =
-                ttnn::reshape(weight_tensor, {1, 1, kernel_size[0] * kernel_size[1] * in_channels, out_channels});
-        }
+        std::tie(weight_tensor_on_device, bias_tensor_on_device) =
+            prepare_conv_weights_biases_for_matmul(queue_id, weight_tensor, bias_tensor, device);
+
+        // run conv as matmul
+        std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+        std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+        std::optional<std::string> linear_activation = std::nullopt;
+        auto input_tensor_on_device =
+            is_device_tensor(input_tensor)
+                ? input_tensor
+                : ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+        // Matmul expects inputs to be in Tile Layout
+        input_tensor_on_device = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
+        Tensor matmul_output = ttnn::linear(
+            input_tensor_on_device,
+            weight_tensor_on_device,
+            bias_tensor_on_device,
+            false,
+            false,
+            mm_output_memory_config,
+            output_dtype,
+            program_config,
+            linear_activation,
+            compute_config);
+        return {matmul_output, input_height, input_width, weight_tensor_on_device, bias_tensor_on_device};
     }
-}
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),

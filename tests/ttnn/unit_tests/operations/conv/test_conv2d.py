@@ -198,7 +198,7 @@ SliceWidth = ttnn.Conv2dDRAMSliceWidth
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
     # fmt: off
     (
-        (1, 528,  528,  192,   192,   SliceWidth,    0,  ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.HiFi4 ),
+        (1, 400,  528,  192,   192,   SliceWidth,    0,  ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), (1, 1),      0,  ttnn.MathFidelity.HiFi4 ),
         (2,  13,   31,  313,    71,   SliceWidth,   16,  ttnn.bfloat8_b, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (2,  63,  129,  981,    39,   SliceHeight,  16,  ttnn.bfloat8_b, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
