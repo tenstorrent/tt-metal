@@ -80,8 +80,8 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     ttnn_output_tensor = layer(ttnn_input_tensor)
     torch_output_tensor = torch.nn.functional.conv2d(
         torch_input_tensor,
-        weight,
-        bias.reshape(-1) if bias is not None else None,
+        ttnn.to_torch(weight),
+        ttnn.to_torch(bias).reshape(-1) if bias is not None else None,
         padding=configuration.padding,
     )
 
@@ -206,12 +206,12 @@ def test_downblock(input_size, batch_size, device):
         x = layer(x)
     ttnn_output_tensor = x
 
-    weight0, bias0 = configurations[0].weight, configurations[0].bias
-    weight1, bias1 = configurations[1].weight, configurations[1].bias
+    weight0, bias0 = ttnn.to_torch(configurations[0].weight), ttnn.to_torch(configurations[0].bias)
+    weight1, bias1 = ttnn.to_torch(configurations[1].weight), ttnn.to_torch(configurations[1].bias)
 
     x = torch_input_tensor
-    x = torch.nn.functional.conv2d(x, weight0.clone(), bias0.clone().reshape(-1), padding=(1, 1))
-    x = torch.nn.functional.conv2d(x, weight1.clone(), bias1.clone().reshape(-1), padding=(1, 1))
+    x = torch.nn.functional.conv2d(x, weight0, bias0.reshape(-1), padding=(1, 1))
+    x = torch.nn.functional.conv2d(x, weight1, bias1.reshape(-1), padding=(1, 1))
     torch_output_tensor = torch.nn.functional.max_pool2d(x, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0))
 
     output_height, output_width = torch_output_tensor.shape[-2:]  # [B, C, H, W]
@@ -253,9 +253,9 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
     assert configuration.padding == torch_layer.padding
     assert configuration.groups == torch_layer.groups
 
-    assert torch.equal(configuration.weight, torch_layer.weight.data)
+    assert_with_pcc(ttnn.to_torch(configuration.weight), torch_layer.weight.data, 1.0)
     if torch_layer.bias is not None:
-        assert torch.equal(configuration.bias, torch_layer.bias.data)
+        assert_with_pcc(ttnn.to_torch(configuration.bias).reshape(-1), torch_layer.bias.data, 1.0)
     else:
         assert configuration.bias is None
 

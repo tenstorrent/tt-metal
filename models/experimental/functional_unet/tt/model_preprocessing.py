@@ -58,6 +58,7 @@ def create_unet_model_parameters(
     model: unet_shallow_torch.UNet, input_tensor: torch.Tensor, groups: int, device: ttnn.Device
 ):
     parameters = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
+
     assert parameters is not None
     for key in parameters.keys():
         parameters[key].module = getattr(model, key)

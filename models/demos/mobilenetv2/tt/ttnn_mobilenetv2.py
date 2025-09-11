@@ -12,6 +12,7 @@ class TtMobileNetV2:
         self.model_parameters = model_params
         self.batchsize = batchsize
 
+        # conv1: 224x224x3 -> 112x112x32
         self.conv1 = TtMobileNetV2Conv2D(
             [3, 2, 1, 32],
             (model_params["fused_conv_0_weight"], model_params["fused_conv_0_bias"]),
@@ -22,6 +23,7 @@ class TtMobileNetV2:
             reshard_if_not_optimal=False,
             activation_function="relu6",
         )
+        # conv2: 112x112x32 -> 112x112x32
         self.conv2 = TtMobileNetV2Conv2D(
             [3, 1, 1, 32],
             (model_params["fused_conv_1_weight"], model_params["fused_conv_1_bias"]),
@@ -32,6 +34,7 @@ class TtMobileNetV2:
             deallocate_activation=True,
             activation_function="relu6",
         )
+        # conv3: 112x112x32 -> 112x112x16
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, 16],
             (model_params["conv_0_weight"], model_params["conv_0_bias"]),
@@ -218,6 +221,7 @@ class TtMobileNetV2:
             block_shard=True,
         )
 
+        # conv4: 7x7x320 -> 7x7x1280
         self.conv4 = TtMobileNetV2Conv2D(
             [1, 1, 0, 1280],
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
@@ -233,9 +237,9 @@ class TtMobileNetV2:
         self,
         x,
     ):
-        output_tensor, h, w = self.conv1(x)
-        output_tensor, h, w = self.conv2(output_tensor)
-        output_tensor, h, w = self.conv3(output_tensor)
+        output_tensor, _, _ = self.conv1(x)  # 224x224x3 -> 112x112x32
+        output_tensor, _, _ = self.conv2(output_tensor)  # 112x112x32 -> 112x112x32
+        output_tensor, _, _ = self.conv3(output_tensor)  # 112x112x32 -> 112x112x16
         output_tensor = self.block1(output_tensor)
         output_tensor = self.block2(output_tensor)
         output_tensor = self.block3(output_tensor)
@@ -253,7 +257,7 @@ class TtMobileNetV2:
         output_tensor = self.block15(output_tensor)
         output_tensor = self.block16(output_tensor)
 
-        output_tensor, h, w = self.conv4(output_tensor)
+        output_tensor, h, w = self.conv4(output_tensor)  # 7x7x320 -> 7x7x1280
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (self.batchsize, h, w, output_tensor.shape[3]))
         if output_tensor.is_sharded():
