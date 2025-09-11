@@ -84,14 +84,9 @@ def randomize_torch_tensor(
             if generate_positive_numbers:
                 torch_tensor = torch.abs(torch_tensor)
         elif mode == "stick":
-            torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16).float()
-            for n in range(tensor_shape[0]):
-                for c in range(tensor_shape[1]):
-                    for h in range(tensor_shape[2]):
-                        for w in range(tensor_shape[3]):
-                            torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
-            if generate_positive_numbers:
-                torch_tensor = torch.abs(torch_tensor)
+            h, w = tensor_shape[2], tensor_shape[3]
+            stick = torch.arange(h * w, dtype=torch.bfloat16).reshape(1, 1, h, w)
+            torch_tensor = stick.expand(tensor_shape)
         elif mode == "single":
             if fill_value is None:
                 raise ValueError("fill_value must be provided when mode is 'single'")
