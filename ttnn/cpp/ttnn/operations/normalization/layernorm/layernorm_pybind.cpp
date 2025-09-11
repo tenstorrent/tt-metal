@@ -60,8 +60,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
 
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Note:
             Supported data types and layouts by tensor:
