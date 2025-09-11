@@ -10,7 +10,7 @@
 namespace lite_fabric {
 
 inline void service_lite_fabric_channels() {
-#if defined(COMPILE_FOR_ERISC) && defined(ROUTING_FW_ENABLED)
+#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_ERISC) && defined(ROUTING_FW_ENABLED)
     auto config = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
     void (*service_routing)() = (void (*)())((uint32_t*)config->service_lite_fabric_addr);
     service_routing();
