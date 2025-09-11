@@ -167,12 +167,21 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
+        if (
+            cfg_a is None
+            or cfg_b is None
+            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
+            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
+        ):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
             if cfg_a is None:
                 cfg_a = container([None]) * len(cfg_b)
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
+            if len(cfg_a) == 1:
+                cfg_a *= len(cfg_b)
+            if len(cfg_b) == 1:
+                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)

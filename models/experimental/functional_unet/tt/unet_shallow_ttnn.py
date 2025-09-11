@@ -134,7 +134,7 @@ class UNetConv2D:
         conv,
         bn=None,
         device=None,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
@@ -508,7 +508,7 @@ class UNet:
         self.output_layer = UNetConv2D(
             parameters.output_layer,
             device=device,
-            activation="",
+            activation=None,
             mesh_mapper=mesh_mapper,
             activation_dtype=ttnn.bfloat16,
         )
