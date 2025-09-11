@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Issue #24955: Enable after Light-Metal rearchitecture
+
 // #include <fmt/base.h>
 // #include <stddef.h>
 // #include <tt-metalium/command_queue.hpp>
