@@ -558,18 +558,17 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             }
         }
     }
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
+    std::vector<uint32_t> reader_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"num_writes", num_writes},
         {"padding_val_packed", padding_val_packed},
         {"needs_padding", needs_padding},
-        {"swap_hw", 0},
-        {"H", H},
-        {"W", W},
+        {"swap_hw", (uint32_t)0},
+        {"H", 1},
+        {"W", 1},
         {"accumulated_outer_dims", 1},
-        {"tile_height", tile_shape[1]},
-        {"tile_width", tile_shape[0]},
+        {"tile_height", 1},
+        {"tile_width", 1},
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 

@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t rows_per_x = get_named_compile_time_arg_val("rows_per_x");
     constexpr uint32_t misalignment = get_named_compile_time_arg_val("misalignment");
     constexpr uint32_t read_alignment = get_named_compile_time_arg_val("read_alignment");
-    constexpr auto src_args = TensorAccessorArgs<28>();
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)

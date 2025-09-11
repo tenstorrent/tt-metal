@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
     constexpr uint32_t input_tensor_page_size = get_named_compile_time_arg_val("input_tensor_page_size");
-    constexpr auto src_args = TensorAccessorArgs<11>();
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
     constexpr uint32_t w_block_size_bytes = w_block_size * element_size;

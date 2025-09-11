@@ -63,7 +63,7 @@ void kernel_main() {
     constexpr bool needs_padding = (get_named_compile_time_arg_val("needs_padding") == 1);
     constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
     constexpr uint32_t permuted_input_h_index = get_named_compile_time_arg_val("h_in_dest");
-    constexpr auto dst_args = TensorAccessorArgs<12>();
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // ------------------------------------------------------------------------
     // 1) Read runtime arguments

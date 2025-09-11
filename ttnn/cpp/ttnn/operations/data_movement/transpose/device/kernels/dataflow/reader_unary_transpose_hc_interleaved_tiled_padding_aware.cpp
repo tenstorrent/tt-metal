@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t accumulated_outer_dims = get_named_compile_time_arg_val("accumulated_outer_dims");
     constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
     constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t H_p = tt::data_movement::common::round_up<H, TILE_HEIGHT>();
     constexpr uint32_t W_p = tt::data_movement::common::round_up<W, TILE_WIDTH>();
