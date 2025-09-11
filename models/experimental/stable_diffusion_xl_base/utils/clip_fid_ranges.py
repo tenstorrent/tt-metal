@@ -24,6 +24,7 @@ CLIP_DELTA_RANGE_106_PERCENT_100 = (31.639151219830346, 32.17464952450337)
 
 
 def accuracy_check_fid(score, num_prompts, mode):
+    # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
     assert mode in {"valid", "approx", "delta"}, "mode should be either 'valid' or 'approx' or 'delta'"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
@@ -39,6 +40,7 @@ def accuracy_check_fid(score, num_prompts, mode):
 
 
 def accuracy_check_clip(score, num_prompts, mode):
+    # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
     assert mode in {"valid", "approx", "delta"}, "mode should be either 'valid', 'approx', or 'delta'"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
