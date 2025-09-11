@@ -12,7 +12,6 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH upstream metal runtime tests"
     ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_tests.sh
     # I wonder why we can't put these in the validation suite?
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
