@@ -218,6 +218,19 @@ This improves performance, but increases memory usage.</p>
 </dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_activation_reuse">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_activation_reuse</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_activation_reuse" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>===================== EXPERIMENTAL FEATURE ======================</p>
+<p>Enables reusing data between consecutive image rows.
+It can be enabled for height sharding only and boosts image2column performance,
+so its meant to be used for reader-bound convolutions.</p>
+</dd>
+</dl>
+
+<hr class="docutils">
+<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_kernel_stride_folding">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_kernel_stride_folding</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_kernel_stride_folding" title="Permalink to this definition"></a>
 </dt>
