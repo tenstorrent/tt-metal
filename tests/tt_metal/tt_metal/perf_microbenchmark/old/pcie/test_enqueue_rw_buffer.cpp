@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
             std::tie(buffer_size, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--size");
         } catch (const std::exception& e) {
-            TT_THROW("Provide buffer size with option --size");
+            TT_THROW("Provide buffer size with option --buffer_size");
         }
 
         // Device Setup

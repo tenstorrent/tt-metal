@@ -68,12 +68,12 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload worklaod;
+    distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(worklaod, std::move(program), device_range);
-    auto& program_ = worklaod.get_programs().at(device_range);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -121,7 +121,7 @@ bool reader_kernel_no_send(
             (uint32_t)eth_l1_byte_address,
         });
 
-    fixture->RunProgram(mesh_device, worklaod);
+    fixture->RunProgram(mesh_device, workload);
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
@@ -143,12 +143,12 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload worklaod;
+    distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(worklaod, std::move(program), device_range);
-    auto& program_ = worklaod.get_programs().at(device_range);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -196,7 +196,7 @@ bool writer_kernel_no_receive(
             (uint32_t)eth_l1_byte_address,
         });
 
-    fixture->RunProgram(mesh_device, worklaod);
+    fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> readback_vec;
     fixture->ReadBuffer(mesh_device, output_dram_buffer, readback_vec);
@@ -217,12 +217,12 @@ bool noc_reader_and_writer_kernels(
     const tt_metal::EthernetConfig& writer_eth_config) {
     bool pass = true;
 
-    distributed::MeshWorkload worklaod;
+    distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(worklaod, std::move(program), device_range);
-    auto& program_ = worklaod.get_programs().at(device_range);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -298,7 +298,7 @@ bool noc_reader_and_writer_kernels(
         device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
     distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
 
-    distributed::EnqueueMeshWorkload(cq, worklaod, false);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
