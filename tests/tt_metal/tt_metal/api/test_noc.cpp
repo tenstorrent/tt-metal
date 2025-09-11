@@ -210,7 +210,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     const uint32_t stream_id = 0;
     const uint32_t stream_reg = 4;
 
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -276,7 +276,7 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
     CoreCoord start_core{0, 0};
     const uint32_t stream_id = 1;
 
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -332,7 +332,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
     uint32_t value_to_write = 39;
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -376,7 +376,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
     CoreCoord receiver_core(0, 1);
     uint32_t value_to_write = 39;
 
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -434,7 +434,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
     uint32_t value_to_write = 39;
     uint32_t num_writes = 8;
 
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -489,7 +489,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
     uint32_t num_writes_total = num_writes_per_risc * 2;
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
-    for (std::shared_ptr<distributed::MeshDevice> mesh_device : this->devices_) {
+    for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

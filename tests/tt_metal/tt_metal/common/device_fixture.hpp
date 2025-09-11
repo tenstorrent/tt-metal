@@ -68,7 +68,7 @@ protected:
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             device_ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
-        for (auto [device_id, device] : id_to_device_) {
+        for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
         this->num_devices_ = this->devices_.size();
@@ -84,7 +84,7 @@ public:
     std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
         constexpr size_t UMAX = std::numeric_limits<unsigned>::max();
         std::pair<size_t, size_t> min_dims = {UMAX, UMAX};
-        for (auto device : devices_) {
+        for (const auto& device : devices_) {
             auto coords = device->compute_with_storage_grid_size();
             min_dims.first = std::min(min_dims.first, coords.x);
             min_dims.second = std::min(min_dims.second, coords.y);

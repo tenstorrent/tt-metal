@@ -254,7 +254,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCore) {
         .kernel_cfg =
             tt::tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
     }
 }
@@ -269,7 +269,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
         .kernel_cfg =
             tt::tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(
             unit_tests_common::dram::test_dram::dram_single_core_pre_allocated(this, mesh_device, dram_test_config));
     }
@@ -280,7 +280,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core_db(this, mesh_device));
     }
 }
@@ -303,7 +303,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
@@ -331,7 +331,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
