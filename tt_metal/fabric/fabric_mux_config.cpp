@@ -214,26 +214,22 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     }
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
+    append_default_stream_ids_to_ct_args(ct_args);
+    append_default_persistent_channel_flags_to_ct_args(ct_args);
+    return ct_args;
+}
 
-    // Add stream IDs for all channels (full size + header only)
-    // Full size channels first
-    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
-        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::FULL_SIZE_CHANNEL, i));
-    }
-    // Header only channels second
-    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
-        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::HEADER_ONLY_CHANNEL, i));
-    }
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
 
-    // Add persistent channel flags - all false by default
-    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
-        ct_args.push_back(0);
-    }
-    // Header only channels second
-    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
-        ct_args.push_back(0);
-    }
+    // For relay mux, always use fabric router config
+    set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+    set_wait_for_fabric_endpoint_ready(true);
 
+    auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
+    append_default_stream_ids_to_ct_args(ct_args);
+    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
@@ -323,7 +319,7 @@ void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
     num_iters_between_teardown_checks_ = new_val;
 }
 
-void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
+void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) const {
     wait_for_fabric_endpoint_ready_ = wait_for_ready;
 }
 
@@ -358,6 +354,29 @@ std::vector<std::pair<size_t, size_t>> FabricMuxConfig::get_memory_regions_to_cl
         {connection_handshake_region_.get_address(), connection_handshake_region_.get_total_size()},
         {flow_control_region_.get_address(), flow_control_region_.get_total_size()},
         {buffer_index_region_.get_address(), buffer_index_region_.get_total_size()}};
+}
+
+void FabricMuxConfig::append_default_stream_ids_to_ct_args(std::vector<uint32_t>& ct_args) const {
+    // Add stream IDs for all channels (full size + header only)
+    // Full size channels first
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::FULL_SIZE_CHANNEL, i));
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::HEADER_ONLY_CHANNEL, i));
+    }
+}
+
+void FabricMuxConfig::append_default_persistent_channel_flags_to_ct_args(std::vector<uint32_t>& ct_args) const {
+    // Add persistent channel flags - all false by default
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(0);
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(0);
+    }
 }
 
 }  // namespace tt::tt_fabric
