@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 import torch
 from diffusers import DiffusionPipeline
@@ -30,6 +29,7 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
 ):
+    ttnn_device.enable_program_cache()
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
@@ -144,7 +144,7 @@ def run_demo_inference(
             else:
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
-
+    ttnn_device.disable_and_clear_program_cache()
     return images
 
 
