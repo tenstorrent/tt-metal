@@ -21,6 +21,11 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     ("model_variant", "width", "height", "num_inference_steps"),
     [
         ("schnell", 1024, 1024, 4),
@@ -28,37 +33,30 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     ],
 )
 @pytest.mark.parametrize(
-    ("mesh_device", "sp", "tp", "topology", "num_links"),
+    ("mesh_device", "sp", "tp", "topology", "num_links", "mesh_test_id"),
     [
-        ((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1),
-        ((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1),
-        ((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1),
-        ((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1),
-        ((4, 8), (8, 1), (4, 0), ttnn.Topology.Linear, 4),
-    ],
-    ids=[
-        "1x4sp0tp1",
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "4x8sp1tp0",
+        pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        (True, True, True),
-        (True, False, False),
+        pytest.param(True, True, True, id="encoder_cpu"),
+        pytest.param(True, False, False, id="encoder_device"),
     ],
-    ids=["encoder_cpu", "encoder_device"],
 )
-@pytest.mark.parametrize("traced", [True, False], ids=["traced", "not_traced"])
+@pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(True, id="traced"),
+        pytest.param(False, id="not_traced"),
+    ],
+)
 def test_flux1_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -76,6 +74,7 @@ def test_flux1_pipeline(
     use_torch_clip_text_encoder: bool,
     model_location_generator,
     traced: bool,
+    mesh_test_id: str,
 ) -> None:
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
@@ -121,7 +120,7 @@ def test_flux1_pipeline(
         # "Futuristic Tokyo street market, vibrant signage, motion blur",
     ]
 
-    filename_prefix = f"flux_{model_variant}_{width}_{height}"
+    filename_prefix = f"flux_{model_variant}_{width}_{height}_{mesh_test_id}"
     if enable_t5_text_encoder:
         if use_torch_t5_text_encoder:
             filename_prefix += "_t5cpu"
