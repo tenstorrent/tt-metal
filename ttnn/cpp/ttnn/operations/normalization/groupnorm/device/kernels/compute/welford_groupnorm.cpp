@@ -382,13 +382,9 @@ void MAIN {
             add_tiles_init(cb_ex_global, cb_eps);
             add_tiles(cb_ex_global, cb_eps, 1, 0, dst0);
             // dprint_tensix_dest_reg(dst0);
-            // sqrt(Var + eps)
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            // dprint_tensix_dest_reg(dst0);
             // 1/[sqrt(Var + eps)]
-            recip_tile_init();
-            recip_tile(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             // dprint_tensix_dest_reg(dst0);
             tile_regs_commit();
             tile_regs_wait();
