@@ -394,6 +394,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
 
             for (std::size_t exit_node_idx = 0; exit_node_idx < exit_nodes.size(); exit_node_idx++) {
                 auto& exit_node = exit_nodes[exit_node_idx];
+                bool paired = false;
                 for (std::size_t candidate_node_idx = 0; candidate_node_idx < candidate_exit_nodes.size();
                      candidate_node_idx++) {
                     auto& candidate_node = candidate_exit_nodes[candidate_node_idx];
@@ -431,8 +432,12 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                             system_graph_.host_connectivity_graph[host][visited_hosts[candidate_host]].second.push_back(
                                 exit_node);
                         }
+                        paired = true;
                         break;
                     }
+                }
+                if (paired) {
+                    continue;
                 }
             }
         }
