@@ -162,9 +162,12 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
     this->resolve_hostname_uniqueness();
+    std::cout << "Run local discovery" << std::endl;
     this->run_local_discovery();
     if (run_global_discovery) {
+        std::cout << "Run global discovery" << std::endl;
         this->run_global_discovery();
+        std::cout << "Done with discovery" << std::endl;
     }
 }
 
