@@ -81,7 +81,7 @@ jobs:
     name: "profiler tests t3000"
     if: inputs.topology == 'config-t3000'
     runs-on: tt-ubuntu-2204-N300-llmbox-stable
-    strategy: 
+    strategy:
       fail-fast: false
     container: *container-config
     defaults: *defaults-config
