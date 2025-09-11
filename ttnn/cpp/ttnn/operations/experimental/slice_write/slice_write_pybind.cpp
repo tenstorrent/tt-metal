@@ -57,7 +57,6 @@ void bind_slice_write(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               //    const ttnn::Tensor& output_tensor,
                ttnn::Tensor& output_tensor,
                const ttnn::SmallVector<uint32_t>& start,
                const ttnn::SmallVector<uint32_t>& end,
