@@ -5,24 +5,22 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <functional>
-#include <map>
 #include <string>
-#include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include "assert.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "dev_msgs.h"
+#include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "umd/device/types/xy_pair.h"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.
@@ -39,91 +37,89 @@ std::vector<std::string> expected = {
     "]"
 };
 
-namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_type) {
+namespace {
+
+void RunTest(
+    MeshWatcherFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    HalProcessorIdentifier processor) {
     // Set up program
-    Program program = Program();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::AddProgramToMeshWorkload(workload, {}, device_range);
+    auto& program = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
-    // Depending on riscv type, choose one core to run the test on.
+    // Depending on riscv type, choose one core to run the test on
+    // and set up the kernel on the correct risc
     CoreCoord logical_core, virtual_core;
-    if (riscv_type == DebugErisc) {
-        if (device->get_active_ethernet_cores(true).empty()) {
-            log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
-            GTEST_SKIP();
-        }
-        logical_core = *(device->get_active_ethernet_cores(true).begin());
-        virtual_core = device->ethernet_core_from_logical_core(logical_core);
-    } else if (riscv_type == DebugIErisc) {
-        if (device->get_inactive_ethernet_cores().empty()) {
-            log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
-            GTEST_SKIP();
-        }
-        logical_core = *(device->get_inactive_ethernet_cores().begin());
-        virtual_core = device->ethernet_core_from_logical_core(logical_core);
-    } else {
-        logical_core = CoreCoord{0, 0};
-        virtual_core = device->worker_core_from_logical_core(logical_core);
-    }
-    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
-
-    // Set up the kernel on the correct risc
-    switch(riscv_type) {
-        case DebugBrisc:
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                logical_core,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    switch (processor.core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            logical_core = CoreCoord{0, 0};
+            virtual_core = device->worker_core_from_logical_core(logical_core);
+            switch (processor.processor_class) {
+                case HalProcessorClassType::DM: {
+                    DataMovementConfig dm_config{};
+                    switch (processor.processor_type) {
+                        case 0:
+                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_0;
+                            dm_config.noc = tt_metal::NOC::RISCV_0_default;
+                            break;
+                        case 1:
+                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_1;
+                            dm_config.noc = tt_metal::NOC::RISCV_1_default;
+                            break;
+                        default: TT_THROW("Unsupported DM processor type {}", processor.processor_type);
+                    }
+                    CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                        logical_core,
+                        dm_config);
+                    break;
+                }
+                case HalProcessorClassType::COMPUTE:
+                    CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                        logical_core,
+                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                    break;
+            }
             break;
-        case DebugNCrisc:
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                logical_core,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
-            break;
-        case DebugTrisc0:
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                logical_core,
-                ComputeConfig{.defines = {{"TRISC0", "1"}}});
-            break;
-        case DebugTrisc1:
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                logical_core,
-                ComputeConfig{.defines = {{"TRISC1", "1"}}});
-            break;
-        case DebugTrisc2:
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                logical_core,
-                ComputeConfig{.defines = {{"TRISC2", "1"}}});
-            break;
-        case DebugErisc:
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            if (device->get_active_ethernet_cores(true).empty()) {
+                log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+                GTEST_SKIP();
+            }
+            logical_core = *(device->get_active_ethernet_cores(true).begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
-        case DebugIErisc:
+        case HalProgrammableCoreType::IDLE_ETH:
+            if (device->get_inactive_ethernet_cores().empty()) {
+                log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+                GTEST_SKIP();
+            }
+            logical_core = *(device->get_inactive_ethernet_cores().begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
-        default: log_info(tt::LogTest, "Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
+        case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Run the program
-    fixture->RunProgram(device, program, true);
+    fixture->RunProgram(mesh_device, workload, true);
 
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
@@ -135,78 +131,82 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
         )
     );
 }
-}
 
-TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+using enum HalProgrammableCoreType;
+using enum HalProcessorClassType;
+
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugBrisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, DM, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugNCrisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, DM, 1});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc0);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc1);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 1});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc2);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 2});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferErisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugErisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {ACTIVE_ETH, DM, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugIErisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
+            },
+            mesh_device);
     }
 }
+
+}  // namespace

@@ -58,14 +58,13 @@ void bind_slice_write(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& output_tensor,
-               const std::array<uint32_t, 4>& start,
-               const std::array<uint32_t, 4>& end,
-               const std::array<uint32_t, 4>& step) { return self(input_tensor, output_tensor, start, end, step); },
+               const ttnn::SmallVector<uint32_t>& start,
+               const ttnn::SmallVector<uint32_t>& end,
+               const ttnn::SmallVector<uint32_t>& step) { return self(input_tensor, output_tensor, start, end, step); },
             py::arg("input_tensor"),
             py::arg("output_tensor"),
             py::arg("start"),
             py::arg("end"),
-            py::arg("step"),
-            py::kw_only()});
+            py::arg("step")});
 }
 }  // namespace ttnn::operations::experimental::slice_write

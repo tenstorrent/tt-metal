@@ -257,6 +257,14 @@ struct Hardshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Elu {
+    static Tensor invoke(
+        const Tensor& input,
+        float alpha = 1.0f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Hardtanh {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -301,6 +309,13 @@ struct Clamp {
         const Tensor& input_tensor,
         float min_val,
         float max_val,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t min_val,
+        int32_t max_val,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -420,7 +435,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log1p, LOG1P);
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
 
 // Unaries with float parameter
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
@@ -450,6 +464,7 @@ constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::una
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
+constexpr auto elu = ttnn::register_operation<"ttnn::elu", ttnn::operations::unary::Elu>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
 constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();

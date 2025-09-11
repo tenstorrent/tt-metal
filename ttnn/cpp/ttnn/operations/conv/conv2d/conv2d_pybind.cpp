@@ -22,6 +22,8 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -296,7 +298,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
-            std::string,
+            std::optional<ttnn::operations::unary::UnaryWithParam>,
             bool,
             bool,
             uint32_t,
@@ -315,7 +317,7 @@ void py_bind_conv2d(py::module& module) {
             bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
-        py::arg("activation") = "",
+        py::arg("activation") = std::nullopt,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
@@ -341,10 +343,11 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite(
         "activation",
         &Conv2dConfig::activation,
-        R"doc(A string that selects the fused activation function to be applied on the output.
-        Empty string means no activation function.
-        Supported activation function strings are:
-        relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt
+        R"doc(Fused activation function to be applied on the output.
+        None means no activation function.
+        Use ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) for ReLU activation.
+        Supported activation functions include:
+        RELU, SILU, GELU, SIGMOID, TANH, etc.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
@@ -459,42 +462,6 @@ void py_bind_conv2d(py::module& module) {
         )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
-
-    py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
-        .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("grid_size"),
-            py::arg("num_cores_nhw") = 1,
-            py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
-        .def_property_readonly("grid_size", [](const OptimizedConvParallelizationConfig& c) { return c.grid_size; })
-        .def_property_readonly(
-            "num_cores_nhw", [](const OptimizedConvParallelizationConfig& c) { return c.num_cores_nhw; })
-        .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](const OptimizedConvParallelizationConfig& c) { return c.per_core_out_matrix_height_ntile; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](const OptimizedConvParallelizationConfig& c) {
-            return c.per_core_out_matrix_width_ntile;
-        });
-
-    py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")
-        .def(
-            py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("act_block_h_ntiles").noconvert(),
-            py::arg("act_block_w_ntiles").noconvert(),
-            py::arg("out_subblock_h_ntiles").noconvert(),
-            py::arg("out_subblock_w_ntiles").noconvert())
-        .def_property_readonly(
-            "act_block_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_h_ntiles; })
-        .def_property_readonly(
-            "act_block_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_w_ntiles; })
-        .def_property_readonly(
-            "out_subblock_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_h_ntiles; })
-        .def_property_readonly(
-            "out_subblock_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_w_ntiles; });
 }
 
 }  // namespace ttnn::operations::conv::conv2d

@@ -382,6 +382,16 @@ Tensor Hardshrink::invoke(
         input_tensor, {UnaryWithParam{op_type, static_cast<float>(lambda)}}, memory_config, optional_output_tensor);
 }
 
+Tensor Elu::invoke(
+    const Tensor& input_tensor,
+    const float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::ELU;
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, static_cast<float>(alpha)}}, memory_config, optional_output_tensor);
+}
+
 Tensor Hardtanh::invoke(
     const Tensor& input_tensor,
     const float min_val,

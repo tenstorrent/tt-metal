@@ -34,7 +34,6 @@ struct ScatterDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 

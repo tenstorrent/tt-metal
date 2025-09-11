@@ -28,6 +28,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -249,11 +250,14 @@ bool chip_to_chip_interleaved_buffer_transfer(
     uint32_t remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);
     uint32_t remaining_pages = remaining_bytes / cfg.page_size_bytes;
 
+    std::vector<uint32_t> sender_compile_args = {(uint32_t)input_is_dram};
+    tt_metal::TensorAccessorArgs(input_buffer).append_to(sender_compile_args);
+
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_sender.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {(uint32_t)input_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = sender_compile_args});
 
     tt_metal::SetRuntimeArgs(
         sender_program_,
@@ -282,11 +286,14 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     fixture->WriteBuffer(receiver_mesh_device, output_buffer, all_zeros);
 
+    std::vector<uint32_t> receiver_compile_args = {(uint32_t)output_is_dram};
+    tt_metal::TensorAccessorArgs(output_buffer).append_to(receiver_compile_args);
+
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = {(uint32_t)output_is_dram}});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = receiver_compile_args});
 
     tt_metal::SetRuntimeArgs(
         receiver_program_,
@@ -339,7 +346,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
     const auto sender_device = sender_mesh_device->get_devices()[0];
-    const auto receiver_device = receiver_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -386,7 +392,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     const auto& sender_mesh_device = devices_.at(1);
     const auto& receiver_mesh_device = devices_.at(0);
     const auto sender_device = sender_mesh_device->get_devices()[0];
-    const auto receiver_device = receiver_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(

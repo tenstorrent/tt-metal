@@ -7,8 +7,8 @@ import torch.nn as nn
 
 import ttnn
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
+from models.common.helper_funcs import Linear as TTLinear
+from models.common.utility_functions import (
     tt2torch_tensor,
     pad_by_zero,
 )
