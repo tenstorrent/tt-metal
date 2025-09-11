@@ -9,15 +9,14 @@ import PIL
 import torch
 from llama_models.llama3.api.chat_format import create_vision_mask
 from tqdm import tqdm
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
-from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.inputs import EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
+from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
 
 import ttnn
-from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.utility_functions import nearest_32
+from models.utility_functions import is_wormhole_b0, nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -179,50 +178,38 @@ def input_processor_for_mllama(
     )
 
 
-def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    hf_model_name = ctx.model_config.hf_config._name_or_path
-    if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
-        prompt_len = len(inputs.get("prompt_token_ids"))
-        MAX_PROMPT_LEN = 65536
-        if prompt_len > MAX_PROMPT_LEN:
-            raise ValueError(
-                f"TT-LLama8B and TT-Llama11B do not support prompts longer than {MAX_PROMPT_LEN} tokens on N150 (received prompt with {prompt_len} tokens)"
-            )
-    return inputs
+# def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+#     mm_processor_kwargs = getattr(ctx.model_config, "mm_processor_kwargs", None) or {}
+#     input_processor = ctx.get_hf_processor(**mm_processor_kwargs)
 
+#     if "prompt" in inputs:
+#         prompt_text = inputs["prompt"]
+#     else:
+#         # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
+#         assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
+#         prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
 
-def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    mm_processor_kwargs = getattr(ctx.model_config, "mm_processor_kwargs", None) or {}
-    input_processor = ctx.get_hf_processor(**mm_processor_kwargs)
+#     multi_modal_data = inputs.get("multi_modal_data", None)
 
-    if "prompt" in inputs:
-        prompt_text = inputs["prompt"]
-    else:
-        # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
-        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
-        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
+#     processed_inputs = input_processor(
+#         text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+#         images=multi_modal_data["image"] if multi_modal_data is not None else None,
+#         videos=None,  # [INFO] videos are not supported yet
+#         return_tensors="pt",
+#     )
 
-    multi_modal_data = inputs.get("multi_modal_data", None)
-
-    processed_inputs = input_processor(
-        text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-        images=multi_modal_data["image"] if multi_modal_data is not None else None,
-        videos=None,  # [INFO] videos are not supported yet
-        return_tensors="pt",
-    )
-
-    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
-    return {
-        "type": inputs["type"],
-        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
-        "prompt": prompt_text,
-        "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
-    }
+#     assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+#     return {
+#         "type": inputs["type"],
+#         "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
+#         "prompt": prompt_text,
+#         "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
+#     }
 
 
 # @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
-@INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)
-class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
+# @INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)  # TODO: replace with MllamaMultiModalProcessor
+class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -230,7 +217,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, tt_data_parallel=1):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
@@ -301,15 +290,27 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
+        hf_model_name = hf_config._name_or_path
+        if (
+            ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name)
+            and mesh_device.get_num_devices() == 1
+            and is_wormhole_b0()
+        ):
+            MAX_PROMPT_LEN = 65536
+            if max_seq_len > MAX_PROMPT_LEN:
+                raise ValueError(
+                    f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
+                    f"(received {max_seq_len}). Set --max_model_len to {MAX_PROMPT_LEN} or lower in vLLM."
+                )
+
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -342,7 +343,7 @@ class QwenForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -376,7 +377,7 @@ class MistralForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, n_layers=None, tt_data_parallel=1
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -404,7 +405,7 @@ class MistralForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
+# @INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal) # TODO: replace with MllamaMultiModalProcessor
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -413,6 +414,8 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
     ):
+        from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
