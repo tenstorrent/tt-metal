@@ -185,10 +185,8 @@ void MAIN {
         add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
-        sqrt_tile_init();
-        sqrt_tile(0);
-        recip_tile_init();
-        recip_tile(0);
+        rsqrt_tile_init<true>();
+        rsqrt_tile<true>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

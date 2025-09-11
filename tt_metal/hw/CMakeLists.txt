@@ -30,7 +30,7 @@ set(IRAM_OPTIONS
 
 # Get the appropriate SFPI tarball
 file(STRINGS "../sfpi-version.sh" SFPI)
-set(SFPI_arch_os "${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}")
+set(SFPI_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
 foreach(tuple ${SFPI})
     string(STRIP ${tuple} pair)
     string(REPLACE "=" ";" pair ${pair})
@@ -42,21 +42,21 @@ foreach(tuple ${SFPI})
             set(SFPI_VERSION "${value}")
         elseif(key STREQUAL "sfpi_url")
             set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_txz_md5")
+        elseif(key STREQUAL "sfpi_${SFPI_arch}_txz_md5")
             set(SFPI_TXZ_MD5 "${value}")
         endif()
     endif()
 endforeach()
 
 if(NOT DEFINED SFPI_TXZ_MD5)
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch_os} is not available")
+    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} is not available")
 endif()
 
 include(FetchContent)
 FetchContent_Declare(
     sfpi
     URL
-        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.txz"
+        "${SFPI_URL}/v${SFPI_VERSION}/sfpi_${SFPI_VERSION}_${SFPI_arch}.txz"
     URL_HASH "MD5=${SFPI_TXZ_MD5}"
     SOURCE_DIR
     "${PROJECT_SOURCE_DIR}/runtime/sfpi"

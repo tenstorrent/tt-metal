@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         CoreRange noc_cr(
             device->worker_core_from_logical_core(logical_cr.start_coord),
             device->worker_core_from_logical_core(logical_cr.end_coord));
-        noc_multicast_regions.push_back(std::move(noc_cr));
+        noc_multicast_regions.push_back(noc_cr);
     }
 
     CoreRange range_0_noc = noc_multicast_regions[0];

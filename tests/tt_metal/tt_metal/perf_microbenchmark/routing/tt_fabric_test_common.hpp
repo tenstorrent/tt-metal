@@ -524,6 +524,27 @@ public:
         return pairs;
     }
 
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_one_unicast_pairs(
+        const uint32_t device_idx) const override {
+        // device_idx is used to deterministically select a destination node from all available global nodes
+        const auto device_ids = get_global_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+        auto dst_node_id = device_ids[device_idx % device_ids.size()];
+        pairs.reserve(device_ids.size() - 1);
+        for (const auto& src_node : device_ids) {
+            if (src_node == dst_node_id) {
+                continue;
+            }
+            if (this->topology_ == Topology::Linear) {
+                if (!this->are_devices_linear({src_node, dst_node_id})) {
+                    continue;
+                }
+            }
+            pairs.push_back({src_node, dst_node_id});
+        }
+        return pairs;
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(const FabricNodeId& src_node_id) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& direction : FabricContext::routing_directions) {

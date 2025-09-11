@@ -212,7 +212,7 @@ Tensors run_with_autoformat(
         cq_id);
 
     auto padded_output_shapes = extract_padded_shapes(
-        std::move(output_specs),
+        output_specs,
         [&](size_t idx) {
             const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), Layout::TILE, tensor.memory_config());
@@ -285,7 +285,7 @@ Tensors run_with_autoformat(
         cq_id);
 
     auto legacy_output_shapes = extract_padded_shapes(
-        std::move(output_specs),
+        output_specs,
         [&](size_t idx) {
             const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), output_layouts[idx], tensor.memory_config());
