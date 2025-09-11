@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-// #define REDUCE_OP (PoolType::MAX)
-// #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -214,7 +211,6 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 }
 
 /*This uses L1 accumulation to accumulate onto cb_cur_mm_out*/
-
 // template <uint32_t Wt, uint32_t block_size>
 // void update_cur_mm_out(uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
 //     cb_wait_front(cb_prev_mm_out, Wt);
@@ -222,7 +218,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 //     cb_wait_front(cb_exp_max_diff, onetile);
 
 //     PACK((llk_pack_reconfig_l1_acc(true)));  // enable L1 accumulation
-//     // pack_reconfig_data_format(cb_cur_mm_out);
+//     pack_reconfig_data_format(cb_cur_mm_out);
 
 //     reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
 //     mul_bcast_cols_init_short(cb_prev_mm_out, cb_exp_max_diff);
@@ -234,7 +230,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 //         tile_regs_commit();
 //         tile_regs_wait();
 //         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-//             pack_tile<true>(/*dst_reg_idx*/ block_idx, cb_cur_mm_out, tile_idx + block_idx);
+//             pack_tile(/*dst_reg_idx*/ block_idx, cb_cur_mm_out);
 //         }
 //         tile_regs_release();
 //     }
@@ -291,12 +287,7 @@ void update_cur_mm_out(
 }
 
 // reduce and recip in place
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t cb_identity_scaler,
-    uint32_t cb_matmul_reduce,
-    bool fp32_transpose = false>
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>
 void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     cb_wait_front(cb_in_idx, onetile);
     cb_wait_front(cb_matmul_reduce, onetile);  // generate tile for matmul row reduce)
@@ -305,10 +296,6 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
 
     reconfig_data_format(cb_in_idx, cb_matmul_reduce);  // reconfig data format to precise
     tile_regs_acquire();
-    // reduce_init<pool_type, reduce_dim, false>(cb_in_idx, cb_identity_scaler, cb_in_idx);
-    // reduce_tile<pool_type, reduce_dim, false>(
-    //     cb_in_idx, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
-    // reduce_uninit();
 
     mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
     // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);

@@ -297,16 +297,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
 
-    auto cb_cur_mm_out =
-        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+    auto cb_cur_mm_out = create_circular_buffer(
+        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
 
-    auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+    auto cb_output = create_circular_buffer(
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
 
     auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -499,12 +499,9 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto* intermediates_buffer = tensor_return_value.back().buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
+    // No runtime args to update for compute kernels.
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
-    // auto& group_1_runtime_args = GetRuntimeArgs(program, sdpa_fw_group_1_kernel);
-    // // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    // auto& group_2_runtime_args =
-    //     core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, sdpa_fw_group_2_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

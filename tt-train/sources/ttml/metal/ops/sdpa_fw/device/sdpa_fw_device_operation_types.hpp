@@ -12,7 +12,7 @@ struct operation_attributes_t {
     uint32_t q_heads{1U};
     uint32_t kv_heads{1U};
     bool return_intermediates{false};
-    float dropout_probability{0.1F};  // default value
+    float dropout_probability{0.0F};  // default value
 };
 
 struct tensor_args_t {

@@ -102,8 +102,15 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qHt == 1U && kHt == 1U && vHt == 1U,
-        "Query and Key must have the same shape, except for the inner dim. Got shapes: Query={}, Key={}, Value={}",
+        "Query, Key and Value must have the same shape, except for the inner dim. Got shapes: Query={}, Key={}, "
+        "Value={}",
         query_shape,
+        key_shape,
+        value_shape);
+
+    TT_FATAL(
+        key_shape == value_shape,
+        "Key and Value must have the same shape. Got Key={}, Value={}",
         key_shape,
         value_shape);
 
@@ -122,6 +129,15 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             output_shape,
             query_shape);
     }
+
+    // TODO: #28205 - Implement dropout support in SDPA forward operation
+    // Currently dropout is not implemented
+    TT_FATAL(
+        args.dropout_probability == 0.0F,
+        "Dropout is not currently supported in SDPA forward operation. "
+        "Got dropout_probability={}, expected 0.0. "
+        "See ticket #28205 for implementation status.",
+        args.dropout_probability);
 
     if (args.return_intermediates && tensor_args.preallocated_intermediate.has_value()) {
         const auto& preallocated_intermediate = tensor_args.preallocated_intermediate.value();
@@ -202,14 +218,13 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // TODO[change]: calculation of hash could be changed due to sdpa implementation
-    // query shape should  difine the shape of other inputs and outputs
-    // we assume that query, key and value have the same shape, and we validate it in validate function
     const auto& query_tensor = tensor_args.query;
     const auto& query_logical_shape = query_tensor.logical_shape();
+    const auto& key_tensor = tensor_args.key;
+    const auto& key_logical_shape = key_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, program_factory.index(), query_tensor.dtype(), query_logical_shape);
+        args, program_factory.index(), query_tensor.dtype(), query_logical_shape, key_logical_shape);
 
     return hash;
 }
