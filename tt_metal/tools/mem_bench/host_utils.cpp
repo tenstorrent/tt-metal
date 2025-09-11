@@ -71,10 +71,6 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
     std::unordered_set<uint32_t> numa_nodes;
 
     for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
-        // Not an MMIO device
-        if (cluster.get_associated_mmio_device(device_id) != device_id) {
-            continue;
-        }
 
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (!numa_nodes.contains(associated_node)) {
