@@ -200,11 +200,8 @@ void MAIN {
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-
-        recip_tile_init();
-        recip_tile(dst0);
+        rsqrt_tile_init<true>();
+        rsqrt_tile<true>(dst0);
 
         tile_regs_commit();
 
@@ -342,17 +339,15 @@ void MAIN {
                 cb_push_back(cb_out, blk);
             }
         }
-
-        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
-        cb_xmm = tt::CBIndex::c_24;  // x minus mean
-#ifdef RMSNORM
-        cb_pop_front(cb_ex, 1);
-#endif
         // End of
         // Final Val Calc
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+
+        cb_xmm = tt::CBIndex::c_24;  // x minus mean
+        cb_pop_front(cb_ex, onetile);
+        cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE

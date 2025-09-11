@@ -33,10 +33,13 @@ class TensorShardingInfo:
         self.shards = shards
         self.topology = tensor.tensor_topology()
         self.placements = self.topology.placements()
-        self.mesh_shape = list(self.topology.mesh_shape())
+        self.distribution_shape = list(self.topology.distribution_shape())
+        self.mesh_shape = list(tensor.device().shape) if tensor.device() else list(tensor.host_buffer().shape())
         self.mesh_coords = self.topology.mesh_coords()
-        self.mesh_rank = len(self.mesh_shape)
 
+        assert len(self.mesh_shape) <= 2, "Tensor visualization only supports up to 2D meshes"
+
+        self.reverse_coord_mapper = self._create_coordinate_mapper()
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
         self.global_tensor_shape = self._compute_global_tensor_shape()
         self.axis_representatives = self._compute_axis_representatives()
@@ -54,32 +57,72 @@ class TensorShardingInfo:
                     mapping[tensor_dim] = axis
         return mapping
 
+    def _create_coordinate_mapper(self):
+        """Create mapping from distribution coordinates to mesh coordinates."""
+        self.mesh_coords_ordered = ttnn.compute_distribution_to_mesh_mapping(
+            ttnn.MeshShape(self.distribution_shape), ttnn.MeshShape(self.mesh_shape)
+        )
+
+        mesh_to_distribution_map = {}
+        coord_idx = 0
+        for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
+            if coord_idx < len(self.mesh_coords_ordered):
+                distribution_key = ttnn.MeshCoordinate(
+                    [distribution_coord[i] for i in range(distribution_coord.dims())]
+                )
+                mesh_to_distribution_map[self.mesh_coords_ordered[coord_idx]] = distribution_key
+                coord_idx += 1
+
+        def mapper(mesh_coord):
+            return mesh_to_distribution_map.get(mesh_coord, mesh_coord)
+
+        return mapper
+
+    def _iter_distribution_to_mesh_coords(self):
+        """Generator that yields (distribution_coord, mesh_coord) pairs using C++ results directly."""
+        coord_idx = 0
+        for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
+            if coord_idx < len(self.mesh_coords_ordered):
+                yield distribution_coord, self.mesh_coords_ordered[coord_idx]
+                coord_idx += 1
+
     def _compute_global_tensor_shape(self):
-        """Compute the global tensor shape."""
+        """Compute the global tensor shape using distribution_shape for scaling."""
         shape = list(self.tensor.shape)
         for tensor_dim, axis in self.dim_to_axis.items():
-            shape[tensor_dim] *= self.mesh_shape[axis]
+            shape[tensor_dim] *= self.distribution_shape[axis]
         return ttnn.Shape(shape)
 
     def _compute_axis_representatives(self):
-        """Find representative device for each axis partition."""
-        mapping = {axis: {} for axis in range(self.mesh_rank)}
+        """Find representative device for each axis partition in distribution coordinate space."""
+        distribution_shape_rank = len(self.distribution_shape)
+        mapping = {axis: {} for axis in range(distribution_shape_rank)}
 
         if self.tensor.storage_type() == ttnn.StorageType.HOST:
-            for host_idx, buffer_coord in enumerate(self.mesh_coords):
-                for axis in range(self.mesh_rank):
-                    part_index = int(buffer_coord[axis])
+            for host_idx, mesh_coord in enumerate(self.mesh_coords):
+                distribution_coord = self.reverse_coord_mapper(mesh_coord)
+
+                for axis in range(min(distribution_shape_rank, distribution_coord.dims())):
+                    part_index = int(distribution_coord[axis])
                     if part_index not in mapping[axis]:
                         mapping[axis][part_index] = host_idx
         else:
             mesh_device = self.tensor.device()
-            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
-            for coord in coord_range:
-                device_id = mesh_device.get_device_id(coord)
-                for axis in range(self.mesh_rank):
-                    part_index = int(coord[axis])
-                    if part_index not in mapping[axis]:
-                        mapping[axis][part_index] = device_id
+
+            # Generate distribution->mesh coordinate pairs using the coord_mapper
+            for distribution_coord, mesh_coord in self._iter_distribution_to_mesh_coords():
+                try:
+                    device_id = mesh_device.get_device_id(mesh_coord)
+
+                    # Record representative for each distribution axis
+                    if distribution_shape_rank == 1:
+                        mapping[0][distribution_coord[0]] = device_id
+                    elif distribution_shape_rank == 2:
+                        mapping[0][distribution_coord[0]] = device_id
+                        mapping[1][distribution_coord[1]] = device_id
+                except:
+                    continue
+
         return mapping
 
     def _compute_device_to_shard_mapping(self):
@@ -92,34 +135,31 @@ class TensorShardingInfo:
         mapping = {}
         try:
             mesh_device = self.tensor.device()
-            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
-            for coord in coord_range:
-                dev_id = mesh_device.get_device_id(coord)
-                for i, mc in enumerate(self.mesh_coords):
-                    if int(mc[0]) == int(coord[0]) and int(mc[1]) == int(coord[1]):
-                        mapping[dev_id] = i
-                        break
-        except Exception:
+            for i, mesh_coord in enumerate(self.mesh_coords):
+                dev_id = mesh_device.get_device_id(mesh_coord)
+                mapping[dev_id] = i
+
+        except Exception as e:
             logger.warning(
-                "Fallback in TensorShardingInfo._compute_device_to_shard_mapping: assuming device ID equals shard index. "
-                "This may not be valid in complex distributed scenarios. Please verify your device/shard mapping."
+                f"Fallback in TensorShardingInfo._compute_device_to_shard_mapping: {e}. "
+                "Assuming device ID equals shard index. This may not be valid in complex distributed scenarios."
             )
             mapping = {i: i for i in range(len(self.shards))}
 
         return mapping
 
     def _compute_axis_offsets_and_sizes(self):
-        """Compute offset and size information for each axis."""
+        """Compute offset and size information for each axis using distribution_shape."""
         axis_offsets = {}
         axis_sizes = {}
 
-        max_axis = min(len(self.mesh_shape), len(self.placements))
+        max_axis = min(len(self.distribution_shape), len(self.placements))
 
         for axis in range(max_axis):
             placement = self.placements[axis]
             if isinstance(placement, ttnn.PlacementShard):
                 tensor_dim = placement.dim
-                parts = int(self.mesh_shape[axis])
+                parts = int(self.distribution_shape[axis])
                 sizes = []
 
                 for p in range(parts):
@@ -198,12 +238,13 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
     """Compute global tensor slice ranges for a specific device coordinate."""
     tensor_shape = list(sharding_info.tensor.shape)
     slice_ranges = []
+    distribution_coord = sharding_info.reverse_coord_mapper(device_coord)
 
     for tensor_dim, dim_size in enumerate(tensor_shape):
         if tensor_dim in sharding_info.dim_to_axis:
             axis = sharding_info.dim_to_axis[tensor_dim]
             try:
-                part_index = int(device_coord[axis])
+                part_index = int(distribution_coord[axis]) if axis < distribution_coord.dims() else 0
                 if (
                     axis in sharding_info.axis_offsets
                     and axis in sharding_info.axis_sizes
@@ -271,11 +312,16 @@ def _create_replication_color_mapping(sharding_info):
             device_to_group[device_id] = slice_key_to_group[slice_key]
     else:
         mesh_device = sharding_info.tensor.device()
-        rows, cols = mesh_device.shape
-        for r in range(rows):
-            for c in range(cols):
-                coord = ttnn.MeshCoordinate(r, c)
-                device_id = mesh_device.get_device_id(coord)
+
+        # Only assign colors to devices that actually have tensor shards
+        for device_id in sharding_info.device_to_shard_map.keys():
+            coord = None
+            for test_coord in ttnn.MeshCoordinateRange(mesh_device.shape):
+                if mesh_device.get_device_id(test_coord) == device_id:
+                    coord = test_coord
+                    break
+
+            if coord is not None:
                 slice_ranges = _compute_global_slice_ranges(coord, sharding_info)
                 slice_key = tuple(slice_ranges)
 
@@ -442,8 +488,8 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
                     if device_id is None:
                         return ""
 
-                    logical_coord = ttnn.MeshCoordinate(r, c)
-                    return _create_shard_annotation_text(device_id, logical_coord, sharding_info)
+                    distribution_coord = ttnn.MeshCoordinate(r, c)
+                    return _create_shard_annotation_text(device_id, distribution_coord, sharding_info)
                 except Exception:
                     return ""
 
@@ -451,8 +497,8 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
             style_func = style_host_cell
         else:
 
-            def annotate_with_shard_info(device_id, device_coord=None):
-                return _create_shard_annotation_text(device_id, device_coord, sharding_info)
+            def annotate_with_shard_info(device_id, distribution_coord=None):
+                return _create_shard_annotation_text(device_id, distribution_coord, sharding_info)
 
             def style_device_cell(device_id):
                 return device_to_style.get(device_id)

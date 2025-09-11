@@ -40,7 +40,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const auto& grid_shape = grid_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 
-    const uint32_t batch_size = input_shape[0];
     const uint32_t input_height = input_shape[1];
     const uint32_t input_width = input_shape[2];
 
@@ -75,9 +74,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // Calculate grid sticks and output sticks separately based on batch_output_channels
     uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
-    uint32_t output_nsticks =
-        batch_output_channels ? grid_nsticks :    // batch_output_channels=true: 1 output stick per grid stick
-            grid_nsticks * grid_batching_factor;  // batch_output_channels=false: K output sticks per grid stick
 
     // Work distribution explanation:
     // - batch_output_channels=true: 1 grid stick → 1 output stick (C*K channels)
@@ -86,9 +82,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // Get device grid for multicore
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t total_cores = num_cores_x * num_cores_y;
 
     // Work distribution - distribute grid sticks across cores (fundamental work units)
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
@@ -276,7 +270,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     for (uint32_t i = 0, grid_sticks_processed = 0, output_sticks_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t grid_sticks_per_core = 0;
-        tt::tt_metal::KernelHandle compute_kernel_for_core = 0;
 
         if (core_group_1.contains(core)) {
             grid_sticks_per_core = num_sticks_per_core_group_1;

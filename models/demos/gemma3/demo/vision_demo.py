@@ -245,7 +245,7 @@ def test_multimodal_demo_text(
     else:
         from transformers import AutoProcessor
 
-        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR)
+        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR, use_fast=True, do_convert_rgb=True)
 
     generator = Generator(model, model_args, mesh_device)
 
@@ -267,21 +267,29 @@ def test_multimodal_demo_text(
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    bee_image = PIL_Image.open(
+    cats_image_1 = PIL_Image.open(
         BytesIO(
             requests.get(
-                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg"
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
             ).content
         )
     ).convert("RGB")
-    logger.info(f"Bee image dimensions: {bee_image.size} (width x height)")
+    cats_image_2 = PIL_Image.open(
+        BytesIO(
+            requests.get(
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.png"
+            ).content
+        )
+    ).convert("RGB")
+    logger.info(f"Cats images dimensions: {cats_image_1.size} and {cats_image_2.size} (width x height)")
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
+        [
+            UserMessage(
+                content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
+            )
+        ],
     ]
 
     if len(trace_dialogs) < max_batch_size:
@@ -294,14 +302,14 @@ def test_multimodal_demo_text(
             img = PIL_Image.open(f).convert("RGB")
         logger.info(f"Dog image dimensions: {img.size} (width x height)")
 
-        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
-            img2 = PIL_Image.open(f).convert("RGB")
-        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
-
         # Regular testing dialogs with original images
         dialogs = [
+            [
+                UserMessage(
+                    content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
+                )
+            ],
             [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
             [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]

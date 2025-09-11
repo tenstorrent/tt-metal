@@ -107,7 +107,7 @@ class TtConv:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="" if self.is_detect_cv2 else "silu",
+            activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_w_div=1,
             deallocate_activation=False,

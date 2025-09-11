@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package tt.scaleout_tools.cabling_generator.proto;
+
+message NodeDescriptor {
+    message Board {
+      uint32 tray_id = 1;
+      string board_type = 2;
+    }
+
+    message Boards {
+        repeated Board board = 1;
+    }
+
+    message Port {
+        uint32 tray_id = 1;
+        uint32 port_id = 2;
+    }
+
+    message Connection {
+        Port port_a = 1;
+        Port port_b = 2;
+    }
+
+    message PortConnections {
+        repeated Connection connections = 1;
+    }
+
+    string motherboard = 1;
+    Boards boards = 2;
+    map<string, PortConnections> port_type_connections = 3;
+}

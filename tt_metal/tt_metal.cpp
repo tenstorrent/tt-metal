@@ -57,7 +57,6 @@
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "get_platform_architecture.hpp"
 
 namespace tt {
 
@@ -354,10 +353,6 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
         &regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
-}
-
-std::string get_physical_architecture_name() {
-    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -1268,7 +1263,7 @@ void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<const uint32_t> runtime_args) {
+    std::initializer_list<uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
@@ -1302,7 +1297,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
 }
 
 void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
+    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);

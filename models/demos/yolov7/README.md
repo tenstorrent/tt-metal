@@ -19,13 +19,13 @@ pytest --disable-warnings models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `70` FPS.
+- For `640x640`, end-2-end perf is `109` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest --disable-warnings models/demos/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `134` FPS.
+- For `640x640`, end-2-end perf is `188` FPS.
 
   ```bash
   pytest --disable-warnings models/demos/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

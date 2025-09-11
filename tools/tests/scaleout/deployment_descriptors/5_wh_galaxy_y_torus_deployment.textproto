@@ -1,0 +1,40 @@
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 2
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-a03u02"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 6
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-a03u08"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 14
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-a03u14"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 2
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-a04u02"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 8
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-a04u08"
+}

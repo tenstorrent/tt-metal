@@ -73,7 +73,7 @@ class TtConv:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="",
+            activation=None,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
@@ -92,7 +92,7 @@ class TtConv:
             conv_config.shard_layout = None
 
         if self.is_act_false != True:
-            conv_config.activation = "silu"
+            conv_config.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks

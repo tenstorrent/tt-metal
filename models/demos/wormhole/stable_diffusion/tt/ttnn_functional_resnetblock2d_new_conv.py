@@ -304,7 +304,6 @@ class resnetBlock2D:
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=self.conv1_shard_layout,
             reshard_if_not_optimal=False,
             enable_act_double_buffer=True,
@@ -416,7 +415,6 @@ class resnetBlock2D:
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,
             enable_act_double_buffer=True,
@@ -467,7 +465,6 @@ class resnetBlock2D:
             # input_tensor = self.conv_shortcut(input_tensor)
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=ttnn.bfloat8_b,
-                activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=False,
                 enable_act_double_buffer=True,

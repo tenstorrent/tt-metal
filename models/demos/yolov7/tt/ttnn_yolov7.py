@@ -214,7 +214,11 @@ class ttnn_detect:
 
         self.m = []
         self.convm_1 = Conv(
-            [1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="sigmoid"
+            [1, 80, 80, 256],
+            (1, 1, 1, 1, 0, 0, 1, 1),
+            parameters["0"],
+            is_reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
         )
         self.m.append(self.convm_1)
 
@@ -223,7 +227,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["1"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -233,7 +237,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["2"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)

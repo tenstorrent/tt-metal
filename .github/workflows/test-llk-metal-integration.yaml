@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests (Wormhole)'
+        description: 'Run all post-commit tests'
         required: false
         type: boolean
         default: false
@@ -21,7 +21,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
   workflow_call:
     inputs:
       mirrored_branch:
@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests (Wormhole)'
+        description: 'Run all post-commit tests'
         required: false
         type: boolean
         default: false
@@ -42,7 +42,14 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
+    outputs:
+      all-post-commit-result:
+        description: 'Result of all post-commit tests (status:url format)'
+        value: ${{ jobs.setup-and-test.outputs.all-post-commit-result }}
+      blackhole-result:
+        description: 'Result of blackhole tests (status:url format)'
+        value: ${{ jobs.setup-and-test.outputs.blackhole-result }}
 
 concurrency:
   group: llk-integration-${{ inputs.mirrored_branch }}
@@ -51,7 +58,7 @@ concurrency:
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 240 }}
+  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 480 }}
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
   GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
@@ -73,6 +80,10 @@ jobs:
       branch-exists: ${{ steps.check-branch.outputs.branch-exists }}
       test-branch-name: ${{ steps.check-branch.outputs.test-branch-name }}
       parent-branch-name: ${{ env.PARENT_BRANCH_NAME }}
+      all-post-commit-run-id: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
+      blackhole-run-id: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
+      all-post-commit-result: ${{ steps.monitor-workflows.outputs.all-post-commit-result }}
+      blackhole-result: ${{ steps.monitor-workflows.outputs.blackhole-result }}
     steps:
       - name: Setup
         uses: actions/checkout@v4
@@ -149,7 +160,63 @@ jobs:
             echo "branch-exists=false" >> $GITHUB_OUTPUT
             echo "❌ Mirrored branch '$MIRRORED_BRANCH' does not exist in submodule"
           fi
-      - name: Run selected tests
+      - name: Trigger workflows
+        id: trigger-workflows
+        if: |
+          steps.check-branch.outputs.branch-exists == 'true' &&
+          (inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true)
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PARENT_BRANCH_NAME: ${{ env.PARENT_BRANCH_NAME }}
+        run: |
+          # Define workflows to trigger
+          declare -A workflows
+          workflows["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
+          workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
+
+          declare -A run_ids
+
+          # Function to trigger workflow and get run ID
+          trigger_and_get_id() {
+            local workflow_file="$1"
+            local display_name="$2"
+
+            gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
+
+            # Poll for run ID
+            local run_id=""
+            for i in {1..12}; do
+              sleep 5
+              run_id=$(gh run list --workflow "$workflow_file" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+              if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+                break
+              fi
+            done
+            echo "$run_id"
+          }
+
+          # Trigger enabled workflows
+          for workflow in "${!workflows[@]}"; do
+            if [ "${workflows[$workflow]}" = "true" ]; then
+              echo "🚀 Triggering $workflow..."
+              case "$workflow" in
+                "all-post-commit-workflows.yaml")
+                  run_ids["all-post-commit"]=$(trigger_and_get_id "$workflow" "All post-commit")
+                  [ -n "${run_ids[all-post-commit]}" ] && echo "✅ All post-commit run ID: ${run_ids[all-post-commit]}"
+                  ;;
+                "blackhole-post-commit.yaml")
+                  run_ids["blackhole"]=$(trigger_and_get_id "$workflow" "Blackhole")
+                  [ -n "${run_ids[blackhole]}" ] && echo "✅ Blackhole run ID: ${run_ids[blackhole]}"
+                  ;;
+              esac
+            fi
+          done
+
+          # Output run IDs for monitoring steps
+          echo "all-post-commit-run-id=${run_ids[all-post-commit]}" >> $GITHUB_OUTPUT
+          echo "blackhole-run-id=${run_ids[blackhole]}" >> $GITHUB_OUTPUT
+      - name: Monitor triggered workflows
+        id: monitor-workflows
         if: |
           steps.check-branch.outputs.branch-exists == 'true' &&
           (inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true)
@@ -158,17 +225,20 @@ jobs:
           WORKFLOW_TIMEOUT: ${{ env.WORKFLOW_TIMEOUT }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
-          PARENT_BRANCH_NAME: ${{ env.PARENT_BRANCH_NAME }}
-          SUBMODULE_PATH: ${{ env.SUBMODULE_PATH }}
+          ALL_POST_COMMIT_RUN_ID: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
+          BLACKHOLE_RUN_ID: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
         run: |
-          # Define test configurations
-          declare -A TEST_CONFIGS
-          TEST_CONFIGS["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
-          TEST_CONFIGS["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
           # Helper function for workflow monitoring
           monitor_workflow() {
-            local run_id=$1
-            local workflow_name=$2
+            local run_id="$1"
+            local workflow_name="$2"
+            local output_var="$3"
+
+            if [ -z "$run_id" ] || [ "$run_id" = "" ]; then
+              echo "⚪ Skipping $workflow_name - not triggered"
+              return 0
+            fi
+
             local retries=0
             local timeout_seconds=$((WORKFLOW_TIMEOUT * 60))
             local elapsed=0
@@ -176,17 +246,21 @@ jobs:
             echo "🚀 Monitoring $workflow_name (run ID: $run_id) - $run_url"
             while [ $retries -lt $MAX_RETRIES ]; do
               while [ $elapsed -lt $timeout_seconds ]; do
-                # Use more efficient status check
-                local status=$(gh run view "$run_id" --json status,conclusion --jq '.status + ":" + (.conclusion // "unknown")' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:unknown")
-                local run_status=$(echo "$status" | cut -d: -f1)
-                local conclusion=$(echo "$status" | cut -d: -f2)
+                status=$(gh run view "$run_id" --json status,conclusion --jq '.status + ":" + (.conclusion // "unknown")' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:unknown")
+                run_status=$(echo "$status" | cut -d: -f1)
+                conclusion=$(echo "$status" | cut -d: -f2)
+
                 if [ "$run_status" = "completed" ]; then
-                  local run_url="https://github.com/tenstorrent/tt-metal/actions/runs/$run_id"
                   if [ "$conclusion" = "success" ]; then
                     echo "🎯 $workflow_name passed: $run_url"
+                    echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
                     return 0
                   else
                     echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url"
+                    if [ $retries -ge $((MAX_RETRIES - 1)) ]; then
+                      echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                      return 1
+                    fi
                     break
                   fi
                 fi
@@ -195,8 +269,8 @@ jobs:
               done
               # Handle timeout
               if [ $elapsed -ge $timeout_seconds ]; then
-                local run_url="https://github.com/tenstorrent/tt-metal/actions/runs/$run_id"
                 echo "⏰ $workflow_name timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
+                echo "$output_var=timeout:$run_url" >> $GITHUB_OUTPUT
                 return 1
               fi
               # Retry logic
@@ -204,54 +278,31 @@ jobs:
               if [ $retries -lt $MAX_RETRIES ]; then
                 echo "🔄 Retrying $workflow_name (attempt $((retries + 1))/$MAX_RETRIES)"
                 if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
-                  echo "🔄 Retry triggered for $workflow_name"
                   sleep 30
-                  elapsed=0  # Reset timer for retry
+                  elapsed=0 # Reset timer for retry
                 else
                   echo "🛑 Failed to trigger retry for $workflow_name"
-                  break
+                  echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                  return 1
                 fi
               fi
             done
+            echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
             return 1
           }
-          declare -A pids
-          declare -A run_ids
-          for workflow in "${!TEST_CONFIGS[@]}"; do
-            if [ "${TEST_CONFIGS[$workflow]}" = "true" ]; then
-              echo "Triggering $workflow..."
-              gh workflow run "$workflow" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
 
-              # Poll for run ID
-              run_id=""
-              for i in {1..12}; do  # Try for 60 seconds max
-                sleep 5
-                run_id=$(gh run list --workflow "$workflow" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
-                if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
-                  echo "Found run ID: $run_id for $workflow"
-                  break
-                fi
-              done
-
-              if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
-                run_ids["$workflow"]="$run_id"
-                # Start monitoring in background
-                monitor_workflow "$run_id" "$workflow" &
-                pids["$workflow"]=$!
-              else
-                echo "🛑 Failed to get run ID for $workflow after 60 seconds"
-                exit 1
-              fi
-            fi
-          done
-          # Wait for all background processes
+          # Monitor workflows using data-driven approach
+          declare -A workflow_configs
+          workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
+          workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
           exit_code=0
-          for workflow in "${!pids[@]}"; do
-            if wait "${pids[$workflow]}"; then
-              echo "🎯 $workflow completed successfully"
-            else
-              echo "🛑 $workflow failed"
-              exit_code=1
+          for workflow_file in "${!workflow_configs[@]}"; do
+            IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
+
+            if [ "$enabled" = "true" ]; then
+              if ! monitor_workflow "$run_id" "$workflow_file" "$output_var"; then
+                exit_code=1
+              fi
             fi
           done
           exit $exit_code
@@ -319,28 +370,59 @@ jobs:
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Mirrored Branch:** ${{ inputs.mirrored_branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Workflow ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ inputs.mirrored_branch }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ needs.setup-and-test.outputs.branch-exists }}" = "true" ]; then
-            echo "✅ **Branch Setup:** Successfully created test branch from mirrored branch" >> $GITHUB_STEP_SUMMARY
             echo "**Test Branch:** ${{ needs.setup-and-test.outputs.test-branch-name }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Test Configuration:**" >> $GITHUB_STEP_SUMMARY
-            echo "- All Post-Commit Tests (Wormhole): ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- All Post-Commit Tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "- Blackhole Post-Commit Tests: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            if [ "${{ needs.setup-and-test.result }}" = "success" ]; then
-              echo "🎯 **Test Execution:** All selected tests completed successfully" >> $GITHUB_STEP_SUMMARY
-            elif [ "${{ needs.setup-and-test.result }}" = "skipped" ]; then
-              echo "ℹ️ **Test Execution:** No tests were selected to run" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "🛑 **Test Execution:** Some tests failed" >> $GITHUB_STEP_SUMMARY
-            fi
+
+            # Display detailed test results with links
+            echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
+
+            # Display test results using data-driven approach
+            declare -A test_configs
+            test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
+            test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
+
+            # Function to display test result
+            display_test_result() {
+              local test_name="$1"
+              local enabled="$2"
+              local result="$3"
+
+              if [ "$enabled" = "true" ]; then
+                if [ -n "$result" ]; then
+                  local status=$(echo "$result" | cut -d: -f1)
+                  local url=$(echo "$result" | cut -d: -f2-)
+                  case "$status" in
+                    "success") echo "- 🎯 **$test_name:** Passed - [View run]($url)" >> $GITHUB_STEP_SUMMARY ;;
+                    "failure") echo "- 🛑 **$test_name:** Failed - [View run]($url)" >> $GITHUB_STEP_SUMMARY ;;
+                    "timeout") echo "- ⏰ **$test_name:** Timed Out - [View run]($url)" >> $GITHUB_STEP_SUMMARY ;;
+                    *) echo "- ⚪ **$test_name:** Status unknown ($status)" >> $GITHUB_STEP_SUMMARY ;;
+                  esac
+                else
+                  echo "- ⚪ **$test_name:** No result captured" >> $GITHUB_STEP_SUMMARY
+                fi
+              else
+                echo "- ⚪ **$test_name:** Not run" >> $GITHUB_STEP_SUMMARY
+              fi
+            }
+
+            # Display results for all test types
+            for test_name in "${!test_configs[@]}"; do
+              IFS=':' read -r enabled result <<< "${test_configs[$test_name]}"
+              display_test_result "$test_name" "$enabled" "$result"
+            done
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+
           else
             echo "❌ **Branch Setup:** Mirrored branch '${{ inputs.mirrored_branch }}' does not exist" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Please ensure the branch has been mirrored using the mirror workflow first." >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Workflow Status:** ${{ needs.setup-and-test.result }}" >> $GITHUB_STEP_SUMMARY

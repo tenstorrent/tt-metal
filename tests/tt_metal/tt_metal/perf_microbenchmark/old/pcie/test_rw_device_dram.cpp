@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Application Setup
-        srand(time(0));
+        srand(time(nullptr));
         uint32_t dram_addr =
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;

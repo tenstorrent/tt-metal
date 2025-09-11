@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+import "node_config.proto";
+
+package tt.scaleout_tools.cabling_generator.proto;
+
+message ClusterDescriptor {
+    // Node descriptors - can be defined inline instead of separate files
+    map<string, NodeDescriptor> node_descriptors = 1;
+
+    // Graph templates - reusable definitions (can be nested arbitrarily)
+    map<string, GraphTemplate> graph_templates = 2;
+
+    // Root graph instance
+    GraphInstance root_instance = 3;
+}
+
+message GraphTemplate {
+    // Child instances within this template
+    repeated ChildInstance children = 1;
+
+    // Internal connections within this graph template
+    map<string, PortConnections> internal_connections = 2;
+}
+
+message ChildInstance {
+    string name = 1;  // Instance name within the template
+
+    oneof instance_type {
+        NodeRef node_ref = 2;      // Leaf node - always a node
+        GraphRef graph_ref = 3;  // Can reference another graph template (arbitrary depth)
+    }
+}
+
+message NodeRef {
+    string node_descriptor = 1;  // e.g. "n300_t3k_node"
+}
+
+message GraphRef {
+    string graph_template = 1;  // e.g. "n300_t3k_superpod", etc.
+}
+
+// Graph instance - instantiation of a template with concrete mappings
+message GraphInstance {
+    string template_name = 1;
+
+    // Recursive child mappings - each child gets mapped to host_id (if node) or sub-instance (if graph)
+    map<string, ChildMapping> child_mappings = 2;
+}
+
+message ChildMapping {
+    oneof mapping {
+        uint32 host_id = 1;              // For node instances (leaf nodes)
+        GraphInstance sub_instance = 2;  // For nested graph instances (recursive)
+    }
+}
+
+// Path-based addressing - supports arbitrary depth
+message Port {
+    repeated string path = 1;   // Path down the hierarchy: ["superpod1", "pod2", "node1"]
+    uint32 tray_id = 2;
+    uint32 port_id = 3;
+}
+
+message Connection {
+    Port port_a = 1;
+    Port port_b = 2;
+}
+
+message PortConnections {
+    repeated Connection connections = 1;
+}

@@ -23,7 +23,7 @@ MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::MatmulReduceScatterAsync{
-        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, std::move(devices)};
+        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, devices};
 }
 
 }  // namespace matmul_reduce_scatter_async_detail
