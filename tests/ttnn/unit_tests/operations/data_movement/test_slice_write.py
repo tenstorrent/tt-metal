@@ -31,8 +31,6 @@ def _rand_shape(dim_size, choices=(8, 16, 32, 64, 128, 256)):
     return ret
 
 
-
-
 def _rand_slice_params(
     shape,
     *,
