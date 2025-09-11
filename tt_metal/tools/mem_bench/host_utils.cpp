@@ -58,6 +58,7 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (numa_node == -1 || associated_node == numa_node) {
             device_ids.push_back(device_id);
+            std::cout << "Using Device: " << device_id << std::endl;
         }
     }
 
@@ -74,6 +75,7 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
 
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (!numa_nodes.contains(associated_node)) {
+            std::cout << "Using Device: " << device_id << std::endl;
             device_ids.push_back(device_id);
             numa_nodes.insert(associated_node);
         }
@@ -104,6 +106,7 @@ std::vector<int> get_device_ids_for_single_device(std::optional<int> override_de
         if (!is_valid_mmio_device(device_id)) {
             throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
         }
+        std::cout << "Using Device: " << device_id << std::endl;
         return {device_id};
     }
     return get_mmio_device_ids(1, -1);
@@ -115,6 +118,7 @@ std::vector<int> get_device_ids_for_multi_device_same_node(std::optional<int> ov
         if (!is_valid_mmio_device(device_id)) {
             throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
         }
+        std::cout << "Using Device: " << device_id << std::endl;
         return {device_id};
     }
     return get_mmio_device_ids(get_number_of_mmio_devices(), 0);
@@ -126,6 +130,7 @@ std::vector<int> get_device_ids_for_multi_device_different_nodes(std::optional<i
         if (!is_valid_mmio_device(device_id)) {
             throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
         }
+        std::cout << "Using Device: " << device_id << std::endl;
         return {device_id};
     }
     return get_mmio_device_ids_unique_nodes(get_number_of_mmio_devices());
