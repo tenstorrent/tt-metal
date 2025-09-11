@@ -118,16 +118,19 @@ class Generator:
                     enable_trace = False
 
             if use_batched_prefill:
+                # reordering the tokens when empty_slots are not sequential (from vllm)
+                inverse_empty_slots = [empty_slots.index(i) for i in range(batch)]
                 prefill_ids = torch.cat(
                     [
                         torch.cat(
                             [tokens[id : id + 1, : seq_len[id]], torch.zeros(1, prefill_seq_len - seq_len[id]).long()],
                             dim=-1,
                         )
-                        for id in range(batch)
+                        for id in inverse_empty_slots
                     ],
                     dim=-1,
                 )
+                last_token_idx = [last_token_idx[id] for id in inverse_empty_slots]
             else:
                 prefill_ids = torch.cat(
                     [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
@@ -158,7 +161,8 @@ class Generator:
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
             if use_batched_prefill:
-                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)
+                # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
+                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)[empty_slots]
             else:
                 output_toks[id] = tt_tok
 
