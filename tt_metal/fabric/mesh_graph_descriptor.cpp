@@ -108,9 +108,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
                 .nodes = {src_device_id, dst_device_id},
                 .count = channels_count,
                 .policy = policy,
-                .directional = false,
                 .parent_instance_id = instance.global_id,
-                .routing_direction = direction, // TODO: Remove after MGD 1.0 is deprecated
+                .routing_direction = direction,  // TODO: Remove after MGD 1.0 is deprecated
             };
 
             connections[src_device_id].push_back(data);
@@ -541,17 +540,6 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
 
     // Combine all checks into a single loop over graph_descriptors
     for (const auto& graph : proto.graph_descriptors()) {
-        // Check that both graph_topology and connections are not defined at the same time
-        if (graph.has_graph_topology() && graph.connections_size() > 0) {
-            error_messages.push_back(
-                fmt::format(
-                    "Graph descriptor cannot have both graph_topology and connections defined (Graph: {})",
-                    graph.name()
-                )
-            );
-            continue;
-        }
-
         // Check connections have at least 2 nodes
         for (const auto& connection : graph.connections()) {
             if (connection.nodes_size() < 2) {
@@ -564,7 +552,6 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
             }
         }
     }
-
 }
 
 void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
@@ -919,7 +906,6 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .nodes = {src_device_id, dst_device_id},
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
-            .directional = false,
             .parent_instance_id = mesh_id,
             .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
         };
@@ -931,7 +917,6 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .nodes = {dst_device_id, src_device_id},
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
-            .directional = false,
             .parent_instance_id = mesh_id,
             .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
         };
@@ -992,8 +977,16 @@ const GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(GlobalNodeId parent
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id) {
+    auto& instance = instances_.at(graph_id);
+    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+
+    TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
+
     populate_inter_mesh_manual_connections(graph_id);
-    populate_inter_mesh_topology_connections(graph_id);
+
+    if (graph_desc->has_graph_topology()) {
+        populate_inter_mesh_topology_connections(graph_id);
+    }
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId graph_id) {
@@ -1043,14 +1036,13 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
                 .nodes = nodes_copy,
                 .count = connection.channels().count(),
                 .policy = connection.channels().policy(),
-                .directional = connection.directional(),
                 .parent_instance_id = graph_id,
                 .routing_direction = routing_direction,
             };
 
             const auto id = data.connection_id;
             add_connection_to_fast_lookups(data, instance.type);
-            connections_.emplace(data.connection_id, std::move(data));
+            connections_.emplace(id, std::move(data));
 
             if (connection.directional()) {
                 break;
@@ -1060,9 +1052,56 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_topology_connections(GlobalNodeId graph_id) {
-    // TODO: This is to be implemented in seperate PR
+    auto& instance = instances_.at(graph_id);
+    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+
+    TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
+
+    auto& graph_topology = graph_desc->graph_topology();
+
+    switch (graph_topology.layout_type()) {
+        case proto::GraphTopology::ALL_TO_ALL: populate_inter_mesh_topology_connections_all_to_all(graph_id); break;
+        case proto::GraphTopology::RING: populate_inter_mesh_topology_connections_ring(graph_id); break;
+        case proto::GraphTopology::INVALID_TYPE:
+        case proto::GraphTopology_Type_GraphTopology_Type_INT_MIN_SENTINEL_DO_NOT_USE_:
+        case proto::GraphTopology_Type_GraphTopology_Type_INT_MAX_SENTINEL_DO_NOT_USE_:
+            // These are protobuf sentinel values that should never be used
+            TT_THROW("Invalid graph topology type: {}", graph_topology.layout_type());
+            break;
+    }
 }
 
+void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id) {
+    // Iterate over all isntances in graph
+    auto& instance = instances_.at(graph_id);
+
+    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+
+    TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
+
+    for (const auto& sub_instance_a : instance.sub_instances) {
+        for (const auto& sub_instance_b : instance.sub_instances) {
+            if (sub_instance_a == sub_instance_b) {
+                continue;
+            }
+
+            // Create a connection between the two instances
+            ConnectionData data{
+                .nodes = {sub_instance_a, sub_instance_b},
+                .count = graph_desc->graph_topology().channels().count(),
+                .policy = graph_desc->graph_topology().channels().policy(),
+                .parent_instance_id = graph_id,
+                .routing_direction = proto::RoutingDirection::NONE,
+            };
+
+            const auto id = data.connection_id;
+            add_connection_to_fast_lookups(data, instance.type);
+            connections_.emplace(id, std::move(data));
+        }
+    }
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id) {}
 
 void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
     std::string indent(indent_level * 2, ' ');

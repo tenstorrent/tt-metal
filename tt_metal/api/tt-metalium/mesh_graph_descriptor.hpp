@@ -64,7 +64,6 @@ struct ConnectionData {
     std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
     std::uint32_t count;             // ethernet lanes per connection
     proto::Policy policy;
-    bool directional;
     GlobalNodeId parent_instance_id;
 
     ConnectionId connection_id = generate_next_global_id();
@@ -212,7 +211,9 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id); // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);
+    void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
+    void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 
     const GlobalNodeId find_instance_by_ref(const GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
 
