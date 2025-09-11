@@ -190,6 +190,17 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto my_rank = *(distributed_context.rank());
     auto hostname = this->my_host_name();
     physical_to_logical_eth_chan_[hostname] = cluster_desc->get_physical_to_logical_eth_chan();
+    if (*(distributed_context.rank()) == 0) {
+        for (const auto& [host_name, asic_chans] : physical_to_logical_eth_chan_) {
+            std::cout << "Physical to logical eth chan for " << host_name << std::endl;
+            for (const auto& [asic_id, physical_to_logical_eth_chan] : asic_chans) {
+                std::cout << "Asic id: " << asic_id << std::endl;
+                for (const auto& [physical_chan, logical_chan] : physical_to_logical_eth_chan) {
+                    std::cout << "Physical chan: " << +physical_chan << ", Logical chan: " << logical_chan << std::endl;
+                }
+            }
+        }
+    }
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
