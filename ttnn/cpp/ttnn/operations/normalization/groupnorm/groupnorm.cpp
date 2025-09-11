@@ -17,6 +17,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& input_mask,
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& bias,
+    const std::optional<ttnn::Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DataType> dtype,
     std::optional<CoreGrid> core_grid,
@@ -120,7 +121,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask})
+                   {gamma, beta, input_mask, negative_mask, reciprocals})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
@@ -139,7 +140,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask})
+                   {gamma, beta, input_mask, negative_mask, reciprocals})
             .at(0);
     }
 }

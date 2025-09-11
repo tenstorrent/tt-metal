@@ -21,8 +21,8 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint_tensix.h"
+// #include "debug/dprint_pages.h"
+// #include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -116,6 +116,8 @@ void MAIN {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(25);
     constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(26);
 
+    constexpr bool use_reciprocal = get_compile_time_arg_val(27);
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
@@ -132,6 +134,7 @@ void MAIN {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
+    constexpr uint32_t cb_reciprocals = tt::CBIndex::c_18;
 
     // interm cbs
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
@@ -235,9 +238,16 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
+    uint32_t* p_reciprocal = nullptr;
+    if constexpr (use_reciprocal) {
+        // The reciprocals are already sharded to this CB, get the pointer to the first value
+        cb_get_tile(cb_reciprocals, /*tile_idx=*/0, &p_reciprocal);
+        p_reciprocal += 4;  // The first 4 entries have metadata, so we ignore them
+    }
+
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
-        DPRINT << "Batch: " << b << " out of " << batch << ENDL();
+        // DPRINT << "Batch: " << b << " out of " << batch << ENDL();
         index_g_offset = 0;
 
         row_offset = num_cols_per_group;
@@ -250,7 +260,7 @@ void MAIN {
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
-            DPRINT << "Group: " << g << " out of " << group << ENDL();
+            // DPRINT << "Group: " << g << " out of " << group << ENDL();
             // Start Welford's Calculation
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
@@ -263,7 +273,7 @@ void MAIN {
             tile_regs_acquire();
 
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
+                // DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -279,11 +289,11 @@ void MAIN {
                 index_h_offset = 0;
 
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    DPRINT << "welford: i: " << i << " out of " << out_block_h_actual << ENDL();
+                    // DPRINT << "welford: i: " << i << " out of " << out_block_h_actual << ENDL();
                     curr_xy_limit += num_channels_per_group;
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        DPRINT << "welford: j: " << j << " out of " << num_subblocks_w << ENDL();
+                        // DPRINT << "welford: j: " << j << " out of " << num_subblocks_w << ENDL();
                         // Run Welford's algorithm
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
@@ -298,13 +308,20 @@ void MAIN {
                             // Print all args to welford
                             // Check if this is the first tile in the row and set tile_offset accordingly
                             auto this_tile_offset = (j + w) ? 0 : tile_offset;
-                            DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
-                                   << this_tile_offset << ENDL();
-                            welford_tile<0, 1, 2, false, false>(curr_xy_coord, curr_xy_limit, this_tile_offset, 0);
+                            // DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
+                            //    << this_tile_offset << ENDL();
+                            welford_tile<0, 1, 2, false, false>(
+                                curr_xy_coord, curr_xy_limit, this_tile_offset, p_reciprocal);
+
+                            if constexpr (use_reciprocal) {
+                                MATH(
+                                    DPRINT << "reciprocal[" << curr_xy_coord << "]: "
+                                           << (reinterpret_cast<float*>(p_reciprocal))[curr_xy_coord] << ENDL());
+                            }
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
-                            dprint_tensix_dest_reg(0);
-                            dprint_tensix_dest_reg(1);
-                            dprint_tensix_dest_reg(2);
+                            // dprint_tensix_dest_reg(0);
+                            // dprint_tensix_dest_reg(1);
+                            // dprint_tensix_dest_reg(2);
                         }
                         index_subblock_w_offset += subblock_w;
                     }
@@ -318,9 +335,9 @@ void MAIN {
             }
 
             welford_M2_to_var<0, 1, 2>(curr_xy_limit, 0);  // Convert M2 to variance
-            DPRINT << "After M2 to var with args: " << curr_xy_limit << " " << ENDL();
-            dprint_tensix_dest_reg(1);
-            dprint_tensix_dest_reg(2);
+            // DPRINT << "After M2 to var with args: " << curr_xy_limit << " " << ENDL();
+            // dprint_tensix_dest_reg(1);
+            // dprint_tensix_dest_reg(2);
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;
@@ -339,46 +356,46 @@ void MAIN {
             cb_wait_front(cb_eps, 1);
             cb_wait_front(cb_ex_global, 2);
             // Print cb_ex_global using dprint_row
-            DPRINT << (uint)0 << " mean:: "
-                   << TileSlice(
-                          cb_ex_global,
-                          0,
-                          SliceRange{
-                              .h0 = (uint8_t)0,
-                              .h1 = (uint8_t)(1),
-                              .hs = (uint8_t)1,
-                              .w0 = (uint8_t)0,
-                              .w1 = (uint8_t)32,
-                              .ws = (uint8_t)1},
-                          true,
-                          false);
-            DPRINT << (uint)0 << " var:: "
-                   << TileSlice(
-                          cb_ex_global,
-                          1,
-                          SliceRange{
-                              .h0 = (uint8_t)0,
-                              .h1 = (uint8_t)(1),
-                              .hs = (uint8_t)1,
-                              .w0 = (uint8_t)0,
-                              .w1 = (uint8_t)32,
-                              .ws = (uint8_t)1},
-                          true,
-                          false);
+            // // DPRINT << (uint)0 << " mean:: "
+            //        << TileSlice(
+            //               cb_ex_global,
+            //               0,
+            //               SliceRange{
+            //                   .h0 = (uint8_t)0,
+            //                   .h1 = (uint8_t)(1),
+            //                   .hs = (uint8_t)1,
+            //                   .w0 = (uint8_t)0,
+            //                   .w1 = (uint8_t)32,
+            //                   .ws = (uint8_t)1},
+            //               true,
+            //               false);
+            // // DPRINT << (uint)0 << " var:: "
+            //        << TileSlice(
+            //               cb_ex_global,
+            //               1,
+            //               SliceRange{
+            //                   .h0 = (uint8_t)0,
+            //                   .h1 = (uint8_t)(1),
+            //                   .hs = (uint8_t)1,
+            //                   .w0 = (uint8_t)0,
+            //                   .w1 = (uint8_t)32,
+            //                   .ws = (uint8_t)1},
+            //               true,
+            //               false);
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
             add_tiles_init(cb_ex_global, cb_eps);
             add_tiles(cb_ex_global, cb_eps, 1, 0, dst0);
-            dprint_tensix_dest_reg(dst0);
+            // dprint_tensix_dest_reg(dst0);
             // sqrt(Var + eps)
             sqrt_tile_init();
             sqrt_tile(dst0);
-            dprint_tensix_dest_reg(dst0);
+            // dprint_tensix_dest_reg(dst0);
             // 1/[sqrt(Var + eps)]
             recip_tile_init();
             recip_tile(dst0);
-            dprint_tensix_dest_reg(dst0);
+            // dprint_tensix_dest_reg(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);
@@ -391,7 +408,7 @@ void MAIN {
             uint32_t start_index_block_w = index_block_w;
 
             uint32_t out_block_h_offset = 0;
-            DPRINT << "Final Val Calc for group: " << g << " out of " << group << ENDL();
+            // DPRINT << "Final Val Calc for group: " << g << " out of " << group << ENDL();
             // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
@@ -414,7 +431,7 @@ void MAIN {
                         for (uint32_t w = 0; w < subblock_w; w++) {
                             uint32_t index = w + index_subblock_w_offset;
                             sub_tiles_bcast_scalar(cb_in0, cb_ex_global, index, 0, w);
-                            dprint_tensix_dest_reg(w);
+                            // dprint_tensix_dest_reg(w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -617,6 +634,7 @@ void MAIN {
                     }
                     cb_push_back(cb_outbeta, out_block_hw_normal);
                     cb_pop_front(cb_inbeta, out_block_hw_normal);
+                    cb_wait_front(cb_outbeta, out_block_hw_normal);
                 }
                 // End Optional Beta
 
@@ -671,7 +689,17 @@ void MAIN {
         // End Group Loop
         index_b_offset += num_tiles_per_batch;
     }
+
+    // Pop all the cb_beta and cb_gamma if used
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, per_core_N);
+    }
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, per_core_N);
+    }
+    cb_pop_front(cb_eps, 1);
+
     // End Batch Loop
-    DPRINT << "Kernel finished" << ENDL();
+    // DPRINT << "Kernel finished" << ENDL();
 }
 }  // namespace NAMESPACE
