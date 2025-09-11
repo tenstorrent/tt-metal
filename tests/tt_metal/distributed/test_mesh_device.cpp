@@ -165,5 +165,16 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     }
 }
 
+TEST_F(MeshDevice2x4Test, OverlappedSubmeshes) {
+    const auto submesh_range_1 = MeshCoordinateRange(MeshShape{2, 2});
+    const auto submesh_range_2 = MeshCoordinateRange(MeshCoordinate{0, 2}, MeshCoordinate{1, 3});
+    const auto submesh_range_3 = MeshCoordinateRange(MeshShape{1, 4});
+    auto submeshes = mesh_device_->create_overlapped_submeshes({submesh_range_1, submesh_range_2, submesh_range_3});
+    ASSERT_EQ(submeshes.size(), 3);
+    EXPECT_EQ(submeshes[0]->shape(), (MeshShape{2, 2}));
+    EXPECT_EQ(submeshes[1]->shape(), (MeshShape{2, 2}));
+    EXPECT_EQ(submeshes[2]->shape(), (MeshShape{1, 4}));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

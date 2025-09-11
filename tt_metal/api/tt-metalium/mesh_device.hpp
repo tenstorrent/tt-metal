@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class SubmeshManager;
 
 using DeviceIds = std::vector<int>;
 
@@ -124,6 +125,7 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+    std::shared_ptr<SubmeshManager> submesh_manager_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -303,6 +305,8 @@ public:
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
+    std::vector<std::shared_ptr<MeshDevice>> create_overlapped_submeshes(
+        const std::vector<MeshCoordinateRange>& submesh_ranges);
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
