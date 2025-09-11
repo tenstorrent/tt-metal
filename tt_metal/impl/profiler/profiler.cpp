@@ -783,7 +783,7 @@ void dumpJsonNocTraces(
             std::ofstream file(rpt_path);
             if (file.is_open()) {
                 // Write the final processed events for this op
-                file << nlohmann::json(std::move(events)).dump(2);
+                file << nlohmann::json(events).dump(2);
             } else {
                 log_error(tt::LogMetal, "Could not write profiler noc json trace to '{}'", rpt_path);
             }
