@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-#!/usr/bin/env python3
 import subprocess
 
 BIN = "build/test/tt_metal/tt_fabric/bench_unicast"

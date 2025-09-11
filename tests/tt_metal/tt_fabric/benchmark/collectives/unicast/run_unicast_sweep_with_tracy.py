@@ -128,7 +128,7 @@ def run_one_under_tracy(run_name: str, cmd_argv: list[str]) -> None:
     """
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
-    runner = ARTIFACTS / f"_bench_runner_{int(time.time()*1000)}.py"
+    runner = ARTIFACTS / f"_bench_runner_{os.getpid()}_{time.time_ns()}.py"
     runner.write_text("import subprocess, sys\n" f"subprocess.run({repr(cmd_argv)}, check=True)\n")
 
     env = os.environ.copy()
@@ -146,7 +146,13 @@ def run_one_under_tracy(run_name: str, cmd_argv: list[str]) -> None:
         run_name,
         str(runner),
     ]
-    subprocess.run(tracy_cmd, check=True, env=env)
+    try:
+        subprocess.run(tracy_cmd, check=True, env=env)
+    finally:
+        try:
+            runner.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def read_last_host_row(csv_path: Path) -> dict:

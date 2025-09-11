@@ -57,14 +57,14 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
               << std::endl;
 
-    // ---------- Build a receiver progrma ----------
+    // ---------- Build a receiver program ----------
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
 
     // create a global semaphore on the dst device
     auto gsem = tt::tt_metal::CreateGlobalSemaphore(
         dst_dev,
         dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
-        /*initial=*/0,
+        /*initial_value=*/0,
         tt::tt_metal::BufferType::L1);
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
@@ -168,7 +168,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     std::cout << " (using " << link_idx << ")\n";
 
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_index=*/link_idx, sender_prog, p.sender_core, writer_rt);
+        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
