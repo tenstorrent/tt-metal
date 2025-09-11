@@ -392,8 +392,11 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
             }
             const auto& remote_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(candidate_host);
 
-            for (auto& exit_node : exit_nodes) {
-                for (auto& candidate_node : candidate_exit_nodes) {
+            for (std::size_t exit_node_idx = 0; exit_node_idx < exit_nodes.size(); exit_node_idx++) {
+                auto& exit_node = exit_nodes[exit_node_idx];
+                for (std::size_t candidate_node_idx = 0; candidate_node_idx < candidate_exit_nodes.size();
+                     candidate_node_idx++) {
+                    auto& candidate_node = candidate_exit_nodes[candidate_node_idx];
                     auto local_asic = exit_node.src_exit_node;
                     auto remote_asic = exit_node.dst_exit_node;
                     if (local_asic == candidate_node.dst_exit_node && candidate_node.src_exit_node == remote_asic) {
