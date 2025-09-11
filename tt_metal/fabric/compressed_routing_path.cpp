@@ -11,7 +11,7 @@ namespace tt::tt_fabric {
 template <>
 void compressed_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
-    for (uint8_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
+    for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         uint32_t routing_field_value = 0;
 
         if (src_chip_id == dst_chip_id) {
