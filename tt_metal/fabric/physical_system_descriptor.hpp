@@ -145,6 +145,7 @@ private:
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
+    void update_asic_graph();
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
