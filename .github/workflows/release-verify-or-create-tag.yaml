@@ -11,7 +11,7 @@ on:
         description: "Bump each commit as a patch version"
         default: true
         type: boolean
-      tag_type:
+      tag-type:
         description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
         default: ""
         type: string
@@ -48,7 +48,7 @@ jobs:
         id: get-tag-version
         run: |
             baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
-            tagType="${{ inputs.tag_type }}"
+            tagType="${{ inputs.tag-type }}"
             if [ "$tagType" = "rc" ]; then
               currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
               newNumber=$(($currentNumberRCs+1))
