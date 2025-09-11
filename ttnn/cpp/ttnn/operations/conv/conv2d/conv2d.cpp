@@ -230,7 +230,18 @@ Result conv2d_DRAM(
         .slice_type = determine_conv_slice_type(input_height, input_width, conv_config.output_layout),
         .num_slices = 0});
 
-    TT_FATAL(!mm_conv, "DRAM Slicing doesn't currently support MM Conv");
+    ttnn::Tensor weight_tensor_on_device;
+    std::optional<ttnn::Tensor> bias_tensor_on_device;
+    if (mm_conv) {
+        if (!is_device_tensor(weight_tensor)) {
+            weight_tensor_on_device =
+                ttnn::operations::core::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+            weight_tensor_on_device = ttnn::permute(weight_tensor_on_device, {2, 3, 1, 0});  // OIHW to HWIO
+            weight_tensor_on_device =
+                ttnn::reshape(weight_tensor, {1, 1, kernel_size[0] * kernel_size[1] * in_channels, out_channels});
+        }
+    }
+}
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
@@ -305,10 +316,7 @@ Result conv2d_DRAM(
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
 
-    ttnn::Tensor weight_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    std::optional<ttnn::Tensor> bias_tensor_on_device;
-
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
