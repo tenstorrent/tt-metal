@@ -518,7 +518,7 @@ an ADDI into code that runs out of registers with a MAD.  (future todo to fix th
 SFPREPLAY
 ---------
 
-The ``SFPREPLAY`` instruction available on Wormhole allows the RISCV processor
+The ``SFPREPLAY`` instruction available on Wormhole and Blackhole allows the RISCV processor
 to submit up to 32 SFP instructions at once.  The compiler looks for sequences
 of instructions that repeat, stores these and then "replays" them later.
 
@@ -593,5 +593,5 @@ Limitations
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
   * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
-  * Keeping too many variables alive at once (4 on GS) requires register spilling which is not implemented and causes a compiler abort
+  * Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort
   * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.
