@@ -22,6 +22,8 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -196,6 +198,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
+        py::arg("enable_activation_reuse") = false,
         py::arg("output_dtype").noconvert() = std::nullopt);
 
     module.def(
@@ -299,7 +302,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
-            std::string,
+            std::optional<ttnn::operations::unary::UnaryWithParam>,
             bool,
             bool,
             uint32_t,
@@ -315,10 +318,11 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
-        py::arg("activation") = "",
+        py::arg("activation") = std::nullopt,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
@@ -334,7 +338,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("full_inner_dim") = false,
         py::arg("enable_split_reader") = false,
         py::arg("in_place") = false,
-        py::arg("enable_kernel_stride_folding") = false);
+        py::arg("enable_kernel_stride_folding") = false,
+        py::arg("enable_activation_reuse") = false);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -344,10 +349,11 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite(
         "activation",
         &Conv2dConfig::activation,
-        R"doc(A string that selects the fused activation function to be applied on the output.
-        Empty string means no activation function.
-        Supported activation function strings are:
-        relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt
+        R"doc(Fused activation function to be applied on the output.
+        None means no activation function.
+        Use ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) for ReLU activation.
+        Supported activation functions include:
+        RELU, SILU, GELU, SIGMOID, TANH, etc.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
@@ -460,6 +466,15 @@ void py_bind_conv2d(py::module& module) {
 
         ===============================================================
         )doc");
+    py_conv_config.def_readwrite("enable_activation_reuse", &Conv2dConfig::enable_activation_reuse, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Enables reusing data between consecutive image rows.
+        It can be enabled for height sharding only and boosts image2column performance,
+        so its meant to be used for reader-bound convolutions.
+
+        ===============================================================
+    )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
 }
