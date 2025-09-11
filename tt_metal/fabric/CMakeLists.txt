@@ -51,9 +51,6 @@ target_sources(
         physical_system_descriptor.cpp
 )
 
-# Make .clang-tidy available in the fabric binary directory for generated files
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
-
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
@@ -85,12 +82,8 @@ endforeach()
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-target_include_directories(
-    fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
