@@ -1012,7 +1012,7 @@ KernelHandle CreateDataMovementKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::string kernel_name;
-    if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
+    if (kernel_src.source_type_ == KernelSource::FILE_PATH || kernel_src.source_type_ == KernelSource::BINARY_PATH) {
         kernel_name = kernel_src.source_;
     } else {
         TT_FATAL(kernel_src.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
@@ -1117,6 +1117,24 @@ KernelHandle CreateKernelFromString(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return std::visit(
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
+                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+        },
+        config);
+}
+
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& binary_path,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(binary_path, KernelSource::BINARY_PATH);
     return std::visit(
         ttsl::overloaded{
             [&](const DataMovementConfig& cfg) {

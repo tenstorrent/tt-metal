@@ -76,14 +76,33 @@ int main() {
         std::vector<uint32_t> dram_copy_compile_time_args;
         TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
         TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
-        KernelHandle dram_copy_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = dram_copy_compile_time_args});
+        
+        // Example: Using CreateKernelFromBinary API to load pre-compiled kernel binary
+        // Replace "/path/to/precompiled/binary" with actual path to test
+        constexpr bool USE_PRECOMPILED_BINARY = false;
+        
+        KernelHandle dram_copy_kernel_id;
+        if (USE_PRECOMPILED_BINARY) {
+            // Use the new CreateKernelFromBinary API to load pre-compiled kernel
+            dram_copy_kernel_id = CreateKernelFromBinary(
+                program,
+                "/path/to/precompiled/binary",  // Path to pre-compiled binary
+                core,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = dram_copy_compile_time_args});
+        } else {
+            // Use the standard CreateKernel API with JIT compilation
+            dram_copy_kernel_id = CreateKernel(
+                program,
+                OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
+                core,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = dram_copy_compile_time_args});
+        }
 
         // Initialize the input buffer with random data.
         std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
