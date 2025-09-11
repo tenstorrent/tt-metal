@@ -21,11 +21,11 @@ void kernel_main() {
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
 
     // Iterate over all pages in the tensor and read them to CB
-    // For interleaved tensors, we need to pass tensor_volume to pages()
-    // For sharded tensors, pages() doesn't need tensor_volume
+    // For interleaved tensors, we need to pass start_page_id and end_page_id to pages()
+    // For sharded tensors, pages() uses default end_page_id (tensor_volume from dspec)
     auto all_pages = [&]() {
 #if INTERLEAVED_LAYOUT
-        return tensor_accessor_src.pages(tensor_volume);
+        return tensor_accessor_src.pages(0, tensor_volume);
 #else
         return tensor_accessor_src.pages();
 #endif

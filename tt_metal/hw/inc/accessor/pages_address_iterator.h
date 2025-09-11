@@ -270,9 +270,9 @@ public:
     using pointer = const Page*;
 
     PagesAddressIteratorInterleaved(
-        const Accessor& accessor, uint32_t start_page_id, uint32_t tensor_vol, uint8_t noc) :
-        accessor(accessor), current_page_id(start_page_id), tensor_volume(tensor_vol), noc(noc) {
-        if (current_page_id < tensor_volume) {
+        const Accessor& accessor, uint32_t start_page_id, uint32_t end_page_id, uint8_t noc) :
+        accessor(accessor), current_page_id(start_page_id), end_page_id_(end_page_id), noc(noc) {
+        if (current_page_id < end_page_id_) {
             update_current_page();
         }
     }
@@ -286,8 +286,8 @@ public:
     // Arithmetic operators
     PagesAddressIteratorInterleaved& operator++() {
         current_page_id++;
-        if (current_page_id >= tensor_volume) {
-            current_page_id = tensor_volume;
+        if (current_page_id >= end_page_id_) {
+            current_page_id = end_page_id_;
             return *this;
         }
 
@@ -304,8 +304,8 @@ public:
     PagesAddressIteratorInterleaved& operator+=(difference_type steps) {
         ASSERT(steps >= 0);
         current_page_id += steps;
-        if (current_page_id >= tensor_volume) {
-            current_page_id = tensor_volume;
+        if (current_page_id >= end_page_id_) {
+            current_page_id = end_page_id_;
             return *this;
         }
 
@@ -345,7 +345,7 @@ public:
 private:
     const Accessor& accessor;
     uint32_t current_page_id = 0;
-    const uint32_t tensor_volume = 0;
+    const uint32_t end_page_id_ = 0;
     const uint8_t noc = noc_index;
     mutable Page current_page{0, 0, 0};
 
@@ -369,22 +369,12 @@ public:
         PagesAddressIteratorSharded<Accessor>>;
     using const_iterator = iterator;
 
-    // Constructor for sharded accessors (tensor volume known from dspec)
-    template <typename A = Accessor, std::enable_if_t<!A::DSpec::is_interleaved, int> = 0>
-    Pages(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
-        accessor_(accessor),
-        start_page_id_(start_page_id),
-        tensor_volume_(accessor.dspec().tensor_volume()),
-        noc_(noc) {}
-
-    // Constructor for interleaved accessors (tensor volume must be provided)
-    template <typename A = Accessor, std::enable_if_t<A::DSpec::is_interleaved, int> = 0>
-    Pages(const Accessor& accessor, uint32_t tensor_volume, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
-        accessor_(accessor), start_page_id_(start_page_id), tensor_volume_(tensor_volume), noc_(noc) {}
+    Pages(const Accessor& accessor, uint32_t start_page_id, uint32_t end_page_id, uint8_t noc = noc_index) :
+        accessor_(accessor), start_page_id_(start_page_id), end_page_id_(end_page_id), noc_(noc) {}
 
     iterator begin() const {
         if constexpr (Accessor::DSpec::is_interleaved) {
-            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, tensor_volume_, noc_);
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, end_page_id_, noc_);
         } else {
             return PagesAddressIteratorSharded<Accessor>(accessor_, start_page_id_, noc_);
         }
@@ -392,9 +382,9 @@ public:
 
     iterator end() const {
         if constexpr (Accessor::DSpec::is_interleaved) {
-            return PagesAddressIteratorInterleaved<Accessor>(accessor_, tensor_volume_, tensor_volume_, noc_);
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, end_page_id_, end_page_id_, noc_);
         } else {
-            return PagesAddressIteratorSharded<Accessor>(accessor_, tensor_volume_, noc_);
+            return PagesAddressIteratorSharded<Accessor>(accessor_, end_page_id_, noc_);
         }
     }
 
@@ -404,7 +394,7 @@ public:
 private:
     const Accessor& accessor_;
     uint32_t start_page_id_;
-    uint32_t tensor_volume_;
+    uint32_t end_page_id_;
     uint8_t noc_;
 };
 

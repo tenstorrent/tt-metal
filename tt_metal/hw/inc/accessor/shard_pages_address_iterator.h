@@ -228,16 +228,23 @@ public:
     using iterator = ShardPagesAddressIterator<Accessor>;
     using const_iterator = ShardPagesAddressIterator<Accessor>;
 
-    ShardPages(const Accessor& accessor, uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) :
-        accessor_(accessor), shard_id_(shard_id), start_page_offset_(start_page_offset), noc_(noc) {}
+    ShardPages(
+        const Accessor& accessor,
+        uint32_t shard_id,
+        uint32_t start_page_offset,
+        uint32_t end_page_offset,
+        uint8_t noc = noc_index) :
+        accessor_(accessor),
+        shard_id_(shard_id),
+        start_page_offset_(start_page_offset),
+        end_page_offset_(end_page_offset),
+        noc_(noc) {}
 
     iterator begin() const {
         return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, start_page_offset_, noc_);
     }
 
-    iterator end() const {
-        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, accessor_.dspec().shard_volume(), noc_);
-    }
+    iterator end() const { return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, end_page_offset_, noc_); }
 
     const_iterator cbegin() const { return begin(); }
     const_iterator cend() const { return end(); }
@@ -246,6 +253,7 @@ private:
     const Accessor& accessor_;
     uint32_t shard_id_;
     uint32_t start_page_offset_;
+    uint32_t end_page_offset_;
     uint8_t noc_;
 };
 }  // namespace tensor_accessor

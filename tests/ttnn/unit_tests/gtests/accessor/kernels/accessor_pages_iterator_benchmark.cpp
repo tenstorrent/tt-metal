@@ -17,7 +17,7 @@ void kernel_main() {
 #if INTERLEAVED_LAYOUT
         // For interleaved layout, need to provide tensor volume
         uint32_t tensor_volume = get_compile_time_arg_val(args.next_compile_time_args_offset());
-        auto pages = tensor_accessor.pages(tensor_volume);
+        auto pages = tensor_accessor.pages(0, tensor_volume);
 #else
         // For sharded layout, tensor volume is known from dspec
         auto pages = tensor_accessor.pages();
