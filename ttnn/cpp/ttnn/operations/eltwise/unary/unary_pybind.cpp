@@ -652,6 +652,75 @@ void bind_unary_operation_with_float_parameter_default(
 }
 
 template <typename unary_operation_t>
+void bind_unary_composite_with_default_float(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    float parameter_a_value,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (float, optional): {3}. Defaults to `{4}`.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 2, 3, 4
+
+            {6}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, {2} = 5)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        supported_dtype,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) { return self(queue_id, input_tensor, parameter_a, memory_config, output_tensor); },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation_with_int_parameter(
     py::module& module,
     const unary_operation_t& operation,
@@ -1973,6 +2042,12 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
+        ttnn::rsqrt,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|rsqrt|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
@@ -2045,7 +2120,6 @@ void py_module(py::module& module) {
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(
         module, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
     bind_unary_operation_with_fast_and_approximate_mode(
@@ -2056,8 +2130,8 @@ void py_module(py::module& module) {
         module, ttnn::log1p, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
 
     // Unaries with float parameter
-    bind_unary_operation_with_float_parameter(
-        module, ttnn::elu, "alpha", "The alpha parameter for the ELU function", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_composite_with_default_float(
+        module, ttnn::elu, "alpha", "The alpha parameter for the ELU function", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_float_parameter(
         module,
         ttnn::heaviside,

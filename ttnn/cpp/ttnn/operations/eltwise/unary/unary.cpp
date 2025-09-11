@@ -108,6 +108,7 @@ template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
+template struct ExecuteUnary<UnaryOpType::RSQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
@@ -140,7 +141,6 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
@@ -418,6 +418,21 @@ Tensor Hardshrink::invoke(
         queue_id,
         input_tensor,
         {UnaryWithParam{op_type, static_cast<float>(lambda)}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor Elu::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::ELU;
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{op_type, static_cast<float>(alpha)}},
         memory_config,
         optional_output_tensor);
 }
