@@ -26,8 +26,8 @@ ALWI void sqrt_tile_init() {
 
 // clang-format off
 /**
- * Performs element-wise computation of the square root on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
+ * Performs element-wise computation of the square root on each element of a
+ * tile in DST register at index idst. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
@@ -35,11 +35,9 @@ ALWI void sqrt_tile_init() {
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-// ALWI void sqrt_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(sqrt, RC, APPROX, idst)); }
-
 template <bool legacy_compat, bool fp32_dest_acc_en>
 ALWI void sqrt_tile(uint32_t idst) {
     MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST(sqrt, APPROX, 8, fp32_dest_acc_en, legacy_compat, idst, RC));
