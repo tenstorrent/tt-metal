@@ -9,6 +9,9 @@ The SFPU is a 32-wide vector engine, capable of performing FP32 and INT32 arithm
 
 Please also see the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>`, the :ref:`LLK<llk>` documentation, and the :ref:`Internal structure of a Tile<internal_structure_of_a_tile>` documentation for more context on how the SFPU fits into the overall architecture.
 
+SFPU Programming Examples
+-------------------------
+
 .. toctree::
    :maxdepth: 1
 
