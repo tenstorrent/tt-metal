@@ -20,7 +20,6 @@ class Conv:
         *,
         stride=1,
         padding=1,
-        has_bias=False,
         act_block_h=32,
         reshard=False,
         deallocate=False,
@@ -29,6 +28,7 @@ class Conv:
         width_sharding=False,
         block_sharding=False,
         dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
         is_sliced=False,
     ) -> None:
@@ -38,21 +38,36 @@ class Conv:
         self.conv_pt = conv_pt
         # logger.debug(f"Conv: {self.conv_pt}")
 
+        # Automatically detect if bias is present in parameters
+        try:
+            self.has_bias = hasattr(parameters, "bias") and parameters.bias is not None
+        except (KeyError, AttributeError):
+            self.has_bias = False
+
+        if self.has_bias:
+            print(f"Conv: bias found in parameters")
+
         # handle comparison mode that requires bias
         if ttnn.CONFIG.enable_comparison_mode:
-            self.has_bias = True
-            if has_bias:
-                self.bias = parameters.bias
+            if self.has_bias:
+                try:
+                    self.bias = parameters.bias
+                except (KeyError, AttributeError):
+                    self.bias = None
             else:
                 # Create bias tensor with proper shape for TTNN conv2d
                 bias_tensor = torch.zeros(conv_pt.out_channels)
                 self.bias = bias_tensor.view(1, 1, 1, -1)
                 # Convert bias to ttnn tensor
                 self.bias = ttnn.from_torch(self.bias, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # In comparison mode, we always have bias (either real or zero)
+            self.has_bias = True
         else:
-            self.has_bias = has_bias
             if self.has_bias:
-                self.bias = parameters.bias
+                try:
+                    self.bias = parameters.bias
+                except (KeyError, AttributeError):
+                    self.bias = None
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.stride = conv_pt.stride  # stride
@@ -62,6 +77,7 @@ class Conv:
         self.act_block_h = act_block_h
         self.reshard = reshard
         self.dtype = dtype
+        self.weights_dtype = weights_dtype
         self.output_layout = output_layout
 
         if width_sharding:
@@ -89,7 +105,7 @@ class Conv:
     def __call__(self, device, input_tensor):
         # logger.debug(f"ULAZ: Conv output layout: {self.output_layout}")
         conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
+            weights_dtype=self.weights_dtype,
             shard_layout=self.shard_layout,
             deallocate_activation=self.deallocate,
             activation=self.activation,
@@ -98,8 +114,8 @@ class Conv:
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         if self.act_block_h is not None:
