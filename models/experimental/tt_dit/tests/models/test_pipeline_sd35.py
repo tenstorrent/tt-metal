@@ -61,7 +61,6 @@ def test_sd35_pipeline(
     num_links,
     no_prompt,
     model_location_generator,
-    get_tt_cache_path,
     traced,
     use_cache,
     is_ci_env,
@@ -74,14 +73,9 @@ def test_sd35_pipeline(
     # Setup CI environment
     if is_ci_env:
         if use_cache:
-            monkeypatch.setenv(
-                "TT_DIT_CACHE_DIR",
-                str(
-                    get_tt_cache_path(
-                        default_dir="/mnt/MLPerf", model_subdir="TT_DIT", model_version="StableDiffusion_35_Large"
-                    )
-                ),
-            )
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
         if traced:
             pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
