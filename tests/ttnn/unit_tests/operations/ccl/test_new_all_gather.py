@@ -445,6 +445,7 @@ def test_all_gather(
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_sharded(
     mesh_device,
+    num_devices,
     output_shape,
     dim,
     num_links,
@@ -463,7 +464,7 @@ def test_all_gather_sharded(
 
     run_all_gather_impl(
         mesh_device,
-        mesh_device.get_num_devices(),
+        num_devices,
         output_shape,
         dim,
         num_links,
