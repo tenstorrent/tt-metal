@@ -18,7 +18,13 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
-FABRIC_CONFIGS = [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D]
+
+FABRIC_CONFIGS = [
+    ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+]
 
 
 # heuristic to cut down on combinatorial explosion. Send/receive to/from the (up to) 4 corners of the mesh.
@@ -56,11 +62,12 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    # fabric 2D not yet supported #TICKET
-    if test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
-        return True, "2D Fabric not yet supported"
+    mesh_shape, (coord0, coord1) = test_vector["mesh_shape_and_coords"]
 
-    _, (coord0, coord1) = test_vector["mesh_shape_and_coords"]
+    # hardcode for 6U
+    if mesh_shape in [(16, 2), (2, 16)]:
+        return True, "Invalid mesh shape for 6U"
+
     if test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_2D and (
         coord0[0] != coord1[0] and coord0[1] != coord1[1]
     ):
