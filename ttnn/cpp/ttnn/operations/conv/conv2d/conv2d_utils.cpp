@@ -1080,10 +1080,10 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
     if (output_layout == Layout::ROW_MAJOR) {
         float threshold_ratio = 3.0;
         if (input_height > input_width * threshold_ratio) {
-            log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
+            log_info(tt::LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
             return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
         }
-        log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
+        log_info(tt::LogOp, "Determined Conv DRAM Slice Type as WIDTH");
         return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
     } else {
         if (input_width < 70) {
@@ -1091,10 +1091,10 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         } else {
             float threshold_ratio = 2;
             if (input_height > input_width * threshold_ratio) {
-                log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
+                log_info(tt::LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
                 return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
             }
-            log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
+            log_info(tt::LogOp, "Determined Conv DRAM Slice Type as WIDTH");
             return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
         }
     }
@@ -1132,9 +1132,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width) {
-
         log_trace(
-            LogOp,
+            tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
             input_slice_height,
             input_slice_width,

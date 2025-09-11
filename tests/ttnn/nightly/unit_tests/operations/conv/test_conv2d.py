@@ -782,6 +782,7 @@ def test_conv_dram(
     stride,
     padding,
     dilation,
+    act_block_h_override,
     math_fidelity,
     fp32_accum,
     input_dtype,
@@ -793,7 +794,8 @@ def test_conv_dram(
         pytest.skip("Tests have been configured for N150.")
 
     batch_size = 1
-    config = None
+    config = {}
+    config["act_block_h"] = act_block_h_override
     run_conv(
         device,
         torch_tensor_map,
