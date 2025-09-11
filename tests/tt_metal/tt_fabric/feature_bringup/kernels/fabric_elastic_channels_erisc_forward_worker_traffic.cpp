@@ -30,7 +30,7 @@ constexpr size_t FABRIC_MCAST_FACTOR = get_compile_time_arg_val(6);
 
 constexpr bool CHANGE_CMD_BUF_AND_NOC = false;
 constexpr bool CHANGE_CMD_BUF = false;
-constexpr bool CHANGE_NOC = true;
+constexpr bool CHANGE_NOC = false;
 using noc_addr_t = uint64_t;
 
 enum class WRITE_OUT_MODE {
@@ -164,7 +164,7 @@ void process_send_side(
 
     auto num_unprocessed_acks = get_sender_num_unprocessed_acks(local_src_ch_ack_stream_id);
     if (num_unprocessed_acks > 0) {
-        uint64_t start_cycles = eth_read_wall_clock();
+        // uint64_t start_cycles = eth_read_wall_clock();
         bool can_release_chunk = current_chunk_ack_index.get() == CHUNK_N_PKTS - 1;
         if (can_release_chunk) {  // 22 cycles!??!?! (44 -> 22 if I don't include the branch condition in the timing)
             auto chunk = open_chunks_cb.pop();  // avg 7.3 cycles
@@ -175,9 +175,9 @@ void process_send_side(
         }
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
-        uint64_t end_cycles = eth_read_wall_clock();
-        timing_stats->release_count++;
-        timing_stats->total_release_cycles += (end_cycles - start_cycles);
+        // uint64_t end_cycles = eth_read_wall_clock();
+        // timing_stats->release_count++;
+        // timing_stats->total_release_cycles += (end_cycles - start_cycles);
         messages_acked++;
         unacked_sends--;
     }
@@ -185,7 +185,7 @@ void process_send_side(
     // Acquire new chunk if current chunk is full
     if ((open_chunks_cb.is_empty() || current_chunk_ptr.is_done()) && !send_pool.is_empty()) {
         // Acquire new chunk - measure timing
-        uint64_t start_cycles = eth_read_wall_clock();
+        // uint64_t start_cycles = eth_read_wall_clock();
         auto new_chunk = send_pool.get_free_chunk();
 
         // Currently we only support one-deep open chunks
@@ -193,19 +193,19 @@ void process_send_side(
         size_t new_chunk_field_for_sender =
             tt::tt_fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
         // notify the worker about new chunk availability
-        auto start_misc = eth_read_wall_clock();
+        // auto start_misc = eth_read_wall_clock();
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);  // 34 cycles?
-        auto end_misc = eth_read_wall_clock();
-        timing_stats->total_misc_cycles += (end_misc - start_misc);
-        timing_stats->misc_count++;
+        // auto end_misc = eth_read_wall_clock();
+        // timing_stats->total_misc_cycles += (end_misc - start_misc);
+        // timing_stats->misc_count++;
 
         current_chunk_ptr.reset_to(reinterpret_cast<uint32_t*>(new_chunk_base_address));
 
         open_chunks_cb.push(new_chunk);
-        uint64_t end_cycles = eth_read_wall_clock();
-        timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
-        timing_stats->acquire_count++;
+        // uint64_t end_cycles = eth_read_wall_clock();
+        // timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
+        // timing_stats->acquire_count++;
     }
 }
 
@@ -311,7 +311,7 @@ void main_loop(
                             size_t packet_src_addr = recv_buffer_addresses[buffer_index];
                             auto trid = buffer_index;
 
-                            auto start_misc = eth_read_wall_clock();
+                            // auto start_misc = eth_read_wall_clock();
                             auto cmd_buf = write_cmd_buf;
                             auto noc_id = noc_index;
                             if constexpr (FABRIC_MCAST_FACTOR > 0) {
@@ -363,9 +363,9 @@ void main_loop(
                                 noc_async_write_one_packet_with_trid(
                                     packet_src_addr, fabric_fwd_addrs[i], message_size, trid, cmd_buf, noc_id);
                             }
-                            auto end_misc = eth_read_wall_clock();
-                            timing_stats->total_misc_cycles += (end_misc - start_misc);
-                            timing_stats->misc_count++;
+                            // auto end_misc = eth_read_wall_clock();
+                            // timing_stats->total_misc_cycles += (end_misc - start_misc);
+                            // timing_stats->misc_count++;
                             send_ack_to_sender(remote_src_ack_stream_id);
                             receiver_wr_ptr.increment();
                             messages_received++;

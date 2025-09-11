@@ -149,19 +149,24 @@ public:
         init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
+    // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
         return this->buffer_addresses[buffer_index];
     }
 
+    // used once - could be "next write packet header" (receiver channel only)
+    // deadcode for sender channel
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header(const BufferIndex& buffer_index) const {
         return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
     }
 
+    // deadcode
     template <typename T>
     [[nodiscard]] FORCE_INLINE size_t get_payload_size(const BufferIndex& buffer_index) const {
         return get_packet_header<T>(buffer_index)->get_payload_size_including_header();
     }
+    // deadcode
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes(const BufferIndex& buffer_index) const {
         return this->buffer_size_in_bytes;
     }
@@ -175,8 +180,10 @@ public:
     }
 #endif
 
+    // used by sender
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const { return this->cached_next_buffer_slot_addr; }
 
+    // used by sender
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }

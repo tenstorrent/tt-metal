@@ -26,6 +26,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/elastic_channels.hpp"
+
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
@@ -1899,41 +1901,51 @@ bool any_sender_channels_active(
     return false;
 }
 
-/*
- * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
- *
- * Every loop iteration visit a sender channel and the receiver channel. Switch between sender
- * channels every iteration unless it is unsafe/undesirable to do so (e.g. for performance reasons).
- */
-template <
-    bool enable_packet_header_recording,
-    size_t NUM_RECEIVER_CHANNELS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
-    size_t NUM_SENDER_CHANNELS,
-    size_t MAX_NUM_SENDER_CHANNELS,
-    typename EthSenderChannels,
-    typename EthReceiverChannels,
-    typename RemoteEthReceiverChannels,
-    typename EdmChannelWorkerIFs,
-    typename TransactionIdTrackerCH0,
-    typename TransactionIdTrackerCH1>
-void run_fabric_edm_main_loop(
-    EthReceiverChannels& local_receiver_channels,
-    EthSenderChannels& local_sender_channels,
-    EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_noc_interfaces_vc0,
-    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_noc_interface_vc1,
-    RemoteEthReceiverChannels& remote_receiver_channels,
-    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
-    TransactionIdTrackerCH0& receiver_channel_0_trid_tracker,
-    TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
-    std::array<uint8_t, num_eth_ports>& port_direction_table,
-    std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
+auto build_
+
+    /*
+     * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
+     *
+     * Every loop iteration visit a sender channel and the receiver channel. Switch between sender
+     * channels every iteration unless it is unsafe/undesirable to do so (e.g. for performance reasons).
+     */
+    template <
+        bool enable_packet_header_recording,
+        size_t NUM_RECEIVER_CHANNELS,
+        uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+        uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+        size_t NUM_SENDER_CHANNELS,
+        size_t MAX_NUM_SENDER_CHANNELS,
+        typename EthSenderChannels,
+        typename EthReceiverChannels,
+        typename RemoteEthReceiverChannels,
+        typename EdmChannelWorkerIFs,
+        typename TransactionIdTrackerCH0,
+        typename TransactionIdTrackerCH1>
+    void run_fabric_edm_main_loop(
+        EthReceiverChannels& local_receiver_channels,
+        EthSenderChannels& local_sender_channels,
+        EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
+        std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+            downstream_edm_noc_interfaces_vc0,
+        tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_noc_interface_vc1,
+        RemoteEthReceiverChannels& remote_receiver_channels,
+        volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
+        std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
+        TransactionIdTrackerCH0& receiver_channel_0_trid_tracker,
+        TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
+        std::array<uint8_t, num_eth_ports>& port_direction_table,
+        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
+
+    sender_channels_chunk_pool_t fwded_sender_elastic_channels;
+    fwded_sender_elastic_channels.init(
+        FWDED_SENDER_ELASTIC_CHANNELS_INFO::CHUNK_BASE_ADDRESSES,
+        buffer_slot::size_bytes,
+        buffer_slot::header_size_bytes);
+
+    std::array<tt::tt_fabric::elastic_sender_channel_t, NUM_FORWARDED_SENDER_CHANNELS> elastic_sender_channels;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
