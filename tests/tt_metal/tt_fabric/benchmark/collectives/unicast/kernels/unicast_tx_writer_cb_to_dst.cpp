@@ -55,8 +55,6 @@ void kernel_main() {
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
 #if defined(DYNAMIC_ROUTING_ENABLED)
     static_assert(false, "Dynamic routing is not supported");
-#else
-
 #endif
     fabric_set_unicast_route(
         mh,
