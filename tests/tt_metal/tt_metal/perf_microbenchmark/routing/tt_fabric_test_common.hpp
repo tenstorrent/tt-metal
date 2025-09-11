@@ -102,6 +102,8 @@ public:
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
+        const auto reliability_mode = fabric_setup.fabric_reliability_mode.value_or(
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -124,12 +126,13 @@ public:
             new_fabric_config = it->second;
         }
 
-        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_) {
+        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
+            reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
-            open_devices_internal(new_fabric_config, fabric_tensix_config);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
             routing_type_ = routing_type;
@@ -171,6 +174,7 @@ public:
         mesh_workload_.reset();
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+        current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         are_devices_open_ = false;
     }
 
@@ -1283,6 +1287,8 @@ private:
     std::vector<FabricNodeId> global_available_node_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
     tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
+    tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1324,15 +1330,17 @@ private:
     }
 
     void open_devices_internal(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricTensixConfig fabric_tensix_config) {
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricReliabilityMode reliability_mode) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, std::nullopt, fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        local_host_rank_ = control_plane_ptr_->get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
@@ -1369,6 +1377,7 @@ private:
 
         current_fabric_config_ = fabric_config;
         current_fabric_tensix_config_ = fabric_tensix_config;
+        current_fabric_reliability_mode_ = reliability_mode;
         are_devices_open_ = true;
     }
 
