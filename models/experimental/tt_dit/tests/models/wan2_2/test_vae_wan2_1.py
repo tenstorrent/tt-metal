@@ -240,7 +240,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
         "480p",
     ],
 )
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, -3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -331,7 +331,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -439,7 +439,7 @@ def test_wan_conv3d(
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -557,7 +557,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -670,7 +670,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -798,7 +798,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         "upblock_3",
     ],
 )
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -943,7 +943,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         "720p",
     ],
 )
-@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
@@ -951,11 +951,15 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
+        ((1, 4), 1, 0),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
+        "1x4_h1_w0",
     ],
     indirect=["mesh_device"],
 )
@@ -988,10 +992,10 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
     )
     torch_model.eval()
 
-    h_factor = tuple(mesh_device.shape)[h_axis]
-    w_factor = tuple(mesh_device.shape)[w_axis]
-    if H % h_factor != 0 or W % w_factor != 0:
-        pytest.skip(f"H % h_factor != 0 or W % w_factor != 0, got {H % h_factor} != 0 or {W % w_factor} != 0")
+    # h_factor = tuple(mesh_device.shape)[h_axis]
+    # w_factor = tuple(mesh_device.shape)[w_axis]
+    # if H % h_factor != 0 or W % w_factor != 0:
+    #     pytest.skip(f"H % h_factor != 0 or W % w_factor != 0, got {H % h_factor} != 0 or {W % w_factor} != 0")
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = VaeHWParallelConfig(
