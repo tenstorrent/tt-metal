@@ -339,6 +339,8 @@ FORCE_INLINE void send_next_data(
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    volatile auto* src_ch_id_ptr =
+        reinterpret_cast<volatile uint8_t*>(src_addr + offsetof(PacketHeaderBase<PACKET_HEADER_TYPE>, src_ch_id));
     // WATCHER_RING_BUFFER_PUSH(
     //     (uint)pkt_header
     //         ->src_ch_id);  // messes up timing or instruction schedule enough to make the asserts below never trip
@@ -349,32 +351,34 @@ FORCE_INLINE void send_next_data(
     prev_dest_addr = dest_addr;
 
     if constexpr (sender_channel_index == 0) {
-        pkt_header->src_ch_id = 7;
+        *src_ch_id_ptr = 7;
     } else if constexpr (sender_channel_index == 1) {
-        pkt_header->src_ch_id = 31;
+        *src_ch_id_ptr = 31;
     } else if constexpr (sender_channel_index == 2) {
-        pkt_header->src_ch_id = 65;
+        *src_ch_id_ptr = 65;
     } else {
         ASSERT(false);
     }
 
     asm volatile("fence" ::: "memory");
-    auto ch_id = pkt_header->src_ch_id;
+    auto ch_id = *src_ch_id_ptr;
     if constexpr (sender_channel_index == 0) {
         if (ch_id != 7) {
             WATCHER_RING_BUFFER_PUSH((uint)0xABABABAB);
             WATCHER_RING_BUFFER_PUSH((uint)ch_id);
             invalidate_l1_cache();
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            pkt_header->src_ch_id = 7;
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+            *src_ch_id_ptr = 7;
+            *src_ch_id_ptr = 7;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
+            *src_ch_id_ptr = 7;
+            *src_ch_id_ptr = 7;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
+            *src_ch_id_ptr = 7;
+            *src_ch_id_ptr = 7;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
+            *src_ch_id_ptr = 7;
+            *src_ch_id_ptr = 7;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
             ASSERT(false);
         }
     } else if constexpr (sender_channel_index == 1) {
@@ -384,42 +388,115 @@ FORCE_INLINE void send_next_data(
             // Got this capture: 0x00000007,0xcbcbcbcb,0x00000007; means the value was not written through
             invalidate_l1_cache();
 
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (OLD) INCORRECT VALUE
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (OLD) INCORRECT VALUE
             // With invalidation, we get this capture: 0x00000007,0xcbcbcbcb,0x0000001f; means the value was not written
             // through
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            pkt_header->src_ch_id = 31;
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (NEW) CORRECT VALUE
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (NEW) CORRECT VALUE
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            *src_ch_id_ptr = 31;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);  /// (NEW) CORRECT VALUE
             ASSERT(false);
         }
 
     } else if constexpr (sender_channel_index == 2) {
-        if (ch_id != 65) {
+        if (ch_id != 65) {  // not hit?
             WATCHER_RING_BUFFER_PUSH((uint)0xDCDCDCDC);
             WATCHER_RING_BUFFER_PUSH((uint)ch_id);
             invalidate_l1_cache();
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            pkt_header->src_ch_id = 65;
-            WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            *src_ch_id_ptr = 65;
+            WATCHER_RING_BUFFER_PUSH((uint)*src_ch_id_ptr);
             ASSERT(false);
         }
 
     } else {
         ASSERT(false);
     }
+    // if constexpr (sender_channel_index == 0) {
+    //     pkt_header->src_ch_id = 7;
+    // } else if constexpr (sender_channel_index == 1) {
+    //     pkt_header->src_ch_id = 31;
+    // } else if constexpr (sender_channel_index == 2) {
+    //     pkt_header->src_ch_id = 65;
+    // } else {
+    //     ASSERT(false);
+    // }
+
+    // asm volatile("fence" ::: "memory");
+    // auto ch_id = pkt_header->src_ch_id;
+    // if constexpr (sender_channel_index == 0) {
+    //     if (ch_id != 7) {
+    //         WATCHER_RING_BUFFER_PUSH((uint)0xABABABAB);
+    //         WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+    //         invalidate_l1_cache();
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         pkt_header->src_ch_id = 7;
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+    //         ASSERT(false);
+    //     }
+    // } else if constexpr (sender_channel_index == 1) {
+    //     if (ch_id != 31) {
+    //         WATCHER_RING_BUFFER_PUSH((uint)0xCBCBCBCB);
+    //         WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+    //         // Got this capture: 0x00000007,0xcbcbcbcb,0x00000007; means the value was not written through
+    //         invalidate_l1_cache();
+
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (OLD) INCORRECT VALUE
+    //         // With invalidation, we get this capture: 0x00000007,0xcbcbcbcb,0x0000001f; means the value was not
+    //         written
+    //         // through
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         pkt_header->src_ch_id = 31;
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);  /// (NEW) CORRECT VALUE
+    //         ASSERT(false);
+    //     }
+
+    // } else if constexpr (sender_channel_index == 2) {
+    //     if (ch_id != 65) {
+    //         WATCHER_RING_BUFFER_PUSH((uint)0xDCDCDCDC);
+    //         WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+    //         invalidate_l1_cache();
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         pkt_header->src_ch_id = 65;
+    //         WATCHER_RING_BUFFER_PUSH((uint)pkt_header->src_ch_id);
+    //         ASSERT(false);
+    //     }
+
+    // } else {
+    //     ASSERT(false);
+    // }
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
