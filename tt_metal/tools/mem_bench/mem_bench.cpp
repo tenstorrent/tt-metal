@@ -162,7 +162,8 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
     auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
-    IDevice* device = (*(devices.begin())).second;
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
@@ -232,7 +233,8 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
     auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
-    IDevice* device = (*(devices.begin())).second;
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
@@ -387,7 +389,8 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
 TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
     auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
-    IDevice* device = (*(devices.begin())).second;
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
