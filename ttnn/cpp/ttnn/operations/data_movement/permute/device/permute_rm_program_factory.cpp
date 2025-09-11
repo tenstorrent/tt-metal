@@ -73,6 +73,8 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     uint32_t N = operation_attributes.dims.size();
 
     std::vector<uint32_t> reader_compile_time_args = {N, input_rm_page_size, num_rows};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -80,16 +82,20 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {N, output_rm_page_size, num_rows};
+    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"N", N}, {"page_size", output_rm_page_size}, {"num_rows", num_rows}};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(
+            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
 
@@ -245,6 +251,20 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         w_block_size,
         input_tensor.element_size(),
         input_tensor.logical_shape()[-1] * input_tensor.element_size()};
+
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"N", N},
+        {"page_size", input_cb_page_size},
+        {"num_rows", num_rows},
+        {"x_dim", x_dim},
+        {"num_blocks_total", num_blocks_total},
+        {"x_blocks", x_blocks},
+        {"w_blocks", w_blocks},
+        {"x_block_size", x_block_size},
+        {"w_block_size", w_block_size},
+        {"element_size", input_tensor.element_size()},
+        {"input_tensor_page_size", input_tensor.logical_shape()[-1] * input_tensor.element_size()}};
+
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -252,7 +272,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {
         N,
@@ -275,15 +296,37 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
 
         W,
         output_tensor.logical_shape()[-1] * output_tensor.element_size()};
+
+    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"N", N},
+        {"output_page_size", output_cb_page_size},
+        {"num_rows", num_rows},
+        {"X", X},
+        {"X_stride", X_stride},
+        {"x_dim", x_dim},
+        {"W_stride", W_stride},
+        {"input_page_size", input_cb_page_size},
+        {"element_size", input_tensor.element_size()},
+        {"num_blocks_total", num_blocks_total},
+        {"x_blocks", x_blocks},
+        {"w_blocks", w_blocks},
+        {"x_block_size", x_block_size},
+        {"w_block_size", w_block_size},
+        {"W", W},
+        {"output_tensor_page_size", output_tensor.logical_shape()[-1] * output_tensor.element_size()}};
+
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(
+            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
+    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"x_block_size", x_block_size}, {"w_block_size", w_block_size}};
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -292,6 +335,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
+            .named_compile_args = compute_named_compile_time_args,
         });
 
     auto input_shape_view = input_tensor.logical_shape().view();
