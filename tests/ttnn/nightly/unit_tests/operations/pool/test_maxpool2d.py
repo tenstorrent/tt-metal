@@ -25,13 +25,32 @@ def tensor_map(request):
     return tensor_map
 
 
-def randomize_torch_tensor(tensor_map, tensor_shape):
+# Creates a tensor with specified mode:
+# - "random": fills tensor with random values using torch.randn
+# - "stick": each stick has same values starting from 0 and increasing
+# - "single": fills entire tensor with the provided value
+def randomize_torch_tensor(tensor_map, tensor_shape, mode="random", fill_value=None):
     tensor_shape = tuple(tensor_shape)
-    if tensor_shape in tensor_map.keys():
-        torch_tensor = tensor_map[tensor_shape]
+    cache_key = (tensor_shape, mode, fill_value)
+    if cache_key in tensor_map.keys():
+        torch_tensor = tensor_map[cache_key]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        tensor_map[tensor_shape] = torch_tensor
+        if mode == "random":
+            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        elif mode == "stick":
+            torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+            for n in range(tensor_shape[0]):
+                for c in range(tensor_shape[1]):
+                    for h in range(tensor_shape[2]):
+                        for w in range(tensor_shape[3]):
+                            torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
+        elif mode == "single":
+            if fill_value is None:
+                raise ValueError("fill_value must be provided when mode is 'single'")
+            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
+        tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
@@ -125,12 +144,6 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
-    # for n in range(input_shape[0]):
-    #     for c in range(input_shape[1]):
-    #         for h in range(input_shape[2]):
-    #             for w in range(input_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
