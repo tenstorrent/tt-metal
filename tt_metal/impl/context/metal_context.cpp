@@ -635,8 +635,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
-            llrt::internal_::wait_for_heartbeat(device_id, virtual_core);
+            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
 
             // Only send reset to subordinate cores
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
@@ -723,10 +722,8 @@ void MetalContext::assert_cores(chip_id_t device_id) {
         const auto assert_eth_core = [&](const CoreCoord& logical_eth_core) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
-            // Return primary to base FW
-            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_eth_core, false);
             // Ensure that the core has returned to base fw
-            llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
             // Stop subordinate
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &

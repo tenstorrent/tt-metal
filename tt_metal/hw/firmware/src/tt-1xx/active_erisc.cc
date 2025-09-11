@@ -137,7 +137,6 @@ void __attribute__((noinline)) Application(void) {
     }
     apply_tweaks();
     ncrisc_noc_full_sync();
-    ncrisc_noc_counters_init();
 
     deassert_all_reset();
     wait_subordinate_eriscs();

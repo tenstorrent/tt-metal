@@ -100,9 +100,10 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack = true,
     int timeout_ms = 10000);
 
-// Wait for a heartbeat from the active ethernet core, if supported
+// Return to base firmware and wait for a heartbeat from the active ethernet core, if supported
 // Used to check if the base firmware is running and ready to service the eth mailbox
-void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+void return_to_base_firmware_and_wait_for_heartbeat(
+    chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
 void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable);
 
