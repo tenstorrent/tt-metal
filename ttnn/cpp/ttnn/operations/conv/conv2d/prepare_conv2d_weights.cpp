@@ -13,6 +13,7 @@
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
@@ -1520,6 +1521,47 @@ ttnn::Tensor prepare_conv_bias(
         device);
 
     return prepared_bias.value();  // We know bias exists since we passed it
+}
+
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_for_matmul(
+    QueueId queue_id,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    MeshDevice* device) {
+    Tensor weight_tensor_on_device;
+    if (is_device_tensor(weight_tensor)) {
+        weight_tensor_on_device = weight_tensor;
+    } else {
+        auto weights_shape = weight_tensor.logical_shape();
+        uint32_t out_channels = weights_shape[0];
+        uint32_t in_channels = weights_shape[1];
+        TT_FATAL(weights_shape.rank() == 4, "Conv2D weights should be a 4D tensor. Shape is {}", weights_shape);
+        TT_FATAL(
+            weights_shape[2] == 1 && weights_shape[3] == 1,
+            "Conv2D weights should be in format [O, I , H, W], where H and W are 1");
+        weight_tensor_on_device = ttnn::operations::core::to_device(weight_tensor, device, std::nullopt);
+        weight_tensor_on_device = ttnn::permute(
+            queue_id,
+            weight_tensor_on_device,
+            ttnn::SmallVector<int64_t>({2, 3, 1, 0}),
+            std::nullopt,
+            std::nullopt);  // OIHW to HWIO
+        log_info(tt::LogOp, "Conv Matmul Permuted Weights Shape =. {}", weight_tensor_on_device.logical_shape());
+        weight_tensor_on_device =
+            ttnn::reshape(queue_id, weight_tensor_on_device, ttnn::Shape({1, 1, in_channels, out_channels}));
+        weight_tensor_on_device = ttnn::to_layout(weight_tensor_on_device, Layout::TILE);
+    }
+    std::optional<Tensor> bias_tensor_on_device = std::nullopt;
+    if (bias_tensor.has_value()) {
+        if (is_device_tensor(bias_tensor.value())) {
+            bias_tensor_on_device = bias_tensor.value();
+        } else {
+            auto bias_shape = bias_tensor.value().logical_shape();
+            bias_tensor_on_device = ttnn::operations::core::to_device(bias_tensor.value(), device, std::nullopt);
+            bias_tensor_on_device = ttnn::to_layout(bias_tensor_on_device.value(), Layout::TILE);
+        }
+    }
+    return {weight_tensor_on_device, bias_tensor_on_device};
 }
 
 }  // namespace conv2d
