@@ -23,17 +23,25 @@ int main() {
             "Movement kernels.\n");
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
-    // Initialize a device
+    // Initialize a MeshDevice:
+    // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
+    // single object,
+    // maintaining uniform memory and runtime state across all physical devices.
+    // A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
+    // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    // A MeshWorkload is a collection of programs that are executed on a MeshDevice.
+    // The specific physical devices that the workload is executed on are determined by the MeshCoordinateRange.
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
@@ -44,6 +52,12 @@ int main() {
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
+    // MeshBuffer Creation:
+    // To create a MeshBuffer, we need to specifcy, the page size, the buffer type, and the size of the buffer.
+    // For this example, we will be using a DRAM buffer.
+    // A DeviceLocalBufferConfig is a configuration object that specifies the properties of a buffer that is allocated
+    // on a single device. A ReplicatedBufferConfig is a configuration object that specifies the properties of a buffer
+    // that is replicated across all devices in the Mesh.
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
                                         // as the tile size for efficiency.
@@ -129,12 +143,17 @@ int main() {
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
 
+    // Add the program to the workload and execute it.
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    /* Execute the workload */
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    // Read the results from the destination DRAM buffer into host memory.
+    // Data can be read from a MeshBuffer using the ReadShard function.
+    // This function is used to read data from a specific shard of a MeshBuffer.
+    // The shard is specified by the MeshCoordinate.
+    // The last argument indicates if the operation is blocking or not.
+    // Setting it to true will wait for the operation to complete before returning.
+    // Setting it to false will return immediately after queuing the operation.
     std::vector<bfloat16> result_vec;
     distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 
