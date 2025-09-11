@@ -5,22 +5,20 @@
 # THRESHOLDS 5000 PROMPTS
 FID_VALID_RANGE_5000 = (23.01085758, 23.95007626)
 CLIP_VALID_RANGE_5000 = (31.68631873, 31.81331801)
-
-FID_SCORE_APPROX_RANGE_5000 = (22.3205318526, 24.6685785478)  # Approximate ranges (+/- 3%) from valid range
-CLIP_SCORE_APPROX_RANGE_5000 = (30.7357291681, 32.7677175503)  # Approximate ranges (+/- 3%) from valid range
-
-FID_DELTA_RANGE_106_PERCENT_5000 = (22.982681019599998, 23.978252820399998)
-CLIP_DELTA_RANGE_106_PERCENT_5000 = (31.6825087516, 31.8171279884)  # intuition: DELTA_RANGE_100_PERCENT == VALID_RANGE
+FID_SCORE_APPROX_RANGE_5000 = (
+    FID_VALID_RANGE_5000[0] * 0.97,
+    FID_VALID_RANGE_5000[1] * 1.03,
+)  # Approximate ranges (+/- 3%) from valid range
+CLIP_SCORE_APPROX_RANGE_5000 = (
+    CLIP_VALID_RANGE_5000[0] * 0.97,
+    CLIP_VALID_RANGE_5000[1] * 1.03,
+)  # Approximate ranges (+/- 3%) from valid range
 
 # THRESHOLDS 100 PROMPTS - calculated from nvidia results
 FID_VALID_RANGE_100 = (181.1513318972489, 184.97865376919088)
 CLIP_VALID_RANGE_100 = (31.65430683222675, 32.15949391210697)
-
 FID_APPROX_RANGE_100 = (179.20542453436752, 186.9656737959027)
 CLIP_APPROX_RANGE_100 = (30.70704558232445, 33.12187298301411)
-
-FID_DELTA_RANGE_106_PERCENT_100 = (181.03651224109063, 185.09347342534915)
-CLIP_DELTA_RANGE_106_PERCENT_100 = (31.639151219830346, 32.17464952450337)
 
 
 def accuracy_check_fid(score, num_prompts, mode):
@@ -34,7 +32,8 @@ def accuracy_check_fid(score, num_prompts, mode):
     elif mode == "approx":
         range_tuple = FID_SCORE_APPROX_RANGE_5000 if num_prompts == 5000 else FID_APPROX_RANGE_100
     elif mode == "delta":
-        range_tuple = FID_DELTA_RANGE_106_PERCENT_5000 if num_prompts == 5000 else FID_DELTA_RANGE_106_PERCENT_100
+        delta_score = get_appr_delta_metric(score, num_prompts, "fid")
+        return 3 if delta_score <= 0.5 else 2
 
     return 3 if score >= range_tuple[0] and score <= range_tuple[1] else 2
 
@@ -50,7 +49,8 @@ def accuracy_check_clip(score, num_prompts, mode):
     elif mode == "approx":
         range_tuple = CLIP_SCORE_APPROX_RANGE_5000 if num_prompts == 5000 else CLIP_APPROX_RANGE_100
     elif mode == "delta":
-        range_tuple = CLIP_DELTA_RANGE_106_PERCENT_5000 if num_prompts == 5000 else CLIP_DELTA_RANGE_106_PERCENT_100
+        delta_score = get_appr_delta_metric(score, num_prompts, "clip")
+        return 3 if delta_score <= 0.5 else 2
 
     return 3 if score >= range_tuple[0] and score <= range_tuple[1] else 2
 

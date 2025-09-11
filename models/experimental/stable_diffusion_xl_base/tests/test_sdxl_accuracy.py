@@ -131,7 +131,7 @@ def test_accuracy_sdxl(
         + profiler.get("prepare_input_tensors")
         + profiler.get("image_gen")
     )
-    min_inference_time = min(
+    sum_times = [
         i + j + k + l
         for i, j, k, l in zip(
             profiler.times["encode_prompts"],
@@ -139,16 +139,8 @@ def test_accuracy_sdxl(
             profiler.times["prepare_input_tensors"],
             profiler.times["image_gen"],
         )
-    )
-    max_inference_time = max(
-        i + j + k + l
-        for i, j, k, l in zip(
-            profiler.times["encode_prompts"],
-            profiler.times["prepare_latents"],
-            profiler.times["prepare_input_tensors"],
-            profiler.times["image_gen"],
-        )
-    )
+    ]
+    min_inference_time, max_inference_time = min(sum_times), max(sum_times)
 
     data = {
         "model": "sdxl",
@@ -190,13 +182,13 @@ def test_accuracy_sdxl(
                 "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
-                "clip_accuracy_check_approx": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                "delta_clip_metric": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
-                "clip_accuracy_check_valid": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+                "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
                 "fid_score": fid_score,
-                "fid_accuracy_check_approx": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                "delta_fid_metric": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
-                "fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+                "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
                 "accuracy_check_approx": min(
                     accuracy_check_fid(fid_score, num_prompts, mode="approx"),
                     accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
