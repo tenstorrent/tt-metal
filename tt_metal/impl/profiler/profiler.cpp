@@ -136,16 +136,14 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
 void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::vector<uint32_t>& device_markers_chunk_offsets,
-    ThreadPool* thread_pool) {
-    TT_ASSERT(thread_pool != nullptr);
-
+    ThreadPool& thread_pool) {
     const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
 
     uint32_t num_chunks_to_merge_together = 2;
     while (num_chunks_to_merge_together <= num_chunks) {
         uint32_t i = 0;
         while (i <= num_chunks - num_chunks_to_merge_together) {
-            thread_pool->enqueue([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
+            thread_pool.enqueue([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
                 TT_ASSERT(std::is_sorted(
                     device_markers.begin() + device_markers_chunk_offsets[i],
                     device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
@@ -167,7 +165,7 @@ void mergeSortedDeviceMarkerChunks(
             i += num_chunks_to_merge_together;
         }
 
-        thread_pool->wait();
+        thread_pool.wait();
 
         TT_ASSERT(std::is_sorted(
             device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
@@ -207,9 +205,7 @@ void mergeSortedDeviceMarkerChunks(
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
         device_markers_per_core_risc_map,
-    ThreadPool* thread_pool) {
-    TT_ASSERT(thread_pool != nullptr);
-
+    ThreadPool& thread_pool) {
     uint32_t total_num_markers = 0;
     auto middle = device_markers_per_core_risc_map.begin();
     std::advance(middle, device_markers_per_core_risc_map.size() / 2);
@@ -231,7 +227,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
         total_num_markers, std::cref(dummy_marker));
 
-    thread_pool->enqueue([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
+    thread_pool.enqueue([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
         uint32_t i = middle_index;
         for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
             for (const auto& [_, markers] : it->second) {
@@ -253,7 +249,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
         }
     }
 
-    thread_pool->wait();
+    thread_pool.wait();
 
     mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets, thread_pool);
 
@@ -1610,7 +1606,7 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, this->thread_pool.get());
+        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
     pushTracyDeviceResults(device_markers_vec);
@@ -1846,6 +1842,7 @@ void DeviceProfiler::updateTracyContexts(
     device_cores_to_update.reserve(device_tracy_contexts.size());
 
     for (const auto& [device_core, _] : device_tracy_contexts) {
+        TT_ASSERT(device_tracy_contexts.at(device_core) != nullptr);
         device_cores_to_update.insert(device_core);
     }
 
@@ -1902,6 +1899,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
         }
 
         TracyTTCtx tracyCtx = device_tracy_contexts.at(device_core);
+        TT_ASSERT(tracyCtx != nullptr);
 
         TracyTTContextPopulate(tracyCtx, cpu_time, device_time, frequency);
         TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
@@ -1915,6 +1913,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
             double device_time = device_sync_info.device_time;
             double frequency = device_sync_info.frequency;
             TracyTTCtx tracyCtx = device_tracy_contexts.at(device_core);
+            TT_ASSERT(tracyCtx != nullptr);
             TracyTTContextCalibrate(tracyCtx, cpu_time, device_time, frequency);
             log_debug(
                 tt::LogMetal,
