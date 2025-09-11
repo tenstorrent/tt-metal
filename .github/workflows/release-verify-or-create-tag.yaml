@@ -73,6 +73,8 @@ jobs:
           echo "${{ toJson(github) }}"
 
       - name: Create or update tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "Tenstorrent Inc."
           git config user.email "info@tenstorrent.com"
