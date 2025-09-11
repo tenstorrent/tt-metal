@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, int ITERATIONS = 8>
 inline void calculate_log1p() {
     vFloat a = vConstFloatPrgm1;
     vFloat b = vConstFloatPrgm2;
@@ -37,12 +37,19 @@ inline void calculate_log1p() {
         v_if(in == 0.0F) { result = -std::numeric_limits<float>::infinity(); }
         v_endif;
 
+        if constexpr (!FAST_APPROX) {
+            v_if(in < 0.0F) {
+                result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
+            }
+            v_endif;
+        }
+
         dst_reg[0] = result;
         ++dst_reg;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX>
 inline void log1p_init() {
     vConstFloatPrgm0 = 0.692871f;  // ln2
     vConstFloatPrgm1 = 0.1058f;

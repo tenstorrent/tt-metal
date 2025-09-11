@@ -20,14 +20,12 @@ void kernel_main() {
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    const DataFormat data_format = get_dataformat(cb_output_idx);
-
-    const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
-        .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto output_args = TensorAccessorArgs<2>();
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
 #ifdef RETURN_RMS
-    const InterleavedAddrGenFast</* is dram */ true> rms_output_addr_generator = {
-        .bank_base_address = rms_output_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto rms_output_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    const auto rms_output_addr_generator = TensorAccessor(rms_output_args, rms_output_addr, tile_bytes);
 #endif
 
     uint32_t end_row = start_row + num_rows_to_process;

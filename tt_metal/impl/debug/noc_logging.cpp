@@ -22,7 +22,7 @@
 using namespace tt::tt_metal;
 
 // 32 buckets to match the number of bits in uint32_t lengths on device
-#define NOC_DATA_SIZE sizeof(uint32_t) * 8
+#define NOC_DATA_SIZE (sizeof(uint32_t) * 8)
 using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 
 namespace tt {
@@ -51,7 +51,8 @@ void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, no
     for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
-        auto from_dev = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, addr, DPRINT_BUFFER_SIZE);
+        auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, virtual_core, addr, DPRINT_BUFFER_SIZE);
         DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         uint32_t* data = reinterpret_cast<uint32_t*>(l->data);
 
@@ -113,7 +114,7 @@ void ClearNocData(chip_id_t device_id) {
         for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
             uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
-            tt::llrt::write_hex_vec_to_core(device_id, virtual_core, initbuf, addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, initbuf, addr);
         }
     }
 }

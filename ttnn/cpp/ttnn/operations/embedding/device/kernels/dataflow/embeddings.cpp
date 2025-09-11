@@ -18,16 +18,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-    constexpr bool input_in_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
-    const auto input = get_interleaved_addr_gen<input_in_dram, input_page_size>(input_buffer_src_addr);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
 
-    constexpr bool weight_in_dram = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(6);
-    const auto weights = get_interleaved_addr_gen<weight_in_dram, weight_stick_size>(weight_buffer_src_addr);
+    constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
+    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
 
-    constexpr uint32_t rows_per_block = get_compile_time_arg_val(7);  // Input elems per block
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(8);
+    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 

@@ -482,10 +482,6 @@ TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
         return;
     }
 
-    uint32_t n_rows = shape[0];
-    uint32_t n_cols = shape[1];
-    size_t n_elements = n_rows * n_cols;
-
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
         std::vector<Type> input(input_size);

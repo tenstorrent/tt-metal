@@ -37,7 +37,6 @@ std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
     auto volume_without_features_a = a.logical_volume() / static_cast<uint64_t>(a.logical_shape()[-1]);
     auto reshaped_a =
         ttnn::reshape(a, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), a.logical_shape()[-1]}));
-    auto volume_without_features_grad = out_grad.logical_volume() / out_grad.logical_shape()[-1];
     auto reshaped_grad = ttnn::reshape(
         out_grad, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), out_grad.logical_shape()[-1]}));
 

@@ -25,11 +25,11 @@ TEST(VisibleDevicesMPTest, ValidateDeviceRatio) {
     }
 
     // Log the device configuration for debugging
-    const char* visible_devices_env = std::getenv("TT_METAL_VISIBLE_DEVICES");
+    const char* visible_devices_env = std::getenv("TT_VISIBLE_DEVICES");
     std::string visible_devices = visible_devices_env ? visible_devices_env : "<not set>";
 
     std::cout << "Device configuration summary:" << std::endl;
-    std::cout << "  TT_METAL_VISIBLE_DEVICES: " << visible_devices << std::endl;
+    std::cout << "  TT_VISIBLE_DEVICES: " << visible_devices << std::endl;
     std::cout << "  PCIe devices: " << num_pcie << std::endl;
     std::cout << "  Total available devices: " << num_available << std::endl;
     std::cout << "  Ratio: " << (num_pcie > 0 ? static_cast<double>(num_available) / num_pcie : 0) << std::endl;

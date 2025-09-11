@@ -5,6 +5,7 @@
 #include "prefix_scan_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -55,7 +56,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t total_tiles_per_col = sharded_sequence_length / TILE_HEIGHT;
     const uint32_t total_tiles = total_tiles_per_row * total_tiles_per_col;
 
-    // One chunk is a row of 32 tiles where an untilize call will move each row into a seperate tile
+    // One chunk is a row of 32 tiles where an untilize call will move each row into a separate tile
     constexpr uint32_t num_tiles_in_chunk = 32;
     const uint32_t num_chunks_per_row = tt::div_up(total_tiles_per_row, num_tiles_in_chunk);
 
@@ -73,7 +74,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t cb_out_id = tt::CBIndex::c_16;
     const auto cb_out = create_circular_buffer(cb_out_id, total_tiles, input_tile_size, input_format, output_buffer);
 
-    const uint32_t num_tiles_in_row_to_tile_cb = 32;  // Tilizing 32 tiles will pack tensor rows into seperate tiles
+    const uint32_t num_tiles_in_row_to_tile_cb = 32;  // Tilizing 32 tiles will pack tensor rows into separate tiles
     const uint32_t cb_a_tilize_in_id = tt::CBIndex::c_24;
     create_circular_buffer(cb_a_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
@@ -98,6 +99,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
+    tt::tt_metal::TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bx_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(h_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
         cb_bx_in_id,

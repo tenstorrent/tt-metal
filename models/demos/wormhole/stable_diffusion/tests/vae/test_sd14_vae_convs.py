@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     get_default_compute_config,
     get_default_conv_config,
@@ -18,7 +19,7 @@ from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "in_channels, input_height, input_width, out_channels, output_height, output_width, conv_in_channel_split_factor, conv_out_channel_split_factor",
     [

@@ -253,6 +253,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
         "BFLOAT16-DRAM",
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_falcon_prefill_end_to_end_determinism(
     generate_weights,
     enable_program_cache,

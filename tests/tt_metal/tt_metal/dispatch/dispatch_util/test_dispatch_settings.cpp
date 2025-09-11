@@ -113,7 +113,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     const auto core_type = CoreType::WORKER;
     const uint32_t hw_cqs = 1;
     const uint32_t prefetch_d_size = 0x1000;
-    const uint32_t mux_size = 0x2000;
     const uint32_t cmddat_size = 0x2000;
     const uint32_t dispatch_s_size = 32;
     const uint32_t dispatch_size = 4096;

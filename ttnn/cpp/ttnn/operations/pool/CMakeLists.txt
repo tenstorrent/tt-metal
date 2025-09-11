@@ -11,6 +11,10 @@ target_sources(
         generic/device/pool_op.cpp
         generic/generic_pools.cpp
         global_avg_pool/global_avg_pool.cpp
+        grid_sample/device/grid_sample_op.cpp
+        grid_sample/device/grid_sample_program_factory.cpp
+        grid_sample/grid_sample.cpp
+        grid_sample/grid_sample_prepare_grid.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp
         upsample/device/upsample_op.cpp

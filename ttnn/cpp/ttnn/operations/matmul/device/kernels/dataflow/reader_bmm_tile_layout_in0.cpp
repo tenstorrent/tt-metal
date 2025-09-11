@@ -29,9 +29,8 @@ void kernel_main() {
     const uint32_t in0_block_num_tiles = get_arg_val<uint32_t>(11);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr bool in0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(1);
+    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(0);
+    constexpr auto in0_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -42,13 +41,11 @@ void kernel_main() {
 #else
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
     constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 
-    const InterleavedAddrGenFast<in0_is_dram, in0_tile_hw> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = in0_single_tile_size_bytes, .data_format = in0_data_format};
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
@@ -67,6 +64,7 @@ void kernel_main() {
                     if constexpr (last_ktile_w > 0) {
                         if ((block == num_blocks - 1) && (w == in0_block_w - 1)) {
                             noc_async_read_barrier();
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
                             pad_last_ktile<in0_data_format, last_ktile_w>(l1_write_addr_in0);
                         }
                     }

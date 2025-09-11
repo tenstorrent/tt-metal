@@ -31,19 +31,24 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename T>
-concept MeshWorkloadFactoryConcept = requires {
-    typename T::cached_mesh_workload_t;
+concept HasMeshWorkloadType = requires { typename T::cached_mesh_workload_t; };
 
-    [](const auto& operation_attributes,
-       const ttnn::MeshCoordinateRangeSet& tensor_coords,
-       const auto& tensor_args,
-       auto& tensor_return_value) {
-        auto cached_workload =
-            T::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-
-        T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, tensor_return_value);
-    };
+template <typename T>
+concept HasCreateMeshWorkload = requires {
+    // Path A: Factory provides create_mesh_workload directly
+    &T::create_mesh_workload;
+    &T::override_runtime_arguments;
 };
+
+template <typename T>
+concept HasCreateAt = requires {
+    // Path B: Factory provides create_at (per-coordinate)
+    &T::create_at;
+    &T::override_runtime_arguments;
+};
+
+template <typename T>
+concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(

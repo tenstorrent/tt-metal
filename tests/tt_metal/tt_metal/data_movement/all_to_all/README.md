@@ -1,10 +1,14 @@
-# All to All Core Data Movement Tests
+# All To All Core Data Movement Tests
 
-This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
+This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions from all master cores to all subordinate cores.
+
+## Mesh Device API Support
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+
+**Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
 ## Test Flow
-
-L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, subsets of these pages are designated as either sender pages or receiver pages.
+L1 memory is allocated on multiple Tensix cores: master cores (senders) and subordinate cores (receivers). Data is written into L1 memory on all master cores. Each master core issues NOC transactions to transfer its data into L1 memory on all subordinate cores. Once data is transferred from all master cores, hardware barriers ensure data validity and completion of the transaction.
 
 The subsets are determined as follows:
 - num_sender_pages = num_reservable_pages / (1 + num_master_cores)
@@ -22,27 +26,39 @@ A pcc check is performed by cross-checking the data of all the master cores piec
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
+## Running the Tests
+The tests use the Mesh Device API with fast dispatch mode:
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*AllToAll*"
+```
+
 ## Test Parameters
-| Parameter                         | Data Type             | Description                                                               |
-| --------------------------------- | --------------------- | ------------------------------------------------------------------------- |
-| test_id                           | uint32_t              | Test ID for identifying different test cases.                             |
-| mst_logical_start_coord           | CoreCoord             | Logical starting coordinates for the master core range.                   |
-| sub_logical_start_coord           | CoreCoord             | Logical starting coordinates for the subordinate core range.              |
-| mst_grid_size                     | CoreCoord             | Grid size of the master core range.                                       |
-| sub_grid_size                     | CoreCoord             | Grid size of the subordinate core range.                                  |
-| num_of_transactions_per_master    | uint32_t              | Number of transactions issued per master core.                            |
-| pages_reservable_per_transaction  | uint32_t              | Number of reservable pages per transaction in L1.                         |
-| bytes_per_page                    | uint32_t              | Size of each page in bytes.                                               |
-| l1_data_format                    | DataFormat            | Data format used for L1 data movement.                                    |
-| noc_id                            | NOC                   | Specifies which NOC to use for the test.                                  |
+| Parameter                              | Data Type             | Description |
+| -------------------------------------- | --------------------- | ----------- |
+| test_id                                | uint32_t              | Test id for signifying different test cases. Can be used for grouping different tests. |
+| mst_logical_start_coord                | CoreCoord             | Starting logical coordinates for the master core grid. |
+| sub_logical_start_coord                | CoreCoord             | Starting logical coordinates for the subordinate core grid. |
+| mst_grid_size                          | CoreCoord             | Size of the master core grid. |
+| sub_grid_size                          | CoreCoord             | Size of the subordinate core grid. |
+| num_of_transactions_per_master         | uint32_t              | Number of noc transactions that each master core will issue. |
+| pages_reservable_per_transaction       | uint32_t              | Size of the issued noc transactions in pages. |
+| bytes_per_page                         | uint32_t              | Size of a page in bytes. Arbitrary value with a minimum of flit size per architecture. |
+| l1_data_format                         | DataFormat            | Data format of data that will be moved. |
+| noc_id                                 | NOC                   | Specifies which NOC to use for the test. |
+| virtual_channel                        | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
+| posted                                 | N/A                   | Posted flag (posted multicast has much better performance at larger grid sizes, than non-posted due to response packets) (TODO)|
 
 ## Test Cases
-Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size. Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
+Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
+Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. **All to All Packet Sizes:** Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
-a. **2x2 Packet Sizes**
-2. **All to All Directed Ideal:** Tests the most optimal data movement setup between two ranges of cores.
-a. **2x2 to 1x1**
-b. **4x4 to 1x1**
-c. **1x1 to 2x2**
-d. **1x1 to 4x4**
+1. **All To All Packet Sizes**: Tests different number of transactions and transaction sizes by varying the num_of_transactions_per_master and pages_reservable_per_transaction parameters across a full compute grid.
+
+2. **All To All Directed Ideal**: Tests the most optimal data movement setup between all master and subordinate cores that maximizes the transaction size and performs enough transactions to amortize initialization overhead.
+
+3. **Grid Configuration Tests**: Multiple test cases testing different master and subordinate grid configurations:
+   - 1x1 To 2x2: 1x1 master grid sending to 2x2 subordinate grid
+   - 1x1 To 4x4: 1x1 master grid sending to 4x4 subordinate grid
+   - 2x2 To 1x1: 2x2 master grid sending to 1x1 subordinate grid
+   - 4x4 To 1x1: 4x4 master grid sending to 1x1 subordinate grid
+   - 2x2 To 2x2: 2x2 master grid sending to 2x2 subordinate grid

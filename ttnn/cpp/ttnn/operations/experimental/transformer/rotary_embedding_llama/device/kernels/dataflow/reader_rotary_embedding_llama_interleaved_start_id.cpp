@@ -20,42 +20,30 @@ void kernel_main() {
     constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t sin_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t trans_mat_cb_id = get_compile_time_arg_val(3);
-    constexpr bool input_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool cos_is_dram = get_compile_time_arg_val(5) == 1;
-    constexpr bool sin_is_dram = get_compile_time_arg_val(6) == 1;
-    constexpr bool trans_mat_is_dram = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t n_heads = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);
-    constexpr uint32_t Wt = get_compile_time_arg_val(10);
-    constexpr bool freq_per_head = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t n_heads = get_compile_time_arg_val(4);
+    constexpr uint32_t Ht = get_compile_time_arg_val(5);
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);
+    constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
+    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
 
     const uint32_t my_seq_tiles = seq_t_end - seq_t_start;
     const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const DataFormat input_data_format = get_dataformat(input_cb_id);
-
-    const InterleavedAddrGenFast<input_is_dram> s0 = {
-        .bank_base_address = src_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto s0 = TensorAccessor(input_args, src_addr, input_tile_bytes);
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const DataFormat cos_data_format = get_dataformat(cos_cb_id);
-
-    const InterleavedAddrGenFast<cos_is_dram> s1 = {
-        .bank_base_address = cos_addr, .page_size = cos_tile_bytes, .data_format = cos_data_format};
+    const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
 
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const DataFormat sin_data_format = get_dataformat(sin_cb_id);
-
-    const InterleavedAddrGenFast<sin_is_dram> s2 = {
-        .bank_base_address = sin_addr, .page_size = sin_tile_bytes, .data_format = sin_data_format};
+    const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
 
     const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-    const DataFormat trans_mat_format = get_dataformat(trans_mat_cb_id);
-
-    const InterleavedAddrGenFast<trans_mat_is_dram> s3 = {
-        .bank_base_address = trans_mat_addr, .page_size = trans_mat_tile_bytes, .data_format = trans_mat_format};
+    const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
 
     uint32_t trans_mat_curr_idx = 0;
 

@@ -1,13 +1,13 @@
 # Visible Devices Multi-Process Tests
 
-This directory contains tests for validating the `TT_METAL_VISIBLE_DEVICES` environment variable functionality in a distributed multi-process context.
+This directory contains tests for validating the `TT_VISIBLE_DEVICES` environment variable functionality in a distributed multi-process context.
 
 ## Overview
 
-This basic test suite validates when `TT_METAL_VISIBLE_DEVICES` is set, the process only sees the PCIe devices exposed to it.
+This basic test suite validates when `TT_VISIBLE_DEVICES` is set, the process only sees the PCIe devices exposed to it.
 This means on a T3000, you can effectively:
 1) Emulate a single N300 process running tt-metal, for every N300 board independently
-2) Expose multiple PCIe devices through `TT_METAL_VISIBLE_DEVICES` and test 2x2 mesh configuration
+2) Expose multiple PCIe devices through `TT_VISIBLE_DEVICES` and test 2x2 mesh configuration
 3) Emulate multi-host configuration by simultaneously launching multiple processes working on independent parts of the available system mesh.
 
 ## Test Script: `run_visible_devices_mp_tests.sh`
@@ -37,14 +37,14 @@ The script will:
 
 ### Example Output
 ```
-Testing TT_METAL_VISIBLE_DEVICES functionality with distributed_mp_unit_tests
+Testing TT_VISIBLE_DEVICES functionality with distributed_mp_unit_tests
 ============================================================================
 
-Testing with TT_METAL_VISIBLE_DEVICES="0"
+Testing with TT_VISIBLE_DEVICES="0"
 ------------------------------------------------
 ✓ Test passed for configuration: 0
 
-Testing with TT_METAL_VISIBLE_DEVICES="0,1"
+Testing with TT_VISIBLE_DEVICES="0,1"
 ------------------------------------------------
 ✓ Test passed for configuration: 0,1
 

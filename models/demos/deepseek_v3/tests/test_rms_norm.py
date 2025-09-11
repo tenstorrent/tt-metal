@@ -9,7 +9,6 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -57,6 +56,7 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -65,14 +65,14 @@ def test_forward_pass(
 
     # Get the reference inputs and outputs
     if reference_layernorm_path is None:
-        torch.set_default_dtype(torch.bfloat16)
         reference_model = DeepseekV3RMSNorm(
             hidden_size=hidden_size,
             eps=hf_config.rms_norm_eps,
         ).eval()
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
 
         torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+        reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, reference_layernorm_path)
@@ -89,23 +89,10 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
-    if not (mode == "decode" and RMSNormClass is DistributedRMSNorm):
+    if RMSNormClass is not DistributedRMSNorm:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        shard_core_grid = ttnn.CoreGrid(x=4, y=7)
-        memory_config = ttnn.create_sharded_memory_config(
-            shape=(
-                ttnn.core.roundup(even_int_div(seq_len, num_module_layers), ttnn.TILE_SIZE),
-                ttnn.core.roundup(
-                    even_int_div(hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
-                    ttnn.TILE_SIZE,
-                ),
-            ),
-            core_grid=shard_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        memory_config = run_config["input_memory_config"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

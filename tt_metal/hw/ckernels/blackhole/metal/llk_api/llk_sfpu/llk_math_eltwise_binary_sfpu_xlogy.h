@@ -18,11 +18,13 @@ inline void llk_math_eltwise_binary_sfpu_xlogy_init() {
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
-inline void llk_math_eltwise_binary_sfpu_xlogy(uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_xlogy(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_sfpu_binary_<APPROXIMATE, BinaryOp::XLOGY, ITERATIONS>,
         dst_index0,
         dst_index1,
+        odst,
         vector_mode);
 }
 

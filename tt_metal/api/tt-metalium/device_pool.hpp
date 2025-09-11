@@ -68,12 +68,12 @@ public:
 private:
     ~DevicePool();
     DevicePool();
-    uint8_t num_hw_cqs;
-    size_t l1_small_size;
-    size_t trace_region_size;
-    size_t worker_l1_size;
+    uint8_t num_hw_cqs{};
+    size_t l1_small_size{};
+    size_t trace_region_size{};
+    size_t worker_l1_size{};
     std::vector<uint32_t> l1_bank_remap;
-    bool using_fast_dispatch;
+    bool using_fast_dispatch_ = false;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
@@ -84,10 +84,10 @@ private:
     std::mutex lock;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
 
-    bool skip_remote_devices;
+    bool skip_remote_devices{};
     // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    bool use_max_eth_core_count_on_all_devices_;
+    bool use_max_eth_core_count_on_all_devices_{};
     std::unordered_set<uint32_t> firmware_built_keys;
 
     // Determine which CPU cores the worker threads need to be placed on for each device

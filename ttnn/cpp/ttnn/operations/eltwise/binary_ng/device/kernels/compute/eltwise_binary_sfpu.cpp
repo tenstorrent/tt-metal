@@ -18,6 +18,7 @@
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
+#include "compute_kernel_api/xlogy.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
@@ -68,7 +69,7 @@ ALWI void process_tile(
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
-            BINARY_SFPU_OP(i * 2, i * 2 + 1);
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();

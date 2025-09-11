@@ -132,6 +132,31 @@ void bind_requantize_operation(
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            **Mixed Quantization Support:**
+
+            This operation supports mixed quantization schemes:
+
+            - **Per-tensor to Per-channel**: Convert from global quantization parameters to per-channel parameters along the specified axis.
+            - **Per-channel to Per-tensor**: Convert from per-channel quantization parameters to global parameters.
+            - **Per-tensor to Per-tensor**: Standard requantization with scalar parameters.
+            - **Per-channel to Per-channel**: Requantization with per-channel parameters along the same axis.
+
+            **Execution Paths:**
+
+            When all four parameters (in_scale, in_zero_point, out_scale, out_zero_point) are provided as tensors and an axis is specified:
+            - The operation uses a path with explicit shape expansion and broadcasting.
+            - Per-tensor parameters (scalar tensors) are broadcast to match the input tensor shape.
+            - Per-channel parameters (1D tensors) are reshaped and expanded along the specified axis.
+            - The implementation performs the mathematical requantization in floating point and typecasts to the output dtype: q' = q * (s_in/s_out) + (z_out - z_in * s_in/s_out).
+
+            When all four parameters are provided as scalar values (float/int32):
+            - Uses a path with a specialized kernel operation.
+            - Computes the requantization directly in a single fused operation.
+
+            When there is a mix of scalar and tensor parameters:
+            - Falls back to a composite operation path.
+            - Decomposes requantization into separate dequantize and quantize operations.
+
         Example:
             >>> input_tensor = ttnn.from_torch(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> in_scale = 0.001173

@@ -143,7 +143,7 @@ struct TileHeader {
 };
 
 union TileHeader_u {
-    uint32_t val[4];
+    uint32_t val[4]{};
     TileHeader header;
     TileHeader_u() {};
 };

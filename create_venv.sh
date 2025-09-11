@@ -24,12 +24,20 @@ echo "Creating virtual env in: $PYTHON_ENV_DIR"
 $PYTHON_CMD -m venv $PYTHON_ENV_DIR
 source $PYTHON_ENV_DIR/bin/activate
 
-echo "Forcefully using a version of pip that will work with our view of editable installs"
-pip install --force-reinstall pip==21.2.4
+# Import functions for detecting OS
+. ./install_dependencies.sh --source-only
+detect_os
 
-echo "Setting up virtual env"
-python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-python3 -m pip install setuptools wheel==0.45.1
+
+if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
+    echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
+    pip install --force-reinstall pip==21.2.4
+    python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+    python3 -m pip install setuptools wheel==0.45.1
+else
+    echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
+    python3 -m pip install --upgrade wheel setuptools
+fi
 
 echo "Installing dev dependencies"
 python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt

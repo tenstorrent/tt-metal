@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 import torch
 import ttnn
-from loguru import logger
 from ..parallel_config import VAEParallelConfig
 from enum import Enum
 
@@ -16,7 +15,7 @@ from enum import Enum
 class ConvStrategy(Enum):
     TP = 1
     DP = 2
-    TP_DP = 3
+    SP = 3
 
 
 slice_params = {
@@ -171,10 +170,6 @@ class TtConv2dParameters:
                 device=parallel_config.device,
             )
 
-        logger.info(
-            f"Conv2d parallel strategy: {conv_parallel_strategy}, conv Oc: {o_c}, i_c: {i_c}, device_count: {device_count}"
-        )
-
         return cls(
             weight=ttnn.from_torch(weight, dtype=dtype, mesh_mapper=w_mesh_mapper),
             bias=ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=b_mesh_mapper)
@@ -240,7 +235,7 @@ def vae_conv2d(x, parameters):
         if not parameters.mesh_sharded_output:  # If output is sharded, we need to gather the output
             output_tensor = parameters.parallel_config.vae_all_gather(output_tensor)
 
-    elif parameters.conv_parallel_strategy == ConvStrategy.TP_DP:
+    elif parameters.conv_parallel_strategy == ConvStrategy.SP:
         # Get device slice
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT) @ parameters.device_slice_mask
 
@@ -262,7 +257,6 @@ def vae_conv2d(x, parameters):
             topology=ttnn.Topology.Linear,
             subdevice_id=None,
         )
-        # ttnn.synchronize_device(parameters.parallel_config.device)
 
         output_tensor = ttnn.reshape(output_tensor, (x.shape[0], x.shape[1], x.shape[2], parameters.weight.shape[0]))
 

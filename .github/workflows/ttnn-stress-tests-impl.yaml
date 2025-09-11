@@ -28,7 +28,7 @@ jobs:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        contains('P150b, N150, N300', inputs.runner-label) && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
         || (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
@@ -37,7 +37,9 @@ jobs:
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -52,6 +54,13 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+
+      - name: Ensure BH Eth links online
+        if: ${{ contains(inputs.runner-label, 'BH-') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        with:
+          runner-label: ${{ inputs.runner-label }}
 
       - name: Run Stress Tests
         timeout-minutes: ${{ inputs.timeout }}

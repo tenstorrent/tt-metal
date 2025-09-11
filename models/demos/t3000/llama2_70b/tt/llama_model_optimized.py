@@ -382,12 +382,13 @@ class TtLlamaModel_optimized:
                 xs, rot_mats, start_pos, cache_idxs=cache_idxs, page_table=page_table, kv_cache=kv_cache, mode="decode"
             )  # xs is sharded
 
-        xs = ttnn.all_gather(
-            xs,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
+        # xs = ttnn.all_gather(
+        #     xs,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         norm_out_replicated = ttnn.rms_norm(
@@ -423,12 +424,13 @@ class TtLlamaModel_optimized:
         )
 
         # AllGather stats
-        tt_stats = ttnn.all_gather(
-            tt_stats,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # tt_stats = ttnn.all_gather(
+        #     tt_stats,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
@@ -471,12 +473,13 @@ class TtLlamaModel_optimized:
 
         # Distributed rmsnorm
         norm_out = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.norm_sharded)
-        norm_out_replicated = ttnn.all_gather(
-            norm_out,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # norm_out_replicated = ttnn.all_gather(
+        #     norm_out,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Deallocate original input to rmsnorm
         xs.deallocate(True)

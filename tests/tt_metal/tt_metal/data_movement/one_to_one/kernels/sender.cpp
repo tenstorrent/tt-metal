@@ -12,27 +12,31 @@ void kernel_main() {
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
     constexpr uint32_t bytes_per_transaction = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t sem_id = get_compile_time_arg_val(4);
+    constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
+    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(5);
 
     // Runtime arguments
-    uint32_t receiver_x_coord = get_arg_val<uint32_t>(0);
-    uint32_t receiver_y_coord = get_arg_val<uint32_t>(1);
+    uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
+    uint32_t receiver_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
 
-    // Derivative values
-    uint32_t sem_addr = get_semaphore(sem_id);
-    uint64_t sem_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, sem_addr);
-
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
-    DeviceTimestampedData("Test id", test_id);
+    uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, l1_local_addr);
 
     {
         DeviceZoneScopedN("RISCV0");
-        uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, l1_local_addr);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction);
+            // Cycle through virtual channels 0 to (num_virtual_channels - 1)
+            uint32_t current_virtual_channel = i % num_virtual_channels;
+            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
         }
         noc_async_write_barrier();
     }
-    noc_semaphore_inc(sem_noc_addr, 1);
+
+    DeviceTimestampedData("Test id", test_id);
+
+    DeviceTimestampedData("NoC Index", noc_index);
+
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+
+    DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }

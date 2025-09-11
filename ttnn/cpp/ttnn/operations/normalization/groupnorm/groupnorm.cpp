@@ -23,7 +23,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,
     std::optional<int> num_out_blocks,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& negative_mask) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -48,8 +49,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-        "Unsupported memory layout: Input tensor must be width-sharded, but it is not. (memory_layout={})",
-        input_tensor.memory_config().memory_layout());
+        "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
@@ -73,8 +73,6 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
     }
-
-    const auto output_dtype = dtype.value_or(input_tensor.dtype());
 
     const std::optional<ttnn::Tensor>& gamma =
         weight.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(weight.value())) : std::nullopt;
@@ -120,7 +118,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .program_config = program_config,
                        .compute_kernel_config = kernel_config_val},
                    {input_tensor},
-                   {gamma, beta, input_mask})
+                   {gamma, beta, input_mask, negative_mask})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
@@ -138,7 +136,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .program_config = program_config,
                        .compute_kernel_config = kernel_config_val},
                    {input_tensor},
-                   {gamma, beta, input_mask})
+                   {gamma, beta, input_mask, negative_mask})
             .at(0);
     }
 }

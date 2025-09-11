@@ -37,10 +37,10 @@ void MAIN {
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 1);
             add_binary_tile_init();
-            add_binary_tile(0, 1);
+            add_binary_tile(0, 1, 0);
             ltz_tile(0);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
 
             tile_regs_commit();
 
@@ -58,16 +58,16 @@ void MAIN {
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 0);
             sub_binary_tile_init();
-            sub_binary_tile(0, 1);
+            sub_binary_tile(0, 1, 0);
             gtz_tile(0);
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
             copy_tile_to_dst_init_short(cb_tmp0);
             copy_tile(cb_tmp0, 0, 1);
             add_binary_tile_init();
-            add_binary_tile(0, 1);
+            add_binary_tile(0, 1, 0);
 
             tile_regs_commit();
 

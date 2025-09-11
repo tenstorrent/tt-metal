@@ -21,9 +21,6 @@ struct CompileTimeReaderKernelArgs {
     uint32_t condition_cb;
     uint32_t true_tensor_cb;
     uint32_t false_tensor_cb;
-    bool is_cond_tensor_in_dram;
-    bool is_true_tensor_in_dram;
-    bool is_false_tensor_in_dram;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseReaderKernelArgs>);

@@ -40,25 +40,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperatio
         transpose_k_heads,
         memory_config,
         optional_output_tensors);
-};
-
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperation::invoke(
-    const Tensor& input_tensor_q,
-    const std::optional<Tensor>& input_tensor_kv,
-    const uint32_t num_q_heads,
-    const std::optional<uint32_t> num_kv_heads,
-    const bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor_q,
-        input_tensor_kv,
-        num_q_heads,
-        num_kv_heads,
-        transpose_k_heads,
-        memory_config,
-        std::move(optional_output_tensors));
-};
+}
 
 }  // namespace ttnn::operations::experimental::transformer

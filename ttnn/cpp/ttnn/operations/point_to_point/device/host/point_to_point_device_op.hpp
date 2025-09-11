@@ -19,7 +19,6 @@ struct PointToPointOp {
         const MeshCoordinate& receive_coord;
         const MeshCoordinate& send_coord;
         const ::ttnn::ccl::Topology topology;
-        const tt::tt_metal::GlobalSemaphore semaphore;
 
         // put this in here to hash on tensor spec
         const ttnn::TensorSpec _input_tensor_spec;
@@ -46,6 +45,7 @@ struct PointToPointOp {
             tt::tt_metal::KernelHandle receive_unary_reader_kernel_id;
             tt::tt_metal::KernelHandle receive_unary_writer_kernel_id;
             std::vector<CoreCoord> receiver_cores;
+            const tt::tt_metal::GlobalSemaphore semaphore;
         };
 
         // AdaptedCachedMeshWorkload this maps device coordinates to sets of shared variables.
@@ -62,7 +62,8 @@ struct PointToPointOp {
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const tt::tt_metal::GlobalSemaphore& semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -104,10 +105,9 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,
-        const tt::tt_metal::GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{receiver_coord, sender_coord, topology, semaphore, input_tensor.tensor_spec()},
+            operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
             tensor_args_t{input_tensor, optional_output_tensor});
     };
 
@@ -146,11 +146,13 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
     const PointToPointOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& sender_coord,
     const MeshCoordinate& receiver_coord,
-    PointToPointOp::tensor_return_value_t& output_tensor);
+    PointToPointOp::tensor_return_value_t& output_tensor,
+    const tt::tt_metal::GlobalSemaphore& semaphore);
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensor);
+    PointToPointOp::tensor_return_value_t& output_tensor,
+    const tt::tt_metal::GlobalSemaphore& semaphore);
 }  // namespace operations::point_to_point
 
 namespace prim {

@@ -163,7 +163,7 @@ static Tensor zero_volume_reduce(
         fill_value,
         input_tensor.dtype(),
         input_tensor.layout(),
-        *input_tensor.mesh_device(),
+        *input_tensor.device(),
         memory_config);
 }
 
@@ -463,11 +463,11 @@ Tensor pool_sum(
         /*non_height_width_dims=*/{});
 }
 
-template class Reduce<ReduceType::Sum>;
-template class Reduce<ReduceType::Mean>;
-template class Reduce<ReduceType::Max>;
-template class Reduce<ReduceType::Min>;
-template class Reduce<ReduceType::Std>;
-template class Reduce<ReduceType::Var>;
+template struct Reduce<ReduceType::Sum>;
+template struct Reduce<ReduceType::Mean>;
+template struct Reduce<ReduceType::Max>;
+template struct Reduce<ReduceType::Min>;
+template struct Reduce<ReduceType::Std>;
+template struct Reduce<ReduceType::Var>;
 }  // namespace operations::reduction
 }  // namespace ttnn

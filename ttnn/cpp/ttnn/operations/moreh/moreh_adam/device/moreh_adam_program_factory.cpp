@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_adam {
 MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::ProgramFactory::create(
@@ -93,18 +94,22 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(param_in)),
-        static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(is_dram(exp_avg_in)),
-        static_cast<uint32_t>(is_dram(exp_avg_sq_in)),
-        static_cast<uint32_t>(is_dram(max_exp_avg_sq_in))};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*exp_avg_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*exp_avg_sq_in.buffer()).append_to(reader_compile_time_args);
+    if (max_exp_avg_sq_in.has_value()) {
+        TensorAccessorArgs(*max_exp_avg_sq_in.value().buffer()).append_to(reader_compile_time_args);
+    }
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(param_out)),
-        static_cast<uint32_t>(is_dram(exp_avg_out)),
-        static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(max_exp_avg_sq_out.has_value() ? is_dram(max_exp_avg_sq_out.value()) : false)};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*exp_avg_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*exp_avg_sq_out.buffer()).append_to(writer_compile_time_args);
+    if (max_exp_avg_sq_out.has_value()) {
+        TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_compile_time_args);
+    }
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
@@ -183,7 +188,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     union {
         float f;
         uint32_t u;
-    } f2u_lr, f2u_beta1, f2u_beta2, f2u_eps, f2u_weight_decay;
+    } f2u_lr{}, f2u_beta1{}, f2u_beta2{}, f2u_eps{}, f2u_weight_decay{};
     f2u_lr.f = lr;
     f2u_beta1.f = beta1;
     f2u_beta2.f = beta2;
@@ -283,7 +288,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     union {
         float f;
         uint32_t u;
-    } f2u_lr;
+    } f2u_lr{};
 
     f2u_lr.f = operation_attributes.lr;
 

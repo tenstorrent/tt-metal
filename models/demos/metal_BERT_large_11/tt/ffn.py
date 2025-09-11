@@ -102,16 +102,18 @@ class TtFeedForwardModel:
 
         if tt_cache_path is not None:
             ff1_weight_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.bin"
+                f"{tt_cache_path}/"
+                f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             ff1_bias_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin"
+                f"{tt_cache_path}/" f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.tensorbin"
             )
             ff2_weight_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin"
+                f"{tt_cache_path}/"
+                f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             ff2_bias_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.bin"
+                f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.tensorbin"
             )
 
         def compute_ff1_weight():

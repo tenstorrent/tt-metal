@@ -20,15 +20,17 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_CACHE_DIR_PATTERN = "{home}/.cache/{hostname}_rank{rank}"
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
 
 class RankBinding(BaseModel):
-    """Binding between MPI rank to target MeshId and HostRankId as defined in the mesh graph descriptor."""
+    """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
     mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
+    mesh_host_rank: Optional[int] = Field(None, ge=0, description="Host rank within the mesh")
     env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
 
 
@@ -76,9 +78,7 @@ def parse_binding_config(yaml_path: Path) -> TTRunConfig:
         raise ValueError(f"Invalid configuration: {e}")
 
 
-def get_rank_environment(
-    binding: RankBinding, config: TTRunConfig, mesh_to_host_rank_id: Dict[int, int]
-) -> Dict[str, str]:
+def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
     Args:
@@ -94,10 +94,16 @@ def get_rank_environment(
             DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
         ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
         "TT_MESH_ID": str(binding.mesh_id),
-        "TT_HOST_RANK": str(mesh_to_host_rank_id[binding.mesh_id]),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
+        # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
+        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
     }
-    mesh_to_host_rank_id[binding.mesh_id] += 1
+
+    # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
+    if binding.mesh_host_rank is not None:
+        env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -108,9 +114,7 @@ def get_rank_environment(
     return env
 
 
-def build_rank_environment_args(
-    binding: RankBinding, config: TTRunConfig, mesh_to_host_rank_id: Dict[int, int]
-) -> List[str]:
+def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -121,7 +125,7 @@ def build_rank_environment_args(
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config, mesh_to_host_rank_id)
+    env = get_rank_environment(binding, config)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -143,13 +147,12 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
         cmd.extend(mpi_args)
 
     # Build per-rank application contexts
-    mesh_to_host_rank_id = defaultdict(int)
-    for i, binding in enumerate(config.rank_bindings):
+    for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config, mesh_to_host_rank_id))
+        cmd.extend(build_rank_environment_args(binding, config))
         cmd.extend(program)
 
     return cmd
@@ -202,7 +205,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
 
     tt-run is a lightweight wrapper around `mpirun` that simplifies launching
     TT-Metal and TT-NN distributed applications by automatically mapping
-    MPI ranks to target MeshId and HostRankId as defined in the mesh graph descriptor.
+    MPI ranks to target MeshId and MeshHostRankId as defined in the mesh graph descriptor.
 
     \b
     Quick Start:
@@ -217,10 +220,12 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         rank_bindings:
           - rank: 0                  # MPI rank
             mesh_id: 0               # Mesh ID
+            mesh_host_rank: 0        # Host rank within the mesh
             env_overrides:
               RANK_0_ENV_VAR: "value"
           - rank: 1
             mesh_id: 0
+            mesh_host_rank: 1        # Host rank within the mesh
             env_overrides:
               RANK_1_ENV_VAR: "value"
         global_env:                  # Environment variables for all ranks
@@ -246,11 +251,16 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
     Environment Variables:
         The following variables are automatically set for each rank:
         - TT_MESH_ID: Mesh identifier
-        - TT_HOST_RANK: Host rank within the mesh
+        - TT_MESH_HOST_RANK: Host rank within the mesh
         - TT_METAL_CACHE: Per-rank cache directory
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
+        - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        Default values for the following environment variables will be used if not set when calling tt-run:
+        - TT_METAL_HOME: User's home directory
+        - PYTHONPATH: User's home directory
+        - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
 
     See examples/ttrun/ for example configuration files.
     """

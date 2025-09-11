@@ -12,11 +12,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names, preprocess
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov7.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov7.demo.demo_utils import postprocess
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-from models.demos.yolov7.tt.common import get_mesh_mappers
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
@@ -94,7 +94,7 @@ def run_yolov7_demo(model_location_generator, device, model_type, input_loc, bat
         model_location_generator, device, model_type, batch_size_per_device
     )
 
-    dataset = LoadImages(path=input_loc, batch=batch_size, img_size=640, stride=32)
+    dataset = LoadImages(path=input_loc, batch=batch_size, img_size=640, vid_stride=32)
     im_tensor, orig_images, paths_images, batch = process_images(dataset, (640, 640), batch_size)
     names = load_coco_class_names()
     save_dir = "models/demos/yolov7/demo/runs"

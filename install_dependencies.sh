@@ -15,6 +15,7 @@ usage()
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
     echo "[--sfpi]                    Install only SFPI package (minimal installation)"
+    echo "[--source-only]             Loads functions into shell"
     exit 1
 }
 
@@ -335,27 +336,28 @@ install_sfpi() {
 	exit 1
     fi
     local $(grep -v '^#' $version_file)
-    local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
+    local sfpi_arch=$(uname -m)
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch}_${pkg}_md5")
     if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
-	echo "[ERROR] SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
+	echo "[ERROR] SFPI $sfpi_version $pkg package for ${sfpi_arch} is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
+    local filename="sfpi_${sfpi_version}_${sfpi_arch}.${pkg}"
+    wget -P $TEMP_DIR "$sfpi_url/v$sfpi_version/$filename"
+    if [ $(md5sum -b "${TEMP_DIR}/$filename" | cut -d' ' -f1) \
 	     != "$sfpi_pkg_md5" ] ; then
-	echo "[ERROR] SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
+	echo "[ERROR] SFPI $filename md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
     # we must select exactly this version
     case "$pkg" in
 	deb)
-	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    apt-get install -y --allow-downgrades $TEMP_DIR/$filename
 	    ;;
 	rpm)
-	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    rpm --upgrade --force $TEMP_DIR/$filename
 	    ;;
     esac
     rm -rf $TEMP_DIR
@@ -422,7 +424,12 @@ install_mpi_ulfm() {
 }
 
 install_rust() {
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 -y
+    INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 --profile minimal -y"
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" /bin/bash -c "$INSTALL_CMD"
+    else
+        /bin/bash -c "$INSTALL_CMD"
+    fi
 }
 
 # We don't really want to have hugepages dependency
@@ -436,7 +443,7 @@ configure_hugepages() {
         return
     fi
 
-    # Fetch the lastest tt-tools release link and name of package
+    # Fetch the latest tt-tools release link and name of package
     TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
     TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
 
@@ -479,76 +486,82 @@ cleanup() {
     fi
 }
 
-# Alright, lets run some things!
+main() {
+    # Alright, lets run some things!
 
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please use sudo."
-    usage
-fi
+    if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run as root. Please use sudo."
+        usage
+    fi
 
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+    VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 
-# Initialize OS detection and validation
-detect_os
+    # Initialize OS detection and validation
+    detect_os
 
-if ! is_supported_os; then
-    echo "Error: $OS_ID is not currently supported."
-    echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
-    exit 1
-fi
+    if ! is_supported_os; then
+        echo "Error: $OS_ID is not currently supported."
+        echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
+        exit 1
+    fi
 
-validate=0
-docker=0
-distributed=1
-hugepages=0
-sfpi_only=0
+    validate=0
+    docker=0
+    distributed=1
+    hugepages=0
+    sfpi_only=0
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --help|-h)
-            usage
-            ;;
-        --validate|-v)
-            validate=1
-            shift
-            ;;
-        --docker|-d)
-            docker=1
-            shift
-            ;;
-        --no-distributed)
-            distributed=0
-            shift
-            ;;
-        --hugepages)
-            hugepages=1
-            shift
-            ;;
-        --sfpi)
-            sfpi_only=1
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
-    esac
-done
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                usage
+                ;;
+            --validate|-v)
+                validate=1
+                shift
+                ;;
+            --docker|-d)
+                docker=1
+                shift
+                ;;
+            --no-distributed)
+                distributed=0
+                shift
+                ;;
+            --hugepages)
+                hugepages=1
+                shift
+                ;;
+            --sfpi)
+                sfpi_only=1
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                ;;
+        esac
+    done
 
-init_packages
+    init_packages
 
-if [ "$sfpi_only" -eq 1 ]; then
-    install_sfpi_only
-elif [ "$validate" -eq 1 ]; then
-    validate_packages
-else
-    install
-fi
+    if [ "$sfpi_only" -eq 1 ]; then
+        install_sfpi_only
+    elif [ "$validate" -eq 1 ]; then
+        validate_packages
+    else
+        install
+    fi
 
-cleanup
+    cleanup
 
-if [ "$sfpi_only" -eq 1 ]; then
-    echo "[INFO] SFPI installation completed successfully!"
-else
-    echo "[INFO] TT-Metalium dependencies installed successfully!"
+    if [ "$sfpi_only" -eq 1 ]; then
+        echo "[INFO] SFPI installation completed successfully!"
+    else
+        echo "[INFO] TT-Metalium dependencies installed successfully!"
+    fi
+}
+
+if [ "${1}" != "--source-only" ]; then
+    main "${@}"
 fi

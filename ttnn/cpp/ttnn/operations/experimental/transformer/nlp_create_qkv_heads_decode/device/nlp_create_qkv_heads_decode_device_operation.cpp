@@ -164,7 +164,6 @@ tt::tt_metal::operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperatio
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
     auto& batch_offset = optional_input_tensors.at(0);
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     return multi_core_nlp_create_qkv_heads_decode(

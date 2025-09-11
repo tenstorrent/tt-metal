@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -235,9 +236,14 @@ TestConstCharStrNC{4,4}
 TestStrBR{4,4}
 +++++++++++++++)";
 
-void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Set up program and command queue
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -246,12 +252,12 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Two kernels - one for brisc and one for ncrisc. Nothing for triscs in
     // this test.
     KernelHandle brisc_kernel_id = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_brisc.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_kernel_id = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_ncrisc.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -263,41 +269,26 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
             const std::vector<uint32_t> brisc_rt_args = {
                 x, y, multi_core, 15
             };
-            SetRuntimeArgs(
-                program,
-                brisc_kernel_id,
-                CoreCoord{x, y},
-                brisc_rt_args
-            );
+            SetRuntimeArgs(program_, brisc_kernel_id, CoreCoord{x, y}, brisc_rt_args);
             const std::vector<uint32_t> ncrisc_rt_args = {
                 x, y, (uint32_t) xy_end.x+1, multi_core, 4, 2, 10
             };
-            SetRuntimeArgs(
-                program,
-                ncrisc_kernel_id,
-                CoreCoord{x, y},
-                ncrisc_rt_args
-            );
+            SetRuntimeArgs(program_, ncrisc_kernel_id, CoreCoord{x, y}, ncrisc_rt_args);
         }
     }
 
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
 }
 }
 
-TEST_F(DPrintFixture, TensixTestPrintRaiseWait) {
-    for (IDevice* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+TEST_F(DPrintMeshFixture, TensixTestPrintRaiseWait) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }

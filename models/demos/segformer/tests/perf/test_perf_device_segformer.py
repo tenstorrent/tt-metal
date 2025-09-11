@@ -11,7 +11,7 @@ import models.perf.device_perf_utils as perf_utils
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 102.0],
+        [1, 110.0],
     ],
 )
 def test_perf_device_segformer_segmentation(batch_size, expected_perf, model_location_generator):

@@ -14,6 +14,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -23,8 +24,8 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.n_heads = configuration.n_heads
         self.n_kv_heads = configuration.n_kv_heads
@@ -36,6 +37,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.attention = TtLlamaCrossAttention(
             mesh_device,
+            tt_ccl,
             state_dict,
             state_dict_prefix=f"{state_dict_prefix}attention.",
             weight_cache_path=weight_cache_path,
@@ -59,8 +61,10 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
+            self.tt_ccl,
         )
 
         self.gate_attn = ttnn.as_tensor(
@@ -74,6 +78,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=configuration,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -94,8 +99,10 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
+            self.tt_ccl,
         )
 
         self.gate_ffwd = ttnn.as_tensor(
@@ -137,7 +144,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         )
         # FIXME: DRAM workaround for No circular buffer with id error
         attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
+        attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn, fast_and_approximate_mode=True))
 
         res = ttnn.add(x_11SH, attn_out)
         mlp_out = self.feed_forward(self.ffn_norm(res, mode=mode), mode=mode)
@@ -145,6 +152,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         mlp_out = ttnn.to_memory_config(mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
-        mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd))
+        mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd, fast_and_approximate_mode=True))
         out = ttnn.add(res, mlp_out)
         return out

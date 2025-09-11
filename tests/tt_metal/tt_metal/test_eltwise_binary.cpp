@@ -36,6 +36,7 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -114,14 +115,14 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
             uint32_t src1_cb_index = tt::CBIndex::c_1;
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src1_cb_index, single_tile_size);
-            auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
             uint32_t ouput_cb_index = tt::CBIndex::c_16;
             uint32_t num_output_tiles = 2;
@@ -129,28 +130,35 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(ouput_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+            std::vector<uint32_t> reader_compile_time_args;
+            tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
+            tt::tt_metal::TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
             auto binary_reader_kernel = tt_metal::CreateKernel(
                 program,
                 multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
                           : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
                 core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .compile_args = reader_compile_time_args});
 
+            std::vector<uint32_t> writer_compile_time_args;
+            tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
                 multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                           : "tt_metal/kernels/dataflow/writer_unary.cpp",
                 core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = writer_compile_time_args});
 
             vector<uint32_t> compute_kernel_args = {};
 
-            bool fp32_dest_acc_en = false;
-            bool math_approx_mode = false;
             std::map<std::string, std::string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};

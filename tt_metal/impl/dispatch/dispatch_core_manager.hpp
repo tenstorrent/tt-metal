@@ -176,7 +176,7 @@ private:
         dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     DispatchCoreConfig dispatch_core_config_;
-    uint8_t num_hw_cqs;
+    uint8_t num_hw_cqs{};
     static dispatch_core_manager* _inst;
 };
 

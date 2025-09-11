@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <functional>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include <fmt/base.h>
 #include <umd/device/types/arch.h>
@@ -97,14 +95,14 @@ inline constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::Float16_b: return 2;
         case DataFormat::Float32: return 4;
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
-        case DataFormat::Int8: return 1;
-        case DataFormat::Lf8: return 1;
-        case DataFormat::UInt8: return 1;
-        case DataFormat::UInt16: return 2;
-        case DataFormat::UInt32: return 4;
+        case DataFormat::Int8:
+        case DataFormat::Lf8:
+        case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1;
+        case DataFormat::UInt16:
         case DataFormat::RawUInt16: return 2;
-        case DataFormat::Int32: return 4;
+        case DataFormat::UInt32:
+        case DataFormat::Int32:
         case DataFormat::RawUInt32: return 4;
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
@@ -124,14 +122,14 @@ inline constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
-        case DataFormat::Int8: return 1024;
-        case DataFormat::Lf8: return 1024;
-        case DataFormat::UInt8: return 1024;
-        case DataFormat::UInt16: return (1024 * 2);
-        case DataFormat::UInt32: return (1024 * 4);
+        case DataFormat::Int8:
+        case DataFormat::Lf8:
+        case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1024;
+        case DataFormat::UInt16:
         case DataFormat::RawUInt16: return (1024 * 2);
-        case DataFormat::Int32: return (1024 * 4);
+        case DataFormat::UInt32:
+        case DataFormat::Int32:
         case DataFormat::RawUInt32: return (1024 * 4);
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
@@ -142,33 +140,6 @@ std::string get_string(ARCH arch);
 std::string get_string_lowercase(ARCH arch);
 std::string get_alias(ARCH arch);
 ARCH get_arch_from_string(const std::string& arch_str);
-
-enum RISCV : uint8_t {
-    BRISC = 0,
-    NCRISC = 1,
-    TRISC0 = 2,
-    TRISC1 = 3,
-    TRISC2 = 4,
-    ERISC = 5,
-    ERISC1 = 6,
-    COMPUTE = 7,  // Encompasses TRISC0, TRISC1, and TRISC2
-    MAX = 8,
-};
-
-inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
-    switch (riscv) {
-        case RISCV::BRISC: os << "BRISC"; break;
-        case RISCV::NCRISC: os << "NCRISC"; break;
-        case RISCV::TRISC0: os << "TRISC0"; break;
-        case RISCV::TRISC1: os << "TRISC1"; break;
-        case RISCV::TRISC2: os << "TRISC2"; break;
-        case RISCV::ERISC: os << "ERISC"; break;
-        case RISCV::ERISC1: os << "ERISC1"; break;
-        case RISCV::COMPUTE: os << "COMPUTE"; break;
-        default: throw std::invalid_argument("Unknown format");
-    }
-    return os;
-}
 
 }  // namespace tt
 

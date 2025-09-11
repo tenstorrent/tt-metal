@@ -15,7 +15,7 @@ namespace tt {
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
+#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= (b)) && ((a) + (l) <= (e)))
 
 #define DEBUG_VALID_ETH_ADDR(a, l)                                                        \
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
@@ -55,20 +55,22 @@ static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     return ss.str();
 }
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 static void print_stack_trace() {
     void* array[15];
 
     int size = backtrace(array, 15);
     char** strings = backtrace_symbols(array, size);
-    if (strings != NULL) {
+    if (strings != nullptr) {
         fprintf(stderr, "Obtained %d stack frames.\n", size);
         for (int i = 0; i < size; i++) {
             fprintf(stderr, "%s\n", strings[i]);
         }
     }
 
-    free(strings);
+    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 static void watcher_sanitize_host_noc(
     const char* what,

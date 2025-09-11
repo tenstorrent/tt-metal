@@ -31,8 +31,8 @@ public:
     std::vector<std::vector<CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
 
-    uint64_t dram_core_size;
-    uint64_t dram_view_size;
+    uint64_t dram_core_size{};
+    uint64_t dram_view_size{};
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 

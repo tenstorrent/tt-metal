@@ -6,11 +6,11 @@
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
-#define DATUMS_PER_ROW 16
+#define DATUMS_PER_ROW (16)
 
 // This parameter is the same for all supported architectures
 // Check this invariant when adding new architectures
-#define DEST_REGISTER_FULL_SIZE 64 * 16
+#define DEST_REGISTER_FULL_SIZE (64 * 16)
 
 namespace ttnn {
 

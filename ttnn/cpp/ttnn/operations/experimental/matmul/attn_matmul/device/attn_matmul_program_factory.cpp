@@ -91,7 +91,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     const uint32_t num_tokens_val = num_tokens.value_or(0);  // should not be nullopt if transpose_hw=true
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    uint32_t B = ashape[1];  // ashape[0] is q_len
     uint32_t Mt = ashape[2] / TILE_HEIGHT;
     uint32_t Kt = ashape[3] / TILE_WIDTH;
     // For transpose_hw=true, in1_Kt is same as in0_Kt but on bshape[3]
@@ -124,25 +123,25 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
         tt::tt_metal::CircularBufferConfig(
             cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
     uint32_t cb_intermed0_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_interm0_config =
         tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
-    auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
     uint32_t cb_intermed1_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_interm1_config =
         tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
             .set_page_size(cb_intermed1_index, interm_single_tile_size);
-    auto cb_interm1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
 
     uint32_t cb_intermed2_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_interm2_config =
         tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
             .set_page_size(cb_intermed2_index, interm_single_tile_size);
-    auto cb_interm2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_5;
     uint32_t num_output_tiles = 2;
@@ -150,15 +149,12 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    const bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)src1_is_dram,
-        (uint32_t)transpose_hw_bool,
-        (uint32_t)(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)};
+        (uint32_t)transpose_hw_bool, (uint32_t)(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)};
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -274,7 +270,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
             const uint32_t num_tokens_val = num_tokens.value_or(0);  // should not be nullopt if transpose_hw=true
             constexpr uint32_t num_rows_in_one_tile = 32;
 
-            uint32_t B = ashape[1];  // ashape[0] is q_len
             uint32_t Mt = ashape[2] / TILE_HEIGHT;
             uint32_t Kt = ashape[3] / TILE_WIDTH;
             // For transpose_hw=true, in1_Kt is same as in0_Kt but on bshape[3]

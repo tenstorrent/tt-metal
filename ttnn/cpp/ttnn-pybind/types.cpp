@@ -43,6 +43,8 @@ void py_module_types(py::module& module) {
 
     module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
     module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);
+    module.attr("DEVICE_STORAGE_TYPE") = py::cast(DEVICE_STORAGE_TYPE);
+    module.attr("HOST_STORAGE_TYPE") = py::cast(HOST_STORAGE_TYPE);
 }
 
 void py_module(py::module& module) {

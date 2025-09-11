@@ -10,3 +10,5 @@ Circular buffers are used for communication between threads of the Tensix core. 
   cb_reserve_back
   cb_push_back
   cb_pop_front
+  get_read_ptr
+  get_write_ptr

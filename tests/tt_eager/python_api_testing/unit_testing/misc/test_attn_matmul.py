@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc, skip_for_blackhole
+from models.utility_functions import comp_pcc
 import ttnn
 
 
@@ -29,7 +29,6 @@ def generate_input_shapes():
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -64,7 +63,6 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("num_loops", [20])
 def test_attn_matmul_fp32(num_loops, in_dtype, device):
@@ -103,7 +101,6 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -135,7 +132,6 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
             assert allclose, f"FAILED: {output}"
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize(
     "shard_orientation",
     (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
@@ -249,7 +245,6 @@ def test_group_attn_matmul(
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize("sharded", [False, True])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -335,7 +330,6 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
     assert num_cache_entries == 1
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shard_orientation",

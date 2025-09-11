@@ -223,17 +223,17 @@ class MoEGate(AbstractModule):
             ),
             "topk_fallback": topk_fallback,
             "topk_fallback_config": TopKFallbackConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 dtype=ttnn.bfloat16,
                 memory_config=memory_config,
                 use_bitonic_sort=use_bitonic_sort,
             ),
             "linear_fallback": False,
             "linear_fallback_config": LinearFallbackConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 dtype=ttnn.bfloat16,
             ),
-            "mesh_device": mesh_device,
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
         }

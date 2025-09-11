@@ -16,8 +16,8 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(9);
     uint32_t nc1 = get_arg_val<uint32_t>(10);  // if 1 we expect the bcast tensor to have NC=1
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -25,13 +25,9 @@ void kernel_main() {
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
@@ -44,7 +40,8 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; wt++) {
                 cb_reserve_back(cb_id_in0, onetile);
                 l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(i, s0, l1_write_addr_in0);
+                uint64_t src0_noc = get_noc_addr(i, s0);
+                noc_async_read(src0_noc, l1_write_addr_in0, tile_bytes);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
 
@@ -52,7 +49,8 @@ void kernel_main() {
                 // but we loop the second list around
                 cb_reserve_back(cb_id_in1, onetile);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i1, s1, l1_write_addr_in1);
+                uint64_t src1_noc = get_noc_addr(i1, s1);
+                noc_async_read(src1_noc, l1_write_addr_in1, tile_bytes);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
                 i1++;

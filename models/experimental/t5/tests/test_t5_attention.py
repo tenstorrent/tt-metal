@@ -149,7 +149,7 @@ def run_test_T5Attention_inference(device, block, use_mask, model_name, input_h,
     torch.manual_seed(0)
     test_input = ((torch.rand(1, input_h, input_w) * 2) - 1) / 512
 
-    # "/ 2" is added beacuse of Tt device precision. Not to hit limits of float16
+    # "/ 2" is added because of Tt device precision. Not to hit limits of float16
     mask = -65504.0 * torch.cat([torch.zeros(7), torch.ones(25)]) / 2
     mask = mask.unsqueeze(0).unsqueeze(0).unsqueeze(0)
     mask = mask if use_mask else None

@@ -238,8 +238,8 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     struct Handler {
         static void segfault_handler(int signum) { siglongjmp(jmp_env, /*val=*/1); }
     };
-    struct sigaction old_action;
-    struct sigaction new_action;
+    struct sigaction old_action{};
+    struct sigaction new_action{};
     memset(&new_action, 0, sizeof(new_action));
     new_action.sa_handler = Handler::segfault_handler;
     sigemptyset(&new_action.sa_mask);

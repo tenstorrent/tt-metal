@@ -196,7 +196,8 @@ def upsample_multicore_common(
                     break
                 nshards_w -= 1
             if nshards_w == 0 or nshards_h == 0:
-                raise ValueError("nshards_h or nshards_w is 0")
+                pytest.skip("nshards_h or nshards_w is 0")
+
             ncores = (nshards_h, nshards_w)
         shard_grid = get_shard_grid_from_num_cores(device, ncores)
 
@@ -264,6 +265,7 @@ def upsample_multicore_common(
         [1, 32, 5, 4],
         [1, 64, 128, 17],
         [1, 64, 132, 19],
+        [1, 8, 28, 28],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

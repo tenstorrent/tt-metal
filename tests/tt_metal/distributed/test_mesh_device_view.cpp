@@ -13,6 +13,8 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+
 namespace tt::tt_metal::distributed {
 namespace {
 
@@ -111,6 +113,14 @@ TEST(MeshDeviceViewTest, GetLineCoordinates3x3WithOffset) {
     EXPECT_EQ(line_coords[2], MeshCoordinate(2, 2));
     EXPECT_EQ(line_coords[3], MeshCoordinate(2, 1));
     EXPECT_EQ(line_coords[4], MeshCoordinate(2, 0));
+}
+
+using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
+
+TEST_F(MeshDeviceView2x4Test, MeshId) {
+    const auto& view = mesh_device_->get_view();
+    EXPECT_EQ(view.shape(), MeshShape(2, 4));
+    EXPECT_EQ(view.mesh_id(), tt::tt_fabric::MeshId(0));
 }
 
 }  // namespace

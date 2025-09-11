@@ -19,7 +19,12 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, save_and_get_path
+from models.demos.deepseek_v3.utils.config_helpers import (
+    MAX_BATCH_SIZE,
+    even_int_div,
+    get_state_dicts,
+    save_and_get_path,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -42,7 +47,7 @@ class DistributedRMSNorm(RMSNormBase):
     ) -> WeightConfig:
         torch_metaweight = get_state_dicts(state_dicts, "weight", shape=(hf_config.hidden_size,), dtype=torch.bfloat16)
         num_shards = torch_metaweight.shape[0]
-        assert num_shards == mesh_device.shape[0], "Number of state dictsdoes not match the number of rows."
+        assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
 
         tt_weight = ttnn.as_tensor(
             torch_metaweight.reshape(
@@ -75,7 +80,10 @@ class DistributedRMSNorm(RMSNormBase):
             ModelPrefillConfig containing operator configurations for prefill mode
         """
         return cls._model_config(
-            hf_config=hf_config, mesh_device=mesh_device, rms_norm_stats_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            hf_config=hf_config,
+            mesh_device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            rms_norm_stats_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # type: ignore
 
     @classmethod
@@ -89,9 +97,25 @@ class DistributedRMSNorm(RMSNormBase):
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
+        shard_core_grid = ttnn.CoreGrid(x=4, y=7)
+        memory_config = ttnn.create_sharded_memory_config(
+            shape=(
+                MAX_BATCH_SIZE,
+                ttnn.core.roundup(
+                    even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
+                    ttnn.TILE_SIZE,
+                ),
+            ),
+            core_grid=shard_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         return cls._model_config(
             hf_config=hf_config,
             mesh_device=mesh_device,
+            memory_config=memory_config,
             rms_norm_stats_memory_config=ttnn.create_sharded_memory_config(
                 shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * mesh_device.shape[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
@@ -101,10 +125,15 @@ class DistributedRMSNorm(RMSNormBase):
 
     @classmethod
     def _model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, rms_norm_stats_memory_config: ttnn.MemoryConfig
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        memory_config: ttnn.MemoryConfig,
+        rms_norm_stats_memory_config: ttnn.MemoryConfig,
     ) -> dict[str, OpConfigBase]:
         """Generate model configuration for RMSNorm."""
         return {
+            "input_memory_config": memory_config,
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
                 dtype=ttnn.bfloat16,
             ),
@@ -137,7 +166,7 @@ class DistributedRMSNorm(RMSNormBase):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
             },
         }
 
@@ -168,6 +197,6 @@ class DistributedRMSNorm(RMSNormBase):
             program_config=program_config,
             **cfg["rms_norm_post_all_gather"],
         )
-        ttnn.deallocate(tt_stats)
+        ttnn.deallocate(tt_gathered_stats)
 
         return tt_out

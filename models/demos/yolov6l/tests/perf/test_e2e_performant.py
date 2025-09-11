@@ -17,7 +17,7 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
 
 
 def get_expected_times(name):
-    base = {"yolov6l": (183.7, 0.017)}
+    base = {"yolov6l": (183.7, 0.0096)}
     return base[name]
 
 

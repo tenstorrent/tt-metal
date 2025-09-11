@@ -41,4 +41,5 @@ def test_yolov6l_bepc3(device, reset_seeds, model_location_generator):
 
     output = ttnn.to_torch(output)
     output = output.permute(0, 3, 1, 2)
+    output = output.reshape(torch_output.shape)
     assert_with_pcc(torch_output, output, pcc=0.99)

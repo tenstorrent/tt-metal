@@ -25,10 +25,6 @@ ttnn::Tensor CopyOperation::invoke(QueueId queue_id, const Tensor& src_tensor, c
     return dst_tensor;
 }
 
-ttnn::Tensor CopyOperation::invoke(const Tensor& src_tensor, const Tensor& dst_tensor) {
-    return invoke(ttnn::DefaultQueueId, src_tensor, dst_tensor);
-}
-
 ttnn::Tensor AssignOperation::invoke(
     QueueId queue_id,
     const Tensor& input,
@@ -52,10 +48,6 @@ ttnn::Tensor AssignOperation::invoke(
 ttnn::Tensor AssignOperation::invoke(QueueId queue_id, const Tensor& input_a, const Tensor& input_b) {
     operation::run(CopyDeviceOperation{input_b.memory_config(), input_b.dtype()}, {input_a, input_b}, {}, {}, queue_id);
     return input_b;
-}
-
-ttnn::Tensor AssignOperation::invoke(const Tensor& input_a, const Tensor& input_b) {
-    return invoke(ttnn::DefaultQueueId, input_a, input_b);
 }
 
 }  // namespace ttnn::operations::data_movement

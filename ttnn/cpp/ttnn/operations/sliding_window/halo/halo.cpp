@@ -18,13 +18,6 @@ Tensor HaloOperation::invoke(
     bool is_out_tiled,
     bool in_place) {
     return halo_op(
-        input_tensor,
-        config,
-        pad_val,
-        remote_read,
-        transpose_mcast,
-        std::move(output_memory_config),
-        is_out_tiled,
-        in_place);
+        input_tensor, config, pad_val, remote_read, transpose_mcast, output_memory_config, is_out_tiled, in_place);
 }
 };  // namespace ttnn::operations::sliding_window::halo

@@ -109,8 +109,10 @@ from ttnn._ttnn.multi_device import (
     create_mesh_mapper,
     concat_mesh_to_tensor_composer,
     create_mesh_composer,
+    compute_distribution_to_mesh_mapping,
     aggregate_tensor,
     distribute_tensor,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
@@ -126,6 +128,10 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
+)
+
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
 )
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -268,8 +274,6 @@ from ttnn.core import (
     LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
-    dump_memory_config,
-    load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
@@ -347,7 +351,9 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -362,11 +368,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
-)
+from ttnn.operations.ccl import Topology
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -384,6 +386,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

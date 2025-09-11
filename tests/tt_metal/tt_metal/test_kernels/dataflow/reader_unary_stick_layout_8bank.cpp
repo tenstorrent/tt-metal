@@ -22,20 +22,8 @@ void kernel_main() {
     const uint32_t num_tiles_c = stick_size / 64;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
     uint32_t stick_id = 0;
 
-    constexpr bool stick_size_is_power_of_two = (get_compile_time_arg_val(0) == 1);
-#if (stick_size_is_power_of_two)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(3);
-    const InterleavedPow2AddrGen<true> s = {
-        .bank_base_address = src_addr,
-
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<true> s = {
-        .bank_base_address = src_addr,
-
-        .page_size = stick_size};
-#endif
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(src_args, src_addr, stick_size);
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads

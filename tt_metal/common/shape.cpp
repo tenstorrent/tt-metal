@@ -4,8 +4,6 @@
 
 #include "shape.hpp"
 
-#include <boost/container/vector.hpp>
-#include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
@@ -25,7 +23,7 @@ uint64_t Shape::volume() const { return std::accumulate(cbegin(), cend(), uint64
 
 std::array<uint32_t, 4> Shape::to_array_4D() const {
     TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
-    std::array<uint32_t, 4> ret_array;
+    std::array<uint32_t, 4> ret_array{};
     for (int i = 0; i < rank(); i++) {
         ret_array[i] = this->operator[](i);
     }

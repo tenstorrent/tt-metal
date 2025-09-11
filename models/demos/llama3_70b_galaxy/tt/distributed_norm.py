@@ -83,7 +83,8 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+            # x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+            raise RuntimeError("Legacy ccl call removed until new implementation is done")
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
@@ -91,6 +92,7 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
+            # x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
+            raise RuntimeError("Legacy ccl call removed until new implementation is done")
 
         return x

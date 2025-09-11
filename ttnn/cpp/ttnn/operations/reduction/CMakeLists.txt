@@ -11,10 +11,18 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels argmax/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    argmax/device/kernels/*
+    generic/device/kernels/*
+)
 target_sources(
     ttnn_op_reduction
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES generic/generic_reductions.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -45,6 +53,7 @@ target_sources(
         prod/device/prod_op_all.cpp
         prod/prod.cpp
         topk/device/topk_op.cpp
+        topk/device/topk_utils.cpp
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
         reduction_common/reduction_common.cpp
@@ -61,6 +70,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_reduction
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/reduction

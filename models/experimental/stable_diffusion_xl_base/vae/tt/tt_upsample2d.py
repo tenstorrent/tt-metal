@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config
 
 
-class TtUpsample2D(nn.Module):
+class TtUpsample2D(LightweightModule):
     def __init__(
         self,
         device,
@@ -37,13 +37,13 @@ class TtUpsample2D(nn.Module):
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
             bias,
-            model_config.conv_w_dtype,
+            self.conv_config.weights_dtype,
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):

@@ -224,10 +224,10 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+    const auto& mesh_view = input_tensors[0].device()->get_view();
     if (this->cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
@@ -271,6 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         this->topology,
         this->semaphore,
         this->barrier_semaphore,
+        this->using_persistent_buffers,
         this->sub_device_id,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -287,7 +288,12 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->intermediate_mem_config,
         this->topology,
         this->barrier_semaphore.has_value(),
-        this->sub_device_id,
+        this->using_persistent_buffers,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -320,11 +326,14 @@ Tensor reduce_scatter_minimal_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
 
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
+        auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
         const auto& mesh_view = mesh_device->get_view();
         // Use the mesh dimensions to determine the ring size
@@ -348,15 +357,17 @@ Tensor reduce_scatter_minimal_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool using_persistent_buffers = persistent_output_buffers.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors =
-        persistent_output_buffers
+        using_persistent_buffers
             ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
             : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
-                   dim,
+                   scatter_dim,
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
@@ -364,6 +375,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    ccl_topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    sub_device_id,
                    cluster_axis,
                    chunks_per_sync,

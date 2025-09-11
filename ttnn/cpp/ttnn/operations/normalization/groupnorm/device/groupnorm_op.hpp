@@ -49,6 +49,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& negative_mask,
     Tensor& output,
     float eps,
     uint32_t num_groups,

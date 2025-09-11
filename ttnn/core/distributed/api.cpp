@@ -14,9 +14,10 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
-#include <ttnn/distributed/distributed_tensor_config.hpp>
+#include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <ttnn/distributed/types.hpp>
 
 using namespace tt::tt_metal;
 
@@ -65,7 +66,8 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_de
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
         std::vector<ttnn::Tensor> tensors;
-        const auto& distributed_buffer = tensor.host_storage().buffer();
+        auto gathered_tensor = host_ccl::all_gather(tensor);
+        const auto& distributed_buffer = gathered_tensor.host_storage().buffer();
         distributed_buffer.apply(
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
@@ -76,8 +78,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
                 DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(
-                    std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}, tensor.tensor_topology()));
+                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
             }
             return tensors;
         } else {
@@ -105,11 +106,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
     }
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        HostStorage{std::move(distributed_host_buffer)},
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
+    return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), TensorTopology{});
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
@@ -142,19 +139,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
     TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)),
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
-}
-
-std::vector<int> get_t3k_physical_device_ids_ring() {
-    using namespace tt::tt_metal::distributed;
-    auto& instance = SystemMesh::instance();
-    TT_FATAL(instance.shape() == instance.local_shape(), "System mesh must be fully local");
-    auto num_devices = instance.shape().mesh_size();
-    TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
-    return extract_locals(instance.get_mapped_devices(MeshShape(1, 8)).device_ids);
+        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), TensorTopology{});
 }
 
 }  // namespace ttnn::distributed

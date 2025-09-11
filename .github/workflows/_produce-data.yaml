@@ -56,12 +56,15 @@ on:
 
 jobs:
   produce-cicd-data:
-    if: |
-      # Check if triggered by `workflow_run` with specific conclusion states,
-      # or if it's triggered by `workflow_call` or `workflow_dispatch`
-      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
-      ${{ github.event_name == 'workflow_call' }} ||
-      ${{ github.event_name == 'workflow_dispatch' }}
+    # Check if triggered by `workflow_run` with specific conclusion states,
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    if: >-
+      ${{ (github.event_name == 'workflow_run' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
+            github.event.workflow_run.conclusion == 'cancelled')) ||
+          github.event_name == 'workflow_call' ||
+          github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,12 +165,15 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
-    if: |
-      # Check if triggered by `workflow_run` with specific conclusion states,
-      # or if it's triggered by `workflow_call` or `workflow_dispatch`
-      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
-      ${{ github.event_name == 'workflow_call' }} ||
-      ${{ github.event_name == 'workflow_dispatch' }}
+    # Check if triggered by `workflow_run` with specific conclusion states,
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    if: >-
+      ${{ (github.event_name == 'workflow_run' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
+            github.event.workflow_run.conclusion == 'cancelled')) ||
+          github.event_name == 'workflow_call' ||
+          github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

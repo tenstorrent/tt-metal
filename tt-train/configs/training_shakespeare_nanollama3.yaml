@@ -10,7 +10,7 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: true
+  use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   transformer_config:
     num_heads: 6

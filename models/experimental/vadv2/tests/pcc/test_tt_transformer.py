@@ -6,7 +6,6 @@ import pytest
 import torch
 import copy
 import ttnn
-import os
 import numpy as np
 import torch.nn as nn
 from models.experimental.vadv2.reference import transformer
@@ -30,6 +29,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
+from models.experimental.vadv2.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -211,26 +211,18 @@ def create_vadv2_model_parameters_tramsformer(model: ResNet, device=None):
 def test_vadv2_encoder(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = transformer.VADPerceptionTransformer(
         rotate_prev_bev=True, use_shift=True, use_can_bus=True, decoder=True, map_decoder=True, embed_dims=256
     )
 
-    torch_dict = torch.load(weights_path)
+    torch_model = load_torch_model(
+        torch_model=torch_model, layer="pts_bbox_head.transformer", model_location_generator=model_location_generator
+    )
 
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("pts_bbox_head.transformer"))}
-
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
-    # print(torch_model)
-    # ss
     parameter = create_vadv2_model_parameters_tramsformer(torch_model, device=device)
-    # print(parameter)
-    # ss
+
     bev_h = 100
     bev_w = 100
     grid_length = (0.6, 0.3)

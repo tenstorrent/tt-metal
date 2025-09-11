@@ -126,7 +126,7 @@ static inline Tensor move_sharded(
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
-    auto input_address = input_tensor.buffer()->address();
+    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
     auto output_mem_config = mem_config.value_or(input_mem_config);
     TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
     if (not can_deallocate(input_tensor)) {
@@ -180,11 +180,6 @@ ttnn::Tensor MoveOperation::invoke(
         return move_sharded(queue_id, input_tensor, output_mem_config);
     }
     return move(queue_id, input_tensor, output_mem_config);
-}
-
-ttnn::Tensor MoveOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

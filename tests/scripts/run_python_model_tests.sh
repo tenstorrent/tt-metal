@@ -74,13 +74,13 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
     # Mistral-7B-v0.3
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
-    HF_MODEL=$mistral_weights pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    HF_MODEL=$mistral_weights pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
@@ -101,7 +101,7 @@ run_python_model_tests_blackhole() {
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
     for llama_dir in "$llama8b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 

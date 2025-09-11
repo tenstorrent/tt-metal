@@ -411,7 +411,7 @@ public:
      * @param coord The global coordinate to check
      * @return true if the coordinate contains a local value, false if remote
      */
-    bool is_local_at(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
+    bool is_local(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
 };
 
 template <typename T>

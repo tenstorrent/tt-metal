@@ -15,7 +15,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_topk_simmilarity
+        function: comp_topk_similarity
       args-gen: gen_topk_args
       sanitize-args: False
       args:
