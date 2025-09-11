@@ -113,8 +113,7 @@ def offset_increment_tensor(shape, offset=0, dtype=torch.int32, step=1):
 
 @skip_for_blackhole("Fails on Blackhole. Issue #28021")
 @pytest.mark.parametrize("rank", range(1, 9))  # 1D … 8D
-# @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_write_nd(rank, layout, device):
     base_seed = 2005
     random.seed(base_seed)
