@@ -178,6 +178,7 @@ class MBConvBlock:
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         id=1,
         deallocate_activation=False,
+        shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ):
         self.parameters = parameters
         self.batch = batch
@@ -198,7 +199,7 @@ class MBConvBlock:
             device=device,
             parameters=parameters["_depthwise_conv"],
             conv_params=conv_params._depthwise_conv,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=shard_layout_depthwise_conv,
             deallocate_activation=deallocate_activation,
         )
 
@@ -284,6 +285,7 @@ class Efficientnetb0:
             is_depthwise_first=True,
             conv_params=conv_params._blocks0,
             deallocate_activation=True,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self._blocks1 = MBConvBlock(
             device,
@@ -291,12 +293,14 @@ class Efficientnetb0:
             is_depthwise_first=False,
             conv_params=conv_params._blocks1,
             deallocate_activation=True,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self._blocks2 = MBConvBlock(
             device,
             parameters["blocks"]["_blocks2"],
             is_depthwise_first=False,
             conv_params=conv_params._blocks2,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self._blocks3 = MBConvBlock(
             device,
@@ -373,6 +377,7 @@ class Efficientnetb0:
             is_depthwise_first=False,
             conv_params=conv_params._blocks12,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
         self._blocks13 = MBConvBlock(
             device,
@@ -380,6 +385,7 @@ class Efficientnetb0:
             is_depthwise_first=False,
             conv_params=conv_params._blocks13,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
         self._blocks14 = MBConvBlock(
             device,
@@ -387,6 +393,7 @@ class Efficientnetb0:
             is_depthwise_first=False,
             conv_params=conv_params._blocks14,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
         self._blocks15 = MBConvBlock(
             device,
@@ -394,6 +401,7 @@ class Efficientnetb0:
             is_depthwise_first=False,
             conv_params=conv_params._blocks15,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=True,
         )
         self._conv_head = Conv2dDynamicSamePadding(
