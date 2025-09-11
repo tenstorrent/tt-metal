@@ -87,7 +87,7 @@ TEST(OptionalReferenceTest, CopyConstruction) {
 TEST(OptionalReferenceTest, MoveConstruction) {
     int value = 42;
     optional_reference<int> ref1(value);
-    optional_reference<int> ref2(std::move(ref1));
+    optional_reference<int> ref2(std::move(ref1)); // NOLINT(performance-move-const-arg)
 
     EXPECT_TRUE(ref2.has_value());
     EXPECT_EQ(*ref2, 42);
