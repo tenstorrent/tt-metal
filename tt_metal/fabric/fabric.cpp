@@ -149,6 +149,17 @@ void append_fabric_connection_rt_args(
             forwarding_direction = direction;
             break;
         }
+        // dst is not a neighbor of src
+        if (!forwarding_direction.has_value()) {
+            auto dir = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            if (dir.has_value()) {
+                auto neighbor_chips = control_plane.get_chip_neighbors(src_fabric_node_id, dir.value());
+                auto neighbor_mesh_chips = neighbor_chips.find(dst_fabric_node_id.mesh_id);
+                if (neighbor_mesh_chips != neighbor_chips.end()) {
+                    forwarding_direction = dir;
+                }
+            }
+        }
     }
     TT_FATAL(
         forwarding_direction.has_value(),

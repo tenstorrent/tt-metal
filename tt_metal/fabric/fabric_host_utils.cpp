@@ -128,7 +128,9 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     } else {
         // TODO: not going to work for Big Mesh
         const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+        auto neighbor_chips = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+        auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            FabricNodeId(dst_fabric_node_id.mesh_id, neighbor_chips.at(dst_fabric_node_id.mesh_id).at(0)));
         // for 1D check if each port has an active connection to the dst_chip_id
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
