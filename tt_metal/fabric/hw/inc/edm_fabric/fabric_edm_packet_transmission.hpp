@@ -120,7 +120,7 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !(defined(RING_TOPOLOGY) && defined(ARCH_BLACKHOLE))
 FORCE_INLINE
 #endif
     void
@@ -295,7 +295,7 @@ template <
     bool stateful_api,
     bool increment_pointers = true,
     uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !(defined(RING_TOPOLOGY) && defined(ARCH_BLACKHOLE))
 FORCE_INLINE
 #endif
     void

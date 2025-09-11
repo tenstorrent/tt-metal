@@ -465,6 +465,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     std::map<std::string, std::string> defines = {};
     if (fabric_context.is_2D_routing_enabled()) {
         defines["FABRIC_2D"] = "";
+    } else if (fabric_context.get_fabric_topology() == tt::tt_fabric::Topology::Ring) {
+        defines["RING_TOPOLOGY"] = "";
     }
 
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
