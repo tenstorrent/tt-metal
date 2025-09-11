@@ -360,17 +360,17 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
-    for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
+    for (auto& [host, exit_nodes] : exit_node_connection_table_) {
         const auto& local_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(host);
         std::unordered_map<std::string, size_t> visited_hosts;
-        for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
+        for (auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
             if (host == candidate_host) {
                 continue;  // Skip self connections
             }
             const auto& remote_physical_to_logical_eth_chan = physical_to_logical_eth_chan_.at(candidate_host);
 
-            for (const auto& exit_node : exit_nodes) {
-                for (const auto& candidate_node : candidate_exit_nodes) {
+            for (auto& exit_node : exit_nodes) {
+                for (auto& candidate_node : candidate_exit_nodes) {
                     auto local_asic = exit_node.src_exit_node;
                     auto remote_asic = candidate_node.dst_exit_node;
                     if (local_asic == candidate_node.dst_exit_node && candidate_node.src_exit_node == remote_asic &&
@@ -378,6 +378,13 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                             local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_node.eth_conn.dst_chan) &&
                         remote_physical_to_logical_eth_chan.at(*remote_asic).at(exit_node.eth_conn.dst_chan) ==
                             candidate_node.eth_conn.src_chan) {
+                        std::cout << "Found a matching exit node connection between " << host << " and "
+                                  << candidate_host << std::endl;
+                        exit_node.eth_conn.dst_chan =
+                            remote_physical_to_logical_eth_chan.at(*remote_asic).at(exit_node.eth_conn.dst_chan);
+                        candidate_node.eth_conn.dst_chan =
+                            local_physical_to_logical_eth_chan.at(*local_asic).at(candidate_node.eth_conn.dst_chan);
+
                         if (visited_hosts.find(candidate_host) == visited_hosts.end()) {
                             system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
                             visited_hosts[candidate_host] = system_graph_.host_connectivity_graph[host].size() - 1;
