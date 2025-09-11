@@ -45,6 +45,7 @@ void py_module(py::module& m) {
     eltwise_unary_with_param.def(py::init<UnaryOpType>())
         .def(py::init<UnaryOpType, float>())
         .def(py::init<UnaryOpType, int>())
+        .def(py::init<UnaryWithParam>())
         .def(py::init<>([](std::pair<UnaryOpType, float> arg) { return EltwiseUnaryWithParam{arg.first, arg.second}; }))
         .def(py::init<>([](std::pair<UnaryOpType, int> arg) { return EltwiseUnaryWithParam{arg.first, arg.second}; }))
         .def_property_readonly("op_type", &EltwiseUnaryWithParam::type);
@@ -54,6 +55,7 @@ void py_module(py::module& m) {
     py::implicitly_convertible<UnaryOpType, EltwiseUnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, float>, EltwiseUnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, int>, EltwiseUnaryWithParam>();
+    py::implicitly_convertible<UnaryWithParam, EltwiseUnaryWithParam>();
 }
 
 }  // namespace ttnn::activation

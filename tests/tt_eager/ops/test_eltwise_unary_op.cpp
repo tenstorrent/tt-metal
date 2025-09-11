@@ -73,6 +73,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
     auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to_layout(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
@@ -115,8 +116,8 @@ void test_operation_infrastructure() {
     using namespace tt::constants;
     log_info(tt::LogTest, "Running {}", __func__);
 
-    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
@@ -127,7 +128,7 @@ void test_operation_infrastructure() {
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     ttnn::operations::unary::operation_attributes_t op_args{
-        {EltwiseUnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
+        {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
     ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
@@ -136,6 +137,9 @@ void test_operation_infrastructure() {
 void test_shape_padding() {
     using namespace tt::constants;
     log_info(tt::LogTest, "Running {}", __func__);
+
+    using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
@@ -174,6 +178,7 @@ void test_numerically() {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
@@ -229,6 +234,7 @@ void test_program_cache() {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);

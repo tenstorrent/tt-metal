@@ -59,7 +59,7 @@ Tensor ExecuteUnary<unary_op_types...>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
+        queue_id, input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
 }
 
 template <>
@@ -133,7 +133,7 @@ Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
         memory_config,
         optional_output_tensor);
 }
@@ -153,7 +153,7 @@ Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
         memory_config,
         optional_output_tensor);
 }
@@ -174,7 +174,7 @@ Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, {static_cast<float>(mode), static_cast<float>(parameter)}}},
+        {UnaryWithParam{unary_op_type, {static_cast<float>(mode), static_cast<float>(parameter)}}},
         memory_config,
         optional_output_tensor);
 }
@@ -191,7 +191,7 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
         memory_config,
         optional_output_tensor);
 }
@@ -207,7 +207,7 @@ Tensor ExecuteUnaryWithTwoFloatParameter<unary_op_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, {static_cast<float>(parameter_a), static_cast<float>(parameter_b)}}},
+        {UnaryWithParam{unary_op_type, {static_cast<float>(parameter_a), static_cast<float>(parameter_b)}}},
         memory_config,
         optional_output_tensor);
 }
@@ -268,10 +268,10 @@ Tensor Sigmoid_accurate::invoke(
     return detail::unary_impl(
         queue_id,
         input,
-        {EltwiseUnaryWithParam(UnaryOpType::NEG),
-         EltwiseUnaryWithParam(UnaryOpType::EXP, 1.0f),
-         EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-         EltwiseUnaryWithParam(UnaryOpType::RECIP)},
+        {UnaryWithParam(UnaryOpType::NEG),
+         UnaryWithParam(UnaryOpType::EXP, 1.0f),
+         UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+         UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
         optional_output_tensor);
 }
@@ -285,8 +285,7 @@ Tensor LogSigmoid::invoke(
     return detail::unary_impl(
         queue_id,
         input,
-        {EltwiseUnaryWithParam(UnaryOpType::SIGMOID, {(float)VecMode::RC, 0.0f}),
-         EltwiseUnaryWithParam(UnaryOpType::LOG)},
+        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
         memory_config,
         optional_output_tensor);
 }
@@ -297,8 +296,7 @@ Tensor Eqz::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::EQZ;
-    return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Unary_chain::invoke(
@@ -321,7 +319,7 @@ Tensor Softplus::invoke(
     return detail::unary_impl(
         queue_id,
         input,
-        {EltwiseUnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
+        {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
         memory_config,
         optional_output_tensor);
 }
@@ -336,7 +334,7 @@ Tensor Tanh::invoke(
     UnaryOpType op_type = UnaryOpType::TANH;
     if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
         return detail::unary_impl(
-            queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
         return ttnn::tanh_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
     }
@@ -349,11 +347,7 @@ Tensor Prelu::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id,
-        input,
-        {EltwiseUnaryWithParam{UnaryOpType::PRELU_SFPU, value}},
-        memory_config,
-        optional_output_tensor);
+        queue_id, input, {UnaryWithParam{UnaryOpType::PRELU_SFPU, value}}, memory_config, optional_output_tensor);
 }
 
 Tensor Identity::invoke(
@@ -366,7 +360,7 @@ Tensor Identity::invoke(
 
     if (input_dtype != DataType::UINT8) {
         return detail::unary_impl(
-            queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
         TT_THROW("ttnn.identity doesn't support uint8 datatype");
     }
@@ -381,8 +375,7 @@ Tensor Abs::invoke(
     if (input_tensor.dtype() == DataType::INT32) {
         op_type = UnaryOpType::ABS_INT32;
     }
-    return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
@@ -396,8 +389,7 @@ Tensor Mish::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::MISH;
 
-    return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Tanhshrink::invoke(
@@ -409,7 +401,7 @@ Tensor Tanhshrink::invoke(
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
     if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
         return detail::unary_impl(
-            queue_id, input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
         return ttnn::tanhshrink_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
     }
@@ -426,7 +418,7 @@ Tensor Hardshrink::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{op_type, static_cast<float>(lambda)}},
+        {UnaryWithParam{op_type, static_cast<float>(lambda)}},
         memory_config,
         optional_output_tensor);
 }
@@ -441,7 +433,7 @@ Tensor Elu::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{op_type, static_cast<float>(alpha)}},
+        {UnaryWithParam{op_type, static_cast<float>(alpha)}},
         memory_config,
         optional_output_tensor);
 }
@@ -455,11 +447,7 @@ Tensor Hardtanh::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::HARDTANH;
     return detail::unary_impl(
-        queue_id,
-        input_tensor,
-        {EltwiseUnaryWithParam{op_type, {min_val, max_val}}},
-        memory_config,
-        optional_output_tensor);
+        queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Clamp::invoke(
@@ -472,7 +460,7 @@ Tensor Clamp::invoke(
     return detail::unary_impl(
         ttnn::DefaultQueueId,
         input_tensor,
-        {EltwiseUnaryWithParam{op_type, {min_val, max_val}}},
+        {UnaryWithParam{op_type, {min_val, max_val}}},
         memory_config,
         optional_output_tensor);
 }
@@ -503,7 +491,7 @@ Tensor Softshrink::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{op_type, static_cast<float>(lambda)}},
+        {UnaryWithParam{op_type, static_cast<float>(lambda)}},
         memory_config,
         optional_output_tensor);
 }
@@ -556,7 +544,7 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        {EltwiseUnaryWithParam{unary_op_type, parameter}},
         memory_config,
         optional_output_tensor);
 }
@@ -578,7 +566,7 @@ Tensor ExecuteUnaryWithOptionalIntegerParameter<unary_op_type, T>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<float>(parameter.value_or(0))}},
+        {EltwiseUnaryWithParam{unary_op_type, parameter.value_or(0)}},
         memory_config,
         optional_output_tensor);
 }
@@ -595,7 +583,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -610,7 +598,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -629,7 +617,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -644,7 +632,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {EltwiseUnaryWithParam(unary_op_rev_type, static_cast<float>(param))},
+        {UnaryWithParam(unary_op_rev_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
