@@ -126,6 +126,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
         log_debug(tt::LogOp, "Invoking SliceWriteDeviceOperation");
 
         // If the operation has stride and output is tiled, convert output to RM
+        auto original_output_layout = output_tensor.layout();
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
@@ -135,7 +136,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
             {},
             {output_tensor})[0];
         if (rm_only_not_sharded) {
-            output_tensor = ttnn::to_layout(output_tensor, output_tensor.layout());
+            output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
         }
         return output_tensor;
     }

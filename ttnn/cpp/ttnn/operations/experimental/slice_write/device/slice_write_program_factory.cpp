@@ -57,9 +57,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
     std::vector<uint32_t> rev_stride(num_dims);
-    if (num_dims == 1) {
-        rev_stride.push_back(1);
-    }
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
 
@@ -911,7 +908,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec, reader_defines));
 
-    writer_defines["DEBUG"] = "1";
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
