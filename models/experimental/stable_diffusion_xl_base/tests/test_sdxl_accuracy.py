@@ -125,16 +125,29 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
-    average_preprocessing_time = profiler.get("__total_preprocessing_time__") / num_prompts
-    average_prepare_input_tensors_time = profiler.get("prepare_input_tensors")
-    average_inference_time = profiler.get("image_gen") + average_prepare_input_tensors_time + average_preprocessing_time
-    min_inference_time = (
-        min(i + j for i, j in zip(profiler.times["image_gen"], profiler.times["prepare_input_tensors"]))
-        + average_preprocessing_time
+    average_inference_time = (
+        profiler.get("encode_prompts")
+        + profiler.get("prepare_latents")
+        + profiler.get("prepare_input_tensors")
+        + profiler.get("image_gen")
     )
-    max_inference_time = (
-        max(i + j for i, j in zip(profiler.times["image_gen"], profiler.times["prepare_input_tensors"]))
-        + average_preprocessing_time
+    min_inference_time = min(
+        i + j + k + l
+        for i, j, k, l in zip(
+            profiler.times["encode_prompts"],
+            profiler.times["prepare_latents"],
+            profiler.times["prepare_input_tensors"],
+            profiler.times["image_gen"],
+        )
+    )
+    max_inference_time = max(
+        i + j + k + l
+        for i, j, k, l in zip(
+            profiler.times["encode_prompts"],
+            profiler.times["prepare_latents"],
+            profiler.times["prepare_input_tensors"],
+            profiler.times["image_gen"],
+        )
     )
 
     data = {
@@ -168,6 +181,7 @@ def test_accuracy_sdxl(
                 "average_vae_time": profiler.get("vae_decode"),
                 "min_inference_time": min_inference_time,
                 "max_inference_time": max_inference_time,
+                "average_encoding_time": profiler.get("encode_prompts"),
             }
         ],
         "evals": [
@@ -198,6 +212,7 @@ def test_accuracy_sdxl(
             }
         ],
     }
+    print(json.dumps(data, indent=2))
 
     os.makedirs(OUT_ROOT, exist_ok=True)
     trace_flag = "with_trace" if capture_trace else "no_trace"

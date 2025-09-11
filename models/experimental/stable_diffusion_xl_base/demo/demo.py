@@ -82,7 +82,7 @@ def run_demo_inference(
         negative_prompt_embeds_torch,
         pooled_prompt_embeds_torch,
         negative_pooled_prompt_embeds_torch,
-    ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
+    ) = tt_sdxl.encode_prompts([""] * batch_size, None)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         prompt_embeds_torch,
@@ -91,14 +91,6 @@ def run_demo_inference(
         negative_pooled_prompt_embeds_torch,
     )
 
-    tt_sdxl.prepare_input_tensors(
-        [
-            tt_latents,
-            *tt_prompt_embeds[0],
-            tt_add_text_embeds[0][0],
-            tt_add_text_embeds[0][1],
-        ]
-    )
     tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
@@ -106,9 +98,7 @@ def run_demo_inference(
         logger.info(f"{key}: {data[-1]:.2f} seconds")
     logger.info("=" * 80)
 
-    total_preproc_time = profiler.get("encode_prompts") + profiler.get("prepare_latents")
     profiler.clear()
-    profiler.times["__total_preprocessing_time__"] = [total_preproc_time]
 
     if not is_ci_env and not os.path.exists("output"):
         os.mkdir("output")
@@ -120,12 +110,34 @@ def run_demo_inference(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
 
+        prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
+        negative_prompts_batch = (
+            negative_prompts[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompts, list)
+            else negative_prompts
+        )
+
+        (
+            prompt_embeds_torch,
+            negative_prompt_embeds_torch,
+            pooled_prompt_embeds_torch,
+            negative_pooled_prompt_embeds_torch,
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+
+        torch.manual_seed(0)
+        tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+            prompt_embeds_torch,
+            negative_prompt_embeds_torch,
+            pooled_prompt_embeds_torch,
+            negative_pooled_prompt_embeds_torch,
+        )
+
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                *tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter][0],
-                tt_add_text_embeds[iter][1],
+                *tt_prompt_embeds[0],
+                tt_add_text_embeds[0][0],
+                tt_add_text_embeds[0][1],
             ]
         )
         imgs = tt_sdxl.generate_images()
