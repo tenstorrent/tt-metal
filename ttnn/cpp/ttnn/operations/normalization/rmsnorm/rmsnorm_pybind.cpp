@@ -82,10 +82,9 @@ void bind_normalization_rms_norm(py::module& module) {
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
-            - If `residual_input_tensor` is provided, it must match the input's padded shape.
-            - `weight`/`bias` tensors:
-              - If TILE: last padded dim must match input's last padded dim.
-              - If ROW_MAJOR: last padded dim must be TILE_WIDTH.
+            - If `residual_input_tensor` is provided, it must match the :attr:`input_tensor`'s padded shape.
+            - If the `weight`/`bias` tensors are TILE layout: last padded dim must match :attr:`input_tensor`'s last padded dim.
+            - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
 
         Example:
             .. code-block:: python
