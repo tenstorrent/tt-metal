@@ -235,7 +235,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
             switch (fabric_edm_type) {
                 case tt::tt_fabric::FabricEriscDatamoverType::Default:
                     TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-                    return *this->router_config_.get();
+                    return *this->router_config_;
                     break;
                 case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
                     TT_FATAL(
@@ -325,7 +325,7 @@ std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_addre
 
 tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
     TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
-    return *tensix_config_.get();
+    return *tensix_config_;
 }
 
 void FabricContext::initialize_tensix_config() {
