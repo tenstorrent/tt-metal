@@ -113,6 +113,8 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"one_to_all", HighLevelTrafficPattern::OneToAll},
+    {"all_to_one", HighLevelTrafficPattern::AllToOne},
+    {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -1327,7 +1329,18 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                max_iterations = std::max(max_iterations, p.iterations.value_or(1));
+                if (p.iterations.has_value()) {
+                    max_iterations = std::max(max_iterations, p.iterations.value());
+                } else if (p.type == "all_to_one") {
+                    // Dynamically calculate iterations for all_to_one patterns based on number of devices
+                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
+                    max_iterations = std::max(max_iterations, num_devices);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for all_to_one pattern in test '{}'",
+                        num_devices,
+                        p_config.name);
+                }
             }
         }
 
@@ -1631,6 +1644,10 @@ private:
                 } else {
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
+            } else if (pattern.type == "all_to_one") {
+                expand_all_to_one_unicast(test, defaults, iteration_idx);
+            } else if (pattern.type == "all_to_one_random") {
+                expand_all_to_one_random_unicast(test, defaults);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1671,6 +1688,22 @@ private:
         } else {
             add_senders_from_pairs(test, all_pairs, base_pattern);
         }
+    }
+
+    void expand_all_to_one_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
+        if (!filtered_pairs.empty()) {
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        }
+    }
+
+    void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
