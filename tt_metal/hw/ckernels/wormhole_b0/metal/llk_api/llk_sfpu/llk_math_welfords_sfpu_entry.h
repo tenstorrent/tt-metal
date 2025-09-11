@@ -27,8 +27,10 @@ inline void llk_math_welfords_sfpu(
         m2_dst_index,
         current_row,
         final_row,
+        num_skip_rows,
+        reciprocal_lut_ptr,
         reformat_dst_to_col_on_end,
-        num_skip_rows);
+        convert_M2_to_var_on_end);
 }
 
 }  // namespace ckernel
