@@ -253,7 +253,8 @@ class MBConvBlock:
 
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if x.shape[-1] != 32 and x.shape[-1] != 96:
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.global_avg_pool2d(x)
 
         x = self._se_reduce(x)
