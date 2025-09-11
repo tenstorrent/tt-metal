@@ -94,7 +94,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
-    strategy: 
+    strategy:
       fail-fast: false
     container: *container-config
     defaults: *defaults-config
