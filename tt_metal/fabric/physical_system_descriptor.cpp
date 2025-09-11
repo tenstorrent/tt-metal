@@ -377,6 +377,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
+    std::cout << "Build Host Connectivity Graph" << std::endl;
     for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
         std::unordered_map<std::string, size_t> visited_hosts;
         for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
@@ -402,22 +403,19 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
             }
         }
     }
+    std::cout << "Done build Host Connectivity Graph" << std::endl;
 
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
-            for (auto& [src_asic, edges] : asic_group) {
-                const auto& src_host = asic_descriptors_.at(src_asic).host_name;
-                for (auto& [dst_asic, eth_conns] : edges) {
-                    const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
-                    if (src_host == dst_host) {
-                        continue;
-                    }
-                    for (auto& eth_conn : eth_conns) {
-                        eth_conn.src_chan =
-                            physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(eth_conn.src_chan);
-                        eth_conn.dst_chan =
-                            physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
-                    }
+            const auto& src_host = asic_descriptors_.at(src_asic).host_name;
+            for (auto& [dst_asic, eth_conns] : edges) {
+                const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
+                if (src_host == dst_host) {
+                    continue;
+                }
+                for (auto& eth_conn : eth_conns) {
+                    eth_conn.src_chan = physical_to_logical_eth_chan_.at(src_host).at(*src_asic).at(eth_conn.src_chan);
+                    eth_conn.dst_chan = physical_to_logical_eth_chan_.at(dst_host).at(*dst_asic).at(eth_conn.dst_chan);
                 }
             }
         }
