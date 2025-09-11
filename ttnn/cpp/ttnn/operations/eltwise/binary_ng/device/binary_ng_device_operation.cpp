@@ -43,7 +43,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case BITWISE_AND:
+            return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
         case QUANT:
         case REQUANT:
         case DEQUANT:
