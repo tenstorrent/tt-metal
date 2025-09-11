@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
-#include <buffer.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
@@ -139,6 +139,50 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
+DeviceAddr Allocator::allocate_buffer(
+    Buffer* buffer, distributed::AllocatorDependencyManager::AllocatorID allocator_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DeviceAddr address = 0;
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
+    auto buffer_type = buffer->buffer_type();
+    auto bottom_up = buffer->bottom_up();
+    auto num_cores = buffer->num_cores();
+    this->verify_safe_allocation();
+    if (config_.disable_interleaved) {
+        TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
+    }
+
+    // Convert AllocatorDependencyManager::AllocatorID to BankManager::AllocatorDependencies::AllocatorID
+    BankManager::AllocatorDependencies::AllocatorID bank_allocator_id{allocator_id.get()};
+
+    switch (buffer_type) {
+        case BufferType::DRAM:
+            address = dram_manager_->allocate_buffer(
+                size, page_size, bottom_up, config_.compute_grid, num_cores, bank_allocator_id);
+            break;
+        case BufferType::L1:
+            address = l1_manager_->allocate_buffer(
+                size, page_size, bottom_up, config_.compute_grid, num_cores, bank_allocator_id);
+            break;
+        case BufferType::L1_SMALL: {
+            TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
+            address = l1_small_manager_->allocate_buffer(
+                size, page_size, bottom_up, config_.compute_grid, num_cores, bank_allocator_id);
+            break;
+        }
+        case BufferType::TRACE:
+            address = trace_buffer_manager_->allocate_buffer(
+                size, page_size, bottom_up, config_.compute_grid, num_cores, bank_allocator_id);
+            break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    allocated_buffers_.insert(buffer);
+    return address;
+}
+
 void Allocator::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
@@ -148,6 +192,26 @@ void Allocator::deallocate_buffer(Buffer* buffer) {
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
         case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
         case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    allocated_buffers_.erase(buffer);
+}
+
+void Allocator::deallocate_buffer(Buffer* buffer, distributed::AllocatorDependencyManager::AllocatorID allocator_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto address = buffer->address();
+    auto buffer_type = buffer->buffer_type();
+
+    // Convert AllocatorDependencyManager::AllocatorID to BankManager::AllocatorDependencies::AllocatorID
+    BankManager::AllocatorDependencies::AllocatorID bank_allocator_id{allocator_id.get()};
+
+    switch (buffer_type) {
+        case BufferType::DRAM: dram_manager_->deallocate_buffer(address, bank_allocator_id); break;
+        case BufferType::L1: l1_manager_->deallocate_buffer(address, bank_allocator_id); break;
+        case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address, bank_allocator_id); break;
+        case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address, bank_allocator_id); break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
