@@ -298,7 +298,6 @@ def eltwise_gelu(
 def eltwise_rsqrt(
     x,
     *args,
-    fast_and_approx,
     device,
     dtype,
     layout,
@@ -309,7 +308,7 @@ def eltwise_rsqrt(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
     if t0.layout == ttnn.TILE_LAYOUT:
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
     else:
         # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
         # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
@@ -317,7 +316,7 @@ def eltwise_rsqrt(
         t0 = t0.cpu().pad_to_tile(0)
         t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
         t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
 
     return tt2torch_tensor(t1)
