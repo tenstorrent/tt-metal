@@ -47,7 +47,7 @@ BLOCK_TYPES = [
     "eth",
 ]
 
-CORE_TYPES = [
+CORE_TYPES = {
     "brisc",
     "trisc0",
     "trisc1",
@@ -56,7 +56,7 @@ CORE_TYPES = [
     "erisc",
     "erisc0",
     "erisc1",
-]
+}
 
 BlockType: TypeAlias = Literal[BLOCK_TYPES]
 CoreType: TypeAlias = Literal[CORE_TYPES]
@@ -140,19 +140,7 @@ class UnifiedDeviceBlockChecker:
             for device in devices
         }
 
-    # def get_block_locations(self, device: Device, block_type: BlockType) -> list[OnChipCoordinate]:
-    #     """Get block locations for a specific device and block type."""
-    #     return self.block_locations[device][block_type]
-
-    # def get_block_locations_for_device(self, device: Device) -> dict[BlockType, list[OnChipCoordinate]]:
-    #     """Get block locations for a specific device."""
-    #     return self.block_locations[device]
-
-    # def get_block_locations_for_block_type(self, block_type: BlockType) -> dict[Device, list[OnChipCoordinate]]:
-    #     """Get block locations for a specific block type."""
-    #     return {device: self.block_locations[device][block_type] for device in self.devices}
-
-    def _collect_results(self, check_result, result_factory):
+    def _collect_results(self, check_result: object, result_factory) -> list:
         """Helper to collect and wrap check results consistently."""
         results = []
         if check_result is None:
@@ -205,21 +193,21 @@ class UnifiedDeviceBlockChecker:
         # Flatten the results: extract PerBlockLocationCheckResult objects from PerDeviceCheckResult wrappers
         block_location_results: list[PerBlockLocationCheckResult] = []
         for device_result in device_results:
-            if isinstance(device_result.result, list):
-                block_location_results.extend(device_result.result)
-            else:
-                # This case shouldn't happen with our device_block_check function, but handle it for safety
-                block_location_results.append(device_result.result)
+            block_location_results.extend(device_result.result)
 
         return block_location_results if len(block_location_results) > 0 else None
 
     def run_per_core_check(
         self,
-        check: Callable[[Device, OnChipCoordinate, str], object],
+        check: Callable[[Device, OnChipCoordinate, CoreType], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
+
+        cores_to_check = (
+            CORE_TYPES if core_filter is None else [core_filter] if isinstance(core_filter, str) else core_filter
+        )
 
         def per_block_cores_check(device: Device, location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
             """Check all RISC cores for a single block location."""
@@ -230,6 +218,10 @@ class UnifiedDeviceBlockChecker:
             risc_names = noc_block.risc_names
 
             for risc_name in risc_names:
+                # Skipping cores we do not want to check
+                if risc_name not in cores_to_check:
+                    continue
+
                 check_result = check(device, location, risc_name)
                 # Use the common result collection helper
                 results = self._collect_results(
@@ -248,11 +240,7 @@ class UnifiedDeviceBlockChecker:
         # Flatten the results: extract PerCoreCheckResult objects from PerBlockLocationCheckResult wrappers
         core_results: list[PerCoreCheckResult] = []
         for block_result in block_results:
-            if isinstance(block_result.result, list):
-                core_results.extend(block_result.result)
-            else:
-                # This case shouldn't happen with our per_block_cores_check function, but handle it for safety
-                core_results.append(block_result.result)
+            core_results.extend(block_result.result)
 
         return core_results if len(core_results) > 0 else None
 
