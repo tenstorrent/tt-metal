@@ -989,7 +989,7 @@ def run_for_grayskull(reason_str="TI_SKIP: only runs for Grayskull"):
 
 
 def skip_for_n_dev(n, reason_str="TI_SKIP: Test is not meant for this number of devices"):
-    return pytest.mark.skipif((ttnn.get_num_devices() == n), reason=reason_str)
+    return pytest.mark.skipif(ttnn.get_num_devices() == n, reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):
