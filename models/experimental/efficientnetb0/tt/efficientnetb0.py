@@ -245,8 +245,6 @@ class MBConvBlock:
 
         x = self._se_reduce(x)
 
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-
         x = x * ttnn.sigmoid_accurate(x)
         x = self._se_expand(x)
 
