@@ -163,7 +163,6 @@ Checks: >
   -performance-for-range-copy,
   -performance-inefficient-string-concatenation,
   -performance-move-const-arg,
-  -performance-move-constructor-init,
   -performance-no-int-to-ptr,
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
