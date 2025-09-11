@@ -20,11 +20,16 @@ TIMEOUT = 45
 
 NUM_DEVICES = ttnn.get_num_devices()
 
+FABRIC_CONFIGS = [
+    ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+]
 
 parameters = {
     "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 256],
@@ -50,6 +55,14 @@ def _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape, **kwargs):
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    cluster_axis = test_vector["cluster_axis"]
+    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
+        return True, "Only one device along axis"
+
+    # hardcode for 6U
+    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+        return True, "Invalid mesh shape for 6U"
+
     if test_vector["dim"] >= len(test_vector["input_shape"]):
         return True, "Dim greater than rank"
     if (
