@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
