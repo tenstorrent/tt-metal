@@ -425,9 +425,9 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                         }
                     }
                 }
-                if (paired) {
-                    continue;
-                }
+                // if (paired) {
+                //     continue;
+                // }
             }
         }
     }
