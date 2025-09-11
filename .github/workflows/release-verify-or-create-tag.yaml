@@ -76,8 +76,6 @@ jobs:
 
       - name: Create or update tag
         run: |
-          TAG="v1.0.0"   # <-- replace or set via input/env
-          git fetch --tags
           git config user.name "Tenstorrent Inc."
           git config user.email "info@tenstorrent.com"
           git tag -f "${{ steps.get-tag-version.outputs.version }}"
