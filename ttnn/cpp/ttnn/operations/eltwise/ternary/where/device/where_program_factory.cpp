@@ -725,20 +725,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor
         reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
 
-        // Add height broadcast flag for TTS
-        bool true_height_bcast = false;
-        bool pred_height_bcast = false;
-        if (true_is_bcast) {
-            auto true_shape = value_true_tensor.value().logical_shape();
-            true_height_bcast = (true_shape[true_shape.rank() - 2] == 1);
-        }
-        if (pred_is_bcast) {
-            auto pred_shape = predicate_tensor.logical_shape();
-            pred_height_bcast = (pred_shape[pred_shape.rank() - 2] == 1);
-        }
-        reader_defines["TRUE_HEIGHT_BCAST"] = true_height_bcast ? "1" : "0";
-        reader_defines["PRED_HEIGHT_BCAST"] = pred_height_bcast ? "1" : "0";
-
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::COL_BCAST) {
@@ -759,20 +745,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
         reader_defines["SRC_BCAST_TRUE"] = "0";                          // True is scalar
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";  // CB1 uses false tensor
-
-        // Add height broadcast flag for TST
-        bool false_height_bcast = false;
-        bool pred_height_bcast = false;
-        if (false_is_bcast) {
-            auto false_shape = value_false_tensor.value().logical_shape();
-            false_height_bcast = (false_shape[false_shape.rank() - 2] == 1);
-        }
-        if (pred_is_bcast) {
-            auto pred_shape = predicate_tensor.logical_shape();
-            pred_height_bcast = (pred_shape[pred_shape.rank() - 2] == 1);
-        }
-        reader_defines["TRUE_HEIGHT_BCAST"] = false_height_bcast ? "1" : "0";  // Use false tensor for true position
-        reader_defines["PRED_HEIGHT_BCAST"] = pred_height_bcast ? "1" : "0";
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
