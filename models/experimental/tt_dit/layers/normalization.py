@@ -24,18 +24,18 @@ class RMSNorm:
             if bias:
                 self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache weight
         if self.weight is not None:
-            weight_path = path_prefix + "weight"
+            weight_path = path_prefix + "weight" + path_suffix
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         # Cache bias if it exists
         if self.bias is not None:
-            bias_path = path_prefix + "bias"
+            bias_path = path_prefix + "bias" + path_suffix
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 
@@ -104,18 +104,18 @@ class LayerNorm:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         if self.weight is not None:
             # Cache weight
-            weight_path = path_prefix + "weight"
+            weight_path = path_prefix + "weight" + path_suffix
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         if self.bias is not None:
             # Cache bias
-            bias_path = path_prefix + "bias"
+            bias_path = path_prefix + "bias" + path_suffix
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 
@@ -207,18 +207,18 @@ class DistributedLayerNorm:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache weight
         if self.weight is not None:
-            weight_path = path_prefix + "weight"
+            weight_path = path_prefix + "weight" + path_suffix
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         # Cache bias
         if self.bias is not None:
-            bias_path = path_prefix + "bias"
+            bias_path = path_prefix + "bias" + path_suffix
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 
