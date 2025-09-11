@@ -550,7 +550,7 @@ on:
       upload_results:
         description: "Upload sweep results to SFTP server?"
         type: boolean
-        default: false
+        default: true
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

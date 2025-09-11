@@ -91,7 +91,7 @@ def create_config_from_args(args) -> SweepsConfig:
 
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
-    arch_env = os.getenv("ARCH_NAME")
+    arch_env = os.getenv("ARCH_NAME") or os.getenv("IRD_ARCH_NAME")
     if not arch_env:
         logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
         exit(1)
@@ -270,7 +270,7 @@ def get_github_pipeline_id() -> Optional[int]:
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
     Returns an int when available, otherwise None.
     """
-    run_id = os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
+    run_id = os.getenv("GITHUB_RUN_NUMBER")
     if not run_id:
         return None
     try:
@@ -765,8 +765,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
+        choices=["elastic", "postgres", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
     )
 
     parser.add_argument(
