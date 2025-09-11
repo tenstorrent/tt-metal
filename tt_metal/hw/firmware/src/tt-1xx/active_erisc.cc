@@ -140,7 +140,7 @@ void __attribute__((noinline)) Application(void) {
 
     deassert_all_reset();
     wait_subordinate_eriscs();
-    gEnableFwFlag[0] = 1;
+    flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
@@ -153,7 +153,7 @@ void __attribute__((noinline)) Application(void) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (gEnableFwFlag[0] != 1) {
+            if (flag_disable[0] != 1) {
                 return;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
@@ -187,13 +187,12 @@ void __attribute__((noinline)) Application(void) {
 
             apply_tweaks();
             uint32_t enables = launch_msg_address->kernel_config.enables;
-            constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             run_subordinate_eriscs(enables);
+
+            constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
 
-                constexpr int index =
-                    static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
