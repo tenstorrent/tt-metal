@@ -26,6 +26,7 @@
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -36,7 +37,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -822,7 +822,81 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
 
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    // Run the test
+    {
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::conv2d,
+            device,
+            input_spec,
+            weight_spec,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
+            std::nullopt,
+            output_spec.tensor_layout().get_memory_config());
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
+        if (query.status == ttnn::graph::ExecutionStatus::Success) {
+            std::cerr << "Query status: Success. Results";
+            std::cerr << ": cb_peak_size_per_core: " <<  query.resource_usage.cb_peak_size_per_core
+                      << ", l1_buffers_peak_per_core: " << query.resource_usage.l1_buffers_peak_per_core
+                      << ", l1_output_buffer_per_core: " << query.resource_usage.l1_output_buffer_per_core
+                      << ", peak_memory_usage_per_core: " << query.resource_usage.peak_memory_usage_per_core << "\n";
+        }
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
+        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+    }
+}
+
+TEST_F(Conv2dOpIfTest, Conv2dOOM) {
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 802816, 3},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+    const auto weight_spec = ttnn::TensorSpec(
+        ttnn::Shape{64, 3, 3, 3},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            // tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            // ttnn::DRAM_MEMORY_CONFIG));
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::BufferType::SYSTEM_MEMORY)));
+    const auto output_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 200704, 64},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+
+    const uint32_t in_channels = 3;
+    const uint32_t out_channels = 64;
+    const uint32_t batch_size = 16;
+    const uint32_t input_height = 224;
+    const uint32_t input_width = 224;
+    const std::array<uint32_t, 2> kernel_size{3, 3};
+    const std::array<uint32_t, 2> stride{2, 2};
+    const std::array<uint32_t, 4> padding{1, 1, 1, 1};
+    const std::array<uint32_t, 2> dilation{1, 1};
+    const uint32_t groups = 1;
 
     // Run the test
     {
@@ -846,16 +920,97 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             std::nullopt,
             std::nullopt,
+            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
-
+        if (query.status == ttnn::graph::ExecutionStatus::Error) {
+            std::cerr << "Query status: Error. Message: " << query.error_message.value() << "\n--------\n";
+        } else if (query.status == ttnn::graph::ExecutionStatus::Success) {
+            std::cerr << "Query status: Success. Results";
+            std::cerr << ": cb_peak_size_per_core: " <<  query.resource_usage.cb_peak_size_per_core
+                      << ", l1_buffers_peak_per_core: " << query.resource_usage.l1_buffers_peak_per_core
+                      << ", l1_output_buffer_per_core: " << query.resource_usage.l1_output_buffer_per_core
+                      << ", peak_memory_usage_per_core: " << query.resource_usage.peak_memory_usage_per_core << "\n";
+        } else {
+            std::cerr << "Query status: Unknown\n";
+        }
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        // Ensure some real usage is reported
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
-        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+    }
+}
+
+/* %134 = "ttnn.conv2d"(%133, %arg136, %9) <\{batch_size = 8 : i32, conv2d_config = #ttnn.conv2d_config<weights_dtype = bf16>, dilation = array<i32: 1, 1>, groups = 1 : i32, in_channels = 256 : i32, input_height = 14 : i32, input_width = 14 : i32, kernel_size = array<i32: 3, 3>, out_channels = 256 : i32, output_dtype = #ttcore.supportedDataTypes<bf16>, padding = array<i32: 1, 1, 1, 1>, stride = array<i32: 1, 1>\}> : (tensor<1x1x1568x256xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 1568 + d1 * 1568 + d2, d3), <1x1>, memref<49x8x!ttcore.tile<32x32, bf16>, #ttnn.buffer_type<dram>>, <interleaved>>>, tensor<256x256x3x3xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 768 + d1 * 3 + d2, d3), <1x1>, memref<196608x3xbf16, #ttnn.buffer_type<system_memory>>>>, !ttnn.device) -> tensor<1x1x1568x256xbf16, #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 1568 + d1 * 1568 + d2, d3), <1x1>, memref<49x8x!ttcore.tile<32x32, bf16>, #ttnn.buffer_type<dram>>, <interleaved>>>\
+*/
+TEST_F(Conv2dOpIfTest, Conv2dOg) {
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 1568, 256},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+    const auto weight_spec = ttnn::TensorSpec(
+        ttnn::Shape{256, 256, 3, 3},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            // tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            // ttnn::DRAM_MEMORY_CONFIG));
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::BufferType::SYSTEM_MEMORY)));
+    const auto output_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 1568, 256},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+
+    const uint32_t in_channels = 256;
+    const uint32_t out_channels = 256;
+    const uint32_t batch_size = 8;
+    const uint32_t input_height = 14;
+    const uint32_t input_width = 14;
+    const std::array<uint32_t, 2> kernel_size{3, 3};
+    const std::array<uint32_t, 2> stride{1, 1};
+    const std::array<uint32_t, 4> padding{1, 1, 1, 1};
+    const std::array<uint32_t, 2> dilation{1, 1};
+    const uint32_t groups = 1;
+
+    // Run the test
+    {
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::conv2d,
+            device,
+            input_spec,
+            weight_spec,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            //ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation=true},
+            std::nullopt,
+            output_spec.tensor_layout().get_memory_config());
+        if (query.status == ttnn::graph::ExecutionStatus::Error) {
+            std::cerr << "Query status: Error. Message: " << query.error_message.value() << "\n--------\n";
+        } else if (query.status == ttnn::graph::ExecutionStatus::Success) {
+            std::cerr << "Query status: Success. Results";
+            std::cerr << ": cb_peak_size_per_core: " <<  query.resource_usage.cb_peak_size_per_core
+                      << ", l1_buffers_peak_per_core: " << query.resource_usage.l1_buffers_peak_per_core
+                      << ", l1_output_buffer_per_core: " << query.resource_usage.l1_output_buffer_per_core
+                      << ", peak_memory_usage_per_core: " << query.resource_usage.peak_memory_usage_per_core << "\n";
+        } else {
+            std::cerr << "Query status: Unknown\n";
+        }
+        bool query_success = query.status == ttnn::graph::ExecutionStatus::Success;
+        EXPECT_EQ(query_success, true);
     }
 }
 
