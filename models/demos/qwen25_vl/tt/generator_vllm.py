@@ -177,15 +177,17 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
+        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] else tokens
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
-                for im in images
+                if im is not None
+                else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                for i, im in enumerate(images)
             ],
             dim=0,
         )
-        if "pixel_values" in images[0]:
+        if images[0] and "pixel_values" in images[0]:
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
