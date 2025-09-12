@@ -84,14 +84,7 @@ TEST_P(AllocatorDependenciesParamTest, ValidateDependencies) {
     BankManager::AllocatorDependencies allocator_dependencies{params.input};
 
     // Validate dependencies
-    // Stored dependencies are not sorted, so we need to sort them for comparison
-    auto sort_nested_vector = [](BankManager::AllocatorDependencies::AdjacencyList a) {
-        for (auto& v : a) {
-            std::sort(v.begin(), v.end());
-        }
-        return a;
-    };
-    EXPECT_EQ(sort_nested_vector(allocator_dependencies.dependencies), params.expected_dependencies);
+    EXPECT_EQ(allocator_dependencies.dependencies, params.expected_dependencies);
 }
 
 INSTANTIATE_TEST_SUITE_P(

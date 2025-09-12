@@ -37,7 +37,9 @@ public:
     struct AllocatorDependencies {
         using AllocatorID = ttsl::StrongType<uint32_t, struct AllocatorIDTag>;
         using AdjacencyList = ttsl::SmallVector<ttsl::SmallVector<AllocatorID>>;
-        AdjacencyList dependencies{};
+
+        // Dependencies per state are sorted in order of allocator IDs
+        AdjacencyList dependencies{{}};  // Default: single allocator (0) with no dependencies
 
         AllocatorDependencies();
         explicit AllocatorDependencies(
@@ -141,12 +143,10 @@ private:
     void validate_bank_id(uint32_t bank_id) const;
     void init_allocators(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 
-    // Assert on non-const methods that have not been tested with overlapping allocators
-    void assert_single_allocator() const;
-
     /*******************************
      * Allocator-dependent methods *
      *******************************/
+    // Returns allocator for the given allocator ID; returns nullptr if allocator ID is invalid
     allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id);
     const allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id) const;
 

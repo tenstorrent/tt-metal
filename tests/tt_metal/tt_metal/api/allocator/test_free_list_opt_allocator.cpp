@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <stddef.h>
 #include <optional>
 #include <utility>
@@ -355,17 +356,14 @@ TEST(FreeListOptTest, AllocatedAddresses) {
 
     // Allocate some blocks and validate allocated addresses
     auto a = allocator.allocate(512_KiB, /*bottom_up=*/false);
-    ASSERT_TRUE(a.has_value());
-    ASSERT_EQ(a.value(), 1_GiB - 512_KiB);
+    ASSERT_THAT(a, ::testing::Optional(1_GiB - 512_KiB));
 
     auto b = allocator.allocate(2_KiB);
-    ASSERT_TRUE(b.has_value());
-    ASSERT_EQ(b.value(), 0);
+    ASSERT_THAT(b, ::testing::Optional(0));
 
     // Unaligned size should be aligned to the next multiple of 1_KiB
     auto c = allocator.allocate(500);
-    ASSERT_TRUE(c.has_value());
-    ASSERT_EQ(c.value(), 2_KiB);
+    ASSERT_THAT(c, ::testing::Optional(2_KiB));
 
     auto allocated_addresses = allocator.allocated_addresses();
     ASSERT_EQ(allocated_addresses.size(), 3);

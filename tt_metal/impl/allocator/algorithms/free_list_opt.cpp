@@ -167,7 +167,6 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     if (!bottom_up) {
         offset = block_size_[target_block_index] - alloc_size;
     }
-    // Allocated addresses cache is invalidated by allocate_in_block
     size_t allocated_block_index = allocate_in_block(target_block_index, alloc_size, offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
     if (start_address + offset_bytes_ < address_limit) {
@@ -354,10 +353,7 @@ std::vector<std::pair<DeviceAddr, size_t>> FreeListOpt::allocated_addresses() co
     allocated_addresses.reserve(block_address_.size());
 
     for (size_t i = 0; i < block_address_.size(); i++) {
-        if (!meta_block_is_allocated_[i]) {
-            continue;
-        }
-        if (block_is_allocated_[i]) {
+        if (meta_block_is_allocated_[i] && block_is_allocated_[i]) {
             allocated_addresses.emplace_back(block_address_[i], static_cast<size_t>(block_size_[i]));
         }
     }

@@ -23,10 +23,7 @@ namespace tt {
 
 namespace tt_metal {
 
-BankManager::AllocatorDependencies::AllocatorDependencies() {
-    // Default: single allocator (0) with no dependencies
-    dependencies = AdjacencyList{{}};
-}
+BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
 BankManager::AllocatorDependencies::AllocatorDependencies(
     const std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>>& dependencies_map) {
@@ -70,16 +67,13 @@ BankManager::AllocatorDependencies::AllocatorDependencies(
     }
 
     // Build dependencies list: for each allocator s, which allocators s depends on / depends on s
-    // Note: Dependencies are not sorted because dependencies_map is unordered
+    // Note: Need to sort dependencies because dependencies_map is unordered
     dependencies.clear();
     dependencies.resize(num_allocators);
     for (uint32_t i = 0; i < num_allocators; ++i) {
         auto& dst = dependencies[i];
-        dst.clear();
-        dst.reserve(undirected_sets[i].size());
-        for (uint32_t neighbor : undirected_sets[i]) {
-            dst.push_back(AllocatorID{neighbor});
-        }
+        dst.assign(undirected_sets[i].begin(), undirected_sets[i].end());
+        std::sort(dst.begin(), dst.end());
     }
 }
 
@@ -101,13 +95,9 @@ bool BankManager::AllocatorDependencies::operator==(const BankManager::Allocator
     if (dependencies.size() != other.dependencies.size()) {
         return false;
     }
-    // Compare as sorted adjacency lists per row, without mutating originals
+    // Direct comparison assuming dependencies are already sorted
     for (size_t i = 0; i < dependencies.size(); ++i) {
-        auto a = dependencies[i];
-        auto b = other.dependencies[i];
-        std::sort(a.begin(), a.end());
-        std::sort(b.begin(), b.end());
-        if (a != b) {
+        if (dependencies[i] != other.dependencies[i]) {
             return false;
         }
     }
@@ -211,10 +201,6 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
         bank_id_to_bank_offset_.size());
 }
 
-void BankManager::assert_single_allocator() const {
-    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
-}
-
 allocator::Algorithm* BankManager::get_allocator_from_id(BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     TT_FATAL(
         allocator_id.get() < allocator_dependencies_.num_allocators(),
@@ -231,9 +217,11 @@ const allocator::Algorithm* BankManager::get_allocator_from_id(
 
 void BankManager::invalidate_allocated_ranges_cache_for_dependent_allocators(
     BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    if (allocator_id.get() >= allocator_dependencies_.num_allocators()) {
-        return;
-    }
+    TT_FATAL(
+        allocator_id.get() < allocator_dependencies_.num_allocators(),
+        "Invalid allocator ID {} (num_allocators={})",
+        allocator_id.get(),
+        allocator_dependencies_.num_allocators());
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
     for (const auto dep_allocator_id : dependent_allocators) {
         allocated_ranges_cache_[dep_allocator_id.get()].reset();
@@ -524,11 +512,7 @@ void BankManager::clear() {
     }
 }
 
-BankManager::~BankManager() {
-    this->deallocate_all();
-    allocators_.clear();
-    bank_id_to_bank_offset_.clear();
-}
+BankManager::~BankManager() { this->deallocate_all(); }
 
 BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
@@ -581,7 +565,7 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
 void BankManager::shrink_size(
     DeviceAddr shrink_size, bool bottom_up, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    this->assert_single_allocator();
+    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->shrink_size(shrink_size, bottom_up);
@@ -589,7 +573,7 @@ void BankManager::shrink_size(
 }
 
 void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    this->assert_single_allocator();
+    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->reset_size();
