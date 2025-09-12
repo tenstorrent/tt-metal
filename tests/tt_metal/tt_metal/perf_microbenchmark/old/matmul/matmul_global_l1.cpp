@@ -67,7 +67,7 @@ CoreCoord get_core_range(
 
 // took & revise from bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
 tt_metal::Program create_program_mcast_in0_in1(
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice* device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B,
