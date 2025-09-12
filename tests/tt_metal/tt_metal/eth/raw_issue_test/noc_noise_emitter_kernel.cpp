@@ -1,4 +1,4 @@
-#include& lt; cstdint & gt;
+#include <cstdint>
 #include "dataflow_api.h"
 
 /**
@@ -17,7 +17,7 @@
  * - dest_noc_y: Destination NOC Y coordinate
  * - noc_write_size: Size of each NOC write
  */
-int kernel_main() {
+void kernel_main() {
     uint32_t arg_idx = 0;
     uint64_t num_iters = ((uint64_t)get_arg_val<uint32_t>(arg_idx) << 32) | (uint64_t)get_arg_val<uint32_t>(arg_idx);
     arg_idx += 2;
@@ -29,10 +29,6 @@ int kernel_main() {
     uint32_t noc_write_size = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t buf_size = 1024;
-    uint32_t local_buffer[buf_size / 4] __attribute__((section(".l1")));
-    for (uint32_t i = 0; i < buf_size / 4; ++i) {
-        local_buffer[i] = 0xDEADBEEF;
-    }
 
     uint32_t current_dest_addr = valid_write_range_start;
     for (uint64_t iter = 0; iter < num_iters; ++iter) {
@@ -40,7 +36,9 @@ int kernel_main() {
         uint32_t size = (noc_write_size < (valid_write_range_end - current_dest_addr))
                             ? noc_write_size
                             : (valid_write_range_end - current_dest_addr);
-        noc_async_write((uint32_t)(uintptr_t)local_buffer, dest_noc_addr, size);
+        // just arbitrarily copy from 0 since we only care about generating the traffic, not
+        // the contents
+        noc_async_write(0, dest_noc_addr, size);
         current_dest_addr += size;
         if (current_dest_addr >= valid_write_range_end) {
             current_dest_addr = valid_write_range_start;

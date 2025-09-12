@@ -17,7 +17,7 @@
  * - addr_step: Step size between base addresses
  * - num_attempts: Number of write attempts per base address
  */
-int kernel_main() {
+void kernel_main() {
     uint32_t arg_idx = 0;
     uint32_t range_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t range_end = get_arg_val<uint32_t>(arg_idx++);

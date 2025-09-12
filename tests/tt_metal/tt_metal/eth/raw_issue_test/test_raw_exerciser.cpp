@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
              noc_write_size});
 
         // Launch program
-        tt::tt_metal::detail::LaunchProgram(device, program);
+        tt::tt_metal::EnqueueProgram(device->command_queue(), program, true);
 
         // Close device
         pass &= tt::tt_metal::CloseDevice(device);
