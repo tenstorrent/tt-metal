@@ -33,7 +33,7 @@ enum Policy : int;
 enum RoutingDirection : int;
 }
 
-inline namespace v1_0 {
+inline namespace v1_1 {
 using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
 using GlobalNodeId = uint32_t;  // Unique across the instantiated MGD
 using ConnectionId = uint32_t;
@@ -77,7 +77,7 @@ private:
         return next_global_id_++;
     }
 };
-} // v1_0
+}  // namespace v1_1
 
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
