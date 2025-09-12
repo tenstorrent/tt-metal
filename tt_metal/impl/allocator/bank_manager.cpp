@@ -492,6 +492,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDe
 }
 
 void BankManager::deallocate_all() {
+    std::cout << "Deallocating all buffers" << std::endl;
     for (const auto allocator_id : allocator_dependencies_.allocator_ids()) {
         auto* alloc = this->get_allocator_from_id(allocator_id);
         TT_FATAL(alloc, "Allocator not initialized!");

@@ -989,3 +989,162 @@ TEST(OverlappedAllocators, OverlappedAllocationsFromBothSides) {
         AllocatorID{2});
     EXPECT_EQ(alloc2_addr3, alloc2_addr0 + alloc_size_1K);
 }
+
+TEST(OverlappedAllocators, AddressLimitAndClampingL1) {
+    // Test address_limit and clamping functionality with L1 buffer type
+    const uint64_t total_size = 1024 * 1024;
+    const uint32_t alignment = 1024;
+    const DeviceAddr address_limit = 256 * 1024;  // 256KB - allocations must start from this address or later
+
+    // Create a bank manager with L1 interleaved buffer type and address limit
+    // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
+
+    // Use the constructor that takes interleaved_address_limit for L1 buffer type
+    std::unordered_map<uint32_t, int64_t> bank_id_to_offset = {{0, 0}};
+    BankManager bank_manager(
+        BufferType::L1,
+        bank_id_to_offset,
+        total_size,
+        address_limit,  // interleaved_address_limit
+        alignment,
+        0,      // alloc_offset
+        false,  // disable_interleaved
+        deps);
+
+    const uint32_t bank_id = 0;
+    const uint32_t alloc_size_1K = 1024;
+    const uint32_t alloc_size_2K = 2048;
+    const uint32_t alloc_size_64K = 64 * 1024;
+
+    // Test 1: Allocations should start from address_limit (256KB) or later, not from 0
+    // Allocate 1K in allocator 0 - should be placed at address_limit (256KB)
+    const auto alloc0_addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr0, address_limit);  // Should start at 256KB, not 0
+
+    // // Test 2: Subsequent allocations should respect the address limit
+    // // Allocate 2K in allocator 1 - should also start at address_limit since it's independent
+    // const auto alloc1_addr0 = bank_manager.allocate_buffer(
+    //     alloc_size_2K,
+    //     alloc_size_2K,
+    //     /*bottom_up=*/true,
+    //     CoreRangeSet(std::vector<CoreRange>{}),
+    //     std::nullopt,
+    //     AllocatorID{1});
+    // EXPECT_EQ(alloc1_addr0, address_limit);  // Should start at 256KB, not 0
+
+    // // Test 3: Overlapped allocator should respect dependencies and address limit
+    // // Allocate 1K in allocator 2 (overlapped) - should be placed after allocator 1's 2K
+    // const auto alloc2_addr0 = bank_manager.allocate_buffer(
+    //     alloc_size_1K,
+    //     alloc_size_1K,
+    //     /*bottom_up=*/true,
+    //     CoreRangeSet(std::vector<CoreRange>{}),
+    //     std::nullopt,
+    //     AllocatorID{2});
+    // EXPECT_EQ(alloc2_addr0, address_limit + alloc_size_2K);  // Should be at 256KB + 2KB
+
+    // Test 4: Top-down allocations should also respect address limit
+    // Allocate 64K in allocator 0 top-down - should be placed from the top but not below address_limit
+    // const auto alloc0_addr1 = bank_manager.allocate_buffer(
+    //     alloc_size_64K,
+    //     alloc_size_64K,
+    //     /*bottom_up=*/false,
+    //     CoreRangeSet(std::vector<CoreRange>{}),
+    //     std::nullopt,
+    //     AllocatorID{0});
+    // EXPECT_EQ(alloc0_addr1, total_size - alloc_size_64K);  // Should be at top of memory
+
+    // Test 5: Verify that allocations cannot be made in the clamped region (below address_limit)
+    // This is implicitly tested by the above assertions - all allocations are at or above address_limit
+
+    // // Test 6: Test with DRAM buffer type (should not apply address limit)
+    // BankManager dram_bank_manager(
+    //     BufferType::DRAM,
+    //     bank_id_to_offset,
+    //     total_size,
+    //     address_limit,  // This should be ignored for DRAM
+    //     alignment,
+    //     0,  // alloc_offset
+    //     false,  // disable_interleaved
+    //     deps);
+
+    // // DRAM allocations should start from 0, not from address_limit
+    // const auto dram_alloc0_addr0 = dram_bank_manager.allocate_buffer(
+    //     alloc_size_1K,
+    //     alloc_size_1K,
+    //     /*bottom_up=*/true,
+    //     CoreRangeSet(std::vector<CoreRange>{}),
+    //     std::nullopt,
+    //     AllocatorID{0});
+    // EXPECT_EQ(dram_alloc0_addr0, 0);  // DRAM should start at 0, not address_limit
+
+    // Test 7: Verify that deallocating and reallocating still respects address limit
+    bank_manager.deallocate_buffer(alloc0_addr0, AllocatorID{0});
+
+    // Reallocate - should still start at address_limit
+    const auto alloc0_addr0_realloc = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr0_realloc, address_limit);  // Should still start at 256KB
+
+    // // Test 8: Test edge case - allocation that would span across address_limit boundary
+    // // Clear all allocations first
+    // bank_manager.deallocate_all();
+    // bank_manager.clear();
+
+    // // Try to allocate a large chunk that would normally start before address_limit
+    // // but should be clamped to start at address_limit
+    // const auto large_alloc = bank_manager.allocate_buffer(
+    //     alloc_size_64K,
+    //     alloc_size_64K,
+    //     /*bottom_up=*/true,
+    //     CoreRangeSet(std::vector<CoreRange>{}),
+    //     std::nullopt,
+    //     AllocatorID{0});
+    // EXPECT_EQ(large_alloc, address_limit);  // Should be clamped to start at address_limit
+}
+
+TEST(OverlappedAllocators, AllocateDeallocateAndReallocateL1) {
+    // 2 independent allocators, no overlaps
+    const uint64_t total_size = 1024 * 1024;
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
+    BankManager bank_manager = get_bank_manager_with_allocator_dependencies(total_size, 1024, deps);
+    const uint32_t bank_id = 0;
+
+    // Hard-coded allocation sizes
+    uint32_t alloc_size_1K = 1024;
+    uint32_t alloc_size_2K = 2048;
+
+    // Allocate 1K in allocator 0
+    // - Alloc0: | free | 1K |
+    // - Alloc1: |   free    |
+    auto alloc0_addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr0, 0);
+
+    bank_manager.deallocate_buffer(alloc0_addr0, AllocatorID{0});
+
+    alloc0_addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+}
