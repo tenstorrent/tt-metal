@@ -146,13 +146,13 @@ def run_max_pool(
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             enable_channels_padding=False,
-            is_shard_height_tile_multiple=dtype == ttnn.bfloat8_b,
-            is_shard_width_tile_multiple=dtype == ttnn.bfloat8_b,
+            is_shard_height_tile_multiple=in_dtype == ttnn.bfloat8_b,
+            is_shard_width_tile_multiple=in_dtype == ttnn.bfloat8_b,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttnn_input.shape,
             parallel_config=parallel_config,
-            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
+            tile_size=32 if in_dtype == ttnn.bfloat8_b else 1,
         )
         ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
