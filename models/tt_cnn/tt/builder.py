@@ -117,7 +117,9 @@ class Conv2dConfiguration:
         weight = torch.randn(weight_shape, dtype=torch.bfloat16).float()
         bias = torch.randn(out_channels, dtype=torch.bfloat16).float()
 
-        weight, bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(weight, bias, mesh_mapper=None)
+        weight, bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+            weight, bias, mesh_mapper=kwargs.get("mesh_mapper", None)
+        )
 
         return cls(
             input_height=input_height,
@@ -382,7 +384,6 @@ class TtConv2d:
         }
 
     def __call__(self, x):
-        # TODO: Preprocess the weights explicitly?
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
