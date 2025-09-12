@@ -44,7 +44,7 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     std::for_each(results.begin(), results.end(), [&](PackType& result) {
         for (unsigned j = 0; j < num_values_to_pack; j++) {
             if constexpr (std::is_same_v<ValueType, bfloat16>) {
-                result |= bfloat16_to_bits(values[index]) << (j * sizeof(ValueType) * CHAR_BIT);
+                result |= std::bit_cast<uint16_t>(values[index]) << (j * sizeof(ValueType) * CHAR_BIT);
             } else {
                 result |= values[index].to_packed() << (j * sizeof(ValueType) * CHAR_BIT);
             }

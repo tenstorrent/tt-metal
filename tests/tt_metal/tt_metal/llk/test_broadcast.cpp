@@ -186,9 +186,9 @@ std::vector<bfloat16> gold_broadcast(
                 case EltwiseOp::MUL: {
                     golden[i * num_cols + j] =
                         static_cast<float>(std::bit_cast<bfloat16>(
-                            static_cast<uint16_t>(bfloat16_to_bits(src_a[i * num_cols + j]) & srca_fid_mask))) *
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(src_a[i * num_cols + j]) & srca_fid_mask))) *
                         static_cast<float>(std::bit_cast<bfloat16>(
-                            static_cast<uint16_t>(bfloat16_to_bits(broadcast_value) & srcb_fid_mask)));
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(broadcast_value) & srcb_fid_mask)));
                     break;
                 }
                 default: {

@@ -57,10 +57,7 @@ public:
 
 private:
     uint16_t from_float(float val);
-    friend constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept;
 };
-
-constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept { return bf.uint16_data; }
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
 

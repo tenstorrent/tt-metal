@@ -76,14 +76,14 @@ bfloat16 bfloat16::operator/(bfloat16 rhs) const {
 uint16_t bfloat16::from_float(float val) { return fp32_to_bf16_bits_round_to_nearest_even(val); }
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
-    os << bfloat16_to_bits(bfp16);
+    os << std::bit_cast<uint16_t>(bfp16);
     return os;
 }
 
 bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& rhs) {
     bool is_equal = lhs.size() == rhs.size();
     for (auto i = 0; i < lhs.size(); i++) {
-        is_equal &= (bfloat16_to_bits(lhs[i]) == bfloat16_to_bits(rhs[i]));
+        is_equal &= (std::bit_cast<uint16_t>(lhs[i]) == std::bit_cast<uint16_t>(rhs[i]));
     }
     return is_equal;
 }
@@ -91,7 +91,8 @@ bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& r
 uint32_t pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16> two_bfloats) {
     // first -> lower 16
     // second -> upper 16
-    return (uint32_t)bfloat16_to_bits(two_bfloats.first) | ((uint32_t)bfloat16_to_bits(two_bfloats.second) << 16);
+    return (uint32_t)std::bit_cast<uint16_t>(two_bfloats.first) |
+           ((uint32_t)std::bit_cast<uint16_t>(two_bfloats.second) << 16);
 }
 
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data) {
@@ -218,8 +219,8 @@ std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
     for (size_t i = 0; i < in.size(); i++) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
-        result[i * 2] = bfloat16_to_bits(two_bfloats.first);
-        result[i * 2 + 1] = bfloat16_to_bits(two_bfloats.second);
+        result[i * 2] = std::bit_cast<uint16_t>(two_bfloats.first);
+        result[i * 2 + 1] = std::bit_cast<uint16_t>(two_bfloats.second);
     }
     return result;
 }

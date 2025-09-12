@@ -114,7 +114,7 @@ inline std::vector<uint16_t> gold_bcast_op(
                             break;
                         default: TT_THROW("Unexpected bcast_op");
                     }
-                    result[offs] = bfloat16_to_bits(bfloat16(result1));
+                    result[offs] = std::bit_cast<uint16_t>(bfloat16(result1));
                 }
             }
         }
@@ -172,7 +172,7 @@ inline std::vector<uint16_t> gold_bmm(
         for (int m = 0; m < M; m++) {
             for (int n = 0; n < N; n++) {
                 auto offsC = addrC.offs(0, ib, m, n);
-                result[offsC] = bfloat16_to_bits(bfloat16(resultf[offsC]));
+                result[offsC] = std::bit_cast<uint16_t>(bfloat16(resultf[offsC]));
             }
         }
     }

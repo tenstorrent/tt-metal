@@ -46,7 +46,7 @@ std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
             converted_data.push_back(static_cast<float>(datum));
         } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)bfloat16_to_bits(datum));
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
         } else {
             converted_data.push_back(static_cast<OutputDataType>(datum));
         }
