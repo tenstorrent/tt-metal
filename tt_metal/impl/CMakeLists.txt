@@ -80,6 +80,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/assert.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
