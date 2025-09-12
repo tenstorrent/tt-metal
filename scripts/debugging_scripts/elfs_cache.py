@@ -20,7 +20,6 @@ from ttexalens.tt_exalens_lib import parse_elf
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=[],
 )
 
 

@@ -223,33 +223,13 @@ def dump_callstacks(
     risc_name: str,
     dispatcher_data: DispatcherData,
     elfs_cache: ElfsCache,
-    context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
     active_cores: bool,
-    port: int | None,
+    gdb_server: GdbServer | None,
+    process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
 ) -> DumpCallstacksData | None:
-    if not hasattr(dump_callstacks, "gdb_server"):
-        dump_callstacks.gdb_server: GdbServer | None = None
-    if not hasattr(dump_callstacks, "process_ids"):
-        dump_callstacks.process_ids: dict[OnChipCoordinate, dict[str, int]] = {}
-
     result: DumpCallstacksData | None = None
-
-    if gdb_callstack and dump_callstacks.gdb_server is None:
-        if port is None:
-            raise TTTriageError("Port must be specified when using GDB callstack.")
-        try:
-            server = ServerSocket(port)
-            server.start()
-            dump_callstacks.gdb_server = GdbServer(context, server)
-            dump_callstacks.gdb_server.start()
-        except Exception as e:
-            raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
-        # Get mapping form risc location and name to process id
-        dump_callstacks.process_ids = get_process_ids(dump_callstacks.gdb_server)
-
-    process_ids = dump_callstacks.process_ids
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
@@ -264,7 +244,9 @@ def dump_callstacks(
                 # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
                 callstack = [CallstackEntry()]
             else:
-                callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                callstack = get_gdb_callstack(
+                    location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
+                )
             # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
             if len(callstack) > 0 and callstack[0].pc is None:
                 try:
@@ -290,6 +272,21 @@ def dump_callstacks(
     return result
 
 
+def start_gdb_server(port: int | None, context: Context) -> GdbServer:
+    """Start GDB server and return it."""
+    if port is None:
+        raise TTTriageError("Port must be specified when using GDB callstack.")
+    try:
+        server = ServerSocket(port)
+        server.start()
+        gdb_server = GdbServer(context, server)
+        gdb_server.start()
+    except Exception as e:
+        raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
+
+    return gdb_server
+
+
 def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
@@ -299,24 +296,31 @@ def run(args, context: Context):
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
+
+    gdb_server: GdbServer | None = None
+    process_ids: dict[OnChipCoordinate, dict[str, int]] | None = None
+    if gdb_callstack:
+        gdb_server = start_gdb_server(port, context)
+        process_ids = get_process_ids(gdb_server)
+
     callstacks_data = run_checks.run_per_core_check(
         lambda location, risc_name: dump_callstacks(
             location,
             risc_name,
             dispatcher_data,
             elfs_cache,
-            context,
             full_callstack,
             gdb_callstack,
             active_cores,
-            port,
+            gdb_server,
+            process_ids,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
     # After all callstacks are dumped, stop GDB server if it was started
-    if dump_callstacks.gdb_server is not None:
-        dump_callstacks.gdb_server.stop()
+    if gdb_server is not None:
+        gdb_server.stop()
 
     return callstacks_data
 
