@@ -1,8 +1,8 @@
 inputs:
-  model_name:
+  device_perf_model_name:
     required: true
     default: ''
-    description: "Model name"
+    description: "Used to specify the model for a device perf test. E2E perf tests do not set this"
   commands:
     required: true
     description: "Shell commands to run the test"
@@ -15,12 +15,12 @@ runs:
 
         ${{ inputs.commands }}
 
-        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv
         python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME REPORT
-        cat Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
+        cat Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
         cat Models_Device_Perf_$(date +%Y_%m_%d).csv
         echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      if: ${{ inputs.model_name != '' }}
+      if: ${{ inputs.device_perf_model_name != '' }}
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
