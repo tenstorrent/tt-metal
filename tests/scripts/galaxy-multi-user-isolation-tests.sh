@@ -6,6 +6,7 @@ TRAY_PODS_DIR="/app/multihosttest"
 REQUIRED_PODS=4
 TIMEOUT=300
 
+rm -rf "$TRAY_PODS_DIR"
 mkdir -p "$TRAY_PODS_DIR"
 
 EPOCH_START=$(date +%s)
@@ -35,18 +36,12 @@ done
 
 echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
 
+# install the wheel 
+echo "Installing the wheel"
+#pip install /app/dist/*.whl
+
 # run tests but capture exit codes
 EXIT_CODE=0
-
-echo "=== Running async test ==="
-set +e
-pytest -v "tt-metal/tests/nightly/t3000/ccl/test_minimal_all_gather_async.py" 2>&1 | tee test1.log
-rc=$?
-set -e
-if [ $rc -ne 0 ]; then
-  echo "test_minimal_all_gather_async.py has failed (exit code $rc). See test1.log"
-  EXIT_CODE=$rc
-fi
 
 echo "=== Building test_system_health ==="
 set +e
@@ -55,6 +50,16 @@ rc=$?
 set -e
 if [ $rc -ne 0 ]; then
   echo "build for T3K test_system_health failed (exit code $rc). See test2.log"
+  EXIT_CODE=$rc
+fi
+
+echo "=== Running async test ==="
+set +e
+pytest -v "tt-metal/tests/nightly/t3000/ccl/test_minimal_all_gather_async.py" 2>&1 | tee test1.log
+rc=$?
+set -e
+if [ $rc -ne 0 ]; then
+  echo "test_minimal_all_gather_async.py has failed (exit code $rc). See test1.log"
   EXIT_CODE=$rc
 fi
 
