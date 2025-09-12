@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <unordered_map>
 
@@ -130,8 +131,18 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
 
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
+    // Use upper 13 bits for op_id (which will be unique for mesh workload)
+    // and lower 8 bits for program_id_per_op (which will be unique for different programs in a mesh workload)
+    constexpr uint32_t PROGRAM_ID_PER_OP_BITS = 8;
+    TT_FATAL(
+        workload.get_programs().size() <= pow(2, PROGRAM_ID_PER_OP_BITS),
+        "Mesh workloads with more than {} programs are not supported.",
+        pow(2, PROGRAM_ID_PER_OP_BITS));
+    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+    uint32_t program_id_per_op = 0;
     for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+        program.set_runtime_id((op_id << PROGRAM_ID_PER_OP_BITS) | program_id_per_op);
+        program_id_per_op++;
     }
 }
 
