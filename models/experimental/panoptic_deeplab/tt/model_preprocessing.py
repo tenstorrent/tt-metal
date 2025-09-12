@@ -299,7 +299,7 @@ def create_panoptic_deeplab_parameters(model: PytorchPanopticDeepLab, device):
     parameters = preprocess_model_parameters(
         initialize_model=model_initializer,
         custom_preprocessor=custom_preprocessor,
-        device=device,
+        device=None,
     )
 
     logger.info("Unified weight preprocessing completed successfully")

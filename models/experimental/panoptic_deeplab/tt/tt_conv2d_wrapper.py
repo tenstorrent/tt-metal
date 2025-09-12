@@ -235,8 +235,9 @@ class TtConv2d:
 
         split_in_channels = self._in_channels // self._slice_config.num_slices
 
-        if not ttnn.is_tensor_storage_on_device(self._weight):
-            self._weight = ttnn.to_device(self._weight, self._device)
+        # We need this for ttnn.add at the end to apply bias
+        if not ttnn.is_tensor_storage_on_device(self._bias):
+            self._bias = ttnn.to_device(self._bias, self._device)
 
         # Create input slices
         input_slices = []
@@ -248,15 +249,33 @@ class TtConv2d:
 
         # Create weight slices (cached)
         if not self._weight_slices:
-            for i in range(self._slice_config.num_slices):
-                start_idx = i * split_in_channels
-                end_idx = (i + 1) * split_in_channels
-                weight_slice = ttnn.slice(
-                    self._weight,
-                    [0, start_idx, 0, 0],
-                    [self._out_channels, end_idx, self._kernel_size[0], self._kernel_size[1]],
+            if ttnn.is_tensor_storage_on_device(self._weight):
+                # Weights are on device - use TTNN slicing
+                logger.debug(
+                    f"TtConv2d channel slicing: using device-based TTNN slicing for {self._slice_config.num_slices} slices"
                 )
-                self._weight_slices.append(weight_slice)
+                for i in range(self._slice_config.num_slices):
+                    start_idx = i * split_in_channels
+                    end_idx = (i + 1) * split_in_channels
+                    weight_slice = ttnn.slice(
+                        self._weight,
+                        [0, start_idx, 0, 0],
+                        [self._out_channels, end_idx, self._kernel_size[0], self._kernel_size[1]],
+                    )
+                    self._weight_slices.append(weight_slice)
+            else:
+                # Weights are on host - convert to torch, slice, then convert back to TTNN
+                logger.debug(
+                    f"TtConv2d channel slicing: using host-based PyTorch slicing for {self._slice_config.num_slices} slices"
+                )
+                torch_weight = ttnn.to_torch(self._weight)
+                for i in range(self._slice_config.num_slices):
+                    start_idx = i * split_in_channels
+                    end_idx = (i + 1) * split_in_channels
+                    torch_slice = torch_weight[:, start_idx:end_idx, :, :]
+                    # Convert back to TTNN but keep on host (don't send to device)
+                    weight_slice = ttnn.from_torch(torch_slice, dtype=self._weight.dtype, layout=self._weight.layout)
+                    self._weight_slices.append(weight_slice)
 
         accumulated_output = None
         output_height, output_width = 0, 0
