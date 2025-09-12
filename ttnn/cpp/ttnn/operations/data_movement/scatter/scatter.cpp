@@ -11,6 +11,7 @@
 
 #include "slice/slice.hpp"
 #include "tt_stl/small_vector.hpp"
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -19,6 +20,9 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 namespace ttnn::operations::data_movement {
+
+using scatter::ScatterReductionType;
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -226,6 +230,25 @@ Tensor post_scatter_transform_tensor(
     return output_tensor;
 }
 
+ScatterReductionType get_reduction_from_string(const std::optional<std::string>& opt_reduction) {
+    if (!opt_reduction.has_value()) {
+        return ScatterReductionType::INVALID;
+    }
+    if (*opt_reduction == "add") {
+        return ScatterReductionType::ADD;
+    }
+    if (*opt_reduction == "multiply") {
+        return ScatterReductionType::MULTIPLY;
+    }
+    if (*opt_reduction == "max" || *opt_reduction == "amax") {
+        return ScatterReductionType::AMAX;
+    }
+    if (*opt_reduction == "min" || *opt_reduction == "amin") {
+        return ScatterReductionType::AMIN;
+    }
+    TT_THROW("Only 'min', 'amin', 'max', 'amax', 'add' and 'multiply' reductions are allowed.");
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -241,12 +264,14 @@ Tensor ScatterOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
-    const std::optional<scatter::ScatterReductionType>& opt_reduction) {
+    const std::optional<std::string>& opt_reduction) {
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    CMAKE_UNIQUE_NAMESPACE::check_support(input_tensor, index_tensor, source_tensor, dim);
-    CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim);
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    check_support(input_tensor, index_tensor, source_tensor, dim);
+    validate_inputs(input_tensor, index_tensor, source_tensor, dim);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
@@ -281,7 +306,7 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt,
+        get_reduction_from_string(opt_reduction),
         queue_id);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
