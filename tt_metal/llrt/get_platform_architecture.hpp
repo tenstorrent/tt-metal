@@ -5,25 +5,26 @@
 #pragma once
 
 #include <cstdlib>
+#include <mutex>
 
 #include "assert.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tracy/Tracy.hpp"
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/simulation/simulation_device.hpp>
 
-#include "tracy/Tracy.hpp"
 namespace tt::tt_metal {
-
-static tt::ARCH current_arch = tt::ARCH::Invalid;
 
 inline tt::ARCH get_physical_architecture() {
     ZoneScoped;
-    if (current_arch == tt::ARCH::Invalid) {
+    static tt::ARCH current_arch = tt::ARCH::Invalid;
+    static std::once_flag current_arch_once_flag;
+    std::call_once(current_arch_once_flag, []() {
         // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
         // This map holds PCI info for each mmio chip.
         auto devices_info = PCIDevice::enumerate_devices_info();
-        if (devices_info.size() > 0) {
+        if (!devices_info.empty()) {
             current_arch = devices_info.begin()->second.get_arch();
             for (auto& [device_id, device_info] : devices_info) {
                 tt::ARCH detected_arch = device_info.get_arch();
@@ -35,7 +36,7 @@ inline tt::ARCH get_physical_architecture() {
                     tt::arch_to_str(detected_arch));
             }
         }
-    }
+    });
     return current_arch;
 }
 
