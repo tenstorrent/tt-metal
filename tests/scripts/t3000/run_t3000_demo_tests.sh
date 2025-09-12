@@ -165,7 +165,7 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$n300" "$t3k"; do
+  for mesh_device in "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
     MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
@@ -297,9 +297,8 @@ run_t3000_sd35large_tests() {
 
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
-  # Run test_model (decode and prefill) for llama3 70B
-  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  NO_PROMPT=1 SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k"  --timeout 600 ; fail+=$?
+  #Cache path
+  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

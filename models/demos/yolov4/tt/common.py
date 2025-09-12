@@ -6,7 +6,7 @@ import ttnn
 
 
 class Conv:
-    def __init__(self, device, conv_param, conv_pth, activation="") -> None:
+    def __init__(self, device, conv_param, conv_pth, activation=None) -> None:
         self.conv_param = conv_param
         self.conv_pth = conv_pth
         self.device = device

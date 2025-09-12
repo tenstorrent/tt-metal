@@ -19,7 +19,7 @@ class YoloV12x:
             conv=parameters.conv_args[0].conv,
             conv_pth=parameters.model[0].conv,
             config_override={"act_block_h": 32},
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )  # 0
         self.conv2 = TtYOLOv12xConv2D(
@@ -27,7 +27,7 @@ class YoloV12x:
             conv=parameters.conv_args[1].conv,
             conv_pth=parameters.model[1].conv,
             config_override={"act_block_h": 32},
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )  # 1
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2])  # 2
@@ -35,7 +35,7 @@ class YoloV12x:
             device=device,
             conv=parameters.conv_args[3].conv,
             conv_pth=parameters.model[3].conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 3
@@ -44,7 +44,7 @@ class YoloV12x:
             device=device,
             conv=parameters.conv_args[5].conv,
             conv_pth=parameters.model[5].conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
@@ -71,7 +71,7 @@ class YoloV12x:
             device=device,
             conv=parameters.conv_args[7].conv,
             conv_pth=parameters.model[7].conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 7
@@ -133,7 +133,7 @@ class YoloV12x:
             device=device,
             conv=parameters.conv_args[15].conv,
             conv_pth=parameters.model[15].conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 15
@@ -156,7 +156,7 @@ class YoloV12x:
             device=device,
             conv=parameters.conv_args[18].conv,
             conv_pth=parameters.model[18].conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 18

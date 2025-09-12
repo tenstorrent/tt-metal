@@ -142,7 +142,7 @@ class resnet50Bottleneck:
             input_width=input_width,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             ),
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
@@ -198,7 +198,7 @@ class resnet50Bottleneck:
             input_width=input_width,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             ),
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),

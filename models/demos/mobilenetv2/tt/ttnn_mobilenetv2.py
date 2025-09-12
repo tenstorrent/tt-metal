@@ -20,7 +20,7 @@ class TtMobileNetV2:
             deallocate_activation=True,
             enable_act_double_buffer=True,
             reshard_if_not_optimal=False,
-            activation_function="relu6",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
         )
         self.conv2 = TtMobileNetV2Conv2D(
             [3, 1, 1, 32],
@@ -30,7 +30,7 @@ class TtMobileNetV2:
             groups=32,
             enable_act_double_buffer=True,
             deallocate_activation=True,
-            activation_function="relu6",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, 16],
@@ -224,7 +224,7 @@ class TtMobileNetV2:
             device,
             batchsize,
             deallocate_activation=True,
-            activation_function="relu6",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
         )
         self.l1_weight = model_params["classifier_1_weight"]
         self.l1_bias = model_params["classifier_1_bias"]

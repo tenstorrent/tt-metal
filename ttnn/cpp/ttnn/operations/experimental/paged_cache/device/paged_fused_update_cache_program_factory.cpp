@@ -484,8 +484,8 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
             auto dst1_buffer = input_tensors.at(0).buffer();
             auto dst2_buffer = input_tensors.at(2).buffer();
 
-            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : 0;
-            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : 0;
+            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
+            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
             auto index_tensor_addr = use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             auto page_table_tensor_addr = is_paged_cache ? optional_input_tensors.at(1).value().buffer()->address() : 0;
 
@@ -976,8 +976,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             const auto dst1_buffer = input_tensors.at(0).buffer();
             const auto dst2_buffer = input_tensors.at(2).buffer();
 
-            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : 0;
-            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : 0;
+            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
+            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
             const auto index_tensor_addr =
                 use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             const auto page_table_tensor_addr =

@@ -182,6 +182,73 @@ Tests:
     patterns:
       - type: all_to_all
 
+  - name: "PacketSizesMeshAllToOneUnicast"
+    fabric_setup:
+      topology: Mesh
+      routing_type: LowLatency
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one
+
+  - name: "PacketSizesMeshAllToOneRandomUnicast"
+    fabric_setup:
+      topology: Mesh
+      routing_type: LowLatency
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one_random
+        iterations: 10
+
+
+  - name: "PacketSizesMeshAllToOneUnicastDynamic"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one
+
+  - name: "PacketSizesMeshAllToOneRandomUnicastDynamic"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one_random
+        iterations: 10
+
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:
       topology: Mesh
