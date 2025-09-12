@@ -176,6 +176,8 @@ public:
     //--- Point-to-point (non-blocking) -------------------------------------
     [[nodiscard]] virtual RequestPtr isend(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
 
+    [[nodiscard]] virtual RequestPtr issend(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
+
     [[nodiscard]] virtual RequestPtr irecv(tt::stl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
 
     //--- Collective operations ---------------------------------------------

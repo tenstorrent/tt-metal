@@ -26,8 +26,8 @@ tests:
       data_size: 4096
       num_transactions: 20
     sockets:
-      - sender_rank: 0
-        receiver_rank: 1
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
         connections:
           - sender:
               mesh_coord: [0, 0]
@@ -35,8 +35,8 @@ tests:
             receiver:
               mesh_coord: [0, 1]
               core_coord: [0, 0]
-      - sender_rank: 1
-        receiver_rank: 0
+      - sender_mesh_id: 1
+        receiver_mesh_id: 0
         connections:
           - sender:
               mesh_coord: [1, 0]
@@ -53,8 +53,8 @@ tests:
       data_size: [4096, 8192]
       num_transactions: 20
     sockets:
-      - sender_rank: 0
-        receiver_rank: 1
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
         connections:
           - sender:
               mesh_coord: [0, 0]
@@ -62,8 +62,8 @@ tests:
             receiver:
               mesh_coord: [0, 1]
               core_coord: [0, 0]
-      - sender_rank: 1
-        receiver_rank: 0
+      - sender_mesh_id: 1
+        receiver_mesh_id: 0
         connections:
           - sender:
               mesh_coord: [1, 0]
@@ -79,8 +79,8 @@ tests:
       data_size: 4096
       num_transactions: 25
     sockets:
-      - sender_rank: 0
-        receiver_rank: 1
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
         connections:
           - sender:
               mesh_coord: [0, 0]
@@ -100,8 +100,8 @@ tests:
             receiver:
               mesh_coord: [1, 1]
               core_coord: [0, 0]
-      - sender_rank: 0
-        receiver_rank: 1
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
         connections:
           - sender:
               mesh_coord: [0, 0]

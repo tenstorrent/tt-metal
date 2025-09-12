@@ -69,8 +69,8 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
              .fifo_size = l1_socket_fifo_size,
              .sender_sub_device = SubDeviceId(0),
              .receiver_sub_device = SubDeviceId(1)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
+        .sender_mesh_id = tt::tt_fabric::MeshId{0},
+        .receiver_mesh_id = tt::tt_fabric::MeshId{1},
     };
     // Dram Socket Config
     SocketConfig socket_config_dram = {
@@ -80,8 +80,8 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
              .fifo_size = dram_socket_fifo_size,
              .sender_sub_device = SubDeviceId(2),
              .receiver_sub_device = SubDeviceId(3)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
+        .sender_mesh_id = tt::tt_fabric::MeshId{0},
+        .receiver_mesh_id = tt::tt_fabric::MeshId{1},
     };
     // This config will be used to ensure that the verification step works correctly
     // Descriptors will be forced to mismatch.
@@ -92,8 +92,8 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
              .fifo_size = dram_socket_fifo_size,
              .sender_sub_device = SubDeviceId(2),
              .receiver_sub_device = SubDeviceId(3)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
+        .sender_mesh_id = tt::tt_fabric::MeshId{0},
+        .receiver_mesh_id = tt::tt_fabric::MeshId{1},
     };
     // Generate dummy addresses for the sender and receiver buffers
     // In a real scenario, these would be allocated buffers on the MeshDevice.

@@ -174,8 +174,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
             tt_metal::distributed::SocketConfig socket_config = {
                 .socket_connection_config = {socket_connection},
                 .socket_mem_config = socket_mem_config,
-                .sender_rank = tt_metal::distributed::multihost::Rank{sender_rank},
-                .receiver_rank = distributed_ctx0->rank(),
+                .sender_mesh_id = tt::tt_fabric::MeshId{sender_rank},
+                .receiver_mesh_id = tt::tt_fabric::MeshId{*distributed_ctx0->rank()},
                 .distributed_context = distributed_ctx0};
             sockets_ctx0.emplace(sender_rank, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
         }
@@ -185,8 +185,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
         tt_metal::distributed::SocketConfig socket_config = {
             .socket_connection_config = {socket_connection},
             .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_ctx0->rank(),
-            .receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx0},
+            .sender_mesh_id = tt::tt_fabric::MeshId{*distributed_ctx0->rank()},
+            .receiver_mesh_id = tt::tt_fabric::MeshId{recv_rank_ctx0},
             .distributed_context = distributed_ctx0};
         sockets_ctx0.emplace(recv_rank_ctx0, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
     }
@@ -198,8 +198,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
                 tt_metal::distributed::SocketConfig socket_config = {
                     .socket_connection_config = {socket_connection},
                     .socket_mem_config = socket_mem_config,
-                    .sender_rank = tt_metal::distributed::multihost::Rank{sender_rank},
-                    .receiver_rank = distributed_ctx1->rank(),
+                    .sender_mesh_id = tt::tt_fabric::MeshId{sender_rank},
+                    .receiver_mesh_id = tt::tt_fabric::MeshId{*distributed_ctx1->rank()},
                     .distributed_context = distributed_ctx1};
                 sockets_ctx1.emplace(sender_rank, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
             }
@@ -209,8 +209,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
             tt_metal::distributed::SocketConfig socket_config = {
                 .socket_connection_config = {socket_connection},
                 .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_ctx1->rank(),
-                .receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx1},
+                .sender_mesh_id = tt::tt_fabric::MeshId{*distributed_ctx1->rank()},
+                .receiver_mesh_id = tt::tt_fabric::MeshId{recv_rank_ctx1},
                 .distributed_context = distributed_ctx1};
             sockets_ctx1.emplace(recv_rank_ctx1, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
         }

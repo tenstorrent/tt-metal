@@ -76,6 +76,7 @@ public:
     void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
     [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    [[nodiscard]] RequestPtr issend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
     [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */

@@ -74,10 +74,10 @@ void MPISocket::recv(ttnn::Tensor& tensor) {
 tt::tt_metal::distributed::multihost::Rank MPISocket::get_rank() const {
     const auto& socket_config = mesh_socket_.get_config();
     auto local_rank = socket_config.distributed_context->rank();
-    if (local_rank != socket_config.sender_rank) {
-        return socket_config.sender_rank;
+    if (*local_rank != *socket_config.sender_mesh_id) {
+        return tt::tt_metal::distributed::multihost::Rank{*socket_config.sender_mesh_id};
     }
-    return socket_config.receiver_rank;
+    return tt::tt_metal::distributed::multihost::Rank{*socket_config.receiver_mesh_id};
 }
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> MPISocket::get_distributed_context() const {
@@ -88,12 +88,12 @@ std::unique_ptr<MPISocket> MPISocket::create(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
-    if (socket_config.distributed_context->rank() < rank) {
-        socket_config.sender_rank = socket_config.distributed_context->rank();
-        socket_config.receiver_rank = rank;
+    if (*(socket_config.distributed_context->rank()) < *rank) {
+        socket_config.sender_mesh_id = tt::tt_fabric::MeshId{*(socket_config.distributed_context->rank())};
+        socket_config.receiver_mesh_id = tt::tt_fabric::MeshId{*rank};
     } else {
-        socket_config.sender_rank = rank;
-        socket_config.receiver_rank = socket_config.distributed_context->rank();
+        socket_config.sender_mesh_id = tt::tt_fabric::MeshId{*rank};
+        socket_config.receiver_mesh_id = tt::tt_fabric::MeshId{*(socket_config.distributed_context->rank())};
     }
     auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
     return std::make_unique<MPISocket>(mesh_socket);

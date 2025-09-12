@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -12,26 +13,44 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-void point_to_point_barrier(
-    const std::vector<Rank>& ranks, std::shared_ptr<multihost::DistributedContext> distributed_context) {
-    TT_FATAL(ranks.size() == 2, "Point-to-point barrier requires exactly two ranks.");
-    TT_FATAL(ranks[0] != ranks[1], "Point-to-Point barrier cannot be used for synchronization within the same rank.");
+// Basic barrier using issend across subset of ranks
+void mesh_to_mesh_barrier(
+    const std::vector<tt::tt_fabric::MeshId>& mesh_ids,
+    std::shared_ptr<multihost::DistributedContext> distributed_context) {
+    std::vector<Rank> ranks;
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    for (const auto& mesh_id : mesh_ids) {
+        for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(mesh_id)) {
+            ranks.push_back(control_plane.get_distributed_rank(mesh_id, host_rank.value()));
+        }
+    }
+    std::unordered_set<Rank> seen;
     TT_FATAL(
-        distributed_context->rank() == ranks[0] || distributed_context->rank() == ranks[1],
-        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
-        *ranks[0],
-        *ranks[1],
+        std::none_of(ranks.begin(), ranks.end(), [&seen](Rank rank) { return !(seen.insert(rank).second); }),
+        "Barrier cannot be used for synchronization within the same rank.");
+    TT_FATAL(
+        std::any_of(
+            ranks.begin(),
+            ranks.end(),
+            [&distributed_context](Rank rank) { return rank == distributed_context->rank(); }),
+        "Mesh-to-Mesh barrier cannot be called on rank {} as it is not in any of the meshes.",
         *distributed_context->rank());
 
     if (distributed_context->rank() == ranks[0]) {
+        std::vector<RequestPtr> requests;
         int sync_msg = 1;
-        distributed_context->ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[1], Tag{0});
+        for (auto rank_itr = ranks.begin() + 1; rank_itr != ranks.end(); ++rank_itr) {
+            distributed_context->ssend(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), *rank_itr, Tag{0});
+        }
+        // for (auto& request : requests) {
+        //     [[maybe_unused]] auto status = request->wait();
+        // }
     } else {
         int sync_msg = 0;
         distributed_context->recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[0], Tag{0});
-        TT_FATAL(sync_msg == 1, "Received unexpected message during point-to-point barrier.");
+        TT_FATAL(sync_msg == 1, "Received unexpected message during mesh-to-mesh barrier.");
     }
 }
 
@@ -39,23 +58,22 @@ void point_to_point_barrier(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config.distributed_context ? config.distributed_context : DistributedContext::get_current_world();
+    const auto& control_plane = MetalContext::instance().get_control_plane();
 
-    if (!(context->rank() == config.sender_rank || context->rank() == config.receiver_rank)) {
+    // MeshDevice only supports one mesh id per host
+    auto mesh_id = control_plane.get_local_mesh_id_bindings()[0];
+    log_info(LogMetal, "Num local meshes: {}", control_plane.get_local_mesh_id_bindings().size());
+    if (!(mesh_id == config.sender_mesh_id || mesh_id == config.receiver_mesh_id)) {
         log_warning(
             LogMetal,
-            "Creating a null socket on host rank {} with sender rank {} and receiver rank {}.",
-            *context->rank(),
-            *config.sender_rank,
-            *config.receiver_rank);
+            "Creating a null socket on host with mesh id {} with sender mesh id {} and receiver mesh id {}.",
+            *mesh_id,
+            *config.sender_mesh_id,
+            *config.receiver_mesh_id);
         return;
     }
 
-    TT_FATAL(
-        config.sender_rank != config.receiver_rank,
-        "{} must only be used for communication between different host ranks, not within the same rank.",
-        __func__);
-
-    bool is_sender = context->rank() == config.sender_rank;
+    bool is_sender = mesh_id == config.sender_mesh_id;
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
@@ -86,7 +104,8 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
-    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
+    // TODO: fix this
+    mesh_to_mesh_barrier({config_.sender_mesh_id, config_.receiver_mesh_id}, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
@@ -156,8 +175,8 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
     return tt::stl::hash::hash_objects_with_default_seed(
         config.socket_connection_config,
         config.socket_mem_config,
-        config.sender_rank,
-        config.receiver_rank,
+        config.sender_mesh_id,
+        config.receiver_mesh_id,
         distributed_context_rank,
         distributed_context_size);
 }

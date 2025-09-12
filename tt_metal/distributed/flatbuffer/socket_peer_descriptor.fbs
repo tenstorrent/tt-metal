@@ -27,8 +27,8 @@ table SocketMemoryConfig {
 table SocketConfig {
     socket_connections: [SocketConnection];
     socket_mem_config: SocketMemoryConfig;
-    sender_rank: uint32;
-    receiver_rank: uint32;
+    sender_mesh_id: uint32;
+    receiver_mesh_id: uint32;
     socket_id: uint32;
 }
 

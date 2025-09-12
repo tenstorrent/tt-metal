@@ -212,8 +212,8 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_devices_pa
                         .receiver = EndpointConfig(recv_coord, core_coord)});
                     sockets.push_back(TestSocketConfig{
                         .connections = connections,
-                        .sender_rank = Rank{*sender_rank},
-                        .receiver_rank = Rank{*receiver_rank}});
+                        .sender_mesh_id = sender_mesh_id,
+                        .receiver_mesh_id = recv_mesh_id});
                 }
             }
         }
@@ -254,13 +254,13 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_hosts_random_sock
                     .sender = EndpointConfig(mesh_graph.chip_to_coordinate(sender_mesh_id, sender_idx), core_coord),
                     .receiver = EndpointConfig(mesh_graph.chip_to_coordinate(recv_mesh_id, recv_idx), core_coord)});
                 sockets.push_back(TestSocketConfig{
-                    .connections = connections, .sender_rank = sender_rank, .receiver_rank = receiver_rank});
+                    .connections = connections, .sender_mesh_id = sender_mesh_id, .receiver_mesh_id = recv_mesh_id});
                 log_info(
                     tt::LogTest,
                     "Generated socket: {} {} -> {} {}",
-                    *sender_rank,
+                    *sender_mesh_id,
                     mesh_graph.chip_to_coordinate(sender_mesh_id, sender_idx),
-                    *receiver_rank,
+                    *recv_mesh_id,
                     mesh_graph.chip_to_coordinate(recv_mesh_id, recv_idx));
             }
         }
@@ -299,16 +299,14 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_device_broadcast_
                 }
 
                 sockets.push_back(TestSocketConfig{
-                    .connections = connections,
-                    .sender_rank = Rank{*sender_rank},
-                    .receiver_rank = Rank{*receiver_rank}});
+                    .connections = connections, .sender_mesh_id = sender_mesh_id, .receiver_mesh_id = recv_mesh_id});
                 log_info(
                     tt::LogTest,
-                    "Generated broadcast socket: device {} on rank {} -> all {} devices on rank {}",
+                    "Generated broadcast socket: device {} on mesh {} -> all {} devices on mesh {}",
                     sender_coord,
-                    *sender_rank,
+                    *sender_mesh_id,
                     connections.size(),
-                    *receiver_rank);
+                    *recv_mesh_id);
             }
         }
     }
@@ -426,11 +424,11 @@ TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& nod
         throw_parse_error("Socket must define either 'connections'", node);
     }
 
-    TT_FATAL(node["sender_rank"].IsDefined(), "Socket missing required 'sender_rank' field");
-    TT_FATAL(node["receiver_rank"].IsDefined(), "Socket missing required 'receiver_rank' field");
-    socket.sender_rank = Rank{node["sender_rank"].as<uint32_t>()};
-    socket.receiver_rank = Rank{node["receiver_rank"].as<uint32_t>()};
-    TT_FATAL(socket.sender_rank != socket.receiver_rank, "Sender and receiver ranks must be different");
+    TT_FATAL(node["sender_mesh_id"].IsDefined(), "Socket missing required 'sender_mesh_id' field");
+    TT_FATAL(node["receiver_mesh_id"].IsDefined(), "Socket missing required 'receiver_mesh_id' field");
+    socket.sender_mesh_id = MeshId{node["sender_mesh_id"].as<uint32_t>()};
+    socket.receiver_mesh_id = MeshId{node["receiver_mesh_id"].as<uint32_t>()};
+    TT_FATAL(socket.sender_mesh_id != socket.receiver_mesh_id, "Sender and receiver mesh IDs must be different");
 
     return socket;
 }
@@ -584,27 +582,15 @@ void MeshSocketYamlParser::validate_socket_config(
     const TestSocketConfig& socket_config, const MeshSocketTestContext& test_context) {
     const auto& distributed_context = test_context.get_distributed_context();
     const auto& mesh_graph = test_context.get_mesh_graph();
-    const auto& rank_to_mesh_mapping = test_context.get_rank_to_mesh_mapping();
     const auto& mesh_device = test_context.get_mesh_device();
 
-    auto world_size = *distributed_context->size();
-
-    // 1. Check if sender and receiver ranks are < distributed context world size
+    // 1. Check if sender and receiver mesh IDs are valid
     TT_FATAL(
-        *socket_config.sender_rank < world_size,
-        "Sender rank {} is >= world size {}",
-        *socket_config.sender_rank,
-        world_size);
-    TT_FATAL(
-        *socket_config.receiver_rank < world_size,
-        "Receiver rank {} is >= world size {}",
-        *socket_config.receiver_rank,
-        world_size);
+        socket_config.sender_mesh_id != socket_config.receiver_mesh_id,
+        "Sender and receiver mesh IDs must be different");
 
-    TT_FATAL(socket_config.sender_rank != socket_config.receiver_rank, "Sender and receiver ranks must be different");
-
-    auto sender_mesh_id = rank_to_mesh_mapping.at(socket_config.sender_rank);
-    auto receiver_mesh_id = rank_to_mesh_mapping.at(socket_config.receiver_rank);
+    auto sender_mesh_id = socket_config.sender_mesh_id;
+    auto receiver_mesh_id = socket_config.receiver_mesh_id;
 
     // Get mesh shapes for validation
     auto sender_mesh_shape = mesh_graph.get_mesh_shape(sender_mesh_id);
@@ -650,8 +636,8 @@ void MeshSocketYamlParser::validate_socket_config(
             receiver_mesh_coord);
 
         // Validate core coordinates for each connection
-        // Only checks if same rank
-        if (distributed_context->rank() == socket_config.sender_rank) {
+        // Only checks if same mesh
+        if (test_context.get_local_mesh_id() == socket_config.sender_mesh_id) {
             TT_FATAL(
                 connection.sender.core_coord.x < device_compute_grid.x &&
                     connection.sender.core_coord.y < device_compute_grid.y,
@@ -664,7 +650,7 @@ void MeshSocketYamlParser::validate_socket_config(
                 sender_mesh_coord);
         }
 
-        if (distributed_context->rank() == socket_config.receiver_rank) {
+        if (test_context.get_local_mesh_id() == socket_config.receiver_mesh_id) {
             TT_FATAL(
                 connection.receiver.core_coord.x < device_compute_grid.x &&
                     connection.receiver.core_coord.y < device_compute_grid.y,
@@ -729,9 +715,9 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
                 log_info(tt::LogTest, "    Socket {}: {} connections", socket_idx + 1, socket.connections.size());
                 log_info(
                     tt::LogTest,
-                    "      Sender Rank: {}, Receiver Rank: {}",
-                    *socket.sender_rank,
-                    *socket.receiver_rank);
+                    "      Sender Mesh ID: {}, Receiver Mesh ID: {}",
+                    *socket.sender_mesh_id,
+                    *socket.receiver_mesh_id);
 
                 // Print connection details
                 for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {

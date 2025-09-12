@@ -2370,8 +2370,8 @@ TEST(SocketSerializationTest, PeerDesc) {
                 .fifo_size = socket_fifo_size,
 
             },
-        .sender_rank = multihost::Rank{0},
-        .receiver_rank = multihost::Rank{1},
+        .sender_mesh_id = tt::tt_fabric::MeshId{0},
+        .receiver_mesh_id = tt::tt_fabric::MeshId{1},
     };
 
     // Populate sender size peer descriptor based on config, addresses and device coordinates

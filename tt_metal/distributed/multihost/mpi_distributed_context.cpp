@@ -247,6 +247,13 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     return std::make_shared<MPIRequest>(req);
 }
 
+RequestPtr MPIContext::issend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+    check_size_fits_int(buf.size());
+    MPI_Request req{};
+    MPI_CHECK(MPI_Issend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_, &req));
+    return std::make_shared<MPIRequest>(req);
+}
+
 RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
