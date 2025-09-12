@@ -187,9 +187,9 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     const auto& eth_connections = cluster.get_ethernet_connections();
     auto cross_host_eth_connections = cluster.get_ethernet_connections_to_remote_devices();
     auto cluster_desc = cluster.get_cluster_desc();
+
     auto my_rank = *(distributed_context.rank());
     auto hostname = this->my_host_name();
-
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
@@ -259,7 +259,6 @@ void PhysicalSystemDescriptor::run_global_discovery() {
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
         system_graph_.asic_connectivity_graph[host_name] = std::move(asic_graph);
     }
