@@ -97,7 +97,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    constexpr uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
     uint32_t W = test_config.Wt * tile_width;
     uint32_t H = test_config.Ht * tile_height;
@@ -187,7 +187,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
         });
 
     std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, dram_buffer_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, dram_buffer_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
     auto golden_packed = pack_vector<uint32_t, bfloat16>(golden);

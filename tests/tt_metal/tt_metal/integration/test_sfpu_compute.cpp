@@ -162,7 +162,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+        byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     auto input = unpack_vector<bfloat16, uint32_t>(packed_input);

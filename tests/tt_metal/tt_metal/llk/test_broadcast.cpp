@@ -219,7 +219,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         log_info(tt::LogTest, "Tile shape is {{{}, {}}}", tile_height, tile_width);
     }
 
-    uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -327,10 +327,10 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         });
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 

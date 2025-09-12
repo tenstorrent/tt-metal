@@ -19,8 +19,6 @@ private:
     uint16_t uint16_data = 0;
 
 public:
-    static constexpr size_t SIZEOF = 2;
-
     // --- Constructors ---
     constexpr bfloat16() = default;
 
