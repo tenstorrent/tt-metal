@@ -15,7 +15,7 @@ from models.common.utility_functions import (
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 158],
+        [1, 161],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
