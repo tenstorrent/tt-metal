@@ -4,6 +4,7 @@
 
 import ttnn
 
+
 program_configs = {
     "linear_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -38,7 +39,6 @@ class TtPatchMerging:
     def __call__(self, input_tensor):
         _, H, W, _ = input_tensor.shape
         input_tensor = ttnn.pad(input_tensor, input_tensor.shape, [0, 0, 0, 0], 0)
-        input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         input_tensor_0 = input_tensor[..., 0::2, 0::2, :]  # ... H/2 W/2 C
         input_tensor_1 = input_tensor[..., 1::2, 0::2, :]  # ... H/2 W/2 C
         input_tensor_2 = input_tensor[..., 0::2, 1::2, :]  # ... H/2 W/2 C
