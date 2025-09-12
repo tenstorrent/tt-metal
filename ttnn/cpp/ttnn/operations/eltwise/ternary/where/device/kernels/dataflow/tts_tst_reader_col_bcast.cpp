@@ -37,6 +37,10 @@ void kernel_main() {
     constexpr auto predicate_cb = tt::CBIndex::c_0;
     constexpr auto true_cb = tt::CBIndex::c_1;
 
+// CB1 broadcast: For TTS it's true tensor, for TST it's false tensor
+// So we check if either true or false tensor needs broadcasting
+#define SRC_BCAST_CB1 (SRC_BCAST_TRUE || SRC_BCAST_FALSE)
+
     // Compile-time args layout for TTS: 2 CB ids, then 2 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
@@ -75,7 +79,7 @@ void kernel_main() {
     // For true tensor (CB1) - use true tensor strides but predicate dimensions for offset
     uint32_t true_tile_offset =
         start_nd * true_nD_stride + start_d * true_d_stride + start_n * true_n_stride + start_c * true_c_stride;
-#if !SRC_BCAST_TRUE
+#if !SRC_BCAST_CB1
     // Use predicate dimensions for offset calculation (same as TTT)
     true_tile_offset += start_th * Wt;
 #endif
@@ -102,7 +106,7 @@ void kernel_main() {
                         FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
                         cb_push_back(predicate_cb, onetile);
 #endif
-#if SRC_BCAST_TRUE
+#if SRC_BCAST_CB1
                         cb_reserve_back(true_cb, onetile);
 #if !SRC_SHARDED_TRUE
                         uint32_t l1_write_addr_true = get_write_ptr(true_cb);
@@ -124,7 +128,7 @@ void kernel_main() {
 #endif
                             cb_push_back(predicate_cb, onetile);
 #endif
-#if !SRC_BCAST_TRUE
+#if !SRC_BCAST_CB1
                             cb_reserve_back(true_cb, onetile);
 #if !SRC_SHARDED_TRUE
                             uint32_t l1_write_addr_true = get_write_ptr(true_cb);
@@ -141,7 +145,7 @@ void kernel_main() {
 #if !SRC_BCAST_PREDICATE && !SRC_SHARDED_PREDICATE
                         tile_offset += Wt;
 #endif
-#if !SRC_BCAST_TRUE && !SRC_SHARDED_TRUE
+#if !SRC_BCAST_CB1 && !SRC_SHARDED_TRUE
                         true_tile_offset += Wt;
 #endif
                     }
@@ -156,7 +160,7 @@ void kernel_main() {
 #endif
 #endif
 #if !SRC_SHARDED_TRUE
-#if SRC_BCAST_TRUE
+#if SRC_BCAST_CB1
                     // For broadcast true tensor, use full stride
                     true_tile_offset += true_c_stride;
 #else
