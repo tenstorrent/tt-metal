@@ -15,9 +15,9 @@ from models.utility_functions import is_blackhole_p100, run_for_blackhole
     "batch_size, test, expected_perf, device_type",
     [
         [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10193.0, "p150"],
-        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 8269.0, "p100"],
+        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 8371.0, "p100"],
         [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 12000.0, "p150"],
-        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 9355.0, "p100"],
+        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 9380.0, "p100"],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf, device_type):
