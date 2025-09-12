@@ -73,7 +73,7 @@ void MAIN {
     binary_op_init_common(cb_query, cb_key, cb_value);
 
     // [Debug]
-    // mm_init(cb_query, cb_key, cb_qk_result, 0);
+    // mm_init(cb_query, cb_key, cb_qk_result);
 
     cb_wait_front(cb_reduction_scaler, onetile);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -93,9 +93,10 @@ void MAIN {
             for (uint32_t h = 0; h < Ht; ++h) {  // read all
                 cb_wait_front(cb_key, tiles_per_head);
 
-                mm_init(cb_query, cb_key, cb_qk_result, /* transpose */ 1);
+                // mm_init(cb_query, cb_key, cb_qk_result, /* transpose */ 1);
                 // TODO[check]: check whether I can use mm_init_short here instead of full init
-                // mm_init_short(cb_query, cb_key, /* transpose */ 1);
+                reconfig_data_format(cb_query, cb_key);
+                mm_init_short(cb_query, cb_key, /* transpose */ 1);
                 tile_regs_acquire();
                 for (uint32_t tile_idx = 0; tile_idx < tiles_per_head; tile_idx++) {
                     matmul_tiles(
