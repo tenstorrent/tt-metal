@@ -1101,7 +1101,46 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
     }
 }
 
-void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id) {}
+void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id) {
+    // Iterate over all instances in graph
+    auto& instance = instances_.at(graph_id);
+
+    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+
+    TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
+
+    std::vector<GlobalNodeId> instances =
+        std::vector<GlobalNodeId>(instance.sub_instances.begin(), instance.sub_instances.end());
+
+    for (int i = 0; i < instances.size(); ++i) {
+        const auto src_instance = instances[i];
+        const auto dst_instance = instances[(i + 1) % instances.size()];
+
+        ConnectionData data{
+            .nodes = {src_instance, dst_instance},
+            .count = graph_desc->graph_topology().channels().count(),
+            .policy = graph_desc->graph_topology().channels().policy(),
+            .parent_instance_id = graph_id,
+            .routing_direction = proto::RoutingDirection::NONE,
+        };
+
+        const auto id = data.connection_id;
+        add_connection_to_fast_lookups(data, instance.type);
+        connections_.emplace(id, std::move(data));
+
+        ConnectionData data_reverse{
+            .nodes = {dst_instance, src_instance},
+            .count = graph_desc->graph_topology().channels().count(),
+            .policy = graph_desc->graph_topology().channels().policy(),
+            .parent_instance_id = graph_id,
+            .routing_direction = proto::RoutingDirection::NONE,
+        };
+
+        const auto id_reverse = data_reverse.connection_id;
+        add_connection_to_fast_lookups(data_reverse, instance.type);
+        connections_.emplace(id_reverse, std::move(data_reverse));
+    }
+}
 
 void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
     std::string indent(indent_level * 2, ' ');

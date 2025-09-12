@@ -997,6 +997,58 @@ TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
     }
 }
 
+TEST(MeshGraphDescriptorTests, RingGraphTopology) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 2 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 3 } }
+          graph_topology: {
+            layout_type: RING
+            channels: { count: 1 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    {
+        auto connections = desc.connections_by_instance_id(pod_id);
+        ASSERT_EQ(connections.size(), 8);
+        check_connections(desc, connections, {0, 1, 2, 3}, 1u, pod_id, {"M0", "M1"});
+    }
+    // Check connections from M0(0)
+    {
+        auto pod_instance = desc.get_instance(pod_id);
+        auto connections = desc.connections_by_source_device_id(pod_instance.sub_instances_local_id_to_global_id.at(0));
+        ASSERT_EQ(connections.size(), 2);
+        check_connections(desc, connections, {1, 3}, 1u, pod_id, {"M0", "M1"});
+    }
+}
+
 TEST(MeshGraphDescriptorTests, BidirectionalConnections) {
     // Test that when directional=false, connections exist in both directions
     std::string text_proto = R"proto(
