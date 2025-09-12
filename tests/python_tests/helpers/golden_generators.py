@@ -608,7 +608,13 @@ class MatmulGolden(FidelityMasking):
 
 @register_golden
 class DataCopyGolden:
-    def __call__(self, operand1, data_format, num_faces, input_dimensions):
+    def __call__(
+        self,
+        operand1,
+        data_format,
+        num_faces: int = 4,
+        input_dimensions: list[int] = [32, 32],
+    ):
         torch_format = format_dict[data_format]
 
         height, width = input_dimensions[0], input_dimensions[1]
