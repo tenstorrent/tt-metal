@@ -844,7 +844,7 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) 
             for (const auto& connection_data : per_source_connections) {
                 const auto id = connection_data.connection_id;
                 add_connection_to_fast_lookups(connection_data, instance.type);
-                connections_.emplace(id, std::move(connection_data));
+                connections_.emplace(id, connection_data);
             }
         }
     }
