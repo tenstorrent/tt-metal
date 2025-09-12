@@ -95,7 +95,6 @@ class TtYOLOv5xConv2D:
             output_layout=ttnn.TILE_LAYOUT,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_weights_double_buffer=self.enable_weights_double_buffer,
-            enable_split_reader=True,
         )
         # if self.core_count is not None:
         #     shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)

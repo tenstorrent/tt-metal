@@ -8,9 +8,9 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE
 from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
-from models.common.utility_functions import run_for_wormhole_b0
 
 
 @pytest.mark.parametrize(
