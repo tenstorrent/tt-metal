@@ -71,6 +71,47 @@ class Conv(nn.Module):
         return x
 
 
+class DWConv(nn.Module):
+    def __init__(self, in_channel, out_channel, kernel=3, stride=1, padding=1, dilation=1, enable_act=True):
+        super().__init__()
+        self.enable_act = enable_act
+        if enable_act:
+            self.conv = nn.Conv2d(
+                in_channel,
+                out_channel,
+                kernel,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                groups=in_channel,  # Depthwise convolution uses groups=in_channels
+                bias=False,
+            )
+            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+            self.act = nn.SiLU(inplace=True)
+        else:
+            self.conv = nn.Conv2d(
+                in_channel,
+                out_channel,
+                kernel,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                groups=in_channel,  # Depthwise convolution uses groups=in_channels
+                bias=False,
+            )
+            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+
+    def forward(self, x):
+        if self.enable_act:
+            x = self.conv(x)
+            x = self.bn(x)
+            x = self.act(x)
+        else:
+            x = self.conv(x)
+            x = self.bn(x)
+        return x
+
+
 class Bottleneck(nn.Module):
     def __init__(
         self, in_channel, out_channel, kernel=[1, 1], stride=[1, 1], padding=[0, 0], dilation=[1, 1], groups=[1, 1]
@@ -722,6 +763,413 @@ class Detect(nn.Module):
         z = z * strides
         yb = torch.sigmoid(yb)
         out = torch.concat((z, yb), 1)
+        return out
+
+
+class OBB(nn.Module):
+    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
+        super().__init__()
+        self.out_channel = out_channel
+        self.in_channel = in_channel
+        
+        # cv2 - same structure as Detect
+        self.cv2 = nn.ModuleList(
+            [
+                nn.Sequential(
+                    Conv(
+                        in_channel[0],
+                        out_channel[0],
+                        kernel[0],
+                        stride=stride[0],
+                        padding=padding[0],
+                        dilation=dilation[0],
+                        groups=groups[0],
+                    ),
+                    Conv(
+                        in_channel[1],
+                        out_channel[1],
+                        kernel[1],
+                        stride=stride[1],
+                        padding=padding[1],
+                        dilation=dilation[1],
+                        groups=groups[1],
+                    ),
+                    nn.Conv2d(
+                        in_channel[2],
+                        out_channel[2],
+                        kernel[2],
+                        stride=stride[2],
+                        padding=padding[2],
+                        dilation=dilation[2],
+                        groups=groups[2],
+                    ),
+                ),
+                nn.Sequential(
+                    Conv(
+                        in_channel[3],
+                        out_channel[3],
+                        kernel[3],
+                        stride=stride[3],
+                        padding=padding[3],
+                        dilation=dilation[3],
+                        groups=groups[3],
+                    ),
+                    Conv(
+                        in_channel[4],
+                        out_channel[4],
+                        kernel[4],
+                        stride=stride[4],
+                        padding=padding[4],
+                        dilation=dilation[4],
+                        groups=groups[4],
+                    ),
+                    nn.Conv2d(
+                        in_channel[5],
+                        out_channel[5],
+                        kernel[5],
+                        stride=stride[5],
+                        padding=padding[5],
+                        dilation=dilation[5],
+                        groups=groups[5],
+                    ),
+                ),
+                nn.Sequential(
+                    Conv(
+                        in_channel[6],
+                        out_channel[6],
+                        kernel[6],
+                        stride=stride[6],
+                        padding=padding[6],
+                        dilation=dilation[6],
+                        groups=groups[6],
+                    ),
+                    Conv(
+                        in_channel[7],
+                        out_channel[7],
+                        kernel[7],
+                        stride=stride[7],
+                        padding=padding[7],
+                        dilation=dilation[7],
+                        groups=groups[7],
+                    ),
+                    nn.Conv2d(
+                        in_channel[8],
+                        out_channel[8],
+                        kernel[8],
+                        stride=stride[8],
+                        padding=padding[8],
+                        dilation=dilation[8],
+                        groups=groups[8],
+                    ),
+                ),
+            ]
+        )
+        
+        # cv3 - different structure with DWConv layers
+        self.cv3 = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[9],
+                            out_channel[9],
+                            kernel[9],
+                            stride=stride[9],
+                            padding=padding[9],
+                            dilation=dilation[9],
+                        ),
+                        Conv(
+                            in_channel[10],
+                            out_channel[10],
+                            kernel[10],
+                            stride=stride[10],
+                            padding=padding[10],
+                            dilation=dilation[10],
+                            groups=groups[10],
+                        ),
+                    ),
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[11],
+                            out_channel[11],
+                            kernel[11],
+                            stride=stride[11],
+                            padding=padding[11],
+                            dilation=dilation[11],
+                        ),
+                        Conv(
+                            in_channel[12],
+                            out_channel[12],
+                            kernel[12],
+                            stride=stride[12],
+                            padding=padding[12],
+                            dilation=dilation[12],
+                            groups=groups[12],
+                        ),
+                    ),
+                    nn.Conv2d(
+                        in_channel[13],
+                        out_channel[13],
+                        kernel[13],
+                        stride=stride[13],
+                        padding=padding[13],
+                        dilation=dilation[13],
+                        groups=groups[13],
+                    ),
+                ),
+                nn.Sequential(
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[14],
+                            out_channel[14],
+                            kernel[14],
+                            stride=stride[14],
+                            padding=padding[14],
+                            dilation=dilation[14],
+                        ),
+                        Conv(
+                            in_channel[15],
+                            out_channel[15],
+                            kernel[15],
+                            stride=stride[15],
+                            padding=padding[15],
+                            dilation=dilation[15],
+                            groups=groups[15],
+                        ),
+                    ),
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[16],
+                            out_channel[16],
+                            kernel[16],
+                            stride=stride[16],
+                            padding=padding[16],
+                            dilation=dilation[16],
+                        ),
+                        Conv(
+                            in_channel[17],
+                            out_channel[17],
+                            kernel[17],
+                            stride=stride[17],
+                            padding=padding[17],
+                            dilation=dilation[17],
+                            groups=groups[17],
+                        ),
+                    ),
+                    nn.Conv2d(
+                        in_channel[18],
+                        out_channel[18],
+                        kernel[18],
+                        stride=stride[18],
+                        padding=padding[18],
+                        dilation=dilation[18],
+                        groups=groups[18],
+                    ),
+                ),
+                nn.Sequential(
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[19],
+                            out_channel[19],
+                            kernel[19],
+                            stride=stride[19],
+                            padding=padding[19],
+                            dilation=dilation[19],
+                        ),
+                        Conv(
+                            in_channel[20],
+                            out_channel[20],
+                            kernel[20],
+                            stride=stride[20],
+                            padding=padding[20],
+                            dilation=dilation[20],
+                            groups=groups[20],
+                        ),
+                    ),
+                    nn.Sequential(
+                        DWConv(
+                            in_channel[21],
+                            out_channel[21],
+                            kernel[21],
+                            stride=stride[21],
+                            padding=padding[21],
+                            dilation=dilation[21],
+                        ),
+                        Conv(
+                            in_channel[22],
+                            out_channel[22],
+                            kernel[22],
+                            stride=stride[22],
+                            padding=padding[22],
+                            dilation=dilation[22],
+                            groups=groups[22],
+                        ),
+                    ),
+                    nn.Conv2d(
+                        in_channel[23],
+                        out_channel[23],
+                        kernel[23],
+                        stride=stride[23],
+                        padding=padding[23],
+                        dilation=dilation[23],
+                        groups=groups[23],
+                    ),
+                ),
+            ]
+        )
+        
+        # dfl - same as Detect
+        self.dfl = DFL()
+        
+        # cv4 - new component, similar structure to cv2
+        self.cv4 = nn.ModuleList(
+            [
+                nn.Sequential(
+                    Conv(
+                        in_channel[24],
+                        out_channel[24],
+                        kernel[24],
+                        stride=stride[24],
+                        padding=padding[24],
+                        dilation=dilation[24],
+                        groups=groups[24],
+                    ),
+                    Conv(
+                        in_channel[25],
+                        out_channel[25],
+                        kernel[25],
+                        stride=stride[25],
+                        padding=padding[25],
+                        dilation=dilation[25],
+                        groups=groups[25],
+                    ),
+                    nn.Conv2d(
+                        in_channel[26],
+                        out_channel[26],
+                        kernel[26],
+                        stride=stride[26],
+                        padding=padding[26],
+                        dilation=dilation[26],
+                        groups=groups[26],
+                    ),
+                ),
+                nn.Sequential(
+                    Conv(
+                        in_channel[27],
+                        out_channel[27],
+                        kernel[27],
+                        stride=stride[27],
+                        padding=padding[27],
+                        dilation=dilation[27],
+                        groups=groups[27],
+                    ),
+                    Conv(
+                        in_channel[28],
+                        out_channel[28],
+                        kernel[28],
+                        stride=stride[28],
+                        padding=padding[28],
+                        dilation=dilation[28],
+                        groups=groups[28],
+                    ),
+                    nn.Conv2d(
+                        in_channel[29],
+                        out_channel[29],
+                        kernel[29],
+                        stride=stride[29],
+                        padding=padding[29],
+                        dilation=dilation[29],
+                        groups=groups[29],
+                    ),
+                ),
+                nn.Sequential(
+                    Conv(
+                        in_channel[30],
+                        out_channel[30],
+                        kernel[30],
+                        stride=stride[30],
+                        padding=padding[30],
+                        dilation=dilation[30],
+                        groups=groups[30],
+                    ),
+                    Conv(
+                        in_channel[31],
+                        out_channel[31],
+                        kernel[31],
+                        stride=stride[31],
+                        padding=padding[31],
+                        dilation=dilation[31],
+                        groups=groups[31],
+                    ),
+                    nn.Conv2d(
+                        in_channel[32],
+                        out_channel[32],
+                        kernel[32],
+                        stride=stride[32],
+                        padding=padding[32],
+                        dilation=dilation[32],
+                        groups=groups[32],
+                    ),
+                ),
+            ]
+        )
+
+    def forward(self, y1, y2, y3):
+        # Process through cv2, cv3, and cv4
+        x1 = self.cv2[0](y1)
+        x2 = self.cv2[1](y2)
+        x3 = self.cv2[2](y3)
+        x4 = self.cv3[0](y1)
+        x5 = self.cv3[1](y2)
+        x6 = self.cv3[2](y3)
+        x7 = self.cv4[0](y1)
+        x8 = self.cv4[1](y2)
+        x9 = self.cv4[2](y3)
+
+        # Concatenate cv2 and cv3 outputs (box predictions and class predictions)
+        y1_box_cls = torch.cat((x1, x4), 1)
+        y2_box_cls = torch.cat((x2, x5), 1)
+        y3_box_cls = torch.cat((x3, x6), 1)
+        y_all = [y1_box_cls, y2_box_cls, y3_box_cls]
+
+        # Reshape for processing
+        y1_box_cls = torch.reshape(y1_box_cls, (y1_box_cls.shape[0], y1_box_cls.shape[1], y1_box_cls.shape[2] * y1_box_cls.shape[3]))
+        y2_box_cls = torch.reshape(y2_box_cls, (y2_box_cls.shape[0], y2_box_cls.shape[1], y2_box_cls.shape[2] * y2_box_cls.shape[3]))
+        y3_box_cls = torch.reshape(y3_box_cls, (y3_box_cls.shape[0], y3_box_cls.shape[1], y3_box_cls.shape[2] * y3_box_cls.shape[3]))
+
+        y_box_cls = torch.cat((y1_box_cls, y2_box_cls, y3_box_cls), 2)
+
+        # Split into box and class predictions
+        ya, yb = y_box_cls.split((self.out_channel[2], self.out_channel[13]), 1)
+
+        # Process box predictions through DFL
+        ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[33]), self.in_channel[33], ya.shape[2]))
+        ya = torch.permute(ya, (0, 2, 1, 3))
+        ya = f.softmax(ya, dim=1)
+        c = self.dfl(ya)
+        c1 = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
+        c2 = c1
+        c1 = c1[:, 0:2, :]
+        c2 = c2[:, 2:4, :]
+        anchor, strides = (y_all.transpose(0, 1) for y_all in make_anchors(y_all, [8, 16, 32], 0.5))
+        anchor.unsqueeze(0)
+        c1 = anchor - c1
+        c2 = anchor + c2
+        z1 = c2 - c1
+        z2 = c1 + c2
+        z2 = z2 / 2
+        z = torch.concat((z2, z1), 1)
+        z = z * strides
+        yb = torch.sigmoid(yb)
+
+        # Process angle predictions from cv4
+        x7_flat = torch.reshape(x7, (x7.shape[0], x7.shape[1], x7.shape[2] * x7.shape[3]))
+        x8_flat = torch.reshape(x8, (x8.shape[0], x8.shape[1], x8.shape[2] * x8.shape[3]))
+        x9_flat = torch.reshape(x9, (x9.shape[0], x9.shape[1], x9.shape[2] * x9.shape[3]))
+        angle_pred = torch.cat((x7_flat, x8_flat, x9_flat), 2)
+
+        # Combine all outputs: boxes, classes, and angles
+        out = torch.concat((z, yb, angle_pred), 1)
         return out
 
 
