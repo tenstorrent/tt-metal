@@ -959,7 +959,7 @@ public:
 
     SmallVectorImpl& operator=(const SmallVectorImpl& RHS);
 
-    SmallVectorImpl& operator=(SmallVectorImpl&& RHS);
+    SmallVectorImpl& operator=(SmallVectorImpl&& RHS) noexcept;
 
     bool operator==(const SmallVectorImpl& RHS) const {
         if (this->size() != RHS.size()) {
@@ -1068,7 +1068,7 @@ SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(const SmallVectorImpl<T>& RHS)
 }
 
 template <typename T>
-SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) {
+SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) noexcept {
     // Avoid self-assignment.
     if (this == &RHS) {
         return *this;
@@ -1254,7 +1254,7 @@ public:
         return *this;
     }
 
-    SmallVector(SmallVector&& RHS) : SmallVectorImpl<T>(N) {
+    SmallVector(SmallVector&& RHS) noexcept : SmallVectorImpl<T>(N) {
         if (!RHS.empty()) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
         }
@@ -1266,7 +1266,7 @@ public:
         }
     }
 
-    SmallVector& operator=(SmallVector&& RHS) {
+    SmallVector& operator=(SmallVector&& RHS) noexcept {
         if (N) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
             return *this;
