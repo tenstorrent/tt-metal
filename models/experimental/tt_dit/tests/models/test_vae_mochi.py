@@ -529,7 +529,7 @@ decoder_test_configs = [
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
 @vae_device_config
-def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real_weights, load_dit_weights):
+def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, load_dit_weights):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
 
@@ -553,7 +553,10 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
     # Create models
     logger.info("Creating VAE decoder models")
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
-    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        hw_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+    )
 
     reference_model, tt_model = create_decoder_models(
         mesh_device,
@@ -565,19 +568,22 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
 
     # Create input tensor (latent representation)
     torch_input = torch.randn(N, C, T, H, W)
-
-    # Convert to TTNN format [N, T, H, W, C]
-    tt_input = torch_input.permute(0, 2, 3, 4, 1)
-    tt_input = torch.nn.functional.pad(
-        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, mesh_device.get_num_devices()) - T)
-    )
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
+    if T % num_devices_T:
+        padded_T = get_padded_size(T, num_devices_T) - T
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, padded_T))
+    num_devices_HW = mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]
+    if W % num_devices_HW:
+        padded_HW = get_padded_size(W, num_devices_HW) - W
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, padded_HW))
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
 
     logger.info(f"Input shape: {torch_input.shape}")
@@ -587,20 +593,18 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
-    logger.info(f"TT output shape: {tt_output_torch.shape}")
 
     # Get reference output
     logger.info("Run RefDecoder forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
-    logger.info(f"Reference output shape: {ref_output.shape}")
 
     # unpad tt output
     if mesh_device.get_num_devices() > 1:
-        tt_output_torch = tt_output_torch[:, :, 0 : ref_output.shape[2], :, :]
+        tt_output_torch = tt_output_torch[:, :, 0 : ref_output.shape[2], :, 0 : ref_output.shape[4]]
 
     logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.99)
