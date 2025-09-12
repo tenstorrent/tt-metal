@@ -177,7 +177,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         program, all_cores, kGradCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_lr = create_circular_buffer(
-        program, all_cores, kLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+        program, all_cores, kLrCbIndex, tt::DataFormat::Float32, float32_single_tile_size_bytes, 1U);
 
     [[maybe_unused]] auto cb_update = create_circular_buffer(
         program, all_cores, kUpdateCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
