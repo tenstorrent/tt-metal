@@ -745,8 +745,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // TST column broadcast
         reader_defines = make_dataflow_defines(
             predicate_tensor.dtype(),
-            predicate_tensor.dtype(),             // For predicate (a), true is scalar
-            value_false_tensor.value().dtype());  // CB1 uses false tensor dtype
+            value_false_tensor.value().dtype(),  // For predicate (a), true is scalar
+            predicate_tensor.dtype());           // CB1 uses false tensor dtype
 
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
