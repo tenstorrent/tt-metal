@@ -41,6 +41,7 @@ void kernel_main() {
     const uint32_t outer_dims_to_keep_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_keep_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_receive = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dims_from_forward = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_outer_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -125,6 +126,29 @@ void kernel_main() {
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
+    } else {
+        // If we need extend beyond the original input tensor, pad
+        if (direction) {
+            if (outer_dims_from_forward) {
+                cb_wait_front(cb_output_id, 1);
+                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                for (uint32_t outer_dim_id = 0; outer_dim_id < outer_dims_from_forward; outer_dim_id++) {
+                    uint32_t dst_stick_id = (outer_dim_id + outer_dims_to_receive +
+                                             (outer_dims_to_keep_end - outer_dims_to_keep_start + 1)) *
+                                                num_sticks_per_outer_dim +
+                                            stick_start_id;
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+
+                        dst_stick_id++;
+
+                        noc_async_write_barrier();
+                    }
+                }
+                cb_pop_front(cb_output_id, 1);
+            }
         }
     }
 

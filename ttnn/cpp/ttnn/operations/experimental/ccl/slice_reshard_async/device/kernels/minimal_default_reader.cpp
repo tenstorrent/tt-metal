@@ -17,6 +17,24 @@ constexpr bool is_first_chip = get_compile_time_arg_val(0);
 constexpr bool is_last_chip = get_compile_time_arg_val(1);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
 constexpr bool direction = get_compile_time_arg_val(3);
+const uint32_t stick_size = get_compile_time_arg_val(4);
+
+template <uint32_t stick_size_bytes>
+inline void zeroPad(uint32_t cb_output_id) {
+    //  Zero-fill from MEM_ZEROS
+    constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
+    constexpr uint32_t partial_read_size = stick_size_bytes % MEM_ZEROS_SIZE;
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t cb_write_addr = get_write_ptr(cb_output_id);
+
+    for (uint32_t i = 0; i < num_full_reads; ++i) {
+        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
+        cb_write_addr += MEM_ZEROS_SIZE;
+    }
+    if (partial_read_size > 0) {
+        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
+    }
+}
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -26,17 +44,17 @@ void kernel_main() {
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t stick_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_forward = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dims_from_forward = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_keep_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_keep_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_outer_dim = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr auto src_args = TensorAccessorArgs<5>();
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
 
@@ -61,6 +79,16 @@ void kernel_main() {
 
                 src_stick_id++;
 
+                noc_async_read_barrier();
+                cb_push_back(cb_output_id, 1);
+            }
+        }
+    } else {
+        // If we need extend beyond the original input tensor, pad
+        if (direction) {
+            if (outer_dims_from_forward) {
+                cb_reserve_back(cb_output_id, 1);
+                zeroPad<stick_size>(cb_output_id);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             }
