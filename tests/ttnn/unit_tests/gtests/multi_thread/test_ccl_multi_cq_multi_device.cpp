@@ -313,7 +313,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 auto& op_cq_2 = single_mesh->mesh_command_queue(op_cq_id.get());
                 auto operation_event = ttnn::record_event(op_cq_2);
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
-                ttnn::wait_for_event(op_cq_2, operation_event);
+                auto& ccl_cq = single_mesh->mesh_command_queue(ccl_cq_id.get());
+                ttnn::wait_for_event(ccl_cq, operation_event);
 
                 promise->set_value();
             });
