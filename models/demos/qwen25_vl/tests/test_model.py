@@ -45,9 +45,9 @@ from models.utility_functions import comp_allclose, comp_pcc
         (
             14308,
             torch.tensor([[1, 98, 146]]),
-        ),  # 100 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 850x1100
+        ),  # 240 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2048x1300
     ],
-    ids=["300dpi", "100dpi"],
+    ids=["300dpi", "240dpi"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
@@ -75,7 +75,6 @@ def test_vision_model_inference(
     pt_pixel_values = torch.randn([seq_len, 1176]) * 0.8320 + 1.2969  # std and mean from above img
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
     seq_len = ((ref_seq_len // 2048) + 1) * 2048
-    seq_len = ((ref_seq_len // 128) + 1) * 128
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
