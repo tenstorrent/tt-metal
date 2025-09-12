@@ -1,0 +1,457 @@
+<!--
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Telemetry Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            min-height: 100vh;
+        }
+
+        h1 {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Telemetry Test</h1>
+    <websocket-tester></websocket-tester>
+
+    <script type="module">
+        import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+
+        class WebSocketTester extends LitElement {
+            static styles = css`
+                :host {
+                    display: block;
+                    max-width: 1200px;
+                    margin: 0 auto;
+                }
+
+                .container {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 20px;
+                    margin-bottom: 20px;
+                }
+
+                .panel {
+                    background: #2a2a2a;
+                    border: 1px solid #444;
+                    border-radius: 8px;
+                    padding: 20px;
+                }
+
+                .panel h2 {
+                    margin-top: 0;
+                    color: #fff;
+                    border-bottom: 1px solid #444;
+                    padding-bottom: 10px;
+                }
+
+                .controls {
+                    margin-bottom: 20px;
+                }
+
+                .controls input, .controls button {
+                    background: #444;
+                    color: white;
+                    border: 1px solid #666;
+                    padding: 10px;
+                    margin: 5px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+
+                .controls button {
+                    cursor: pointer;
+                    transition: background-color 0.2s;
+                }
+
+                .controls button:hover {
+                    background: #666;
+                }
+
+                .controls button:disabled {
+                    background: #333;
+                    color: #666;
+                    cursor: not-allowed;
+                }
+
+                .status {
+                    padding: 10px;
+                    border-radius: 5px;
+                    margin-bottom: 10px;
+                    font-weight: bold;
+                }
+
+                .status.connected {
+                    background: #2d5a2d;
+                    color: #90ee90;
+                }
+
+                .status.disconnected {
+                    background: #5a2d2d;
+                    color: #ff6b6b;
+                }
+
+                .status.connecting {
+                    background: #5a5a2d;
+                    color: #ffeb3b;
+                }
+
+                .log {
+                    background: #1a1a1a;
+                    border: 1px solid #444;
+                    border-radius: 5px;
+                    padding: 10px;
+                    height: 300px;
+                    overflow-y: auto;
+                    font-family: 'Courier New', monospace;
+                    font-size: 12px;
+                    white-space: pre-wrap;
+                }
+
+                .log-entry {
+                    margin-bottom: 5px;
+                    padding: 2px 0;
+                }
+
+                .log-entry.sent {
+                    color: #90ee90;
+                }
+
+                .log-entry.received {
+                    color: #87ceeb;
+                }
+
+                .log-entry.error {
+                    color: #ff6b6b;
+                }
+
+                .log-entry.info {
+                    color: #ffeb3b;
+                }
+
+                .telemetry-data {
+                    background: #1a1a1a;
+                    border: 1px solid #444;
+                    border-radius: 5px;
+                    padding: 10px;
+                    height: 200px;
+                    overflow-y: auto;
+                    font-family: 'Courier New', monospace;
+                    font-size: 12px;
+                }
+
+                .stats {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                    gap: 10px;
+                    margin-bottom: 20px;
+                }
+
+                .stat {
+                    background: #333;
+                    padding: 10px;
+                    border-radius: 5px;
+                    text-align: center;
+                }
+
+                .stat-value {
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #87ceeb;
+                }
+
+                .stat-label {
+                    font-size: 12px;
+                    color: #ccc;
+                }
+
+                @media (max-width: 768px) {
+                    .container {
+                        grid-template-columns: 1fr;
+                    }
+                }
+            `;
+
+            static properties = {
+                wsUrl: { type: String },
+                ws: { type: Object },
+                connectionStatus: { type: String },
+                logs: { type: Array },
+                messagesSent: { type: Number },
+                messagesReceived: { type: Number },
+                telemetryData: { type: Object },
+                lastTelemetryTime: { type: String }
+            };
+
+            constructor() {
+                super();
+                this.wsUrl = 'ws://localhost:8081';
+                this.ws = null;
+                this.connectionStatus = 'disconnected';
+                this.logs = [];
+                this.messagesSent = 0;
+                this.messagesReceived = 0;
+                this.telemetryData = null;
+                this.lastTelemetryTime = 'Never';
+            }
+
+            connect() {
+                if (this.ws) {
+                    this.ws.close();
+                }
+
+                this.connectionStatus = 'connecting';
+                this.addLog('info', `Connecting to ${this.wsUrl}...`);
+
+                try {
+                    this.ws = new WebSocket(this.wsUrl);
+
+                    this.ws.onopen = () => {
+                        this.connectionStatus = 'connected';
+                        this.addLog('info', 'Connected to WebSocket server');
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        this.messagesReceived++;
+
+                        if (event.data === 'hello') {
+                            this.addLog('received', 'Received hello message');
+                        } else {
+                            try {
+                                const data = JSON.parse(event.data);
+                                this.telemetryData = data;
+                                this.lastTelemetryTime = new Date().toLocaleTimeString();
+                                this.addLog('received', `Received telemetry data (${Object.keys(data).length} fields)`);
+                            } catch (e) {
+                                this.addLog('received', `Received: ${event.data}`);
+                            }
+                        }
+                    };
+
+                    this.ws.onclose = (event) => {
+                        this.connectionStatus = 'disconnected';
+                        let reason = '';
+                        switch(event.code) {
+                            case 1000: reason = 'Normal closure'; break;
+                            case 1001: reason = 'Going away'; break;
+                            case 1002: reason = 'Protocol error'; break;
+                            case 1003: reason = 'Unsupported data'; break;
+                            case 1004: reason = 'Reserved'; break;
+                            case 1005: reason = 'No status received'; break;
+                            case 1006: reason = 'Abnormal closure (server not running or network issue)'; break;
+                            case 1007: reason = 'Invalid frame payload data'; break;
+                            case 1008: reason = 'Policy violation'; break;
+                            case 1009: reason = 'Message too big'; break;
+                            case 1010: reason = 'Mandatory extension'; break;
+                            case 1011: reason = 'Internal server error'; break;
+                            case 1015: reason = 'TLS handshake'; break;
+                            default: reason = 'Unknown'; break;
+                        }
+                        this.addLog('error', `Connection closed (code: ${event.code} - ${reason})`);
+                    };
+
+                    this.ws.onerror = (error) => {
+                        this.addLog('error', `WebSocket error occurred`);
+                        console.error('WebSocket error:', error);
+                    };
+
+                } catch (error) {
+                    this.connectionStatus = 'disconnected';
+                    this.addLog('error', `Failed to connect: ${error.message}`);
+                }
+            }
+
+            disconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                    this.ws = null;
+                }
+            }
+
+            sendMessage() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const message = `Test message ${Date.now()}`;
+                    this.ws.send(message);
+                    this.messagesSent++;
+                    this.addLog('sent', `Sent: ${message}`);
+                } else {
+                    this.addLog('error', 'Not connected to WebSocket server');
+                }
+            }
+
+            sendPing() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const message = 'ping';
+                    this.ws.send(message);
+                    this.messagesSent++;
+                    this.addLog('sent', `Sent ping`);
+                } else {
+                    this.addLog('error', 'Not connected to WebSocket server');
+                }
+            }
+
+            clearLogs() {
+                this.logs = [];
+            }
+
+            addLog(type, message) {
+                const timestamp = new Date().toLocaleTimeString();
+                this.logs = [...this.logs, { type, message, timestamp }];
+
+                // Keep only last 100 log entries
+                if (this.logs.length > 100) {
+                    this.logs = this.logs.slice(-100);
+                }
+
+                // Auto-scroll to bottom after next render
+                setTimeout(() => {
+                    const logElement = this.shadowRoot?.querySelector('.log');
+                    if (logElement) {
+                        logElement.scrollTop = logElement.scrollHeight;
+                    }
+                }, 0);
+            }
+
+            onUrlChange(e) {
+                this.wsUrl = e.target.value;
+            }
+
+            render() {
+                return html`
+                    <div class="stats">
+                        <div class="stat">
+                            <div class="stat-value">${this.messagesSent}</div>
+                            <div class="stat-label">Messages Sent</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value">${this.messagesReceived}</div>
+                            <div class="stat-label">Messages Received</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value">${this.lastTelemetryTime}</div>
+                            <div class="stat-label">Last Telemetry</div>
+                        </div>
+                    </div>
+
+                    <div class="container">
+                        <div class="panel">
+                            <h2>WebSocket Connection</h2>
+
+                            <div class="status ${this.connectionStatus}">
+                                Status: ${this.connectionStatus.toUpperCase()}
+                            </div>
+
+                            <div class="controls">
+                                <input
+                                    type="text"
+                                    .value=${this.wsUrl}
+                                    @input=${this.onUrlChange}
+                                    placeholder="WebSocket URL"
+                                    style="width: 200px;"
+                                />
+                                <br>
+                                <button
+                                    @click=${this.connect}
+                                    ?disabled=${this.connectionStatus === 'connected'}
+                                >
+                                    Connect
+                                </button>
+                                <button
+                                    @click=${this.disconnect}
+                                    ?disabled=${this.connectionStatus === 'disconnected'}
+                                >
+                                    Disconnect
+                                </button>
+                                <button
+                                    @click=${this.sendMessage}
+                                    ?disabled=${this.connectionStatus !== 'connected'}
+                                >
+                                    Send Test Message
+                                </button>
+                                <button
+                                    @click=${this.sendPing}
+                                    ?disabled=${this.connectionStatus !== 'connected'}
+                                >
+                                    Send Ping
+                                </button>
+                                <button @click=${this.clearLogs}>Clear Logs</button>
+                            </div>
+
+                            <h3>Connection Log</h3>
+                            <div class="log">
+                                ${this.logs.map(log => html`
+                                    <div class="log-entry ${log.type}">
+                                        [${log.timestamp}] ${log.message}
+                                    </div>
+                                `)}
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <h2>Telemetry Data</h2>
+
+                            <div class="telemetry-data">
+                                ${this.telemetryData ?
+                                    html`<pre>${JSON.stringify(this.telemetryData, null, 2)}</pre>` :
+                                    html`<div style="color: #666; font-style: italic;">No telemetry data received yet</div>`
+                                }
+                            </div>
+
+                            <h3>Instructions</h3>
+                            <div style="font-size: 14px; color: #ccc; line-height: 1.5;">
+                                <p><strong>To test the WebSocket server:</strong></p>
+                                <ol>
+                                    <li>Start the telemetry server with WebSocket enabled:<br>
+                                        <code style="background: #333; padding: 2px 4px; border-radius: 3px;">
+                                            ./tt_telemetry_server --enable-websocket --ws-port 8081 --mock-telemetry
+                                        </code>
+                                    </li>
+                                    <li>Click "Connect" to connect to the WebSocket server</li>
+                                    <li>You should receive a "hello" message upon connection</li>
+                                    <li>Use "Send Test Message" to test bidirectional communication</li>
+                                    <li>Telemetry data will appear automatically when available</li>
+                                </ol>
+
+                                <p><strong>Troubleshooting Error 1006:</strong></p>
+                                <ul style="color: #ff6b6b;">
+                                    <li><strong>Server not running:</strong> Make sure tt_telemetry_server is started with --enable-websocket</li>
+                                    <li><strong>Wrong port:</strong> Check if server is running on port 8081 (or change URL above)</li>
+                                    <li><strong>Check server logs:</strong> Look for "Starting WebSocket server on port 8081" message</li>
+                                    <li><strong>Firewall:</strong> Ensure port 8081 is not blocked</li>
+                                    <li><strong>Build issues:</strong> Make sure the WebSocket server compiled successfully</li>
+                                </ul>
+
+                                <p><strong>Expected behavior:</strong></p>
+                                <ul>
+                                    <li>Server sends "hello" on new connections</li>
+                                    <li>Server echoes back any messages you send</li>
+                                    <li>Server broadcasts telemetry data as JSON every 5 seconds (with mock data)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        customElements.define('websocket-tester', WebSocketTester);
+    </script>
+</body>
+</html>

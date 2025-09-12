@@ -24,7 +24,7 @@
 #include <telemetry/mock_telemetry_provider.hpp>
 #include <telemetry/telemetry_provider.hpp>
 #include <server/web_server.hpp>
-
+#include <server/websocket_server.hpp>
 
 /**************************************************************************************************
  Main
@@ -140,6 +140,8 @@ int main(int argc, char* argv[]) {
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
         "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
+        "ws-port", "Port for the WebSocket server", cxxopts::value<int>()->default_value("8081"))(
+        "enable-websocket", "Enable WebSocket server", cxxopts::value<bool>()->default_value("false"))(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
         cxxopts::value<std::string>())("h,help", "Print usage");
@@ -154,6 +156,8 @@ int main(int argc, char* argv[]) {
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
+    int ws_port = result["ws-port"].as<int>();
+    bool enable_websocket = result["enable-websocket"].as<bool>();
     std::string metal_src_dir = "";
     if (result.count("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
@@ -176,21 +180,37 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
     std::tie(web_server2, web_server2_subscriber) = run_web_server(secondary_port, metal_src_dir);
 
+    // WebSocket server (optional)
+    std::future<bool> websocket_server;
+    std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers = {web_server_subscriber, web_server2_subscriber};
+
+    if (enable_websocket) {
+        log_info(tt::LogAlways, "Starting WebSocket server on port {}", ws_port);
+        std::tie(websocket_server, websocket_subscriber) = run_web_socket_server(ws_port, metal_src_dir);
+        subscribers.push_back(websocket_subscriber);
+    }
+
     if (use_mock_telemetry) {
         // Mock telemetry
         log_info(tt::LogAlways, "Using mock telemetry data");
-        MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
+        MockTelemetryProvider mock_telemetry(subscribers);
         mock_telemetry.run();
     } else {
         // Real telemetry
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_provider({web_server_subscriber, web_server2_subscriber});
+        run_telemetry_provider(subscribers);
     }
 
     // Run until finished
     bool web_server_succeeded = web_server.get();
     bool web_server2_succeeded = web_server2.get();
-    if (!web_server_succeeded || !web_server2_succeeded) {
+    bool websocket_succeeded = true;
+    if (enable_websocket) {
+        websocket_succeeded = websocket_server.get();
+    }
+
+    if (!web_server_succeeded || !web_server2_succeeded || !websocket_succeeded) {
         return 1;
     }
 
