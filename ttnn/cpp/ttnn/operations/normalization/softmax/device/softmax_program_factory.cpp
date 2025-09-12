@@ -814,6 +814,11 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         im0_t = 80;
         im3_t = 80;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
+        // TODO:
+        // See issue:
+        TT_FATAL(
+            !attributes.numeric_stable,
+            "For softmax, large_kernel and numeric_stable cannot be currently both enabled");
     }
     if (!use_large_kernel) {
         TT_FATAL(

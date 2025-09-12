@@ -63,7 +63,7 @@ def main():
         attention_scores = query @ key
         attention_scores = attention_scores * (1 / (head_size**0.5))
         attention_scores += attention_mask
-        attention_probs = ttnn.softmax(attention_scores, dim=-1)
+        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False)
 
         context_layer = attention_probs @ value
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
@@ -112,24 +112,24 @@ def main():
         torch_output_bias, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    start = time.time()
-    multi_head_attention(
-        hidden_states,
-        attention_mask,
-        query_weight,
-        query_bias,
-        key_weight,
-        key_bias,
-        value_weight,
-        value_bias,
-        output_weight,
-        output_bias,
-        num_heads=num_heads,
-    )
-    end = time.time()
-    duration = end - start
+    # start = time.time()
+    # multi_head_attention(
+    #    hidden_states,
+    #    attention_mask,
+    #    query_weight,
+    #    query_bias,
+    #    key_weight,
+    #    key_bias,
+    #    value_weight,
+    #    value_bias,
+    #    output_weight,
+    #    output_bias,
+    #    num_heads=num_heads,
+    # )
+    # end = time.time()
+    # duration = end - start
 
-    logger.info(f"Multi-head attention ran in {duration} seconds for the first iteration")
+    # logger.info(f"Multi-head attention ran in {duration} seconds for the first iteration")
 
     start = time.time()
     output = multi_head_attention(
@@ -198,6 +198,7 @@ def main():
         ttnn.deallocate(query)
         ttnn.deallocate(key)
 
+        print("Head_size={head_size}")
         attention_probs = ttnn.transformer.attention_softmax_(
             attention_scores, attention_mask=attention_mask, head_size=head_size
         )
@@ -242,21 +243,21 @@ def main():
     output_weight = ttnn.to_device(output_weight, device)
     output_bias = ttnn.to_device(output_bias, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    start = time.time()
-    hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-    optimized_output = optimized_multi_head_attention(
-        hidden_states,
-        attention_mask,
-        qkv_weight,
-        qkv_bias,
-        output_weight,
-        output_bias,
-        num_heads=num_heads,
-    )
-    end = time.time()
-    duration = end - start
+    # start = time.time()
+    # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+    # optimized_output = optimized_multi_head_attention(
+    #    hidden_states,
+    #    attention_mask,
+    #    qkv_weight,
+    #    qkv_bias,
+    #    output_weight,
+    #    output_bias,
+    #    num_heads=num_heads,
+    # )
+    # end = time.time()
+    # duration = end - start
 
-    logger.info(f"Optimized multi-head attention ran in {duration} seconds for the first iteration")
+    # logger.info(f"Optimized multi-head attention ran in {duration} seconds for the first iteration")
 
     start = time.time()
     optimized_output = optimized_multi_head_attention(
@@ -278,7 +279,20 @@ def main():
     torch_output = ttnn.to_torch(output)
     torch_optimized_output = ttnn.to_torch(optimized_output)
 
-    assert torch.allclose(torch_output, torch_optimized_output)
+    if not torch.allclose(torch_output, torch_optimized_output):
+        print("Output doesn't match")
+        # logger.info("Output doesn't match")
+
+        out_list = torch_output.flatten().tolist()
+        opt_list = torch_optimized_output.flatten().tolist()
+        num = min(100, len(out_list))
+        for i in range(0, num):
+            print(f"{out_list[i]} {opt_list[i]}")
+            # logger.info(f"{out_list[i]} {opt_list[i]}")
+
+        assert False
+
+    # assert torch.allclose(torch_output, torch_optimized_output)
 
     ttnn.close_device(device)
 
