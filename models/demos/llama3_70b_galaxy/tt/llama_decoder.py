@@ -157,7 +157,7 @@ class TtTransformerBlock(LightweightModule):
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            h = ttnn.add(x, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            h = ttnn.add(x, h)
             attn_in_sharded, _ = self.attention_norm(h, None, mode)
             # attn_in_sharded, _ = self.attention_norm(x, h, mode)
             # attn_in_sharded = ttnn.to_memory_config(
@@ -176,13 +176,13 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)  # , dtype=ttnn.bfloat16)
+            h = ttnn.add(x, attn_out)  # , dtype=ttnn.bfloat16)
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, h, mode)
 
         if mode == "decode":
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            h = ttnn.add(attn_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            h = ttnn.add(attn_out, h)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
             # ff_in_sharded = ttnn.to_memory_config(ff_in_sharded, self.model_config["SHARDED_FF12_RING_MEMCFG"])
             # attn_out.deallocate(True)
@@ -192,7 +192,7 @@ class TtTransformerBlock(LightweightModule):
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             if self.args.qk_norm:
                 h = ttnn.to_memory_config(h, skip_mem_cfg)
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h)  # , dtype=ttnn.bfloat16)
             # if mode == "decode":
             #     ff_out.deallocate(True)
             if mode == "prefill":

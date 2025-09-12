@@ -63,9 +63,9 @@ class DistributedNorm(LightweightModule):
         """Apply a norm, possibly gathering inputs if required."""
         if self.TG:
             if mode == "decode":
-                if self.args.qk_norm:
-                    x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-                    res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
+                # if self.args.qk_norm:
+                #     x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
+                #     res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
 
                 return tt_sharded_distributed_rmsnorm(
                     x,
