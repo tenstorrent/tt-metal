@@ -67,7 +67,12 @@ def run_slice_reshard_impl(
 
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
-        input_tensor_sliced = input_tensor[output_offset : output_offset + output_shape, :, :, :]
+        input_tensor_sliced = input_tensor[output_offset : min(output_offset + output_shape, input_shape[dim]), :, :, :]
+        pad_offset = input_tensor.ndim - 1 - dim
+        pad_list = [0] * (pad_offset * 2)
+        pad_list.extend([0, max(output_offset + output_shape - input_shape[dim], 0)])
+        padding = tuple(pad_list)
+        input_tensor_sliced = torch.nn.functional.pad(input_tensor_sliced, padding)
         sr_output_tensor_goldens_list.append(input_tensor_sliced)
 
         input_tensor_mesh = ttnn.from_torch(
@@ -159,12 +164,14 @@ def run_slice_reshard_impl(
 @pytest.mark.parametrize(
     "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape",
     [
-        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88),
-        (8, [176, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 168),
+        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88),  # (1,8)
+        (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84),  # (1,4)
+        (8, [176, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 168),  # (1,8)
     ],
     ids=[
-        "mochi_vae_1",
-        "mochi_vae_2",
+        "8mochi_vae_1",
+        "4mochi_vae_1",
+        "8mochi_vae_2",
     ],
 )
 @pytest.mark.parametrize(

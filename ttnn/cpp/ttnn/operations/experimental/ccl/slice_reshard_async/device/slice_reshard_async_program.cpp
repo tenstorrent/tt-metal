@@ -73,19 +73,21 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     uint32_t output_outer_dim_size = output_tensor_shape[0];
     bool is_first_device = !backward_device.has_value();
     bool is_last_device = !forward_device.has_value();
+    // output coords for this device, in the input space
     uint32_t global_output_outer_dim_start = output_dim_offset + output_outer_dim_size * ring_index;
     uint32_t global_output_outer_dim_end = output_dim_offset + output_outer_dim_size * (ring_index + 1) - 1;
+    // input coords for this device, in the input space
     uint32_t global_input_outer_dim_start = input_outer_dim_size * ring_index;
     uint32_t global_input_outer_dim_end = input_outer_dim_size * (ring_index + 1) - 1;
 
     int32_t backward_device_end = std::max((int32_t)global_input_outer_dim_start - 1, 0);
     uint32_t outer_dims_from_backward = std::max(backward_device_end - (int32_t)global_output_outer_dim_start + 1, 0);
-    int32_t forward_device_start = std::min(global_input_outer_dim_end + 1, input_outer_dim_size * ring_size - 1);
+    int32_t forward_device_start = global_input_outer_dim_end + 1;
     uint32_t outer_dims_from_forward = std::max((int32_t)global_output_outer_dim_end - forward_device_start + 1, 0);
     uint32_t outer_dims_to_keep_start =
         std::max((int32_t)global_output_outer_dim_start - (int32_t)global_input_outer_dim_start, 0);
     uint32_t outer_dims_to_keep_end = std::min(
-        outer_dims_to_keep_start - outer_dims_from_backward + output_outer_dim_size - 1, global_input_outer_dim_end);
+        outer_dims_to_keep_start - outer_dims_from_backward + output_outer_dim_size - 1, input_outer_dim_size - 1);
     int32_t backward_device_output_end =
         std::max((int32_t)global_output_outer_dim_start - 1, (int32_t)output_dim_offset - 1);
     uint32_t outer_dims_to_backward =
@@ -168,6 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 direction ? is_last_device : is_first_device,
                 sender_cb_index,  // cb_forward_id
                 direction,
+                page_size,
             };
             TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
             TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
@@ -182,11 +185,11 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),                            // input_tensor_address
                 output_tensor.buffer()->address(),                           // output_tensor_address
-                page_size,                                                   // stick_size
                 stick_start_id,                                              // stick_start_id
                 num_sticks_to_read,                                          // num_sticks_to_read
                 input_outer_dim_size,                                        // input_outer_dim_size
                 direction ? outer_dims_to_forward : outer_dims_to_backward,  // outer_dims_to_forward
+                outer_dims_from_forward,                                     // outer_dims_from_forward
                 outer_dims_to_keep_start,                                    // outer_dims_to_keep
                 outer_dims_to_keep_end,                                      // outer_dims_to_keep
                 num_sticks_per_outer_dim,                                    // num_sticks_per_outer_dim
@@ -223,6 +226,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 outer_dims_to_keep_start,                                        // outer_dims_to_keep
                 outer_dims_to_keep_end,                                          // outer_dims_to_keep
                 direction ? outer_dims_from_backward : outer_dims_from_forward,  // outer_dims_to_receive
+                outer_dims_from_forward,                                         // outer_dims_from_forward
                 num_sticks_per_outer_dim,                                        // num_sticks_per_outer_dim
                 virtual_core.x,                                                  // out_ready_sem_noc0_x
                 virtual_core.y,                                                  // out_ready_sem_noc0_y
@@ -285,7 +289,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                     auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                     worker_writer_runtime_args[0] = input.buffer()->address();
                     worker_writer_runtime_args[1] = output.buffer()->address();
-                    worker_writer_runtime_args[13] = out_ready_semaphore.address();
+                    worker_writer_runtime_args[14] = out_ready_semaphore.address();
 
                     // if (barrier_semaphore.has_value()) {
                     // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
