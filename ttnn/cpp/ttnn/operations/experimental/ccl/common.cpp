@@ -42,11 +42,7 @@ bool use_composite_reduce_scatter(
     // Use composite if tiled and scattering on padded dim 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    if (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) {
-        return true;
-    }
-
-    return false;
+    return scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0;
 }
 
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config) {

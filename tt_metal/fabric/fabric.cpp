@@ -51,11 +51,7 @@ bool is_TG_gateway_connection(
 
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
-    if (mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id)) {
-        return true;
-    }
-
-    return false;
+    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
 }
 
 }  // namespace
