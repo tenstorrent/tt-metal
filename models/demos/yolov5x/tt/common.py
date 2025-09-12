@@ -52,7 +52,6 @@ class TtYOLOv5xConv2D:
         reshard_if_not_optimal=False,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=False,
-        # core_count=64,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -70,7 +69,6 @@ class TtYOLOv5xConv2D:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.auto_shard = auto_shard
         self.enable_weights_double_buffer = enable_weights_double_buffer
-        # self.core_count = core_count
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -95,12 +93,7 @@ class TtYOLOv5xConv2D:
             output_layout=ttnn.TILE_LAYOUT,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_weights_double_buffer=self.enable_weights_double_buffer,
-            enable_split_reader=True,
         )
-        # if self.core_count is not None:
-        #     shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
-        #     self.conv_config.core_grid = shard_grid
-        #     self.conv_config.override_sharding_config = True
 
         if auto_shard:
             self.conv_config.shard_layout = None

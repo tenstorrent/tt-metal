@@ -24,19 +24,31 @@ class Yolov5x:
             deallocate_activation=True,
         )
         self.conv2 = TtYOLOv5xConv2D(
-            device, parameters.conv_args[1].conv, conv_pt.model[1].conv, deallocate_activation=True, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            device,
+            parameters.conv_args[1].conv,
+            conv_pt.model[1].conv,
+            deallocate_activation=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.c3_1 = TtnnC3(
             shortcut=True, n=4, device=self.device, parameters=parameters.conv_args[2], conv_pt=conv_pt.model[2]
         )
         self.conv3 = TtYOLOv5xConv2D(
-            device, parameters.conv_args[3].conv, conv_pt.model[3].conv, deallocate_activation=False, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            device,
+            parameters.conv_args[3].conv,
+            conv_pt.model[3].conv,
+            deallocate_activation=False,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.c3_2 = TtnnC3(
             shortcut=True, n=8, device=self.device, parameters=parameters.conv_args[4], conv_pt=conv_pt.model[4]
         )
         self.conv4 = TtYOLOv5xConv2D(
-            device, parameters.conv_args[5].conv, conv_pt.model[5].conv, deallocate_activation=False, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            device,
+            parameters.conv_args[5].conv,
+            conv_pt.model[5].conv,
+            deallocate_activation=False,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.c3_3 = TtnnC3(
             shortcut=True, n=12, device=self.device, parameters=parameters.conv_args[6], conv_pt=conv_pt.model[6]

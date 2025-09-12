@@ -36,7 +36,7 @@ class TtnnSPPF:
             self.conv_pt.cv2.conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=True,
-            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
     def __call__(self, x):
@@ -71,7 +71,7 @@ class TtnnSPPF:
         out = concat(-1, True, *y)
 
         deallocate_tensors(*y)
-
+        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = self.cv2(out)
 
         return out
