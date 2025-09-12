@@ -94,6 +94,17 @@ static std::vector<Tensor> pool2d_invoke(
     auto input_shape = input_tensor.logical_shape();
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
 
+    ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
+    MemoryConfig out_memory_config = input_tensor.memory_config();
+    bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
+    Tensor input_tensor_flattened = input_tensor;
+    // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
+    if (!is_tensor_already_flattened && !out_memory_config.shard_spec().has_value()) {
+        const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
+        const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
+        input_tensor_flattened = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+        input_tensor_shape = flattened_input_shape;
+    }
     // Check if this is a global pooling case that can use reduce operations directly
     bool bypass_to_reduce = is_global_pool(input_h, input_w, kernel_size, stride, padding_4d, count_include_pad);
 
@@ -107,7 +118,6 @@ static std::vector<Tensor> pool2d_invoke(
             get_bf16_pool_scalar(pool_type, kernel_size.at(0), kernel_size.at(1), divisor_override));
     }
     sliding_window::ParallelConfig parallel_config;
-    MemoryConfig out_memory_config = input_tensor.memory_config();
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
     Tensor input_tensor_sharded = input_tensor;
@@ -167,18 +177,6 @@ static std::vector<Tensor> pool2d_invoke(
             input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
                                        : (shard_width % 16 == 0)                      ? 16U
                                                                                       : 8U;
-        }
-
-        ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
-
-        bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
-        Tensor input_tensor_flattened = input_tensor;
-        // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
-        if (!is_tensor_already_flattened) {
-            const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
-            const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
-            input_tensor_flattened = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
-            input_tensor_shape = flattened_input_shape;
         }
 
         uint32_t input_tensor_width_snapped_to_channels_alignment =
