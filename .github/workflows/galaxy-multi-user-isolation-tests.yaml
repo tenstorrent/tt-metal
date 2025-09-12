@@ -50,7 +50,7 @@ jobs:
         run: |
           rm -rf ./multihosttest
           mkdir -p ./multihosttest
-          cat <<EOF > docker-compose.temp.yml
+          cat <<EOF > docker-compose.yaml
           version: "3.9"
           services:
             tray-1:
@@ -131,8 +131,8 @@ jobs:
           EOF
       - name: Run Docker Compose
         run: |
-          docker compose -f docker up --abort-on-container-exit
+          docker compose up -d
 
       - name: Tear down containers
         if: always()
-        run: docker compose -f docker-compose.temp.yml down
+        run: docker compose -f docker-compose.yaml down
