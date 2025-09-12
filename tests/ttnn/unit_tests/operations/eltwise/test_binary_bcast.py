@@ -3090,12 +3090,29 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [32, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
+# Doesn't work for now
+# block_sharded_memory_config = ttnn.create_sharded_memory_config(
+#     [32, 32],
+#     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+#     strategy=ttnn.ShardStrategy.BLOCK,
+#     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+#     use_height_and_width_as_shard_shape=True,
+# )
+
+block_sharded_memory_config = ttnn.MemoryConfig(
+    ttnn.BufferType.L1,
+    ttnn.NdShardSpec(
+        shard_shape=[32, 32],  # Shard size in each dimension
+        grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        # shard_distribution_strategy=ttnn.ShardDistributionStrategy.GRID_2D,     # Doesn't work for now
+    ),
+)
+
+interleaved_l1_memory_config = ttnn.MemoryConfig(
+    memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+    buffer_type=ttnn.BufferType.L1,
 )
 
 
@@ -3110,13 +3127,15 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 @pytest.mark.parametrize(
     "a_config, b_config, out_config",
     [
-        # [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
-        # [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
-        # [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, block_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [interleaved_l1_memory_config, interleaved_l1_memory_config, interleaved_l1_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
+        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, block_sharded_memory_config],
         [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
-        # [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
-        # [block_sharded_memory_config, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
-        # [block_sharded_memory_config, block_sharded_memory_config, block_sharded_memory_config],
+        [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
+        [block_sharded_memory_config, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
+        [block_sharded_memory_config, block_sharded_memory_config, block_sharded_memory_config],
     ],
 )
 @pytest.mark.parametrize(

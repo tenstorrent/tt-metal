@@ -221,38 +221,38 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Validate that all shard specs match
-    if (tensor_a_sharded) {
-        if (tensor_b_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.subtile_broadcast_type);
-        }
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_a.shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (tensor_b_sharded) {
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_b->shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (output_sharded) {
-        TT_FATAL(
-            attributes.memory_config.shard_spec().has_value(),
-            "Sharded output memory config must have shard spec if neither input is sharded");
-    }
+    // // Validate that all shard specs match
+    // if (tensor_a_sharded) {
+    //     if (tensor_b_sharded) {
+    //         validate_sharding(
+    //             input_tensor_a.memory_config().memory_layout(),
+    //             *input_tensor_a.shard_spec(),
+    //             input_tensor_b->memory_config().memory_layout(),
+    //             *input_tensor_b->shard_spec(),
+    //             attributes.subtile_broadcast_type);
+    //     }
+    //     if (output_sharded) {
+    //         validate_sharding(
+    //             input_tensor_a.memory_config().memory_layout(),
+    //             *input_tensor_a.shard_spec(),
+    //             attributes.memory_config.memory_layout(),
+    //             attributes.memory_config.shard_spec().value_or(*input_tensor_a.shard_spec()),
+    //             attributes.subtile_broadcast_type);
+    //     }
+    // } else if (tensor_b_sharded) {
+    //     if (output_sharded) {
+    //         validate_sharding(
+    //             input_tensor_b->memory_config().memory_layout(),
+    //             *input_tensor_b->shard_spec(),
+    //             attributes.memory_config.memory_layout(),
+    //             attributes.memory_config.shard_spec().value_or(*input_tensor_b->shard_spec()),
+    //             attributes.subtile_broadcast_type);
+    //     }
+    // } else if (output_sharded) {
+    //     TT_FATAL(
+    //         attributes.memory_config.shard_spec().has_value(),
+    //         "Sharded output memory config must have shard spec if neither input is sharded");
+    // }
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
@@ -370,25 +370,27 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return output_tensor->tensor_spec();
     }
 
-    if (attributes.memory_config.is_sharded()) {
-        const auto& memory_layout = attributes.memory_config.memory_layout();
-        const auto& buffer_type = attributes.memory_config.buffer_type();
-        const auto& shard_spec = attributes.memory_config.shard_spec();
-        const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
-        const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() : std::nullopt;
-        const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
-                                        : input_a_shard_spec.has_value() ? *input_a_shard_spec
-                                                                         : *input_b_shard_spec;
-        return TensorSpec(
-            output_shape,
-            TensorLayout(
-                attributes.get_dtype(),
-                PageConfig(Layout::TILE),
-                MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
-    }
+    return input_tensor_a.tensor_spec();
 
-    return TensorSpec(
-        output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
+    // if (attributes.memory_config.is_sharded()) {
+    //     const auto& memory_layout = attributes.memory_config.memory_layout();
+    //     const auto& buffer_type = attributes.memory_config.buffer_type();
+    //     const auto& shard_spec = attributes.memory_config.shard_spec();
+    //     const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
+    //     const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() :
+    //     std::nullopt; const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
+    //                                     : input_a_shard_spec.has_value() ? *input_a_shard_spec
+    //                                                                      : *input_b_shard_spec;
+    //     return TensorSpec(
+    //         output_shape,
+    //         TensorLayout(
+    //             attributes.get_dtype(),
+    //             PageConfig(Layout::TILE),
+    //             MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
+    // }
+
+    // return TensorSpec(
+    //     output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
