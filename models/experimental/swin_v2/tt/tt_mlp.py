@@ -4,6 +4,14 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+
 program_configs = {
     "linear_1_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -100,6 +108,9 @@ class TtMLP:
         self.activation_layer = activation_layer
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="swin_mlp")
+
         for hidden_dim in self.hidden_channels[:-1]:
             if x.shape[-1] == 96:
                 x = ttnn.to_memory_config(
@@ -265,5 +276,4 @@ class TtMLP:
                 ),
             )
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        ttnn.ReadDeviceProfiler(self.device)
         return x

@@ -12,12 +12,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
 
 
-@pytest.mark.parametrize("batch_sizes", [(1,)])
-@pytest.mark.parametrize("m_size", [384])
-@pytest.mark.parametrize("k_size", [1024])
-@pytest.mark.parametrize("n_size", [1024])
-@pytest.mark.parametrize("use_bias", [True, False])
+@pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])
+@pytest.mark.parametrize("out_subblock", [[1, 1]])
+@pytest.mark.parametrize("out_block", [[1, 4]])
+@pytest.mark.parametrize("num_cores", [62, 64, 4608])
+@pytest.mark.parametrize("batch_sizes", [(256,)])
+@pytest.mark.parametrize("m_size", [64])
+@pytest.mark.parametrize("k_size", [96])
+@pytest.mark.parametrize("n_size", [288])
+@pytest.mark.parametrize("use_bias", [True])
 def test_linear(
+    in0_block_w,
+    out_subblock,
+    out_block,
+    num_cores,
     batch_sizes,
     m_size,
     k_size,
@@ -61,10 +69,27 @@ def test_linear(
     else:
         bias = None
 
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock[0],
+        out_subblock_w=out_subblock[1],
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
     output_tensor = ttnn.linear(
         input_tensor_a,
         input_tensor_b,
         bias=bias,
+        program_config=matmul_config,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+        ),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     output_tensor = ttnn.to_torch(output_tensor)
 

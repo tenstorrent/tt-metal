@@ -6,6 +6,13 @@ import ttnn
 from typing import List
 from models.experimental.swin_v2.tt.tt_swin_transformer_block import TtSwinTransformerBlock
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSwinTransformerBlockV2(TtSwinTransformerBlock):
     def __init__(
@@ -29,6 +36,9 @@ class TtSwinTransformerBlockV2(TtSwinTransformerBlock):
         self.attn_mask_shape = attn_mask.shape
 
     def forward(self, x):
+        if use_signpost:
+            signpost(header="swin_transformer_block_v2")
+
         attn = self.attn.forward(x)
         norm1 = ttnn.layer_norm(
             attn,

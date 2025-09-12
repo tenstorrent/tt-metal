@@ -139,9 +139,7 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     )
 
     torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
-
-    # Input tensor for testing
-    torch_input_tensor = torch.randn(1, 3, 512, 512)  # Sample input tensor
+    torch_input_tensor = torch.randn(1, 3, 512, 512)
     torch_output_tensor = torch_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
@@ -149,8 +147,6 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     )
 
     attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [8, 8], [3, 3], device)
-
-    # Convert the model to TTNN
     ttnn_model = TtSwinTransformer(
         device,
         parameters,
@@ -162,20 +158,21 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
         attn_mask_tuple=attn_mask_tuple,
     )
 
-    # Convert input tensor to TTNN format
+    n, c, h, w = torch_input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-
-    # Apply TTNN model
+    input_tensor = input_tensor.to(device, input_mem_config)
     output_tensor = ttnn_model(input_tensor)
-
-    # Convert output tensor back to Torch format
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)

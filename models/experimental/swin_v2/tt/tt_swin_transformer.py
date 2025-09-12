@@ -7,6 +7,13 @@ from models.experimental.swin_v2.tt.tt_patchmerging_v2 import TtPatchMergingV2
 import ttnn
 from models.experimental.swin_v2.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSwinTransformer:
     def __init__(
@@ -63,6 +70,9 @@ class TtSwinTransformer:
             index += 1
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="swin_transformer")
+
         N, C, H, W = x.shape
         min_channels = 16
         if C < min_channels:
@@ -75,7 +85,6 @@ class TtSwinTransformer:
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)
         x = self.conv2d(self.device, nhwc)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
 
         if self.norm_layer is None:
