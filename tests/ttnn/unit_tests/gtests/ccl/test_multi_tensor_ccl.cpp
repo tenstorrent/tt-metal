@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
@@ -102,21 +103,23 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsync) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
-    auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
+    auto forward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto backward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+        forward_semaphore, backward_semaphore};
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
 
     auto all_gathered = ttnn::experimental::all_gather_async(
         /* input_tensors */ tensors,
         /* persistent_output_buffer */ std::nullopt,
         /* dim */ 0,
-        /* multi_device_global_semaphore */ {multi_dev_semaphore},
+        /* cluster_axis */ 0,  // TODO or 1?
+        /* mesh_device */ *(mesh_device_.get()),
+        /* multi_device_global_semaphore */ multi_dev_semaphore,
         /* num_links */ 1,
         /* memory_config */ std::nullopt,
         /* topology */ ttnn::ccl::Topology::Linear,
         /* subdevice_id */ SubDeviceId(0),
-        /* cluster_axis */ 0,  // TODO or 1?
-        /* mesh_device */ *(mesh_device_.get()),
         /* use_optimal_ccl_for_llama */ false,
         /* barrier_semaphore */ std::nullopt,
         /* chunks_per_sync */ std::nullopt,

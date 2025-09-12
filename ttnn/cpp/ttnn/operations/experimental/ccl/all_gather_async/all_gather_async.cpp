@@ -267,7 +267,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     const int32_t dim,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::vector<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,

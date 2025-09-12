@@ -223,7 +223,7 @@ std::vector<Tensor> all_gather_async(
     uint32_t dim,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::vector<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

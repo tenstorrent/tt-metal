@@ -533,7 +533,7 @@ std::vector<Tensor> all_gather_async(
     const uint32_t dim,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::vector<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -551,7 +551,9 @@ std::vector<Tensor> all_gather_async(
             input_tensors[i],
             persistent_output_buffer,
             dim,
-            multi_device_global_semaphore[i],
+            {multi_device_global_semaphore.at(0).global_semaphores.at(i),
+             multi_device_global_semaphore.at(1).global_semaphores.at(
+                 i)},  // 0 = forward link, 1 = backward link, i = device index
             num_links,
             memory_config,
             topology,
