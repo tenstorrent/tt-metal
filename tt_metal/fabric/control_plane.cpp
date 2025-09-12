@@ -1735,10 +1735,10 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint16_t ew_dim = mesh_shape[1];  // east-west dimension
-    TT_ASSERT(num_chips <= 1024, "Number of chips exceeds 1024 for mesh {}", *mesh_id);
+    TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
-        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
-        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
+        mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
+        "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
         *mesh_id,
         mesh_shape[0],
         mesh_shape[1]);
