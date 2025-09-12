@@ -7,6 +7,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "autograd/auto_context.hpp"
@@ -14,6 +16,8 @@
 #include "autograd/graph.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/gpt_block.hpp"
+#include "modules/linear_module.hpp"
 
 namespace ttml::autograd {
 
@@ -132,6 +136,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<Graph>(m, "Graph");
     nb::class_<ModuleBase>(m, "ModuleBase");
+    nb::class_<modules::GPTBlock, ModuleBase>(m, "GPTBlock");
+    nb::class_<modules::LinearLayer, ModuleBase>(m, "LinearLayer");
     nb::class_<Tensor>(m, "Tensor");
     nb::class_<AutocastTensor>(m, "AutocastTensor");
     nb::class_<AutoContext>(m, "AutoContext");
@@ -157,6 +163,17 @@ void py_module(nb::module_& m) {
     py_module_base.def("train", &ModuleBase::train);
     py_module_base.def("eval", &ModuleBase::eval);
     py_module_base.def("set_run_mode", &ModuleBase::set_run_mode);
+
+    auto py_gpt_block_base = static_cast<nb::class_<modules::GPTBlock, ModuleBase>>(m.attr("GPTBlock"));
+    py_gpt_block_base.def(nb::init<uint32_t, uint32_t, float, bool>());
+    py_gpt_block_base.def("__call__", &modules::GPTBlock::operator());
+
+    auto py_linear_layer_base = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
+    py_linear_layer_base.def(nb::init<uint32_t, uint32_t, bool>());
+    py_linear_layer_base.def(nb::init<const TensorPtr&, const TensorPtr&>());
+    py_linear_layer_base.def(nb::init<const TensorPtr&, bool>());
+    py_linear_layer_base.def("get_weight", &modules::LinearLayer::get_weight);
+    py_linear_layer_base.def("__call__", &modules::LinearLayer::operator());
 
     auto py_tensor = static_cast<nb::class_<Tensor>>(m.attr("Tensor"));
     py_tensor.def(nb::init<const Tensor&>());
