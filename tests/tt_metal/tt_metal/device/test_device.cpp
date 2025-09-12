@@ -49,7 +49,7 @@ namespace unit_tests::basic::device {
 /// @param grid_size - grid size. will ping all cores from {0,0} to grid_size (non-inclusive)
 /// @return
 bool l1_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
@@ -84,7 +84,7 @@ bool l1_ping(
 /// @param num_channels - num_channels. will ping all channels from {0} to num_channels (non-inclusive)
 /// @return
 bool dram_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {

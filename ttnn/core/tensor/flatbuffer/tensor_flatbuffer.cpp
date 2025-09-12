@@ -50,7 +50,10 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 }
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
-    uint64_t size_bytes, const TensorSpec& spec, tt::stl::Span<std::byte> data, tt::tt_metal::MemoryPin memory_pin) {
+    uint64_t size_bytes,
+    const TensorSpec& spec,
+    tt::stl::Span<std::byte> data,
+    const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
@@ -138,7 +141,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
-    tt::tt_metal::MemoryPin memory_pin) {
+    const tt::tt_metal::MemoryPin& memory_pin) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();

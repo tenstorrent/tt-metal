@@ -30,7 +30,7 @@ using AdaptedView = decltype(xt::adapt(
 // Returns `AdaptedView<T>` for a span of data.
 // Does not take ownership of the data.
 template <typename T>
-auto adapt(tt::stl::Span<T> data, std::vector<size_t> shape_vec) {
+auto adapt(tt::stl::Span<T> data, const std::vector<size_t>& shape_vec) {
     return xt::adapt(data.data(), data.size(), xt::no_ownership(), std::move(shape_vec));
 }
 
@@ -39,7 +39,7 @@ auto adapt(tt::stl::Span<T> data, std::vector<size_t> shape_vec) {
 template <typename T>
 class XtensorAdapter {
 public:
-    XtensorAdapter(std::vector<T>&& data, std::vector<size_t> shape_vec) :
+    XtensorAdapter(std::vector<T>&& data, const std::vector<size_t>& shape_vec) :
         data_(std::move(data)), expr_(adapt(tt::stl::make_span(data_), std::move(shape_vec))) {}
 
     XtensorAdapter(const XtensorAdapter& other) :

@@ -13,7 +13,7 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 void point_to_point_barrier(
-    const std::vector<Rank>& ranks, std::shared_ptr<multihost::DistributedContext> distributed_context) {
+    const std::vector<Rank>& ranks, const std::shared_ptr<multihost::DistributedContext>& distributed_context) {
     TT_FATAL(ranks.size() == 2, "Point-to-point barrier requires exactly two ranks.");
     TT_FATAL(ranks[0] != ranks[1], "Point-to-Point barrier cannot be used for synchronization within the same rank.");
     TT_FATAL(
@@ -67,7 +67,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     this->connect_with_peer(context);
 }
 
-void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext> context) {
+void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
     // Convention:

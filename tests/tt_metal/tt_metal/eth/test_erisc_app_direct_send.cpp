@@ -197,8 +197,8 @@ bool eth_direct_sender_receiver_kernels(
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
-    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {
