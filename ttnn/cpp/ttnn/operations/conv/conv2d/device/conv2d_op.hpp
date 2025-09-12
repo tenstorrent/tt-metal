@@ -303,6 +303,7 @@ struct OptimizedConvNew {
         enable_activation_reuse(enable_activation_reuse),
         config_tensors_in_dram(config_tensors_in_dram) {};
     void validate(
+        const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
@@ -385,6 +386,7 @@ bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_
 struct conv_op_l1_usage {
     uint32_t tensor_allocation_size;
     uint32_t CB_allocation_size;
+};
 
 // L1 allocation is either for the output tensor or for Circular Buffers.
 conv_op_l1_usage calculate_L1_usage(

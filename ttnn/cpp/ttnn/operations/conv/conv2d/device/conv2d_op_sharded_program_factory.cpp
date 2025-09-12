@@ -750,6 +750,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index};
 
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> writer_mcast_sender_defines;
+    std::map<std::string, std::string> compute_defines;
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
+        writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+    } else {
+        // Put enough 0s so that the offsets of activation reuse args are the same
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
+    }
+
     if (enable_activation_reuse) {
         std::vector<uint32_t> activation_reuse_args = {
             activation_reuse_config.act_cb_num_tiles_split,
@@ -762,20 +781,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
-    }
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
-    std::map<std::string, std::string> writer_mcast_sender_defines;
-    std::map<std::string, std::string> compute_defines;
-
-    if (config_tensors_in_dram) {
-        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
     }
 
     if (skip_activation_mcast) {
@@ -1057,8 +1062,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                         activation_reuse_config.cores_with_non_meaningful_work.end()) {
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
-                } 
-                reader_rt_args.push_back(reader_remaining_tiles_to_push);
+                    reader_rt_args.push_back(reader_remaining_tiles_to_push);
+                }
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
                 core_index++;
             }
