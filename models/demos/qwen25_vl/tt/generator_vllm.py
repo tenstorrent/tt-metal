@@ -4,21 +4,23 @@
 
 
 from types import SimpleNamespace
+from typing import Mapping, Optional
 
 import torch
 from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
-from vllm.inputs import INPUT_REGISTRY
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.generator_vllm import input_processor_for_multimodal
+from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -89,7 +91,15 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
+class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        return {"image": None, "video": 0}  # [INFO] videos are not supported yet
+
+
+# TOOD: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
+@MULTIMODAL_REGISTRY.register_processor(
+    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+)
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)

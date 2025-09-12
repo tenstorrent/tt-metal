@@ -10,7 +10,9 @@ from llama_models.llama3.api.chat_format import create_vision_mask
 from PIL.Image import Image
 from tqdm import tqdm
 from transformers import BatchFeature
+from vllm.model_executor.models.gemma3_mm import Gemma3ProcessingInfo
 from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
+from vllm.model_executor.models.mllama import MllamaProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
     MultiModalDataDict,
@@ -20,7 +22,7 @@ from vllm.multimodal.inputs import (
     MultiModalKwargs,
 )
 from vllm.multimodal.parse import MultiModalDataItems
-from vllm.multimodal.processing import BaseProcessingInfo, EncDecMultiModalProcessor, PromptUpdate
+from vllm.multimodal.processing import BaseMultiModalProcessor, EncDecMultiModalProcessor, PromptUpdate
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
@@ -106,25 +108,12 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
-class MllamaProcessingInfo(BaseProcessingInfo):
-    """Processing information for Mllama multi-modal models."""
-
-    def get_hf_config(self):
-        from transformers import MllamaConfig
-
-        return self.ctx.get_hf_config(MllamaConfig)
-
-    def get_hf_processor(self, **kwargs: object):
-        from transformers.models.mllama.processing_mllama import MllamaProcessor
-
-        return self.ctx.get_hf_processor(MllamaProcessor, **kwargs)
-
+class TT_MllamaProcessingInfo(MllamaProcessingInfo):
     def get_supported_mm_limits(self):
-        """Get the supported multimodal limits."""
         return {"image": 1}  # TT implementation currently only supports 1 image
 
 
-class MllamaDummyInputsBuilder(BaseDummyInputsBuilder[MllamaProcessingInfo]):
+class DummyInputsBuilder(BaseDummyInputsBuilder):
     """
     We don't need to implement a dummy input builder since we don't do profiling in vLLM.
     Create callable class just for processor registration.
@@ -145,7 +134,7 @@ class MllamaDummyInputsBuilder(BaseDummyInputsBuilder[MllamaProcessingInfo]):
 # and passes the images directly to the model. In the future, the apply() function should
 # call super().apply() (similar to vllm.model_executor.models.mllama.py::MllamaMultiModalProcessor)
 # and _get_mm_fields_config / _get_prompt_updates should be implemented.
-class MllamaMultiModalProcessor(EncDecMultiModalProcessor[MllamaProcessingInfo]):
+class MllamaMultiModalProcessor(EncDecMultiModalProcessor[TT_MllamaProcessingInfo]):
     """Multi-modal processor for Llama3.2-Vision that handles encoder-decoder inputs."""
 
     def create_encoder_prompt(
@@ -260,37 +249,8 @@ class MllamaMultiModalProcessor(EncDecMultiModalProcessor[MllamaProcessingInfo])
         return mm_inputs
 
 
-# def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-#     mm_processor_kwargs = getattr(ctx.model_config, "mm_processor_kwargs", None) or {}
-#     input_processor = ctx.get_hf_processor(**mm_processor_kwargs)
-
-#     if "prompt" in inputs:
-#         prompt_text = inputs["prompt"]
-#     else:
-#         # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
-#         assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
-#         prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-
-#     multi_modal_data = inputs.get("multi_modal_data", None)
-
-#     processed_inputs = input_processor(
-#         text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-#         images=multi_modal_data["image"] if multi_modal_data is not None else None,
-#         videos=None,  # [INFO] videos are not supported yet
-#         return_tensors="pt",
-#     )
-
-#     assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
-#     return {
-#         "type": inputs["type"],
-#         "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
-#         "prompt": prompt_text,
-#         "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
-#     }
-
-
 @MULTIMODAL_REGISTRY.register_processor(
-    MllamaMultiModalProcessor, info=MllamaProcessingInfo, dummy_inputs=MllamaDummyInputsBuilder
+    MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
     def __init__(self, *args, **kwargs):
@@ -488,7 +448,61 @@ class MistralForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-# @INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal) # TODO: replace with MllamaMultiModalProcessor
+class MultiModalProcessor(BaseMultiModalProcessor):
+    """Multi-modal processor for Gemma3 / Qwen-VL."""
+
+    def _get_mm_fields_config(
+        self,
+        hf_inputs: "BatchFeature",
+        hf_processor_mm_kwargs: Mapping[str, object],
+    ) -> Mapping[str, MultiModalFieldConfig]:
+        """Unused, defined to satisfy abstract method requirement."""
+        raise NotImplementedError
+
+    def _get_prompt_updates(
+        self,
+        mm_items: MultiModalDataItems,
+        hf_processor_mm_kwargs: Mapping[str, object],
+        out_mm_kwargs: MultiModalKwargs,
+    ) -> Sequence[PromptUpdate]:
+        """Unused, defined to satisfy abstract method requirement."""
+        raise NotImplementedError
+
+    def apply(
+        self,
+        prompt: Union[str, list[int]],
+        mm_data: MultiModalDataDict,
+        hf_processor_mm_kwargs: Mapping[str, object],
+        tokenization_kwargs: Optional[Mapping[str, object]] = None,
+        return_mm_hashes: bool = False,
+    ) -> MultiModalInputs:
+        # Getting mm kwargs from model config since hf_processor_mm_kwargs is empty (TODO: resolve this)
+        mm_processor_kwargs = getattr(self.info.ctx.model_config, "mm_processor_kwargs", None) or {}
+        input_processor = self.info.get_hf_processor(**mm_processor_kwargs)
+
+        processed_inputs = input_processor(
+            text=prompt,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+            images=mm_data["image"] if mm_data else None,
+            videos=None,  # [INFO] videos are not supported yet
+            return_tensors="pt",
+        )
+
+        assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+        prompt_token_ids = processed_inputs.input_ids[0].tolist()
+
+        mm_inputs = MultiModalInputs(
+            type="multimodal",
+            prompt=prompt,
+            prompt_token_ids=prompt_token_ids,
+            mm_kwargs={"image": processed_inputs},  # [INFO] add processed_inputs,
+            mm_hashes={},
+            mm_placeholders={},
+        )
+        return mm_inputs
+
+
+# TOOD: Eventually replace MultiModalProcessor with vllm.model_executor.models.gemma3_mm::Gemma3MultiModalProcessor
+@MULTIMODAL_REGISTRY.register_processor(MultiModalProcessor, info=Gemma3ProcessingInfo, dummy_inputs=DummyInputsBuilder)
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
