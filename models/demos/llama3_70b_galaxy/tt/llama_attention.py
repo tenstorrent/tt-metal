@@ -459,44 +459,6 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
-            # inp_torch = ttnn.to_torch(
-            #     q_heads_pre_rot_1BQD,
-            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
-            # )
-            # q_heads_pre_rot_1BQD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            # q_heads_pre_rot_1BQD_torch = q_heads_pre_rot_1BQD_torch * self.q_norm_weight
-            # q_heads_pre_rot_1BQD = ttnn.from_torch(
-            #     q_heads_pre_rot_1BQD_torch,
-            #     mesh_mapper=ttnn.ShardTensor2dMesh(
-            #         self.mesh_device,
-            #         dims=(2, 1),
-            #         mesh_shape=(8, 4),
-            #     ),
-            #     memory_config=rm_mem_cfg_q,
-            #     dtype=ttnn.bfloat16,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            #     device=self.mesh_device,
-            # )
-
-            # inp_torch = ttnn.to_torch(
-            #     k_heads_pre_rot_1BKD,
-            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
-            # )
-            # k_heads_pre_rot_1BKD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            # k_heads_pre_rot_1BKD_torch = k_heads_pre_rot_1BKD_torch * self.k_norm_weight
-            # k_heads_pre_rot_1BKD = ttnn.from_torch(
-            #     k_heads_pre_rot_1BKD_torch,
-            #     mesh_mapper=ttnn.ShardTensor2dMesh(
-            #         self.mesh_device,
-            #         dims=(2, 1),
-            #         mesh_shape=(8, 4),
-            #     ),
-            #     memory_config=rm_mem_cfg_k,
-            #     dtype=ttnn.bfloat16,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            #     device=self.mesh_device,
-            # )
-
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
 
