@@ -5,7 +5,6 @@
 #pragma once
 
 #include <vector>
-#include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
@@ -154,23 +153,19 @@ struct BasicUnaryWithParam {
     BasicUnaryWithParam(const BasicUnaryWithParam<T>& other) : base{other} {}
 
     UnaryOpType type() const noexcept {
-        constexpr ttsl::overloaded visitor = {std::mem_fn(&BasicUnaryWithParam<Ts>::type)...};
-        return std::visit(visitor, base);
+        return std::visit([](const auto& activation) { return activation.type(); }, base);
     }
 
     bool has_parameter() const noexcept {
-        constexpr ttsl::overloaded visitor = {std::mem_fn(&BasicUnaryWithParam<Ts>::has_parameter)...};
-        return std::visit(visitor, base);
+        return std::visit([](const auto& activation) { return activation.has_parameter(); }, base);
     }
 
     bool empty() const noexcept {
-        constexpr ttsl::overloaded visitor = {std::mem_fn(&BasicUnaryWithParam<Ts>::empty)...};
-        return std::visit(visitor, base);
+        return std::visit([](const auto& activation) { return activation.empty(); }, base);
     }
 
     std::variant<std::span<const Ts>...> get_params() const noexcept {
-        constexpr ttsl::overloaded visitor = {std::mem_fn(&BasicUnaryWithParam<Ts>::get_params)...};
-        return std::visit<decltype(get_params())>(visitor, base);
+        return std::visit<decltype(get_params())>([](const auto& activation) { return activation.get_params(); }, base);
     }
 
     template <typename T>
