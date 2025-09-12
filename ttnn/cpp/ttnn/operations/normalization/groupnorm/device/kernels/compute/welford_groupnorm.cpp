@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <optional>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_SCALAR
@@ -116,7 +117,7 @@ void MAIN {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(25);
     constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(26);
 
-    constexpr bool use_reciprocal = get_compile_time_arg_val(27);
+    constexpr uint32_t reciprocal_size = get_compile_time_arg_val(27);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -234,11 +235,14 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
-    uint32_t* p_reciprocal = nullptr;
-    if constexpr (use_reciprocal) {
+    std::optional<std::reference_wrapper<const std::array<uint32_t, reciprocal_size>>> p_reciprocal_opt = std::nullopt;
+    if constexpr (reciprocal_size > 0) {
         // The reciprocals are already sharded to this CB, get the pointer to the first value
+        uint32_t* p_reciprocal = nullptr;
         cb_get_tile(cb_reciprocals, /*tile_idx=*/0, &p_reciprocal);
-        p_reciprocal += 4;  // The first 4 entries have metadata, so we ignore them
+        // The first 4 entries have metadata, so we ignore them
+        p_reciprocal_opt = std::make_optional(
+            std::cref(*reinterpret_cast<const std::array<uint32_t, reciprocal_size>*>(p_reciprocal + 4)));
     }
 
     // Start Batch Loop
@@ -304,13 +308,15 @@ void MAIN {
                             auto this_tile_offset = (j + w) ? 0 : tile_offset;
                             // DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
                             //    << this_tile_offset << ENDL();
-                            welford_tile<0, 1, 2, false, false>(
-                                curr_xy_coord, curr_xy_limit, this_tile_offset, p_reciprocal);
+                            welford_tile<0, 1, 2, false, false, reciprocal_size>(
+                                curr_xy_coord, curr_xy_limit, this_tile_offset, p_reciprocal_opt);
 
-                            if constexpr (use_reciprocal) {
+                            if constexpr (reciprocal_size > 0) {
                                 MATH(
-                                    DPRINT << "reciprocal[" << curr_xy_coord << "]: "
-                                           << (reinterpret_cast<float*>(p_reciprocal))[curr_xy_coord] << ENDL());
+                                    DPRINT
+                                    << "reciprocal[" << curr_xy_coord << "]: "
+                                    << (reinterpret_cast<const float*>(p_reciprocal_opt->get().data()))[curr_xy_coord]
+                                    << ENDL());
                             }
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                             // dprint_tensix_dest_reg(0);
@@ -328,7 +334,7 @@ void MAIN {
 #endif
             }
 
-            welford_M2_to_var<0, 1, 2>(curr_xy_limit, 0);  // Convert M2 to variance
+            welford_M2_to_var<0, 1, 2, reciprocal_size>(curr_xy_limit, p_reciprocal_opt);  // Convert M2 to variance
             // DPRINT << "After M2 to var with args: " << curr_xy_limit << " " << ENDL();
             // dprint_tensix_dest_reg(1);
             // dprint_tensix_dest_reg(2);
