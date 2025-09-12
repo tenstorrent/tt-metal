@@ -423,8 +423,6 @@ void validate_input_params(
     // tensor shape validation against provided NHWC dimensions
     const uint32_t nhw = batch_size * input_h * input_w;
     const auto& input_shape = input_tensor.logical_shape();
-    bool is_input_block_format =
-        input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B;
 
     // Support both (1, 1, nhw, c) and (n, h, w, c) formats
     bool is_flattened_format =
