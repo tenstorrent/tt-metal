@@ -13,7 +13,7 @@ class EfficientNetb0Conv2D:
         conv,
         device,
         cache={},
-        activation="",
+        activation=None,
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         groups=1,
@@ -46,7 +46,7 @@ class EfficientNetb0Conv2D:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
+            activation=None,
             shard_layout=self.shard_layout,
             act_block_w_div=1,
             transpose_shards=False,
@@ -451,7 +451,7 @@ class Efficientnetb0:
         x = self._blocks15(x)
         x = self._conv_head(x)
 
-        x = x * ttnn.sigmoid(x)
+        x = x * ttnn.sigmoid_accurate(x)
 
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)

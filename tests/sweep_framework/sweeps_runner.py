@@ -765,8 +765,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
+        choices=["elastic", "postgres", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
     )
 
     parser.add_argument(
