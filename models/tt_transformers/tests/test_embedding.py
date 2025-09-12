@@ -48,7 +48,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
 
     reference_emb = model_args.reference_embedding()
 
-    if model_args.is_vision():
+    if model_args.is_llama_vision():
         layer_name = "text_model.tok_embeddings.weight"
     else:
         layer_name = "tok_embeddings.weight"
