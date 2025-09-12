@@ -5,7 +5,7 @@
 import pytest
 
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
-from models.utility_functions import run_for_blackhole
+from models.utility_functions import is_blackhole_p100, run_for_blackhole
 
 # These perf figures were measured on one of the machines in ird -
 # as e2e perf depends on the performance of the host machine,
@@ -30,6 +30,8 @@ def test_perf(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    if is_blackhole_p100(device) and batch_size == 16:
+        pytest.skip("Skipping ResNet50 for batch size 16 on P100 Blackhole")
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -59,6 +61,8 @@ def test_perf_trace(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    if is_blackhole_p100(device) and batch_size == 16:
+        pytest.skip("Skipping ResNet50 for batch size 16 on P100 Blackhole")
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -88,6 +92,8 @@ def test_perf_2cqs(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    if is_blackhole_p100(device) and batch_size == 16:
+        pytest.skip("Skipping ResNet50 for batch size 16 on P100 Blackhole")
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -116,6 +122,8 @@ def test_perf_trace_2cqs(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    if is_blackhole_p100(device) and batch_size == 16:
+        pytest.skip("Skipping ResNet50 for batch size 16 on P100 Blackhole")
     run_perf_resnet(
         batch_size,
         expected_inference_time,

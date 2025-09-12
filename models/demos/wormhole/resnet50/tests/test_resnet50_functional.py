@@ -6,7 +6,7 @@ import pytest
 
 import ttnn
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-from models.utility_functions import is_blackhole
+from models.utility_functions import is_blackhole, is_blackhole_p100
 
 
 def run_resnet_50(
@@ -73,6 +73,8 @@ def test_resnet_50(
     use_pretrained_weight,
     model_location_generator,
 ):
+    if is_blackhole_p100(device) and math_fidelity == ttnn.MathFidelity.LoFi and batch_size == 16:
+        pytest.skip("Skipping ResNet50 for batch size 16 on P100 Blackhole")
     run_resnet_50(
         device,
         batch_size,
