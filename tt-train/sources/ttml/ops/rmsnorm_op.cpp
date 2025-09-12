@@ -84,7 +84,7 @@ autograd::TensorPtr rmsnorm_composite(
 
     ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true);  // [B,1,S,1]
 
-    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
     ttnn::Tensor seq_means_of_squares_plus_epsilon = ttnn::add(
         seq_means_of_squares,
@@ -134,7 +134,7 @@ autograd::TensorPtr rmsnorm_composite(
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
 
-        constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+        constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
         auto scaled_gain = ttnn::divide(
             g,
