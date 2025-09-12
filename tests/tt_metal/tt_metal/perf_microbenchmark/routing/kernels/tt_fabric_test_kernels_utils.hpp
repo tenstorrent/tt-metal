@@ -377,12 +377,15 @@ struct NocUnicastScatterWriteFields {
 template <typename T>
 void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
     // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
+    DPRINT << "HOW DID WE GET HERE" << ENDL();
     fabric_set_unicast_route(
         (T*)packet_header_address,
         unicast_fields.src_device_id,
         unicast_fields.dst_device_id,
         unicast_fields.dst_mesh_id,
         unicast_fields.ew_dim);
+    DPRINT << "SET UNICAST ROUTE TO BE :" << unicast_fields.src_device_id << " TO " << unicast_fields.dst_device_id
+           << " MESH " << unicast_fields.dst_mesh_id << " EW DIM " << unicast_fields.ew_dim << ENDL();
 }
 
 template <typename T>
@@ -718,6 +721,10 @@ struct SenderKernelTrafficConfig {
         fabric_connection_handle->send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
+        for (uint32_t i = 0; i < 12; i++) {
+            auto temp = (uint32_t*)packet_header;
+            DPRINT << "Header " << HEX() << temp[i] << ENDL();
+        }
         if constexpr (!BENCHMARK_MODE) {
             // avoid race condition where we update the ptrs but fabric write is not done yet.
             noc_async_writes_flushed();
@@ -989,6 +996,9 @@ struct SenderKernelConfig {
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             fabric_connections()[i].open();
+            DPRINT << "NOC X" << (uint32_t)fabric_connections()[i].edm_noc_x << " Y"
+                   << (uint32_t)fabric_connections()[i].edm_noc_y << " opened" << ENDL();
+            // DPRINT << " Direction = " << fabric_connections()[i].direction << ENDL();
         }
     }
 

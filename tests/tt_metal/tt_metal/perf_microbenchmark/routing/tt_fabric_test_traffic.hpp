@@ -309,10 +309,43 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
             const auto& mesh_shape = this->parameters.mesh_shape;
+            // // Handle dynamic routing by adjusting hops for unicast too
+            // auto adjusted_hops = *(this->hops);
+            // if (this->parameters.is_dynamic_routing_enabled) {
+            //     auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
+            //     auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
+            //     auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
+            //     auto west_hops = hops->count(RoutingDirection::W) > 0 ? hops->at(RoutingDirection::W) : 0;
+            //     // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
+            //     hop. if (north_hops > 0) {
+            //         adjusted_hops[RoutingDirection::N] -= 1;
+            //     }
+            //     if (south_hops > 0) {
+            //         adjusted_hops[RoutingDirection::S] -= 1;
+            //     }
+            //     // for dynamic routing, decrement east/west hops by 1, since the start dst node is accounted as one
+            //     hop. if (north_hops == 0 && south_hops == 0 && east_hops > 0) {
+            //         adjusted_hops[RoutingDirection::E] -= 1;
+            //     }
+            //     if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
+            //         adjusted_hops[RoutingDirection::W] -= 1;
+            //     }
+            // }
             // TODO: move this out of here
             const uint32_t EW_DIM = 1;
+            // log_info(tt::LogTest, "2D UNICAST: src_chip_id={}, dst_chip_id={}, dst_mesh_id={}, ew_dim={}",
+            //          this->src_node_id.chip_id,
+            //          dst_node_id.chip_id,
+            //          *dst_node_id.mesh_id,
+            //          mesh_shape[EW_DIM]);
             const auto unicast_fields = ChipUnicastFields2D(
                 this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
+            log_info(
+                tt::LogTest,
+                "SENDER PACKET: src={} dst={} mesh_id={}",
+                this->src_node_id.chip_id,
+                dst_node_id.chip_id,
+                *dst_node_id.mesh_id);
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {

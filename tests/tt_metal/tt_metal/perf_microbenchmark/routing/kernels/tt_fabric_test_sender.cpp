@@ -30,6 +30,7 @@ static_assert(
 
 void kernel_main() {
     size_t rt_args_idx = 0;
+    DPRINT << "Starting Sender Kernel" << ENDL();
 
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
@@ -57,6 +58,7 @@ void kernel_main() {
 
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
+    DPRINT << " SENDING PACKETS NOW" << ENDL();
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -69,6 +71,12 @@ void kernel_main() {
             // if wrapped, then wait for credits from the receiver
 
             // Always send exactly one packet per config per round
+            // DPRINT << "SENT PACKET FROM CONFIG " << (uint32_t)i << ENDL();
+            // DPRINT << "PacketHeaderAddress : " << (uint32_t)sender_config->memory_map.get_packet_header_address() <<
+            // ENDL(); auto address = (uint32_t *)sender_config->memory_map.get_packet_header_address(); for(uint32_t i
+            // = 0; i < 12; i++){
+            //     DPRINT << "header[i]" << HEX() << address[i] << ENDL();
+            // }
             traffic_config->send_one_packet<BENCHMARK_MODE>();
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
@@ -90,7 +98,7 @@ void kernel_main() {
         auto* traffic_config = sender_config->traffic_config_ptrs[i];
         total_packets_sent += traffic_config->num_packets_processed;
     }
-
+    DPRINT << "DONE SENDING" << ENDL();
     // Write test results
     write_test_cycles(sender_config->get_result_buffer_address(), total_elapsed_cycles_outer_loop);
     write_test_packets(sender_config->get_result_buffer_address(), total_packets_sent);

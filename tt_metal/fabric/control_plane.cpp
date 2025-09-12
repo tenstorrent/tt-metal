@@ -1758,7 +1758,7 @@ void ControlPlane::print_routing_tables() const {
         }
     }
 
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
     ss << "Control Plane: InterMesh Routing Tables" << std::endl;
 
@@ -1772,7 +1772,7 @@ void ControlPlane::print_routing_tables() const {
             ss << std::endl;
         }
     }
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 void ControlPlane::print_ethernet_channels() const {

@@ -20,7 +20,7 @@ static_assert(
 
 void kernel_main() {
     size_t rt_args_idx = 0;
-
+    DPRINT << "Starting Receiver Kernel" << ENDL();
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
     uint32_t kernel_config_address = common_memory_map.kernel_config_base;
@@ -35,9 +35,10 @@ void kernel_main() {
 
     bool failed = false;
     uint64_t total_packets_received = 0;
-
+    DPRINT << "HERE" << ENDL();
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
+        // DPRINT << "IN LOOP" << ENDL();
         packets_left_to_validate = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto* traffic_config = receiver_config->traffic_configs[i];
@@ -71,7 +72,7 @@ void kernel_main() {
             break;
         }
     }
-
+    DPRINT << "DONE" << ENDL();
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
 

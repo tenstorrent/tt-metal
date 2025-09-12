@@ -21,6 +21,7 @@ constexpr bool use_dram_dst = get_compile_time_arg_val(3);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
+    DPRINT << "Starting Receiver Kernel" << ENDL();
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t num_packets = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));

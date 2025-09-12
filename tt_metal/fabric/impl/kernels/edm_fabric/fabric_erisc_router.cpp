@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
+#include "debug/dprint.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -827,6 +828,13 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     const tt_l1_ptr fabric_router_l1_config_t* routing_table =
         reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
+    // DEBUG: Print routing decision
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+
+    DPRINT << "My_x " << my_x << " My_y " << my_y << ENDL();
+
     // Template version for constexpr edm_index
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
@@ -866,6 +874,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             transaction_id);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
+            DPRINT << "DEST CHIP IS ME" << ENDL();
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             if (mcast_active) {
                 // This packet is in an active mcast
@@ -970,6 +979,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             ASSERT(downstream_channel != INVALID_DIRECTION);
             const auto downstream_direction =
                 static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
+            // DPRINT << "FORWARDING TO DIRECTION: " << (uint32_t)downstream_direction << ENDL();
             const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                 packet_start,
@@ -1784,6 +1794,9 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
+                DPRINT << "PACKET_RECEIVED: dst_chip=" << packet_header->dst_start_chip_id
+                       << " dst_mesh=" << packet_header->dst_start_mesh_id
+                       << " payload_size=" << packet_header->payload_size_bytes << ENDL();
                 receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
@@ -2351,7 +2364,7 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode();
         }
     }
-
+    DPRINT << "EDM starting up" << ENDL();
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //

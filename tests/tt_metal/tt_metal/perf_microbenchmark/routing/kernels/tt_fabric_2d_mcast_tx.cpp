@@ -87,7 +87,7 @@ inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connecti
 
 void kernel_main() {
     using namespace tt::tt_fabric;
-
+    DPRINT << "Starting Transmitter Kernel" << ENDL();
     size_t rt_args_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);

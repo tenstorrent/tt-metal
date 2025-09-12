@@ -107,6 +107,7 @@ void fabric_set_unicast_route(
     // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
     packet_header->mcast_params_64 = 0;
     packet_header->is_mcast_active = 0;
+    DPRINT << "DYNAMIC_UNICAST: src=" << my_dev_id << " dst=" << dst_dev_id << " mesh=" << dst_mesh_id << ENDL();
 }
 
 void fabric_set_mcast_route(

@@ -3344,28 +3344,28 @@ Tests:
       - type: all_devices_uniform_pattern
         iterations: 3
 
-  # - name: "TorusXYDynamicNorth6Hops"
-  #   sync: true
+  - name: "TorusXYDynamicNorth6Hops"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: XY
-  #     routing_type: Dynamic
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: Dynamic
 
-  #   parametrization_params:
-  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-  #     ftype: [mcast, unicast]
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ftype: [mcast, unicast]
 
-  #   defaults:
-  #     size: 512
-  #     num_packets: 1
-  #     destination:
-  #       hops:
-  #         N: 6
+    defaults:
+      size: 512
+      num_packets: 1
+      destination:
+        hops:
+          N: 6
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 3
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
 
 # ================================================
 # South tests

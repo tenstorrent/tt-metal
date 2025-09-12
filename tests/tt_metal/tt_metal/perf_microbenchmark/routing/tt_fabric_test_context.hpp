@@ -561,6 +561,12 @@ private:
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
             log_info(
                 tt::LogTest,
+                "RECEIVER SETUP: src={} hops={} calculated_dst={}",
+                traffic_config.src_node_id.chip_id,
+                hops.value(),
+                dst_node_ids[0].chip_id);
+            log_info(
+                tt::LogTest,
                 "add_traffic_config: resolved dst_node_ids.size()={} (first chip_id={})",
                 dst_node_ids.size(),
                 dst_node_ids.empty() ? -1 : dst_node_ids[0].chip_id);
@@ -614,6 +620,61 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
+        // prints
+        //  Add this right after the receiver_config definition around line 615
+
+        // Replace the logging section around lines 620-655 with this corrected version:
+
+        // Replace the logging section around lines 620-655 with this corrected version:
+
+        log_info(tt::LogTest, "=== SENDER CONFIG DETAILS ===");
+        log_info(
+            tt::LogTest,
+            "  src_node_id: (mesh_id={}, chip_id={})",
+            sender_config.src_node_id.mesh_id,
+            sender_config.src_node_id.chip_id);
+        log_info(tt::LogTest, "  dst_node_ids count: {}", sender_config.dst_node_ids.size());
+        for (size_t i = 0; i < sender_config.dst_node_ids.size(); ++i) {
+            log_info(
+                tt::LogTest,
+                "    dst_node_ids[{}]: (mesh_id={}, chip_id={})",
+                i,
+                sender_config.dst_node_ids[i].mesh_id,
+                sender_config.dst_node_ids[i].chip_id);
+        }
+        log_info(
+            tt::LogTest,
+            "  dst_logical_core: ({}, {})",
+            sender_config.dst_logical_core.x,
+            sender_config.dst_logical_core.y);
+        log_info(tt::LogTest, "  target_address: 0x{:08x}", sender_config.target_address);
+        log_info(tt::LogTest, "  atomic_inc_address: 0x{:08x}", sender_config.atomic_inc_address.value_or(0));
+        log_info(tt::LogTest, "  dst_noc_encoding: 0x{:08x}", sender_config.dst_noc_encoding);
+        log_info(tt::LogTest, "  payload_buffer_size: {}", sender_config.payload_buffer_size);
+        log_info(tt::LogTest, "  link_id: {}", sender_config.link_id.value_or(0));
+        if (sender_config.mcast_start_node_id.has_value()) {
+            log_info(
+                tt::LogTest,
+                "  mcast_start_node_id: (mesh_id={}, chip_id={})",
+                sender_config.mcast_start_node_id->mesh_id,
+                sender_config.mcast_start_node_id->chip_id);
+        } else {
+            log_info(tt::LogTest, "  mcast_start_node_id: None");
+        }
+
+        log_info(tt::LogTest, "=== RECEIVER CONFIG DETAILS ===");
+        log_info(tt::LogTest, "  sender_id: {}", receiver_config.sender_id);
+        log_info(tt::LogTest, "  target_address: 0x{:08x}", receiver_config.target_address);
+        log_info(tt::LogTest, "  atomic_inc_address: 0x{:08x}", receiver_config.atomic_inc_address.value_or(0));
+        log_info(tt::LogTest, "  payload_buffer_size: {}", receiver_config.payload_buffer_size);
+
+        log_info(tt::LogTest, "=== TRAFFIC PARAMETERS ===");
+        log_info(tt::LogTest, "  chip_send_type: {}", sender_config.parameters.chip_send_type);
+        log_info(tt::LogTest, "  noc_send_type: {}", sender_config.parameters.noc_send_type);
+        log_info(tt::LogTest, "  payload_size_bytes: {}", sender_config.parameters.payload_size_bytes);
+        log_info(tt::LogTest, "  num_packets: {}", sender_config.parameters.num_packets);
+        log_info(tt::LogTest, "  seed: {}", sender_config.parameters.seed);
+        log_info(tt::LogTest, "================================");
         // Compute canonical “equivalence signatures”
         auto hash_vec = [](const std::vector<uint32_t>& v) {
             uint64_t h = 1469598103934665603ull;  // FNV-1a 64-bit
@@ -672,17 +733,17 @@ private:
         const auto src_mc = this->fixture_->get_device_coord(src_node_id);
         const auto dst_mc = this->fixture_->get_device_coord(dst_node_ids[0]);
 
-        log_info(
-            tt::LogTest,
-            "Route(unicast, device path): src=({},{}), dst=({},{}), hops E/N/S/W={}/{}/{}/{}",
-            src_mc[0],
-            src_mc[1],
-            dst_mc[0],
-            dst_mc[1],
-            hops->count(RoutingDirection::E) ? hops->at(RoutingDirection::E) : 0,
-            hops->count(RoutingDirection::N) ? hops->at(RoutingDirection::N) : 0,
-            hops->count(RoutingDirection::S) ? hops->at(RoutingDirection::S) : 0,
-            hops->count(RoutingDirection::W) ? hops->at(RoutingDirection::W) : 0);
+        // log_info(
+        //     tt::LogTest,
+        //     "Route(unicast, device path): src=({},{}), dst=({},{}), hops E/N/S/W={}/{}/{}/{}",
+        //     src_mc[0],
+        //     src_mc[1],
+        //     dst_mc[0],
+        //     dst_mc[1],
+        //     hops->count(RoutingDirection::E) ? hops->at(RoutingDirection::E) : 0,
+        //     hops->count(RoutingDirection::N) ? hops->at(RoutingDirection::N) : 0,
+        //     hops->count(RoutingDirection::S) ? hops->at(RoutingDirection::S) : 0,
+        //     hops->count(RoutingDirection::W) ? hops->at(RoutingDirection::W) : 0);
     }
 
     void initialize_memory_maps() {
