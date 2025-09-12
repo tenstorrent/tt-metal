@@ -311,7 +311,7 @@ public:
         return feature_targets[feature].processors;
     }
     void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
-        feature_targets[feature].processors = std::move(processors);
+        feature_targets[feature].processors = processors;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {

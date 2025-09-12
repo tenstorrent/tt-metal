@@ -207,6 +207,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -345,11 +346,11 @@ Result ConvTranpose2dOperation::invoke(
         output_padding,
         dilation,
         groups,
-        std::move(dtype),
+        dtype,
         std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
-        std::move(memory_config),
+        conv_config_,
+        compute_config_,
+        memory_config,
         mirror_kernel,
         return_output_dim,
         return_weights_and_bias);

@@ -103,6 +103,7 @@ template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
+template struct ExecuteUnary<UnaryOpType::RSQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
@@ -133,7 +134,6 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
