@@ -8,12 +8,10 @@
 #include "device/create_qkv_heads_from_separate_tensors_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_kv,
     const uint32_t num_q_heads,
@@ -43,8 +41,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTenso
             memory_config.value_or(input_tensor_q.memory_config())},
         {input_tensor_q, input_tensor_kv},
         {},
-        optional_outputs,
-        queue_id);
+        optional_outputs);
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
 }
 

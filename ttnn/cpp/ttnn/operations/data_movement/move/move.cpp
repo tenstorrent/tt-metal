@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -29,7 +28,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         input_tensor.storage());
 }
 
-static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -115,14 +114,12 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
                       MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy},
                       {input_tensor, output_tensor},
                       {},
-                      {},
-                      queue_id)
+                      {})
                       .at(0);
     return output;
 }
 
-static inline Tensor move_sharded(
-    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
@@ -174,12 +171,11 @@ static inline Tensor move_sharded(
         .at(0);
 }
 
-ttnn::Tensor MoveOperation::invoke(
-    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
-        return move_sharded(queue_id, input_tensor, output_mem_config);
+        return move_sharded(input_tensor, output_mem_config);
     }
-    return move(queue_id, input_tensor, output_mem_config);
+    return move(input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

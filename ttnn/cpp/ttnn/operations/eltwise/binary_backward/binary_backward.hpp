@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
@@ -88,7 +87,6 @@ struct ExecuteBackwardMin {
 
 struct ExecuteBackwardMul {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
@@ -96,7 +94,6 @@ struct ExecuteBackwardMul {
         std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const Tensor& other_tensor_arg,
@@ -114,14 +111,12 @@ struct ExecuteBackwardMul {
 
 struct ExecuteBackwardAssign {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_a_grad = std::nullopt);
 
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const Tensor& other_tensor_arg,
@@ -149,7 +144,6 @@ struct ExecuteBackwardBiasGelu {
 
 struct ExecuteBackwardLT {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const Tensor& other_tensor_arg,
@@ -159,7 +153,6 @@ struct ExecuteBackwardLT {
         std::optional<Tensor> other_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float other,
@@ -169,7 +162,6 @@ struct ExecuteBackwardLT {
 
 struct ExecuteBackwardAdd {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
@@ -177,7 +169,6 @@ struct ExecuteBackwardAdd {
         std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
@@ -196,7 +187,6 @@ struct ExecuteBackwardAdd {
 
 struct ExecuteBackwardSub {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
@@ -204,7 +194,6 @@ struct ExecuteBackwardSub {
         std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
@@ -223,7 +212,6 @@ struct ExecuteBackwardSub {
 
 struct ExecuteBackwardDiv {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
@@ -232,7 +220,6 @@ struct ExecuteBackwardDiv {
         std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const Tensor& other_tensor_arg,
@@ -279,7 +266,6 @@ struct ExecuteBackwardFmod {
 
 struct ExecuteAddalphaBW {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
@@ -292,7 +278,6 @@ struct ExecuteAddalphaBW {
 
 struct ExecuteBackwardSubAlpha {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
@@ -305,7 +290,6 @@ struct ExecuteBackwardSubAlpha {
 
 struct ExecuteBackwardRsub {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
@@ -317,7 +301,6 @@ struct ExecuteBackwardRsub {
 
 struct ExecuteBackwardConcat {
     static std::vector<std::optional<Tensor>> invoke(
-        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,

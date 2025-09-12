@@ -41,7 +41,6 @@ void py_bind_barrier(pybind11::module& module) {
         module,
         ttnn::barrier,
         R"doc(
-
         Performs a barrier operation among all the devices covered in the input multi-device tensor to reduce skew between chips upon completion of the operation
 
         Args:

@@ -543,8 +543,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
  * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -912,6 +911,33 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 // clang-format on
 void Synchronize(
     IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+// clang-format off
+/**
+ * Push the current command queue id to the stack.
+ * Return value: void
+ * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
+ */
+// clang-format on
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Pop the current command queue id from the stack.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t PopCurrentCommandQueueIdForThread();
+
+// clang-format off
+/**
+ * Get the current command queue id.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt_metal
 

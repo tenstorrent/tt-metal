@@ -16,7 +16,6 @@ namespace py = pybind11;
 void bind_fill_pad_op(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Fills the implicit padding of a tiled input tensor with the specified value.
             Specifically, any nD tensor will have the implicit padding of the last 2 dims that exists from [height:tile_height, width:tile_width] filled with the specified value.
 
@@ -33,8 +32,7 @@ void bind_fill_pad_op(py::module& module) {
                 value greater than 0 fill_value (float): Value to fill the tensor padding with.
 
             Keyword args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to
-                `None`. queue_id (int, optional): command queue id. Defaults to `0`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -51,13 +49,13 @@ void bind_fill_pad_op(py::module& module) {
             [](const OperationType& self,
                const Tensor& input_tensor,
                const float fill_value,
-               const std::optional<MemoryConfig>& memory_config,
-               QueueId queue_id) { return self(queue_id, input_tensor, fill_value, memory_config); },
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, fill_value, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("fill_value"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

@@ -35,7 +35,6 @@ void py_bind_conv3d(py::module& module) {
         :param ttnn.Conv3dConfig config: Configuration for the Conv3D operation.
         :param ttnn.MemoryConfig memory_config: Memory configuration for the output of the Conv3D operation.
         :param ttnn.DeviceComputeKernelConfig compute_kernel_config: Compute kernel configuration for the Conv3D operation.
-        :param queue_id: Queue ID for the Conv3D operation.
 
         :return: Output tensor after applying the Conv3D operation.
         :rtype: ttnn.Tensor
@@ -47,10 +46,8 @@ void py_bind_conv3d(py::module& module) {
                const std::optional<ttnn::Tensor>& bias_tensor,
                const Conv3dConfig& config,
                const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               const QueueId& queue_id) {
-                return self(
-                    queue_id, input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
+               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+                return self(input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -58,8 +55,7 @@ void py_bind_conv3d(py::module& module) {
             py::arg("bias_tensor") = std::nullopt,
             py::arg("config"),
             py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("compute_kernel_config") = std::nullopt});
 
     auto py_conv3d_config = py::class_<Conv3dConfig>(
                                 module,

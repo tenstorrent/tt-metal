@@ -9,7 +9,7 @@ from loguru import logger
 
 
 def main():
-    # Open Tenstorrent device
+    # Open the Device
     device = ttnn.open_device(device_id=0)
 
     logger.info("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")

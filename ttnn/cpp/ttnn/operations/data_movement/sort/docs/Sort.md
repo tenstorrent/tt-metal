@@ -59,7 +59,7 @@ const bool stable = false;
 std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors;
 const std::optional<ttnn::MemoryConfig> memory_config;
 
-std::vector<Tensor> sorted_tensors = ttnn::sort(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
+std::vector<Tensor> sorted_tensors = ttnn::sort(input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
 ```
 
 ### Usage Limitations
