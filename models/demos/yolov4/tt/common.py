@@ -33,27 +33,15 @@ def to_sharding_strategy(conv_param):
 
 
 def create_conv2d_from_params(device, params, conv_pth, activation=""):
-    weight = ttnn.from_device(conv_pth.weight)
-    bias = ttnn.from_device(conv_pth.bias) if conv_pth.bias else None
-
+    weight, bias = ttnn.from_device(conv_pth.weight), ttnn.from_device(conv_pth.bias) if conv_pth.bias else None
     sharding_strategy = to_sharding_strategy(params)
-    config = Conv2dConfiguration(
-        input_height=params.input_height,
-        input_width=params.input_width,
-        in_channels=params.in_channels,
-        out_channels=params.out_channels,
-        batch_size=params.batch_size,
-        kernel_size=params.kernel_size,
-        stride=params.stride,
-        padding=params.padding,
-        groups=params.groups,
-        dilation=params.dilation,
-        activation=activation,
-        weights_dtype=ttnn.bfloat8_b,
-        output_dtype=params.dtype,
-        weight=weight,
+    config = Conv2dConfiguration.from_model_args(
+        conv2d_args=params,
+        weights=weight,
         bias=bias,
         sharding_strategy=sharding_strategy,
+        activation=activation,
+        weights_dtype=ttnn.bfloat8_b,
         math_fidelity=ttnn.MathFidelity.LoFi,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -62,7 +50,5 @@ def create_conv2d_from_params(device, params, conv_pth, activation=""):
         deallocate_activation=params.deallocate_activation,
         reallocate_halo_output=True,
     )
-
     device_descriptor = DeviceDescriptor(device, grid_size=(8, 8))
-    conv2d = TtConv2d(config, device_descriptor)
-    return conv2d
+    return TtConv2d(config, device_descriptor)

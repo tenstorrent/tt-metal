@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import torch
+from ttnn.model_preprocessing import Conv2dArgs
 
 import ttnn
 
@@ -160,6 +161,27 @@ class Conv2dConfiguration:
             groups=torch_layer.groups,
             dilation=torch_layer.dilation,
             weight=weight,
+            bias=bias,
+            **kwargs,
+        )
+
+    @classmethod
+    def from_model_args(
+        cls, conv2d_args: Conv2dArgs, weights: ttnn.Tensor, bias: Optional[ttnn.Tensor] = None, **kwargs
+    ):
+        return cls(
+            input_height=conv2d_args.input_height,
+            input_width=conv2d_args.input_width,
+            in_channels=conv2d_args.in_channels,
+            out_channels=conv2d_args.out_channels,
+            batch_size=conv2d_args.batch_size,
+            kernel_size=conv2d_args.kernel_size,
+            stride=conv2d_args.stride,
+            padding=conv2d_args.padding,
+            groups=conv2d_args.groups,
+            dilation=conv2d_args.dilation,
+            output_dtype=conv2d_args.dtype,
+            weight=weights,
             bias=bias,
             **kwargs,
         )

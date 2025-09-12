@@ -1,5 +1,6 @@
 import pytest
 import torch
+from ttnn.model_preprocessing import infer_ttnn_module_args
 
 import ttnn
 from models.tt_cnn.tt.builder import (
@@ -225,9 +226,9 @@ def test_downblock(input_size, batch_size, device):
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("input_size", INPUT_SIZES[:1])  # Use first 2 sizes
-@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS[:1])  # Use first 2 channel configs
-@pytest.mark.parametrize("batch_size", BATCH_SIZES[:1])  # Use first 2 batch sizes
+@pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
+@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS[:1])
+@pytest.mark.parametrize("batch_size", BATCH_SIZES[:1])
 @pytest.mark.parametrize(
     "torch_layer_config",
     [
@@ -323,5 +324,62 @@ def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size,
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     output_height, output_width = torch_output.shape[-2:]
     ttnn_output_torch = ttnn_output_torch.reshape(batch_size, output_height, output_width, channels).permute(0, 3, 1, 2)
+
+    assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES)
+@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)
+@pytest.mark.parametrize("batch_size", BATCH_SIZES)
+@pytest.mark.parametrize(
+    "torch_layer_config",
+    [
+        {"kernel_size": 3, "stride": 2, "padding": 1, "groups": 1, "bias": True},
+        {"kernel_size": 5, "stride": 1, "padding": 2, "groups": 1, "bias": False},
+    ],
+)
+def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_size, torch_layer_config, device):
+    input_height, input_width = input_size
+    in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
+
+    torch_input = torch.randn(batch_size, in_channels, input_height, input_width)
+    ttnn_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    torch_layer = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, **torch_layer_config)
+
+    parameters = infer_ttnn_module_args(model=torch_layer, run_model=lambda _: torch_layer(torch_input), device=None)
+
+    weight, bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+        torch_layer.weight.data, torch_layer.bias.data if torch_layer.bias is not None else None
+    )
+    configuration = Conv2dConfiguration.from_model_args(parameters, weights=weight, bias=bias)
+
+    assert configuration.in_channels == torch_layer.in_channels
+    assert configuration.out_channels == torch_layer.out_channels
+    assert configuration.kernel_size == torch_layer.kernel_size
+    assert configuration.stride == torch_layer.stride
+    assert configuration.padding == torch_layer.padding
+    assert configuration.groups == torch_layer.groups
+
+    assert_with_pcc(ttnn.to_torch(configuration.weight), torch_layer.weight.data, 1.0)
+    if torch_layer.bias is not None:
+        assert_with_pcc(ttnn.to_torch(configuration.bias).reshape(-1), torch_layer.bias.data, 1.0)
+    else:
+        assert configuration.bias is None
+
+    configuration.validate_weights()
+
+    tt_layer = TtConv2d(configuration, device_descriptor)
+
+    ttnn_output = tt_layer(ttnn_input)
+    torch_output = torch_layer(torch_input)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    output_height, output_width = torch_output.shape[-2:]
+    ttnn_output_torch = ttnn_output_torch.reshape(batch_size, output_height, output_width, out_channels).permute(
+        0, 3, 1, 2
+    )
 
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
