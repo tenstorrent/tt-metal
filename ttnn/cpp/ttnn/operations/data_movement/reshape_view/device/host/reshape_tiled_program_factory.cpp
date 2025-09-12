@@ -419,7 +419,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         [reader_kernel_id,
          writer_kernel_id,
          utilized_cores,
-         // cache this tensor
+         // capture this to cache the computed mapping tensor. Cheap copy since data is on device.
          mapping_tensor](
             const void* operation,
             Program& program,
