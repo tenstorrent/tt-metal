@@ -441,8 +441,8 @@ inline void RunPersistent1dFabricLatencyTest(
     // create the kernel for
     // "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/1D_fabric_latency_test_ack_writer.cpp"
     if (!is_ring) {
-        auto my_device = devices[line_size - 1];
-        auto backward_device = devices[line_size - 2];
+        const auto& my_device = devices[line_size - 1];
+        const auto& backward_device = devices[line_size - 2];
         size_t num_hops_upstream_to_writer = line_size - 1 - latency_writer_index;
         auto& ack_writer_program = programs.back();
         auto& latency_writer_spec = writer_specs.at(latency_writer_index);
@@ -481,7 +481,7 @@ inline void RunPersistent1dFabricLatencyTest(
         tt_metal::SetRuntimeArgs(ack_writer_program, ack_writer_kernel, worker_cores, rt_args);
     }
 
-    for (auto d : devices_with_workers) {
+    for (const auto& d : devices_with_workers) {
         log_info(tt::LogTest, "launch on Device {}", d->id());
     }
     build_and_enqueue(devices_with_workers, programs);
