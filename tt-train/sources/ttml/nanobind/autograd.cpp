@@ -83,8 +83,9 @@ void py_module(nb::module_& m) {
         const auto data_type = data.dtype();
         TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
 
-        tt::tt_metal::ShapeBase::Container shape_container(data.ndim());
-        for (size_t dimension = 0; dimension < data.ndim(); ++dimension) {
+        const auto rank = data.ndim();
+        tt::tt_metal::ShapeBase::Container shape_container(rank);
+        for (size_t dimension = 0; dimension < rank; ++dimension) {
             const auto dimension_size = data.shape(dimension);
             TT_FATAL(
                 dimension_size >= std::numeric_limits<uint32_t>::min(),
@@ -114,7 +115,7 @@ void py_module(nb::module_& m) {
 
             tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
             tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-            tt::tt_metal::Tensor&& tensor = tt::tt_metal::Tensor::from_span(
+            tt::tt_metal::Tensor tensor = tt::tt_metal::Tensor::from_span(
                 tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
             tensor = tensor.to_device(device, tensor_memory_config);
 
@@ -143,11 +144,28 @@ void py_module(nb::module_& m) {
         const tt::tt_metal::TensorSpec& tensor_spec = tensor.tensor_spec();
         const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
 
+        const auto tensor_shape_rank = tensor_shape.rank();
+        std::vector<size_t> numpy_shape(tensor_shape_rank);
+        std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
+
+        const auto tensor_strides = tensor.strides();
+        std::vector<int64_t> numpy_strides(tensor_strides.rank());
+        std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
+
+        auto make_numpy_tensor =
+            [&numpy_shape, &numpy_strides, tensor_shape_rank]<typename T>(std::vector<T>&& tensor_data) {
+                T* numpy_data = new T[tensor_data.size()];
+                memcpy(numpy_data, tensor_data.data(), tensor_data.size() * sizeof(T));
+                nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+                return nb::ndarray<nb::numpy>(
+                    numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+            };
+
         switch (tensor_spec.data_type()) {
-            case tt::tt_metal::DataType::INT32: break;
-            case tt::tt_metal::DataType::UINT32: break;
-            case tt::tt_metal::DataType::FLOAT32: break;
-            case tt::tt_metal::DataType::BFLOAT16: break;
+            case tt::tt_metal::DataType::INT32: return make_numpy_tensor(tensor.to_vector<int32_t>());
+            case tt::tt_metal::DataType::UINT32: return make_numpy_tensor(tensor.to_vector<uint32_t>());
+            case tt::tt_metal::DataType::FLOAT32: return make_numpy_tensor(tensor.to_vector<float>());
+            case tt::tt_metal::DataType::BFLOAT16: return make_numpy_tensor(tensor.to_vector<bfloat16>());
             case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
             case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
             case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
@@ -172,10 +190,10 @@ void py_module(nb::module_& m) {
     // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
     py_auto_context.def(
         "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
-            auto const argc = args.size();
-            std::vector<char const*> argv(argc);
+            const auto argc = args.size();
+            std::vector<const char*> argv(argc);
 
-            for (auto const& arg : args) {
+            for (const auto& arg : args) {
                 argv.push_back(arg.c_str());
             }
             argv.push_back(nullptr);
