@@ -7,7 +7,7 @@
 #include "topk_constants.hpp"
 #include "topk_utils.hpp"
 #include "tt-metalium/allocator.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 

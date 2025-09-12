@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {

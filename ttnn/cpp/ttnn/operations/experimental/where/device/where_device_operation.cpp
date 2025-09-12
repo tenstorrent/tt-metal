@@ -15,7 +15,7 @@
 #include <tt-metalium/command_queue.hpp>
 
 #include <tracy/Tracy.hpp>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 

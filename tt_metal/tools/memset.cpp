@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "fmt/base.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>

@@ -10,7 +10,7 @@
 #include <random>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tracy/Tracy.hpp"
 
 namespace {

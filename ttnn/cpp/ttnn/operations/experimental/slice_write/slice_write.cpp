@@ -4,7 +4,7 @@
 
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"

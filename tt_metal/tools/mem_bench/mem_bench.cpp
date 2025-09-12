@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "context.hpp"
 #include "device.hpp"
 #include "device_utils.hpp"

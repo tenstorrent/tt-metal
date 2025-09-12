@@ -7,7 +7,7 @@
 #include <cstring>
 
 #include <tt_stl/aligned_allocator.hpp>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"

@@ -11,7 +11,7 @@
 
 #include <sys/types.h>
 #include <cstddef>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <cstdint>

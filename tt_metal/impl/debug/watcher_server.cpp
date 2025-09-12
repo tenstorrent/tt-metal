@@ -20,7 +20,7 @@
 #include <thread>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"

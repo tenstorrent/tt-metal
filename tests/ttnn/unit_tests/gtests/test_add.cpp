@@ -9,7 +9,7 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"

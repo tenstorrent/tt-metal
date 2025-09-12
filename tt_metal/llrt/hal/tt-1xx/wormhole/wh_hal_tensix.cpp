@@ -5,7 +5,7 @@
 #include "dev_msgs.h"
 #include <cstdint>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
