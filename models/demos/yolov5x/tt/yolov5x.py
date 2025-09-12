@@ -4,13 +4,11 @@
 
 
 import ttnn
-
+from models.demos.yolov5x.tt.c3 import TtnnC3
+from models.demos.yolov5x.tt.common import TtYOLOv5xConv2D, interleaved_to_sharded
+from models.demos.yolov5x.tt.detect import TtnnDetect
+from models.demos.yolov5x.tt.sppf import TtnnSPPF
 from models.experimental.yolo_common.yolo_utils import concat
-
-from models.experimental.yolov5x.tt.c3 import TtnnC3
-from models.experimental.yolov5x.tt.sppf import TtnnSPPF
-from models.experimental.yolov5x.tt.detect import TtnnDetect
-from models.experimental.yolov5x.tt.common import TtYOLOv5xConv2D, interleaved_to_sharded
 
 
 class Yolov5x:
@@ -139,7 +137,6 @@ class Yolov5x:
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)
         x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
-        ttnn.deallocate(nhwc)
 
         x = self.conv1(x)
         x = self.conv2(x)
