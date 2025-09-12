@@ -683,9 +683,9 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
             return test_config.fabric_setup.routing_type == r_type;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
-                return test_config.benchmark_mode == true;
+                return test_config.benchmark_mode;
             } else if (filter_value == "false") {
-                return test_config.benchmark_mode == false;
+                return !test_config.benchmark_mode;
             } else {
                 log_info(
                     tt::LogTest,
@@ -695,9 +695,9 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
             }
         } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
             if (filter_value == "true") {
-                return test_config.global_sync == true;
+                return test_config.global_sync;
             } else if (filter_value == "false") {
-                return test_config.global_sync == false;
+                return !test_config.global_sync;
             } else {
                 log_info(
                     tt::LogTest,

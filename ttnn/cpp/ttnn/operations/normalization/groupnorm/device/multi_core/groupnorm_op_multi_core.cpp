@@ -793,7 +793,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
 
-    if (negative_mask.has_value() == false) {
+    if (!negative_mask.has_value()) {
         // in - stores tilized input
         uint32_t in_cb_index = tt::CBIndex::c_1;
         tt::tt_metal::CircularBufferConfig in_cb_config =
