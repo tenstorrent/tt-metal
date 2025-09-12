@@ -1,16 +1,11 @@
-name: Multi-Host Deployment (Physical)
+name: Galaxy Multi-user Isolation Tests (Physical)
 on:
   push:
     branches:
       - main
   workflow_dispatch:
     inputs:
-      t3k_multihost:
-        description: 'Run T3K multi-host job'
-        required: false
-        default: true
-        type: boolean
-      galaxy_multihost:
+      galaxy-multi-user-isolation-tests:
         description: 'Run Galaxy multi-host job'
         required: false
         default: true
@@ -25,11 +20,10 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  multi-host-t3k:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true' }}
+  galaxy-multi-user-isolation-tests:
     runs-on:
-      # A physical, multi-host WH T3K that's in service
-      - multi-host-t3000
+      # A physical, multi-host WH 6U that's in service
+      - topology-6u
       - arch-wormhole_b0
       - bare-metal
       - in-service
@@ -51,77 +45,102 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Capture runner's home directory
-        id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 30
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
-  multi-host-galaxy:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
-    runs-on:
-      # A physical, multi-host WH Galaxy that's in service
-      - multi-host-galaxy
-      - arch-wormhole_b0
-      - bare-metal
-      - in-service
-    needs: build-artifact
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Capture runner's home directory
-        id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 30
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks"
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity"
-            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml
+      - name: Run tests on multiple hosts with Docker Compose
+        run: |
+          docker compose -f docker-compose.yaml up 
+      - name: Tear down containers
+        if: always()
+        run: docker compose -f docker-compose.temp.yaml down
+
+
+---- ${image}
+
+      - name: Create Docker Compose file
+        run: |
+          cat <<EOF > docker-compose.temp.yml
+          version: "3.9"
+          services:
+            tray-1:
+              image: ${{ needs.build-artifact.outputs.docker-image }}
+              stdin_open: true
+              tty: true
+              volumes:
+                  - ./tt-metal:/app/tt-metal
+                  - ./multihosttest:/app/multihosttest
+              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              command: bash
+              devices:
+                - "/dev/tenstorrent/0:/dev/tenstorrent/0"
+                - "/dev/tenstorrent/1:/dev/tenstorrent/1"
+                - "/dev/tenstorrent/2:/dev/tenstorrent/2"
+                - "/dev/tenstorrent/3:/dev/tenstorrent/3"
+                - "/dev/tenstorrent/4:/dev/tenstorrent/4"
+                - "/dev/tenstorrent/5:/dev/tenstorrent/5"
+                - "/dev/tenstorrent/6:/dev/tenstorrent/6"
+                - "/dev/tenstorrent/7:/dev/tenstorrent/7"
+
+            tray-2:
+              image: ${{ needs.build-artifact.outputs.docker-image }}
+              command: bash
+              stdin_open: true
+              tty: true
+              volumes:
+                  - ./tt-metal:/app/tt-metal
+                  - ./multihosttest:/app/multihosttest
+              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              devices:
+                - "/dev/tenstorrent/8:/dev/tenstorrent/8"
+                - "/dev/tenstorrent/9:/dev/tenstorrent/9"
+                - "/dev/tenstorrent/10:/dev/tenstorrent/10"
+                - "/dev/tenstorrent/11:/dev/tenstorrent/11"
+                - "/dev/tenstorrent/12:/dev/tenstorrent/12"
+                - "/dev/tenstorrent/13:/dev/tenstorrent/13"
+                - "/dev/tenstorrent/14:/dev/tenstorrent/14"
+                - "/dev/tenstorrent/15:/dev/tenstorrent/15"
+
+            tray-3:
+              image: ${{ needs.build-artifact.outputs.docker-image }}
+              command: bash
+              stdin_open: true
+              tty: true
+              volumes:
+                  - ./tt-metal:/app/tt-metal
+                  - ./multihosttest:/app/multihosttest
+              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              devices:
+                - "/dev/tenstorrent/16:/dev/tenstorrent/16"
+                - "/dev/tenstorrent/17:/dev/tenstorrent/17"
+                - "/dev/tenstorrent/18:/dev/tenstorrent/18"
+                - "/dev/tenstorrent/19:/dev/tenstorrent/19"
+                - "/dev/tenstorrent/20:/dev/tenstorrent/20"
+                - "/dev/tenstorrent/21:/dev/tenstorrent/21"
+                - "/dev/tenstorrent/22:/dev/tenstorrent/22"
+                - "/dev/tenstorrent/23:/dev/tenstorrent/23"
+              
+            tray-4:
+              image: ${{ needs.build-artifact.outputs.docker-image }}
+              command: bash
+              stdin_open: true
+              tty: true
+              volumes:
+                  - ./tt-metal:/app/tt-metal
+                  - ./multihosttest:/app/multihosttest
+              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              devices:
+                - "/dev/tenstorrent/24:/dev/tenstorrent/24"
+                - "/dev/tenstorrent/25:/dev/tenstorrent/25"
+                - "/dev/tenstorrent/26:/dev/tenstorrent/26"
+                - "/dev/tenstorrent/27:/dev/tenstorrent/27"
+                - "/dev/tenstorrent/28:/dev/tenstorrent/28"
+                - "/dev/tenstorrent/29:/dev/tenstorrent/29"
+                - "/dev/tenstorrent/30:/dev/tenstorrent/30"
+                - "/dev/tenstorrent/31:/dev/tenstorrent/31"
+          EOF
+
+      - name: Run Docker Compose
+        run: |
+          docker compose -f docker up --abort-on-container-exit
+
+      - name: Tear down containers
+        if: always()
+        run: docker compose -f docker-compose.temp.yml down
