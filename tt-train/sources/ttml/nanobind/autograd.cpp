@@ -155,7 +155,7 @@ void py_module(nb::module_& m) {
         auto make_numpy_tensor =
             [&numpy_shape, &numpy_strides, tensor_shape_rank]<typename T>(std::vector<T>&& tensor_data) {
                 T* numpy_data = new T[tensor_data.size()];
-                memcpy(numpy_data, tensor_data.data(), tensor_data.size() * sizeof(T));
+                std::copy(tensor_data.cbegin(), tensor_data.cend(), numpy_data);
                 nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
                 return nb::ndarray<nb::numpy>(
                     numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
