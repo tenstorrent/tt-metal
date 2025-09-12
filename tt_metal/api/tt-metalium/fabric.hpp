@@ -178,8 +178,8 @@ public:
     size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void set_num_full_size_channel_iters(size_t new_val);
     void set_num_iters_between_teardown_checks(size_t new_val);
-    void set_wait_for_fabric_endpoint_ready(bool wait_for_ready) const;
-    void set_fabric_endpoint_channel_num_buffers(size_t num_buffers) const;
+    void set_wait_for_fabric_endpoint_ready(bool wait_for_ready);
+    void set_fabric_endpoint_channel_num_buffers(size_t num_buffers);
 
     size_t get_memory_map_end_address() const;
 
