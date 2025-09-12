@@ -27,3 +27,10 @@ endif()
 if(ENABLE_FAKE_KERNELS_TARGET)
     add_subdirectory(fake_kernels_target)
 endif()
+
+
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(jit_build REUSE_FROM distributed)
+else()
+    target_precompile_headers(jit_build REUSE_FROM TT::CommonPCH)
+endif()

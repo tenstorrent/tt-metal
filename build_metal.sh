@@ -30,6 +30,7 @@ show_help() {
     echo "  --build-metal-tests              Build metal Testcases."
     echo "  --build-umd-tests                Build umd Testcases."
     echo "  --build-programming-examples     Build programming examples."
+    echo "  --build-aggressive-pch           Enable aggressive precompiled headers."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
     echo "  --build-telemetry                Build tt-telemetry server."
@@ -82,6 +83,7 @@ unity_builds="ON"
 light_metal_trace="ON"
 build_packages="OFF"
 build_all="OFF"
+build_aggressive_pch="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
@@ -118,6 +120,7 @@ build-ttnn-tests
 build-metal-tests
 build-umd-tests
 build-programming-examples
+build-aggressive-pch
 build-tt-train
 build-packages
 build-telemetry
@@ -168,7 +171,7 @@ while true; do
             enable_coverage="ON";;
         --without-distributed)
             enable_distributed="OFF";;
-	--build-dir)
+	    --build-dir)
             build_dir="$2";shift;;
         -b|--build-type)
             build_type="$2";shift;;
@@ -186,6 +189,8 @@ while true; do
             build_umd_tests="ON";;
         --build-programming-examples)
             build_programming_examples="ON";;
+        --build-aggressive-pch)
+            build_aggressive_pch="ON";;
         --build-tt-train)
             build_tt_train="ON";;
         --build-packages)
@@ -345,6 +350,10 @@ fi
 
 if [ "$build_programming_examples" = "ON" ]; then
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
+fi
+
+if [ "$build_aggressive_pch" = "ON" ]; then
+    cmake_args+=("-DTT_METAL_BUILD_AGGRESSIVE_PCH=ON")
 fi
 
 if [ "$build_tt_train" = "ON" ]; then

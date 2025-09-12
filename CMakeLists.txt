@@ -242,29 +242,16 @@ add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
 target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
 
-target_precompile_headers(
-    metal_common_pch
-    PUBLIC
-        <fmt/core.h>
-        <fmt/format.h>
-        <nlohmann/json.hpp>
-        <algorithm>
-        <cstddef>
-        <cstdint>
-        <functional>
-        <map>
-        <memory>
-        <tuple>
-        <unordered_map>
-        <variant>
-        <vector>
-)
+target_precompile_headers(metal_common_pch PUBLIC ${PROJECT_SOURCE_DIR}/pch.hpp)
 
 target_link_libraries(
     metal_common_pch
     PRIVATE
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
+        FlatBuffers::FlatBuffers
+        umd::device
+        Tracy::TracyClient
 )
 
 ############################################################################################################################

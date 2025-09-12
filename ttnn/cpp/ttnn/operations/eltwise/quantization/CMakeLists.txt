@@ -1,7 +1,11 @@
 add_library(ttnn_op_eltwise_quantization ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Quantization ALIAS ttnn_op_eltwise_quantization)
 
-target_precompile_headers(ttnn_op_eltwise_quantization REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_eltwise_quantization REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_eltwise_quantization REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_quantization)
 
 target_sources(ttnn_op_eltwise_quantization PRIVATE quantization.cpp)

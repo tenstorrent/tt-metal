@@ -1,7 +1,11 @@
 add_library(ttnn_op_point_to_point ${LIB_TYPE})
 add_library(TTNN::Ops::PointToPoint ALIAS ttnn_op_point_to_point)
 
-target_precompile_headers(ttnn_op_point_to_point REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_point_to_point REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_point_to_point REUSE_FROM TT::CommonPCH)
+endif()
 
 target_sources(
     ttnn_op_point_to_point

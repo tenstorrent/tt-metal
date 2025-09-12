@@ -1,0 +1,25 @@
+#pragma once
+
+#include "std_pch.hpp"
+#include <enchantum/enchantum.hpp>
+#include <enchantum/scoped.hpp>
+#include <experimental/type_traits>
+#include <flatbuffers/flatbuffers.h>
+#include <fmt/base.h>
+#include <fmt/core.h>
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <reflect>
+#include <tt-logger/tt-logger.hpp>
+#include <umd/device/chip_helpers/tlb_manager.h>
+#include <umd/device/device_api_metal.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "common/TracyTTDeviceData.hpp"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyTTDevice.hpp"

@@ -1,7 +1,11 @@
 add_library(ttnn_op_eltwise_complex_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Complex::Unary ALIAS ttnn_op_eltwise_complex_unary)
 
-target_precompile_headers(ttnn_op_eltwise_complex_unary REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_eltwise_complex_unary REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_eltwise_complex_unary REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary)
 
 target_sources(ttnn_op_eltwise_complex_unary PRIVATE device/complex_unary_op.cpp)

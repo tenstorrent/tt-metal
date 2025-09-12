@@ -154,8 +154,6 @@ target_link_libraries(
         TT::Metalium::Logging
 )
 
-target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
-
 target_include_directories(
     tt_metal
     PUBLIC
@@ -188,6 +186,7 @@ include_directories(
     ${CMAKE_CURRENT_BINARY_DIR}/api
 )
 
+add_subdirectory(distributed)
 add_subdirectory(logging)
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
@@ -197,7 +196,6 @@ add_subdirectory(llrt)
 add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
-add_subdirectory(distributed)
 add_subdirectory(fabric)
 add_subdirectory(lite_fabric)
 if(TT_METAL_BUILD_TESTS)
@@ -243,4 +241,10 @@ if(TT_INSTALL)
             COMPONENT metalium-dev
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
     )
+endif()
+
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(tt_metal REUSE_FROM distributed)
+else()
+    target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
 endif()
