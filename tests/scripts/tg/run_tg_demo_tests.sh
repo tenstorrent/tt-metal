@@ -125,8 +125,7 @@ run_tg_falcon7b_tests() {
 
 run_tg_sd35_demo_tests() {
   fail=0
-
-  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4" --timeout=1500 ; fail+=$?
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5  pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout=600 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_sd35_demo_tests failed"

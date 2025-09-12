@@ -233,7 +233,7 @@ void MorehSgdOperation::ProgramFactory::override_runtime_arguments(
     auto param_in_buffer = tensor_args.param_in.buffer();
     auto grad_buffer = tensor_args.grad.buffer();
     auto momentum_buffer_in_buffer =
-        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : 0;
+        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : nullptr;
 
     auto param_out_buffer = tensor_return_value.at(0)->buffer();
     auto momentum_buffer_out_buffer = tensor_return_value.at(1)->buffer();

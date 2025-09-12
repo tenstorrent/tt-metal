@@ -16,7 +16,6 @@
 #include <tt-metalium/data_types.hpp>
 #include "assert.hpp"
 #include "debug_tools_fixture.hpp"
-#include "dev_msgs.h"
 #include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -39,7 +38,7 @@ static void RunTest(
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     int processor_id,
-    debug_assert_type_t assert_type = DebugAssertTripped) {
+    dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -158,7 +157,7 @@ static void RunTest(
     // expected error message depends on the risc we're running on and the assert type.
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
-    if (assert_type == DebugAssertTripped) {
+    if (assert_type == dev_msgs::DebugAssertTripped) {
         const uint32_t line_num = 67;
         expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
@@ -175,13 +174,13 @@ static void RunTest(
             kernel);
     } else {
         std::string barrier;
-        if (assert_type == DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
+        if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
             barrier = "NOC non-posted atomics flushed";
-        } else if (assert_type == DebugAssertNCriscNOCNonpostedWritesSentTripped) {
+        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped) {
             barrier = "NOC non-posted writes sent";
-        } else if (assert_type == DebugAssertNCriscNOCPostedWritesSentTripped) {
+        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped) {
             barrier = "NOC posted writes sent";
-        } else if (assert_type == DebugAssertNCriscNOCReadsFlushedTripped) {
+        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped) {
             barrier = "NOC reads flushed";
         }
 
@@ -214,7 +213,7 @@ struct WatcherTestParams {
     HalProgrammableCoreType core_type;
     HalProcessorClassType processor_class;
     int processor_id;
-    debug_assert_type_t assert_type = DebugAssertTripped;
+    dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped;
 };
 
 class WatcherAssertTest : public MeshWatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
@@ -260,13 +259,13 @@ INSTANTIATE_TEST_SUITE_P(
     WatcherNonDefaultAssertTests,
     WatcherAssertTest,
     ::testing::Values(
-        WatcherTestParams{"Brisc", TENSIX, DM, 0, DebugAssertTripped},
-        WatcherTestParams{"NCrisc", TENSIX, DM, 1, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0, DebugAssertNCriscNOCNonpostedWritesSentTripped},
-        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1, DebugAssertNCriscNOCPostedWritesSentTripped},
-        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2, DebugAssertNCriscNOCReadsFlushedTripped},
-        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0, DebugAssertNCriscNOCReadsFlushedTripped}),
+        WatcherTestParams{"Brisc", TENSIX, DM, 0, dev_msgs::DebugAssertTripped},
+        WatcherTestParams{"NCrisc", TENSIX, DM, 1, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
+        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
+        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 }  // namespace

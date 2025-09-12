@@ -10,37 +10,24 @@ namespace tt::tt_metal::hal_1xx {
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    uint32_t l1_cache_disable_mask = rtoptions.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-    defines.push_back(fmt::format(
-        "PROCESSOR_INDEX={}",
-        MetalContext::instance().hal().get_processor_index(
-            params.core_type, params.processor_class, params.processor_id)));
+    const auto& l1_cache_disable_processors =
+        rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    auto processor_index = MetalContext::instance().hal().get_processor_index(
+        params.core_type, params.processor_class, params.processor_id);
+    defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
+    if (l1_cache_disable_processors.contains(params.core_type, processor_index)) {
+        defines.push_back("DISABLE_L1_DATA_CACHE");
+    }
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
                 case HalProcessorClassType::DM:
                     switch (params.processor_id) {
-                        case 0:
-                            defines.push_back("COMPILE_FOR_BRISC");
-                            if (l1_cache_disable_mask & llrt::DebugHartFlags::RISCV_BR) {
-                                defines.push_back("DISABLE_L1_DATA_CACHE");
-                            }
-                            break;
-                        case 1:
-                            defines.push_back("COMPILE_FOR_NCRISC");
-                            if (l1_cache_disable_mask & llrt::DebugHartFlags::RISCV_NC) {
-                                defines.push_back("DISABLE_L1_DATA_CACHE");
-                            }
-                            break;
+                        case 0: defines.push_back("COMPILE_FOR_BRISC"); break;
+                        case 1: defines.push_back("COMPILE_FOR_NCRISC"); break;
                     }
                     break;
                 case HalProcessorClassType::COMPUTE: {
-                    uint32_t debug_compute_mask =
-                        (tt::llrt::DebugHartFlags::RISCV_TR0 | tt::llrt::DebugHartFlags::RISCV_TR1 |
-                         tt::llrt::DebugHartFlags::RISCV_TR2);
-                    if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
-                        defines.push_back("DISABLE_L1_DATA_CACHE");
-                    }
                     switch (params.processor_id) {
                         case 0:
                             defines.push_back("UCK_CHLKC_UNPACK");
@@ -61,20 +48,12 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             }
             break;
         case HalProgrammableCoreType::ACTIVE_ETH: {
-            uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
-            if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
-                defines.push_back("DISABLE_L1_DATA_CACHE");
-            }
             defines.push_back("COMPILE_FOR_ERISC");
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
             break;
         }
         case HalProgrammableCoreType::IDLE_ETH: {
-            uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
-            if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
-                defines.push_back("DISABLE_L1_DATA_CACHE");
-            }
             defines.push_back(fmt::format("COMPILE_FOR_IDLE_ERISC={}", params.processor_id));
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");

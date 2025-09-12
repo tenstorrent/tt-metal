@@ -24,21 +24,21 @@ class TtnnC3:
             device,
             parameters.cv1.conv,
             self.conv_pt.cv1.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
         self.cv2 = TtYOLOv5xConv2D(
             device,
             parameters.cv2.conv,
             self.conv_pt.cv2.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
         self.cv3 = TtYOLOv5xConv2D(
             device,
             parameters.cv3.conv,
             self.conv_pt.cv3.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             auto_shard=True,
         )
 

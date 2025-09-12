@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Application Setup
-        srand(time(0));
+        srand(time(nullptr));
         size_t core_x = rand() % 8;
         size_t core_y = rand() % 8;
         log_info(LogTest, "Target core (x,y) = ({},{})", core_x, core_y);

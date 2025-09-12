@@ -354,7 +354,6 @@ class UNet2DConditionModel:
         )
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
             enable_act_double_buffer=True,
@@ -622,7 +621,6 @@ class UNet2DConditionModel:
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
             reshard_if_not_optimal=True,

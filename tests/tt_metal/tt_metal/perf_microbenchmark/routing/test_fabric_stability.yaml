@@ -1,0 +1,63 @@
+# For bigger systems we may need to increase the number of configs per core
+allocation_policies:
+    receiver:
+      max_configs_per_core: 1
+
+Tests:
+  - name: "LinearMulticastLooped"
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      ftype: mcast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: all_to_all
+        iterations: 100
+
+  - name: "MeshLowLatencyMulticastLooped"
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      ftype: mcast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: all_to_all
+        iterations: 100
+
+  - name: "MeshDynamicMulticastLooped"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      ftype: mcast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: all_to_all
+        iterations: 100

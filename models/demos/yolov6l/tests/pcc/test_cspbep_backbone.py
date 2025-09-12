@@ -38,16 +38,20 @@ def test_yolov6l_cspbep_backbone(device, reset_seeds, model_location_generator):
 
     output_0 = ttnn.to_torch(output[0])
     output_0 = output_0.permute(0, 3, 1, 2)
+    output_0 = output_0.reshape(torch_output[0].shape)
     assert_with_pcc(torch_output[0], output_0, pcc=0.99)
 
     output_1 = ttnn.to_torch(output[1])
     output_1 = output_1.permute(0, 3, 1, 2)
+    output_1 = output_1.reshape(torch_output[1].shape)
     assert_with_pcc(torch_output[1], output_1, pcc=0.99)
 
     output_2 = ttnn.to_torch(output[2])
     output_2 = output_2.permute(0, 3, 1, 2)
+    output_2 = output_2.reshape(torch_output[2].shape)
     assert_with_pcc(torch_output[2], output_2, pcc=0.99)
 
     output_3 = ttnn.to_torch(output[3])
     output_3 = output_3.permute(0, 3, 1, 2)
+    output_3 = output_3.reshape(torch_output[3].shape)
     assert_with_pcc(torch_output[3], output_3, pcc=0.99)

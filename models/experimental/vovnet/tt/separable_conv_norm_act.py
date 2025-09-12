@@ -25,7 +25,7 @@ class TtSeparableConvNormAct:
             conv_params=[stride, stride, padding, padding],
             split_conv=split_conv,
             fused_op=False,
-            activation="",
+            activation=None,
             parameters=parameters,
         )
 
@@ -34,7 +34,7 @@ class TtSeparableConvNormAct:
             path=base_address,
             conv_params=[1, 1, 0, 0],
             fused_op=True,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             seperable_conv_norm_act=True,
             pw=True,
             parameters=parameters,

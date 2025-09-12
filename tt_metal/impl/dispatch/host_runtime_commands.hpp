@@ -41,8 +41,8 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-class BufferRegion;
-class Event;
+struct BufferRegion;
+struct Event;
 class Trace;
 
 // Only contains the types of commands which are enqueued onto the device

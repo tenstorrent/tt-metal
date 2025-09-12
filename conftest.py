@@ -520,7 +520,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     import ttnn
 
     if ttnn.get_num_devices() < 8:
-        pytest.skip()
+        pytest.skip("Not enough devices to run test")
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)

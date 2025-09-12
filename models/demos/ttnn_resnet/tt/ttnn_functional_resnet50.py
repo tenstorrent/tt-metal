@@ -246,7 +246,7 @@ class resnet50Bottleneck:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -321,7 +321,7 @@ class resnet50Bottleneck:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=True,
                 reallocate_halo_output=not is_wormhole_b0(),
                 act_block_h_override=act_block_h_override,
@@ -574,13 +574,15 @@ class resnet50:
 
         self.conv1_config = ttnn.Conv2dConfig(
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=dealloc_input,
             act_block_h_override=act_block_h_override,
             enable_act_double_buffer=is_wormhole_b0() or is_blackhole(),
             enable_split_reader=True,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
+            # otherwise act block h is not big enough for the reuse
+            enable_activation_reuse=not is_wormhole_b0() or device.get_num_devices() <= 8,
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
