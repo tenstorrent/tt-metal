@@ -59,7 +59,7 @@ def compare_tensors_using_pcc(
             desired_pcc=desired_pcc,
             actual_pcc=actual_pcc,
         )
-        comparison_records.append(commparison_record)
+        comparison_records.append(comparison_record)
 
         if not matches:
             error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"

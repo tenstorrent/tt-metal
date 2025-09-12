@@ -55,15 +55,14 @@ def test_graph_capture_with_all_parameters(device):
 
     node1 = captured_graph[1]["arguments"]
     # ttnn:transpose
-    assert node1[0] == "\x00"
     assert (
-        node1[1]
+        node1[0]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([1]))))"
     )
-    assert node1[2] == "1"
-    assert node1[3] == "2"
-    assert node1[4] == "nullopt"
-    assert node1[5] == "0"
+    assert node1[1] == "1"
+    assert node1[2] == "2"
+    assert node1[3] == "nullopt"
+    assert node1[4] == "0"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]

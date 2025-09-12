@@ -93,7 +93,7 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
             py::arg("cache"),
             py::arg("input"),
             py::arg("update_index"),
-            py::arg("batch_offset"),
+            py::arg("batch_offset") = 0,
             py::arg("compute_kernel_config") = std::nullopt});
 }
 
