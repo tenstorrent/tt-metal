@@ -99,7 +99,7 @@ TEST(IntermeshAPIs, LocalIntermeshLinkTable) {
         auto board_id = local_chan.board_id;
         bool chip_found = false;
         for (auto chip_id : cluster.user_exposed_chip_ids()) {
-            if (control_plane.has_intermesh_links(chip_id) == false) {
+            if (!control_plane.has_intermesh_links(chip_id)) {
                 continue;
             }
             if (control_plane.get_asic_id(chip_id) == board_id) {
