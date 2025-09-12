@@ -91,10 +91,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "all_to_all_combine": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "final_output_reduce_scatter": {
                 "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
@@ -138,7 +138,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=False),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
