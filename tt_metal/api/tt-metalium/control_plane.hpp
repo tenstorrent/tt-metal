@@ -189,6 +189,9 @@ public:
     // Query the local intermesh link table containing the local to remote link mapping
     const IntermeshLinkTable& get_local_intermesh_link_table() const;
 
+    // Collect router port directions map from all hosts via MPI and merge into local map
+    void collect_and_merge_router_port_directions_from_all_hosts();
+
     // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
