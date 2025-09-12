@@ -235,14 +235,12 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
-    std::optional<std::reference_wrapper<const std::array<uint32_t, reciprocal_size>>> p_reciprocal_opt = std::nullopt;
+    const std::array<uint32_t, reciprocal_size>* p_reciprocal = nullptr;
     if constexpr (reciprocal_size > 0) {
         // The reciprocals are already sharded to this CB, get the pointer to the first value
-        uint32_t* p_reciprocal = nullptr;
         cb_get_tile(cb_reciprocals, /*tile_idx=*/0, &p_reciprocal);
         // The first 4 entries have metadata, so we ignore them
-        p_reciprocal_opt = std::make_optional(
-            std::cref(*reinterpret_cast<const std::array<uint32_t, reciprocal_size>*>(p_reciprocal + 4)));
+        p_reciprocal += 4;
     }
 
     // Start Batch Loop
@@ -309,14 +307,12 @@ void MAIN {
                             // DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
                             //    << this_tile_offset << ENDL();
                             welford_tile<0, 1, 2, false, false, reciprocal_size>(
-                                curr_xy_coord, curr_xy_limit, this_tile_offset, p_reciprocal_opt);
+                                curr_xy_coord, curr_xy_limit, this_tile_offset, *p_reciprocal);
 
                             if constexpr (reciprocal_size > 0) {
                                 MATH(
-                                    DPRINT
-                                    << "reciprocal[" << curr_xy_coord << "]: "
-                                    << (reinterpret_cast<const float*>(p_reciprocal_opt->get().data()))[curr_xy_coord]
-                                    << ENDL());
+                                    DPRINT << "reciprocal[" << curr_xy_coord << "]: "
+                                           << (reinterpret_cast<const float*>(p_reciprocal))[curr_xy_coord] << ENDL());
                             }
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                             // dprint_tensix_dest_reg(0);
@@ -334,7 +330,7 @@ void MAIN {
 #endif
             }
 
-            welford_M2_to_var<0, 1, 2, reciprocal_size>(curr_xy_limit, p_reciprocal_opt);  // Convert M2 to variance
+            welford_M2_to_var<0, 1, 2, reciprocal_size>(curr_xy_limit, *p_reciprocal);  // Convert M2 to variance
             // DPRINT << "After M2 to var with args: " << curr_xy_limit << " " << ENDL();
             // dprint_tensix_dest_reg(1);
             // dprint_tensix_dest_reg(2);

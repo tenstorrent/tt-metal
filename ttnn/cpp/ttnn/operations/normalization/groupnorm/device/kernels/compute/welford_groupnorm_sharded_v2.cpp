@@ -135,6 +135,9 @@ void MAIN {
     // Used in cases of negative mask provided
     constexpr uint32_t cb_in_negative_mask = tt::CBIndex::c_14;
 
+    // Sharded v2 does not use reciprocal lookup table, so we pass an empty array
+    constexpr std::array<uint32_t, 0> empty_reciprocal_lut{};
+
 #ifdef FUSE_NEGATIVE_MASK
     constexpr bool use_negative_mask = true;
 #else
@@ -200,14 +203,14 @@ void MAIN {
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
                         welford_tile<0, 1, 2, false, false, 0>(
-                            curr_xy_coord, curr_xy_limit, this_tile_offset, std::nullopt);
+                            curr_xy_coord, curr_xy_limit, this_tile_offset, empty_reciprocal_lut);
                         curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                     }
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
-            welford_M2_to_var<0, 1, 2, 0>(curr_xy_limit, std::nullopt);  // Convert M2 to variance
+            welford_M2_to_var<0, 1, 2, 0>(curr_xy_limit, empty_reciprocal_lut);  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + channels_per_group) % TILE_WIDTH;
