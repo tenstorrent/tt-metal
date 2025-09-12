@@ -8,7 +8,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.debug import is_enabled, record
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mamba_falcon import FalconH1Mamba
 from models.tt_transformers.tt.mlp import MLP
@@ -240,8 +239,6 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.attn_in", attn_in)
         # Apply attention input multiplier if provided by config (Falcon-H1)
         if hasattr(self.args, "attention_in_multiplier"):
             attn_in = ttnn.multiply(attn_in, self.args.attention_in_multiplier)
@@ -265,10 +262,22 @@ class TransformerBlock(LightweightModule):
         # Apply attention out multiplier if provided by config (Falcon-H1)
         if hasattr(self.args, "attention_out_multiplier"):
             attn_out = ttnn.multiply(attn_out, self.args.attention_out_multiplier)
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.attn_out", attn_out)
 
         # mamba_out computed above
+        # Ensure mamba_out matches attn_out layout/memory_config before add (avoid broadcast errors)
+        if mamba_out is not None:
+            try:
+                # Force both tensors to DRAM + ROW_MAJOR + 4D shape [1,1,S,H]
+                attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                mamba_out = ttnn.to_memory_config(mamba_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if attn_out.layout != ttnn.ROW_MAJOR_LAYOUT:
+                    attn_out = ttnn.to_layout(attn_out, ttnn.ROW_MAJOR_LAYOUT)
+                if mamba_out.layout != ttnn.ROW_MAJOR_LAYOUT:
+                    mamba_out = ttnn.to_layout(mamba_out, ttnn.ROW_MAJOR_LAYOUT)
+                attn_out = ttnn.unsqueeze_to_4D(attn_out)
+                mamba_out = ttnn.unsqueeze_to_4D(mamba_out)
+            except Exception:
+                pass
 
         if self.pre_ff_norm is None:
             # Residual connection after attention (no mamba path implemented yet)
@@ -283,8 +292,6 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
             # Apply FFN norm only in architectures without pre-FF norm
             hidden_states = self.ff_norm(hidden_states, mode)
-            if is_enabled() and self.layer_num == 0:
-                record("layer0.ff_norm_out", hidden_states)
         else:
             # Falcon-H1 style: add residual first, then apply pre-FF norm; no extra FFN norm here
             hidden_states = attn_out if mamba_out is None else ttnn.add(attn_out, mamba_out)
@@ -316,8 +323,6 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.mlp_out", hidden_states)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -349,7 +354,5 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.residual_out", out)
 
         return out  # fractured across devices

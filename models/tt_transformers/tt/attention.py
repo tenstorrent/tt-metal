@@ -10,7 +10,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.debug import is_enabled, record
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -728,11 +727,6 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Debug captures: Q/K before RoPE
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.q_pre", q_heads_1QSD_pre_rot)
-            record("layer0.k_pre", k_heads_1KSD_pre_rot)
-
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
@@ -765,11 +759,6 @@ class Attention(LightweightModule):
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
-
-        # Debug captures: Q/K after RoPE
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.q_post", q_heads_1QSD)
-            record("layer0.k_post", k_heads_1KSD)
 
         # Fill KV-Cache
         if kv_cache:
@@ -867,9 +856,6 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # Debug capture: attention output before WO
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.attn_core_out", attn_output_11SH)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
@@ -898,10 +884,6 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
-
-        # Debug capture: attention output after WO
-        if is_enabled() and self.layer_num == 0:
-            record("layer0.attn_out", output_11SH)
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])

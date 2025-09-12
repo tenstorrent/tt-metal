@@ -594,7 +594,7 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Falcon-H1-0.5B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                # Removed Falcon-H1-0.5B support
                 "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Falcon-H1-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 64},
             }
@@ -2219,7 +2219,7 @@ class ModelArgs:
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
                 "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
-                "Falcon-H1-0.5B": "tiiuae/Falcon-H1-0.5B-Instruct",
+                # Removed Falcon-H1-0.5B support
                 "Falcon3-1B": "tiiuae/Falcon3-1B-Instruct",
                 "Falcon-H1-7B": "tiiuae/Falcon-H1-7B-Instruct",
             }

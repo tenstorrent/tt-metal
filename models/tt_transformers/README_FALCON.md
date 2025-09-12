@@ -2,7 +2,6 @@
 
 This document summarizes the changes and usage to run the following Hugging Face models on Tenstorrent hardware using the TT Transformers demo:
 
-- tiiuae/Falcon-H1-0.5B-Instruct
 - tiiuae/Falcon3-1B-Instruct
 - tiiuae/Falcon3-7B-Instruct
 
@@ -10,7 +9,7 @@ This document summarizes the changes and usage to run the following Hugging Face
 
 - Model config updates (`models/tt_transformers/tt/model_config.py`):
   - Enable `trust_remote_code` automatically for `falcon-h1` and `falcon3` HF repos.
-  - Add tokenizer fallback mappings for `Falcon-H1-0.5B`, `Falcon3-1B`, `Falcon3-7B`.
+  - Add tokenizer fallback mappings for `Falcon3-1B`, `Falcon3-7B`.
   - Provide conservative per-device prefill chunk sizes for Falcon variants.
 - HF weight loading (`models/tt_transformers/tt/load_checkpoints.py`):
   - Normalize Falcon-style paths from `transformer.*` to `model.*` and unify attention names.
@@ -23,7 +22,7 @@ This document summarizes the changes and usage to run the following Hugging Face
 - Norm key resolution
   - Dynamically resolve `ffn_norm`/`final_layernorm` aliases in `tt/decoder.py` and `tt/model.py`.
 - Demo support (`models/tt_transformers/demo/simple_text_demo.py`):
-  - Add `Falcon-H1-0.5B`, `Falcon3-1B`, and `Falcon-H1-7B` to `supported_models` list.
+  - Add `Falcon3-1B`, and `Falcon-H1-7B` to `supported_models` list.
 
 ### How to run
 
@@ -41,11 +40,6 @@ export MESH_DEVICE=N300
 Run batch-1 (latency) and batch-32 (throughput) demos:
 
 ```bash
-# Falcon-H1-0.5B (Under progress)
-export HF_MODEL=tiiuae/Falcon-H1-0.5B-Instruct
-#pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
-#pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
-
 # Falcon3-1B
 export HF_MODEL=tiiuae/Falcon3-1B-Instruct
 pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"

@@ -987,7 +987,6 @@ def test_demo_text(
         "Llama-3.2-11B",
         "Llama-3.1-70B",
         "Mistral-7B",
-        "Falcon-H1-0.5B",
         "Falcon3-1B",
         "Falcon-H1-7B",
     ]
