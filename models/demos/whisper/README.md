@@ -22,56 +22,30 @@ pytest --disable-warnings models/demos/whisper/tests/test_whisper_modules.py::te
 
 - To run the conditional generation demo with custom inputs:
 
-#### Single Device:
-
 ```sh
 pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
 ```
 
-#### Multi Device:
-```sh
-pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dp
-```
-
 - To run the conditional generation demo with inputs from the `hf-internal-testing/librispeech_asr_dummy` dataset:
-
-#### Single Device:
 
 ```sh
 pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset
 ```
 
-#### Multi Device:
-
-```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset_dp
-```
-
 ### Audio Classification Demo
 
 - To run the audio classification demo with custom inputs:
-#### Single Device:
 
 ```sh
-pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/audio_classification" models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_inference
-```
-
-#### Multi Device:
-
-```sh
-pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/audio_classification" models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_inference_dp
+pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_inference --input-path="models/demos/whisper/demo/dataset/audio_classification"
 ```
 
 - To run the audio classification demo with inputs from the `google/fleurs` dataset:
-
-#### Single Device:
 
 ```sh
 pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_dataset
 ```
 
-#### Multi Device:
-
-```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_dataset_dp
-```
+## Notes:
+- By default, demo tests (Conditional Generation, Audio Classification) run using all available devices.
+- Uncomment the `True` value in `run_on_single_card` (pytest parameter) to restrict the demo tests to a single device (`num_devices = 1`).
