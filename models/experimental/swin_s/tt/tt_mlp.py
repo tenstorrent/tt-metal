@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 program_configs = {
     "linear_1_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -100,6 +107,8 @@ class TtMLP:
         self.activation_layer = activation_layer
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="mlp")
         for hidden_dim in self.hidden_channels[:-1]:
             if input_tensor.shape[-1] == 96:
                 input_tensor = ttnn.to_memory_config(

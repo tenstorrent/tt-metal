@@ -5,6 +5,13 @@
 import ttnn
 import torch.nn as nn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtShiftedWindowAttention(nn.Module):
     def __init__(
@@ -32,6 +39,8 @@ class TtShiftedWindowAttention(nn.Module):
         self.core_grid = self.device.compute_with_storage_grid_size()
 
     def forward(self, input_tensor):
+        if use_signpost:
+            signpost(header="shifted_window_attention")
         relative_position_bias = self.parameters[
             "relative_position_bias"
         ]  # relative position bias is taken from torch since it won't differ from input
@@ -53,6 +62,7 @@ class TtShiftedWindowAttention(nn.Module):
         # cyclic shift
         if sum(self.shift_size) > 0:
             input_tensor = ttnn.roll(input_tensor, [-self.shift_size[0], -self.shift_size[1]], [1, 2])
+            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # partition windows
         num_windows = (pad_H // self.window_size[0]) * (pad_W // self.window_size[1])
@@ -73,7 +83,11 @@ class TtShiftedWindowAttention(nn.Module):
         )
         input_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        input_tensor = ttnn.reshape(input_tensor, (B * num_windows, self.window_size[0] * self.window_size[1], C))
+        input_tensor = ttnn.reshape(
+            input_tensor,
+            (B * num_windows, self.window_size[0] * self.window_size[1], C),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         qkv_weight = self.parameters.qkv.weight
         qkv_bias = self.parameters.qkv.bias
@@ -260,6 +274,7 @@ class TtShiftedWindowAttention(nn.Module):
         if sum(self.shift_size) > 0:
             output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             output_tensor = ttnn.roll(output_tensor, [self.shift_size[0], self.shift_size[1]], [1, 2])
+            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # unpad features
         output_tensor = output_tensor[:, :H, :W, :]

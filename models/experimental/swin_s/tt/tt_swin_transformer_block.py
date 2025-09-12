@@ -7,6 +7,13 @@ import torch.nn as nn
 from models.experimental.swin_s.tt.tt_mlp import TtMLP
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSwinTransformerBlock(nn.Module):
     def __init__(
@@ -42,6 +49,8 @@ class TtSwinTransformerBlock(nn.Module):
         )
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="swin_transformer_block")
         norm1 = ttnn.layer_norm(
             input_tensor,
             weight=self.parameters.norm1.weight,
