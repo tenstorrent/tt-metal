@@ -79,11 +79,23 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
+# Add the factory_system_descriptor protobuf files from scaleout_tools
+list(
+    APPEND
+    GENERATED_PROTO_SRCS
+    ${CMAKE_BINARY_DIR}/tools/scaleout/protobuf/factory_system_descriptor.pb.cc
+    ${CMAKE_BINARY_DIR}/tools/scaleout/protobuf/factory_system_descriptor.pb.h
+)
+
+# Ensure factory_system_descriptor proto is generated before fabric is built
+add_dependencies(fabric factory_system_descriptor)
+
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout/protobuf)
 
 target_link_libraries(
     fabric
@@ -98,6 +110,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
+        TT::ScaleoutTools
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)

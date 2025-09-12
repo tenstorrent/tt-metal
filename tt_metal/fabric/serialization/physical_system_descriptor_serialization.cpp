@@ -187,6 +187,18 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Convert host deployment descriptors
+    for (const auto& [host_name, deployment_desc] : descriptor.get_host_deployment_descriptors()) {
+        auto* proto_map = proto_desc->add_host_deployment_descriptors();
+        proto_map->set_host_name(host_name);
+
+        auto* proto_deployment = proto_map->mutable_deployment_descriptor();
+        proto_deployment->set_hall(*deployment_desc.hall);
+        proto_deployment->set_aisle(*deployment_desc.aisle);
+        proto_deployment->set_rack(*deployment_desc.rack);
+        proto_deployment->set_shelf_u(*deployment_desc.shelf_u);
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -244,6 +256,20 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         }
 
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
+    }
+
+    // Convert host deployment descriptors
+    auto& host_deployment_descriptors = descriptor->get_host_deployment_descriptors();
+    for (const auto& proto_map : proto_desc.host_deployment_descriptors()) {
+        HostDeploymentDescriptor deployment_desc;
+        const auto& proto_deployment = proto_map.deployment_descriptor();
+
+        deployment_desc.hall = HallID{proto_deployment.hall()};
+        deployment_desc.aisle = AisleID{proto_deployment.aisle()};
+        deployment_desc.rack = RackID{proto_deployment.rack()};
+        deployment_desc.shelf_u = UID{proto_deployment.shelf_u()};
+
+        host_deployment_descriptors[proto_map.host_name()] = deployment_desc;
     }
 
     return descriptor;

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fstream>
 #include <yaml-cpp/yaml.h>
 
 #include <tt-metalium/control_plane.hpp>
@@ -10,6 +11,9 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include "factory_system_descriptor.pb.h"
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
 
 namespace tt::tt_metal {
 
@@ -94,9 +98,36 @@ struct EthEndpoint {
 
 }  // namespace
 
-PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool run_discovery) {
+PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool run_discovery, const std::string& fsd_path) {
     if (run_discovery) {
         this->run_discovery();
+    }
+    if (!fsd_path.empty()) {
+        this->load_host_deployment_descriptors_from_fsd(fsd_path);
+    }
+}
+
+void PhysicalSystemDescriptor::load_host_deployment_descriptors_from_fsd(const std::string& fsd_path) {
+    scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
+    std::ifstream fsd_file(fsd_path);
+    if (!fsd_file.is_open()) {
+        throw std::runtime_error("Failed to open FSD file: " + fsd_path);
+    }
+
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
+        TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path);
+    }
+    const google::protobuf::RepeatedPtrField<scaleout_tools::fsd::proto::FactorySystemDescriptor::Host>& hosts =
+        generated_fsd.hosts();
+    for (const auto& host : hosts) {
+        HostDeploymentDescriptor location_info{
+            .hall = HallID{host.hall()},
+            .aisle = AisleID{host.aisle()},
+            .rack = RackID{host.rack()},
+            .shelf_u = UID{host.shelf_u()}};
+        host_deployment_descriptors_[host.hostname()] = location_info;
     }
 }
 
@@ -674,19 +705,31 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
 }
 
 UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
-    TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
+    if (host_deployment_descriptors_.find(hostname) != host_deployment_descriptors_.end()) {
+        return host_deployment_descriptors_.at(hostname).shelf_u;
+    }
+    TT_THROW("Host Deployment Descriptor not found for hostname {}", hostname);
 }
 
 RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
-    TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
+    if (host_deployment_descriptors_.find(hostname) != host_deployment_descriptors_.end()) {
+        return host_deployment_descriptors_.at(hostname).rack;
+    }
+    TT_THROW("Host Deployment Descriptor not found for hostname {}", hostname);
 }
 
 AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
-    TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
+    if (host_deployment_descriptors_.find(hostname) != host_deployment_descriptors_.end()) {
+        return host_deployment_descriptors_.at(hostname).aisle;
+    }
+    TT_THROW("Host Deployment Descriptor not found for hostname {}", hostname);
 }
 
 HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
-    TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
+    if (host_deployment_descriptors_.find(hostname) != host_deployment_descriptors_.end()) {
+        return host_deployment_descriptors_.at(hostname).hall;
+    }
+    TT_THROW("Host Deployment Descriptor not found for hostname {}", hostname);
 }
 
 }  // namespace tt::tt_metal

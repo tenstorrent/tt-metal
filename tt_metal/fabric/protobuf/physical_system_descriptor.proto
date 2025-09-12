@@ -90,6 +90,20 @@ message ExitNodeConnectionTable {
     repeated ExitNodeConnection exit_connections = 2;
 }
 
+// Host deployment descriptor containing location information
+message HostDeploymentDescriptor {
+    string hall = 1;
+    string aisle = 2;
+    uint32 rack = 3;
+    uint32 shelf_u = 4;
+}
+
+// Map entry for host to deployment descriptor
+message HostToDeploymentMap {
+    string host_name = 1;
+    HostDeploymentDescriptor deployment_descriptor = 2;
+}
+
 // Top-level Physical System Descriptor message
 message PhysicalSystemDescriptor {
     PhysicalConnectivityGraph system_graph = 1;
@@ -97,4 +111,5 @@ message PhysicalSystemDescriptor {
     repeated HostToMoboMap host_to_mobo_name = 3;
     repeated HostToRankMap host_to_rank = 4;
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
+    repeated HostToDeploymentMap host_deployment_descriptors = 6;
 }
