@@ -11,7 +11,6 @@
 #include "point_to_point_device_op.hpp"
 
 using tt::tt_fabric::FabricNodeId;
-using tt::tt_fabric::get_fabric_node_id_from_physical_chip_id;
 
 namespace ttnn::operations::point_to_point {
 
@@ -84,7 +83,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     auto this_device = mesh_device->get_device(send_coord);
-    const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
 
     const auto [num_hops, dst_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);

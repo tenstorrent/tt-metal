@@ -107,25 +107,38 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         this->reduce_scatter_minimal_async_struct.devices,
         this->reduce_scatter_minimal_async_struct.topology);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
+    auto target_device_coord = mesh_coord;
 
     std::vector<IDevice*> devices_to_use = {};
     devices_to_use = this->reduce_scatter_minimal_async_struct.devices;
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<MeshCoordinate> backward_coord = std::nullopt;
+    std::optional<MeshCoordinate> forward_coord = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < this->reduce_scatter_minimal_async_struct.ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_coord = MeshCoordinate(
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? i - 1 : mesh_coord[0],
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : i - 1);
             } else if (this->reduce_scatter_minimal_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(this->reduce_scatter_minimal_async_struct.ring_size - 1);
+                backward_coord = MeshCoordinate(
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0)
+                        ? this->reduce_scatter_minimal_async_struct.ring_size - 1
+                        : mesh_coord[0],
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0)
+                        ? mesh_coord[1]
+                        : this->reduce_scatter_minimal_async_struct.ring_size - 1);
             }
             if (i != this->reduce_scatter_minimal_async_struct.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_coord = MeshCoordinate(
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? i + 1 : mesh_coord[0],
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : i + 1);
             } else if (this->reduce_scatter_minimal_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
+                forward_coord = MeshCoordinate(
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? 0 : mesh_coord[0],
+                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : 0);
             }
         }
     }
@@ -140,8 +153,9 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
 
         /* Reduce Scatter Params */
         target_device,
-        forward_device,
-        backward_device,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
         this->reduce_scatter_minimal_async_struct.dim,
         this->reduce_scatter_minimal_async_struct.num_links,
         this->reduce_scatter_minimal_async_struct.ring_size,

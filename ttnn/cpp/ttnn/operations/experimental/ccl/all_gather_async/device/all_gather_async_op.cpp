@@ -174,6 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     auto mesh_device = input_tensors[0].device();
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    auto target_device_coord = coord;
     std::vector<IDevice*> devices_to_use = {};
     if (this->cluster_axis.has_value()) {
         const auto& mesh_view = input_tensors[0].device()->get_view();
@@ -186,21 +187,28 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     }
     uint32_t target_ring_size = devices_to_use.size();
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<MeshCoordinate> backward_coord = std::nullopt;
+    std::optional<MeshCoordinate> forward_coord = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < target_ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_coord = MeshCoordinate(
+                    (this->cluster_axis.value() == 0) ? i - 1 : coord[0],
+                    (this->cluster_axis.value() == 0) ? coord[1] : i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(target_ring_size - 1);
+                backward_coord = MeshCoordinate(
+                    (this->cluster_axis.value() == 0) ? target_ring_size - 1 : coord[0],
+                    (this->cluster_axis.value() == 0) ? coord[1] : target_ring_size - 1);
             }
             if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_coord = MeshCoordinate(
+                    (this->cluster_axis.value() == 0) ? i + 1 : coord[0],
+                    (this->cluster_axis.value() == 0) ? coord[1] : i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
+                forward_coord = MeshCoordinate(
+                    (this->cluster_axis.value() == 0) ? 0 : coord[0], (this->cluster_axis.value() == 0) ? coord[1] : 0);
             }
         }
     }
@@ -212,8 +220,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             return all_gather_async_llama_sharded(
                 input_tensors[0],
                 target_device,
-                forward_device,
-                backward_device,
+                target_device_coord,
+                forward_coord,
+                backward_coord,
                 output_tensors[0],
                 this->dim,
                 this->num_links,
@@ -232,8 +241,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             return all_gather_async_minimal_default(
                 input_tensors[0],
                 target_device,
-                forward_device,
-                backward_device,
+                target_device_coord,
+                forward_coord,
+                backward_coord,
                 output_tensors[0],
                 this->dim,
                 this->num_links,

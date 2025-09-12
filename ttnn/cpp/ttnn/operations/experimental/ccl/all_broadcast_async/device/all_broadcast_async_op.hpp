@@ -81,9 +81,9 @@ struct AllBroadcastAsync {
 
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate& sender_device_coord,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensors,
     uint32_t num_links,
     uint32_t ring_size,

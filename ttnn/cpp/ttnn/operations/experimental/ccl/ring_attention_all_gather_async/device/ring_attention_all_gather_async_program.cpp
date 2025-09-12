@@ -36,9 +36,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers(
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -53,9 +53,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     return ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,
         input_tensor,
-        target_device,
-        forward_device,
-        backward_device,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
         output_tensor,
         dim,
         num_links,
@@ -70,9 +70,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -88,8 +88,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.at(0).device()->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        target_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -422,12 +422,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
         writer_forward_rt_args.push_back(false);
-        writer_forward_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_forward_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 backward_fabric_node_id,
@@ -460,12 +458,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
-        writer_backward_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_backward_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 forward_fabric_node_id,

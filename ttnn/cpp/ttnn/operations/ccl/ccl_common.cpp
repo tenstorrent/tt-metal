@@ -263,9 +263,8 @@ RingTopology::RingTopology(
             auto const& sockets = device->get_ethernet_sockets(receiver_device);
             TT_FATAL(
                 sender_socket_idx < sockets.size(),
-                "Sender socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "Sender socket index out of bounds. Device has {} ethernet cores but tried to access core at "
                 "index {}",
-                device->id(),
                 sockets.size(),
                 sender_socket_idx);
             auto eth_sender_core = sockets.at(sender_socket_idx);
@@ -277,9 +276,8 @@ RingTopology::RingTopology(
             auto const& sockets = device->get_ethernet_sockets(sender_device);
             TT_FATAL(
                 receiver_socket_idx < sockets.size(),
-                "Receiver socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "Receiver socket index out of bounds. Device has {} ethernet cores but tried to access core at "
                 "index {}",
-                device->id(),
                 sockets.size(),
                 receiver_socket_idx);
             auto eth_receiver_core = sockets.at(receiver_socket_idx);
@@ -1569,33 +1567,32 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
     Topology topology,
-    IDevice* src_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device) {
+    MeshCoordinate src_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
+    MeshDevice* mesh_device) {
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
         TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        if (forward_device) {
-            auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
+        if (forward_device_coord) {
+            auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
             forward_args[1] = forward_device_fabric_node_id.chip_id;
         }
-        if (backward_device) {
-            auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*backward_device)->id());
+        if (backward_device_coord) {
+            auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_device_coord.value());
             backward_args[0] = *backward_device_fabric_node_id.mesh_id;
             backward_args[1] = backward_device_fabric_node_id.chip_id;
         }
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
-        if (forward_device) {
+        if (forward_device_coord) {
             forward_args[0] = 0; // dst_mesh_id, unused
             forward_args[1] = 1; // distance_in_hops
         }
-        if (backward_device) {
+        if (backward_device_coord) {
             backward_args[0] = 0; // dst_mesh_id, unused
             backward_args[1] = 1; // distance_in_hops
         }
@@ -1628,11 +1625,12 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology,
-    IDevice* src_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate src_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
     uint32_t num_targets_forward,
-    uint32_t num_targets_backward) {
+    uint32_t num_targets_backward,
+    MeshDevice* mesh_device) {
     std::array<uint32_t, 6> forward_args = {};
     std::array<uint32_t, 6> backward_args = {};
     // Used for experimentation for optimal perf
@@ -1641,24 +1639,29 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
 
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
         TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
-        auto set_mcast_args = [&src_fabric_node_id](std::array<uint32_t, 6>& args, std::optional<IDevice*> device, uint32_t num_targets) {
-            if (device) {
-                auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*device)->id());
+        auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
+        auto set_mcast_args = [&src_fabric_node_id](
+                                  std::array<uint32_t, 6>& args,
+                                  std::optional<MeshCoordinate> coord,
+                                  uint32_t num_targets,
+                                  MeshDevice* mesh_device) {
+            if (coord) {
+                const auto dev_coord = *coord;
+                auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
                 auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
                 args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets - 1;
             }
         };
-        set_mcast_args(forward_args, forward_device, num_targets_forward);
-        set_mcast_args(backward_args, backward_device, num_targets_backward);
+        set_mcast_args(forward_args, forward_device_coord, num_targets_forward, mesh_device);
+        set_mcast_args(backward_args, backward_device_coord, num_targets_backward, mesh_device);
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
-        if (forward_device) {
+        if (forward_device_coord) {
             forward_args[0] = 1;                    // start_distance_in_hops
             forward_args[1] = num_targets_forward;  // range_hops
         }
-        if (backward_device) {
+        if (backward_device_coord) {
             backward_args[0] = 1;                     // start_distance_in_hops
             backward_args[1] = num_targets_backward;  // range_hops
         }
