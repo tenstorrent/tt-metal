@@ -8,7 +8,6 @@
 #include <random>
 
 #include <tt-logger/tt-logger.hpp>
-#include <utility>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -79,7 +78,7 @@ bool is_close_packed_vectors(
     return is_close_vectors(
         unpack_vector<ValueType, PackType>(vec_a),
         unpack_vector<ValueType, PackType>(vec_b),
-        std::move(comparison_function),
+        comparison_function,
         argfail);
 }
 

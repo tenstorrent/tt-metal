@@ -5,8 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-
-#include <utility>
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 

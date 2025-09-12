@@ -13,7 +13,6 @@
 #include "debug_tools_test_utils.hpp"
 #include <fmt/base.h>
 #include <string>
-#include <utility>
 #include <vector>
 
 using namespace tt;

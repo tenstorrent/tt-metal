@@ -9,7 +9,6 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <utility>
 
 namespace tt::tt_metal {
 

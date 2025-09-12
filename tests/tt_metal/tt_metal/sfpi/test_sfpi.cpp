@@ -20,7 +20,6 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
-#include <utility>
 
 namespace {
 
