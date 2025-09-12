@@ -259,7 +259,9 @@ Tensor LogSigmoid::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
+        {UnaryWithParam(UnaryOpType::NEG),
+         UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f}),
+         UnaryWithParam(UnaryOpType::NEG)},
         memory_config,
         optional_output_tensor);
 }

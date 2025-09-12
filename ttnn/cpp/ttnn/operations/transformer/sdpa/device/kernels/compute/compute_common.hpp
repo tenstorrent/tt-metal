@@ -12,6 +12,7 @@
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/softplus.h"
+#include "compute_kernel_api/eltwise_unary/logsigmoid.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -420,6 +421,29 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     }
     cb_push_back(out_cb, num_tiles);
 }
+
+void logsigmoid_sub_optimized(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = logsigmoid(in0_cb - in1_cb)
+    // Optimized implementation using the new logsigmoid_tile LLK
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        // Compute in0_cb - in1_cb
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Apply fused logsigmoid operation: logsigmoid(x) = -softplus(-x)
+        logsigmoid_tile_init();
+        logsigmoid_tile(0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+
 void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = in0_cb - in1_cb
 
