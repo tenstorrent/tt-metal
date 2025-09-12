@@ -14,6 +14,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/common/guard.hpp"
 
 namespace ttnn {
 
@@ -37,11 +38,27 @@ void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
 
+QueueId get_current_command_queue_id_for_thread();
+void push_current_command_queue_id_for_thread(QueueId cq_id);
+QueueId pop_current_command_queue_id_for_thread();
+
+ScopeGuard with_command_queue_id(QueueId cq_id);
+
+template <typename T>
+void with_command_queue_id(QueueId cq_id, T&& func) {
+    auto guard = with_command_queue_id(cq_id);
+    func();
+}
+
 }  // namespace core
 
+using core::get_current_command_queue_id_for_thread;
 using core::get_memory_config;
 using core::has_storage_type_of;
+using core::pop_current_command_queue_id_for_thread;
+using core::push_current_command_queue_id_for_thread;
 using core::set_printoptions;
+using core::with_command_queue_id;
 
 class CoreIDs {
 public:
