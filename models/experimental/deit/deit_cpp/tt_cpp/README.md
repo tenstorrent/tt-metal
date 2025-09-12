@@ -7,13 +7,17 @@ This directory contains the C++ implementation of DeiT (Data-efficient Image Tra
 ### Header Files
 - `deit_config.h` - Configuration structure for DeiT model parameters
 - `deit_attention.h` - Main attention module combining self-attention and output layers
+- `deit_embeddings.h` - Input embeddings with patch, position, and token embeddings
 - `deit_self_attention.h` - Self-attention mechanism implementation
 - `deit_self_output.h` - Output projection layer for attention
+- `deit_pooler.h` - Pooler module for extracting CLS token representation
 
 ### Implementation Files
 - `deit_attention.cpp` - Implementation of the main attention module
+- `deit_embeddings.cpp` - Implementation of input embeddings layer
 - `deit_self_attention.cpp` - Implementation of self-attention with Q, K, V projections
 - `deit_self_output.cpp` - Implementation of the output projection layer
+- `deit_pooler.cpp` - Implementation of the pooler module with linear transformation and tanh activation
 
 ### Build Files
 - `CMakeLists.txt` - CMake configuration for building the C++ components

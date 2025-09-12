@@ -32,7 +32,7 @@ ttnn::Tensor linear_transform(
 
 ttnn::Tensor torch_to_tt_tensor_tile(
     const at::Tensor& tensor,
-    ttnn::MeshDevice* device,
+    std::shared_ptr<ttnn::MeshDevice> device,
     std::optional<std::vector<int64_t>> shape
 ) {
     // Get tensor shape, default to tensor's current shape if not provided
@@ -60,7 +60,7 @@ ttnn::Tensor torch_to_tt_tensor_tile(
     ttnn::Shape logical_shape(std::vector<uint32_t>{target_shape.begin(), target_shape.end()});
     
     ttnn::Tensor tt_tensor = from_torch(contiguous_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
-    
+    tt_tensor = tt_tensor.to_device(device.get());
     
     // Move tensor to device - use the same approach as from_torch function
     return tt_tensor;

@@ -36,7 +36,7 @@ ttnn::Tensor linear_transform(
  */
 ttnn::Tensor torch_to_tt_tensor_tile(
     const at::Tensor& tensor,
-    ttnn::MeshDevice* device,
+    std::shared_ptr<ttnn::MeshDevice> device,
     std::optional<std::vector<int64_t>> shape = std::nullopt
 );
 
