@@ -21,19 +21,20 @@ Description:
 from dataclasses import dataclass
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
+from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
-from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
+from ttexalens.tt_exalens_lib import top_callstack, callstack
 from utils import BLUE, GREEN, ORANGE, RST
 
 import re
 import subprocess
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
 
@@ -171,17 +172,13 @@ def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
     dispatcher_core_data: DispatcherCoreData,
-    elfs_cache: dict[str, ParsedElfFile],
+    elfs_cache: ElfsCache,
     full_callstack: bool,
 ) -> list[CallstackEntry]:
     context = location._device._context
-    if dispatcher_core_data.firmware_path not in elfs_cache:
-        elfs_cache[dispatcher_core_data.firmware_path] = parse_elf(dispatcher_core_data.firmware_path, context)
     elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
-        if dispatcher_core_data.kernel_path not in elfs_cache:
-            elfs_cache[dispatcher_core_data.kernel_path] = parse_elf(dispatcher_core_data.kernel_path, context)
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
@@ -225,14 +222,13 @@ def dump_callstacks(
     location: OnChipCoordinate,
     risc_name: str,
     dispatcher_data: DispatcherData,
+    elfs_cache: ElfsCache,
     context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
     active_cores: bool,
     port: int | None,
 ) -> DumpCallstacksData | None:
-    if not hasattr(dump_callstacks, "elfs_cache"):
-        dump_callstacks.elfs_cache: dict[str, ParsedElfFile] = {}
     if not hasattr(dump_callstacks, "gdb_server"):
         dump_callstacks.gdb_server: GdbServer | None = None
     if not hasattr(dump_callstacks, "process_ids"):
@@ -276,9 +272,8 @@ def dump_callstacks(
                 except:
                     pass
         else:
-            callstack = get_callstack(
-                location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
-            )
+            callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
             pc=callstack[0].pc if len(callstack) > 0 else None,
@@ -301,6 +296,7 @@ def run(args, context: Context):
     active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     callstacks_data = run_checks.run_per_core_check(
@@ -308,6 +304,7 @@ def run(args, context: Context):
             location,
             risc_name,
             dispatcher_data,
+            elfs_cache,
             context,
             full_callstack,
             gdb_callstack,

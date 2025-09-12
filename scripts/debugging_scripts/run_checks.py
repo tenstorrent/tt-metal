@@ -212,7 +212,7 @@ class RunChecks:
         cores_to_check = (
             CORE_TYPES
             if core_filter is None
-            else set(core_filter)
+            else set([core_filter])
             if isinstance(core_filter, str)
             else set(core_filter)
         )

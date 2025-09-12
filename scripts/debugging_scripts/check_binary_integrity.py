@@ -28,7 +28,7 @@ from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
 
