@@ -364,7 +364,10 @@ def set_fabric(fabric_config, fabric_tensix_config=None):
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        # Apply default logic for fabric_tensix_config
+        # Apply default logic for fabric_tensix_config,
+        # fabric_tensix_config is used for enabling tensix extensions for the fabric router,
+        # some sender channels in the fabric router are moved to the fabric tensix extension
+        # (currently the extension is mux kernel, can have other kernels in future as well).
         if fabric_tensix_config is None:
             fabric_tensix_config = get_default_fabric_tensix_config()
 
