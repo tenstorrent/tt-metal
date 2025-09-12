@@ -41,6 +41,16 @@ target_sources(
         ${GENERATED_PROTO_SRCS}
 )
 
+# Disable clang-tidy for generated protobuf files
+foreach(PROTO_SRC ${GENERATED_PROTO_SRCS})
+    set_source_files_properties(
+        ${PROTO_SRC}
+        PROPERTIES
+            CXX_CLANG_TIDY
+                ""
+    )
+endforeach()
+
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 

@@ -694,7 +694,7 @@ public:
         return Result;
     }
 
-    void swap(SmallVectorImpl& RHS);
+    void swap(SmallVectorImpl& RHS) noexcept;
 
     /// Add the specified range to the end of the SmallVector.
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
@@ -978,7 +978,7 @@ public:
 };
 
 template <typename T>
-void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) {
+void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) noexcept {
     if (this == &RHS) {
         return;
     }
@@ -1339,13 +1339,13 @@ namespace std {
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T>
-inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) noexcept {
     LHS.swap(RHS);
 }
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T, unsigned N>
-inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) noexcept {
     LHS.swap(RHS);
 }
 

@@ -31,7 +31,8 @@ Checks: >
   -cppcoreguidelines-interfaces-global-init,
   -hicpp-use-equals-default,
   -modernize-use-equals-default,
-  -cppcoreguidelines-avoid-goto"
+  -cppcoreguidelines-avoid-goto,
+  -performance-noexcept-swap"
     )
 
     # Generate protobuf files by invoking protoc directly. This avoids depending on
