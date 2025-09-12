@@ -9,6 +9,7 @@ from collections import defaultdict
 import pandas as pd
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.perf_utils import process_perf_results
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
@@ -213,6 +214,39 @@ def prep_device_perf_report(
 
     csv_file = f"device_perf_{model_name}_{comments}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)
+
+    # Save partial benchmark run data for Superset (CI only)
+    profiler = BenchmarkProfiler()
+    with profiler("run"):
+        pass
+
+    benchmark_data = BenchmarkData()
+    iteration = 0
+    step_name = "run"
+
+    for metric_name, metric_value in post_processed_results.items():
+        try:
+            value_float = float(metric_value)
+        except Exception:
+            continue
+        benchmark_data.add_measurement(
+            profiler=profiler,
+            iteration=iteration,
+            step_name=step_name,
+            name=str(metric_name),
+            value=value_float,
+        )
+
+    config_params = {"comments": comments}
+    benchmark_data.save_partial_run_json(
+        profiler=profiler,
+        run_type="device_perf_report",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+        config_params=config_params,
+        profiler_name="prep_device_perf_report",
+        perf_analysis=True,
+    )
 
 
 def check_device_perf_results(fname, expected_cols, check_cols):

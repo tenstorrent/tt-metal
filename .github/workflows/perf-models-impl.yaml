@@ -94,6 +94,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      # Ensure local composite actions are present before use
+      - name: Verify local actions exist
+        run: |
+          test -f .github/actions/docker-run/action.yml
+          test -f .github/actions/upload-data-via-sftp/action.yaml
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -121,6 +126,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-info.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e CI=true
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
           install_wheel: true
@@ -136,6 +142,30 @@ jobs:
 
             ## Merge all the generated reports
             env python3 models/perf/merge_perf_results.py
+      - name: Save environment data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e CI=true
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}

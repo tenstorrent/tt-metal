@@ -11,6 +11,8 @@ from os.path import isfile, join
 import git
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+
 today = time.strftime("%Y_%m_%d")
 
 
@@ -182,3 +184,73 @@ def prep_perf_report(
     model_name = model_name.replace("/", "_")
     csv_file = f"perf_{model_name}_{comments}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)
+
+    # Save partial benchmark run data for Superset (CI only)
+    profiler = BenchmarkProfiler()
+    with profiler("run"):
+        pass
+
+    benchmark_data = BenchmarkData()
+    iteration = 0
+    step_name = "run"
+
+    # Numeric values for measurements
+    compile_time_value = compile_time
+    device_throughput_float = batch_size * (1 / inference_time)
+
+    benchmark_data.add_measurement(
+        profiler=profiler,
+        iteration=iteration,
+        step_name=step_name,
+        name="first_run_sec",
+        value=float(inference_and_compile_time),
+    )
+    benchmark_data.add_measurement(
+        profiler=profiler,
+        iteration=iteration,
+        step_name=step_name,
+        name="compile_time_sec",
+        value=float(compile_time_value),
+        target=float(expected_compile_time),
+    )
+    benchmark_data.add_measurement(
+        profiler=profiler,
+        iteration=iteration,
+        step_name=step_name,
+        name="inference_time_sec",
+        value=float(inference_time),
+        target=float(expected_inference_time),
+    )
+    benchmark_data.add_measurement(
+        profiler=profiler,
+        iteration=iteration,
+        step_name=step_name,
+        name="throughput_batch_inf_per_sec",
+        value=float(device_throughput_float),
+    )
+    if inference_time_cpu:
+        cpu_throughput_float = batch_size * (1 / inference_time_cpu)
+        benchmark_data.add_measurement(
+            profiler=profiler,
+            iteration=iteration,
+            step_name=step_name,
+            name="inference_time_cpu_sec",
+            value=float(inference_time_cpu),
+        )
+        benchmark_data.add_measurement(
+            profiler=profiler,
+            iteration=iteration,
+            step_name=step_name,
+            name="throughput_cpu_batch_inf_per_sec",
+            value=float(cpu_throughput_float),
+        )
+
+    config_params = {"comments": comments}
+    benchmark_data.save_partial_run_json(
+        profiler=profiler,
+        run_type="perf_report",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+        config_params=config_params,
+        profiler_name="prep_perf_report",
+    )
