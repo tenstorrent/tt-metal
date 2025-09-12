@@ -207,12 +207,10 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
         const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
 
-        if ((fabric_type == FabricType::TORUS_X && is_north_south) ||
-            (fabric_type == FabricType::TORUS_Y && is_east_west)) {
-            // torused along one dimension, but connecting along the other dimension
-            return false;
-        }
-        return true;
+        const bool torus_mismatch = (fabric_type == FabricType::TORUS_X && is_north_south) ||
+                                    (fabric_type == FabricType::TORUS_Y && is_east_west);
+
+        return !torus_mismatch;
     }
 
     return false;
