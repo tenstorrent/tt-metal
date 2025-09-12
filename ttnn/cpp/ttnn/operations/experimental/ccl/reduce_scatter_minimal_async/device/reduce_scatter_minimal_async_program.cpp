@@ -290,7 +290,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
+ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
@@ -725,6 +725,69 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
         }
     }
 
+    return {
+        reader_kernel_ids,
+        writer_kernel_ids,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link};
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* sender_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset) {
+    auto
+        [reader_kernel_ids,
+         writer_kernel_ids,
+         all_cores,
+         num_directions_per_link,
+         num_workers_per_direction,
+         num_mux_cores_per_direction_per_link,
+         num_cores_per_link] =
+            build_ring_reduce_scatter_minimal_async_program_artifacts(
+                program,
+                input_tensor,
+                intermediate_tensor,
+                sender_device,
+                forward_device,
+                backward_device,
+                output_tensor,
+                dim,
+                num_links,
+                ring_size,
+                ring_index,
+                topology,
+                semaphore,
+                barrier_semaphore,
+                using_persistent_buffers,
+                sub_device_id,
+                fused_op_signaler,
+                chunks_per_sync,
+                num_workers_per_direction_opt,
+                num_buffers_per_channel,
+                core_grid_offset);
+
     auto override_runtime_arguments_callback =
         [reader_kernel_ids,
          writer_kernel_ids,
@@ -785,7 +848,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
+ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
@@ -1291,6 +1354,67 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
         }
     }
 
+    return {
+        reader_kernel_ids,
+        writer_kernel_ids,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link};
+}
+tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* sender_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset) {
+    auto
+        [reader_kernel_ids,
+         writer_kernel_ids,
+         all_cores,
+         num_directions_per_link,
+         num_workers_per_direction,
+         num_mux_cores_per_direction_per_link,
+         num_cores_per_link] =
+            build_line_reduce_scatter_minimal_async_program_artifacts(
+                program,
+                input_tensor,
+                intermediate_tensor,
+                sender_device,
+                forward_device,
+                backward_device,
+                output_tensor,
+                dim,
+                num_links,
+                ring_size,
+                ring_index,
+                topology,
+                semaphore,
+                barrier_semaphore,
+                using_persistent_buffers,
+                sub_device_id,
+                fused_op_signaler,
+                chunks_per_sync,
+                num_workers_per_direction_opt,
+                num_buffers_per_channel,
+                core_grid_offset);
     auto override_runtime_arguments_callback =
         [reader_kernel_ids,
          writer_kernel_ids,
