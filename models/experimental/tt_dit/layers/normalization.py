@@ -10,7 +10,14 @@ from ..utils.tensor import bf16_tensor
 
 class RMSNorm:
     def __init__(
-        self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None, init=False
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        init=False,
+        rmsnorm_on_host=False,
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -19,6 +26,7 @@ class RMSNorm:
         self.use_bias = bias
         self.weight = None
         self.bias = None
+        self.rmsnorm_on_host = rmsnorm_on_host
         if norm_elementwise_affine and init:
             self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
             if bias:
@@ -48,15 +56,32 @@ class RMSNorm:
             self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
-        if self.norm_elementwise_affine:
-            self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
-            if self.use_bias:
-                self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
+        if self.rmsnorm_on_host:
+            if self.norm_elementwise_affine:
+                self.weight = state_dict["weight"]
+                if self.use_bias:
+                    self.bias = state_dict["bias"]
+        else:
+            if self.norm_elementwise_affine:
+                self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
+                if self.use_bias:
+                    self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
 
     def __call__(self, x, compute_kernel_config=None):
-        return ttnn.rms_norm(
-            x, weight=self.weight, bias=self.bias, epsilon=self.norm_eps, compute_kernel_config=compute_kernel_config
-        )
+        if self.rmsnorm_on_host:
+            x_host = ttnn.to_torch(x)
+            x_norm = torch.nn.functional.rms_norm(
+                x_host, normalized_shape=(x.shape[-1],), weight=self.weight, eps=self.norm_eps
+            )
+            return bf16_tensor(x_norm, device=self.mesh_device)
+        else:
+            return ttnn.rms_norm(
+                x,
+                weight=self.weight,
+                bias=self.bias,
+                epsilon=self.norm_eps,
+                compute_kernel_config=compute_kernel_config,
+            )
 
 
 class LayerNorm:

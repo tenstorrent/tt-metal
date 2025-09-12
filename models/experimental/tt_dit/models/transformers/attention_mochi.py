@@ -28,6 +28,7 @@ class MochiAttention:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
+        rmsnorm_on_host=False,
     ):
         self.inner_dim = out_dim if out_dim is not None else head_dim * heads
         self.out_dim = out_dim if out_dim is not None else query_dim
@@ -54,6 +55,7 @@ class MochiAttention:
             "bias": False,
             "mesh_device": mesh_device,
             "init": init,
+            "rmsnorm_on_host": rmsnorm_on_host,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)

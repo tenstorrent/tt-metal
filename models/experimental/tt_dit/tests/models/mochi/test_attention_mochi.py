@@ -64,6 +64,7 @@ def stack_cos_sin(cos, sin):
 @pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
 @pytest.mark.parametrize("context_pre_only", [True, False], ids=["yes_context_pre", "no_context_pre"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("rmsnorm_on_host", [True, False], ids=["host_rmsnorm", "device_rmsnorm"])
 def test_mochi_attention(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -74,6 +75,7 @@ def test_mochi_attention(
     prompt_seq_len: int,
     context_pre_only: bool,
     is_fsdp: bool,
+    rmsnorm_on_host: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -142,6 +144,7 @@ def test_mochi_attention(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        rmsnorm_on_host=rmsnorm_on_host,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -176,16 +179,6 @@ def test_mochi_attention(
     trans_mat = get_rot_transformation_mat(None)
     tt_trans_mat = bf16_tensor(trans_mat, device=mesh_device)
 
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    attention_mask = torch.ones((B, prompt_seq_len), dtype=torch_dtype)
-    torch_spatial_out, torch_prompt_out = torch_model(
-        spatial_input,
-        prompt_input,
-        attention_mask=attention_mask,
-        image_rotary_emb=[rope_cos, rope_sin],
-    )
-
     # Run TT model
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
@@ -197,6 +190,15 @@ def test_mochi_attention(
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
+    )
+    # Run torch model
+    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    attention_mask = torch.ones((B, prompt_seq_len), dtype=torch_dtype)
+    torch_spatial_out, torch_prompt_out = torch_model(
+        spatial_input,
+        prompt_input,
+        attention_mask=attention_mask,
+        image_rotary_emb=[rope_cos, rope_sin],
     )
 
     spatial_concat_dims = [None, None]
