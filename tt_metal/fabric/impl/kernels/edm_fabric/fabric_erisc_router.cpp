@@ -1860,34 +1860,17 @@ void run_receiver_channel_step_impl(
             receiver_received_counter_ch1++;
         }
 
-        uint32_t src_addr = local_receiver_channel.template get_buffer_address(receiver_buffer_index);
-        volatile auto* pkt_payload = reinterpret_cast<volatile uint32_t*>(src_addr + sizeof(PACKET_HEADER_TYPE));
-
-        if (*pkt_payload == 7) {
+        if (packet_header->src_ch_id == 7) {
             ch_id = 0;
-        } else if (*pkt_payload == 31) {
+        } else if (packet_header->src_ch_id == 31) {
             ch_id = 1;
-        } else if (*pkt_payload == 65) {
+        } else if (packet_header->src_ch_id == 65) {
             ch_id = 2;
         } else {
-            if (*pkt_payload == 255) {
+            if (packet_header->src_ch_id == 255) {
                 ASSERT(false);
             }
         }
-
-        *pkt_payload = 255;
-
-        // if (packet_header->src_ch_id == 7) {
-        //     ch_id = 0;
-        // } else if (packet_header->src_ch_id == 31) {
-        //     ch_id = 1;
-        // } else if (packet_header->src_ch_id == 65) {
-        //     ch_id = 2;
-        // } else {
-        //     if (packet_header->src_ch_id == 255) {
-        //         ASSERT(false);
-        //     }
-        // }
 
         bool can_send_to_all_local_chip_receivers = false;
         while (!can_send_to_all_local_chip_receivers) {

@@ -32,7 +32,12 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     //         local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
     // } else {
     noc_async_write_one_packet_with_trid(
-        local_l1_address, get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l), 32, trid, cmd_buf, noc);
+        local_l1_address,
+        get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l),
+        page_size * num_pages,
+        trid,
+        cmd_buf,
+        noc);
 
     // noc_async_write_barrier(noc);
     // }

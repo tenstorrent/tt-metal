@@ -1759,7 +1759,7 @@ private:
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (int i = 0; i < devices.size(); ++i) {
             auto& src_node = devices[i];
-            if (wrap_around_mesh && (src_node.chip_id == 0 || src_node.chip_id == 1)) {
+            if (wrap_around_mesh) {
                 // Get ring neighbors - returns nullopt for non-perimeter devices
                 auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
 
