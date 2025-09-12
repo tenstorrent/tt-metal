@@ -183,6 +183,8 @@ void kernel_main() {
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
 
     uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
@@ -192,6 +194,7 @@ void kernel_main() {
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
             fabric_multicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                 pkt_hdr_seminc,
@@ -248,6 +251,7 @@ void kernel_main() {
             0,                         // ignore
             static_cast<uint16_t>(1),  // increment 1
             static_cast<uint16_t>(0xFFFF)});
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < num_batches; b++) {

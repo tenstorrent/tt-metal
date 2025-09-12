@@ -165,6 +165,9 @@ void kernel_main() {
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
     auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
@@ -181,6 +184,7 @@ void kernel_main() {
         // multicast to entire ring of workers going in the same direction
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             &mux_connection_handle,
             pkt_hdr_mcastseminc,
