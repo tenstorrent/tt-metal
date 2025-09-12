@@ -1,0 +1,17 @@
+[requires]
+openmpi/4.1.6
+capstone/5.0.6
+libnuma/2.0.19
+boost/1.88.0
+
+[generators]
+CMakeDeps
+CMakeConfigDeps
+CMakeToolchain
+VirtualBuildEnv
+
+[layout]
+cmake_layout
+
+[options]
+libnuma/2.0.19:shared=True

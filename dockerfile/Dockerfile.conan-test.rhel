@@ -1,0 +1,72 @@
+# TT-Metalium Dockerfile for RHEL
+
+#############################################################
+
+ARG RHEL_VERSION=9.6
+FROM redhat/ubi9:${RHEL_VERSION} AS base
+
+# # Install runtime deps
+COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+
+RUN dnf update -y && dnf install -y \
+    acl \
+    gdb \
+    less \
+    mpfr-devel \
+    mesa-libGL \
+    git \
+    gcc gcc-c++ make \
+    pkg-config \
+    xz \
+    python3-pip python3-devel \
+    wget \
+    clang \
+    patch \
+    pcre2-devel \
+    openssl-devel zlib-devel \
+    bzip2-devel sqlite-devel \
+    ncurses-devel xz-devel tk-devel libxml2-devel libffi-devel xz-devel \
+    dnf-plugins-core \
+    gcc-toolset-14-libatomic-devel.x86_64 \
+    clang clang-tools-extra \
+    llvm llvm-devel \
+    which \
+    && dnf clean all
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+ENV HOME="/root"
+WORKDIR $HOME
+RUN git clone --depth=1 https://github.com/pyenv/pyenv.git .pyenv
+
+ENV PYENV_ROOT="$HOME/.pyenv"
+ENV PATH="$PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH"
+RUN ls "$PYENV_ROOT/bin"
+RUN pyenv install 3.10
+RUN which python
+RUN $(pyenv prefix 3.10)/bin/python -m venv $HOME/tt-metal-virtualenv
+RUN source $HOME/tt-metal-virtualenv/bin/activate
+
+RUN pip3 install conan
+RUN conan --version
+
+RUN git config --global --add safe.directory /workspace
+
+WORKDIR /tt-metal-conan
+COPY conanfile.txt /tt-metal-conan/conanfile.txt
+COPY tool_conanfile.txt /tt-metal-conan/tool_conanfile.txt
+COPY conan_profile_clang_19.txt /tt-metal-conan/conan_profile_clang_19.txt
+COPY install_conan_packages.sh /tt-metal-conan/install_conan_packages.sh
+RUN ls -al
+RUN clang --version
+RUN ./install_conan_packages.sh /tt-metal-conan/conan-build conan_profile_clang_19.txt
+
+WORKDIR /tt-metal
+COPY . /tt-metal
+RUN ls
+
+# # Build tt-metal and venv, then clear cache
+# RUN /bin/bash -c "./build_metal.sh"

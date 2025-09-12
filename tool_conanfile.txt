@@ -1,0 +1,6 @@
+[generators]
+VirtualBuildEnv
+
+[tool_requires]
+cmake/4.1.1
+ninja/1.13.1
