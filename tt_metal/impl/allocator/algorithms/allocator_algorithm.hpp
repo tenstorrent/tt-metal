@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <vector>
-#include "hostdevcommon/common_values.hpp"
 
 #include <assert.hpp>
 #include <hal_types.hpp>
@@ -51,6 +50,9 @@ public:
     virtual void init() = 0;
 
     virtual std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const = 0;
+
+    // Returns all allocated address ranges as (start_address, size_bytes) pairs; start address is not sorted
+    virtual std::vector<std::pair<DeviceAddr, size_t>> allocated_addresses() const = 0;
 
     // bottom_up=true indicates that allocation grows from address 0
     virtual std::optional<DeviceAddr> allocate(
