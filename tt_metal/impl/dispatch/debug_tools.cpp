@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"

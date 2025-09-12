@@ -9,7 +9,7 @@
 #include "dev_msgs.h"
 #include <cstdint>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"

@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"

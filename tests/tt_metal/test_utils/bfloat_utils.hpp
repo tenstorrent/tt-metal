@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <vector>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::test_utils {
 

@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "device.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"

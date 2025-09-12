@@ -12,7 +12,7 @@
 #include <queue>
 #include <unordered_map>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(

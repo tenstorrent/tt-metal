@@ -6,7 +6,7 @@
 
 #include <cstdlib>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
 #include <umd/device/pci_device.hpp>
 #include <umd/device/tt_soc_descriptor.h>

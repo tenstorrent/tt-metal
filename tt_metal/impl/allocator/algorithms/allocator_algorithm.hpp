@@ -9,7 +9,7 @@
 #include <vector>
 #include "hostdevcommon/common_values.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <hal_types.hpp>
 #include <allocator_types.hpp>
 

@@ -11,7 +11,7 @@
 #include <ttnn/operations/data_movement/squeeze/squeeze.hpp>
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "cumprod.hpp"
 
 namespace ttnn::operations::reduction::accumulation {
