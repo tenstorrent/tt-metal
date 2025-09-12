@@ -18,7 +18,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -40,7 +40,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -66,7 +66,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -88,7 +88,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -114,7 +114,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -136,7 +136,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -158,7 +158,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -180,7 +180,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -202,7 +202,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -224,7 +224,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -250,7 +250,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -272,7 +272,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -294,7 +294,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -316,7 +316,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -338,7 +338,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -360,7 +360,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -386,7 +386,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -409,7 +409,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -432,7 +432,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -455,7 +455,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -478,7 +478,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -501,7 +501,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -524,7 +524,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -547,7 +547,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -570,7 +570,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -593,7 +593,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -620,7 +620,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -643,7 +643,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -666,7 +666,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -689,7 +689,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -712,7 +712,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -735,7 +735,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -758,7 +758,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -781,7 +781,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -804,7 +804,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -827,7 +827,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -854,7 +854,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -877,7 +877,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -900,7 +900,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -923,7 +923,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -946,7 +946,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -969,7 +969,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -992,7 +992,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1015,7 +1015,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1038,7 +1038,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1061,7 +1061,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1088,7 +1088,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1111,7 +1111,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1134,7 +1134,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1157,7 +1157,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1180,7 +1180,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1203,7 +1203,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1226,7 +1226,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1249,7 +1249,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1272,7 +1272,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1295,7 +1295,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1322,7 +1322,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1345,7 +1345,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1368,7 +1368,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1391,7 +1391,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1414,7 +1414,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1437,7 +1437,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1460,7 +1460,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1483,7 +1483,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1506,7 +1506,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1533,7 +1533,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1556,7 +1556,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1579,7 +1579,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1606,7 +1606,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1634,7 +1634,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1658,7 +1658,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1682,7 +1682,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1706,7 +1706,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1730,7 +1730,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1754,7 +1754,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1778,7 +1778,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1802,7 +1802,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1826,7 +1826,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1850,7 +1850,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1878,7 +1878,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1902,7 +1902,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1926,7 +1926,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1950,7 +1950,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1974,7 +1974,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -1998,7 +1998,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2022,7 +2022,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2046,7 +2046,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2070,7 +2070,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2094,7 +2094,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2118,7 +2118,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2146,7 +2146,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2170,7 +2170,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2194,7 +2194,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2218,7 +2218,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2242,7 +2242,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2266,7 +2266,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2290,7 +2290,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2314,7 +2314,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2338,7 +2338,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2362,7 +2362,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2386,7 +2386,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2414,7 +2414,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2438,7 +2438,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2462,7 +2462,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2486,7 +2486,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2510,7 +2510,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2534,7 +2534,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2558,7 +2558,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2582,7 +2582,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2606,7 +2606,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2630,7 +2630,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2654,7 +2654,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2682,7 +2682,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2707,7 +2707,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2732,7 +2732,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2757,7 +2757,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2782,7 +2782,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2807,7 +2807,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2832,7 +2832,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2857,7 +2857,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2882,7 +2882,7 @@ Tests:
       torus_config: XY
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2913,7 +2913,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2935,7 +2935,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2961,7 +2961,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -2983,7 +2983,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3009,7 +3009,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3031,7 +3031,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3053,7 +3053,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3075,7 +3075,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3097,7 +3097,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3119,7 +3119,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3145,7 +3145,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3167,7 +3167,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3189,7 +3189,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3211,7 +3211,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3233,7 +3233,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3255,7 +3255,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3281,7 +3281,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3304,7 +3304,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3327,7 +3327,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3350,7 +3350,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3373,7 +3373,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3396,7 +3396,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3419,7 +3419,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3442,7 +3442,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3465,7 +3465,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3488,7 +3488,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3515,7 +3515,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3538,7 +3538,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3561,7 +3561,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3584,7 +3584,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3607,7 +3607,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3630,7 +3630,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3653,7 +3653,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3676,7 +3676,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3699,7 +3699,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3722,7 +3722,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3749,7 +3749,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3772,7 +3772,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3795,7 +3795,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3818,7 +3818,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3841,7 +3841,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3864,7 +3864,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3887,7 +3887,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3910,7 +3910,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3933,7 +3933,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3956,7 +3956,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -3983,7 +3983,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4006,7 +4006,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4029,7 +4029,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4052,7 +4052,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4075,7 +4075,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4098,7 +4098,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4121,7 +4121,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4144,7 +4144,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4167,7 +4167,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4190,7 +4190,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4217,7 +4217,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4240,7 +4240,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4263,7 +4263,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4286,7 +4286,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4309,7 +4309,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4332,7 +4332,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4355,7 +4355,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4378,7 +4378,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4401,7 +4401,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4428,7 +4428,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4451,7 +4451,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4474,7 +4474,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4501,7 +4501,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4529,7 +4529,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4553,7 +4553,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4577,7 +4577,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4601,7 +4601,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4625,7 +4625,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4649,7 +4649,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4673,7 +4673,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4697,7 +4697,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4721,7 +4721,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4745,7 +4745,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4773,7 +4773,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4797,7 +4797,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4821,7 +4821,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4845,7 +4845,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4869,7 +4869,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4893,7 +4893,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4917,7 +4917,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4941,7 +4941,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4965,7 +4965,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -4989,7 +4989,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5013,7 +5013,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5041,7 +5041,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5065,7 +5065,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5089,7 +5089,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5113,7 +5113,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5137,7 +5137,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5161,7 +5161,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5185,7 +5185,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5209,7 +5209,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5233,7 +5233,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5257,7 +5257,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5281,7 +5281,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5309,7 +5309,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5333,7 +5333,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5357,7 +5357,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5381,7 +5381,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5405,7 +5405,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5429,7 +5429,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5453,7 +5453,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5477,7 +5477,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5501,7 +5501,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5525,7 +5525,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5549,7 +5549,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5577,7 +5577,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5602,7 +5602,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5627,7 +5627,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5652,7 +5652,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5677,7 +5677,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5702,7 +5702,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5727,7 +5727,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5752,7 +5752,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5777,7 +5777,7 @@ Tests:
       torus_config: XY
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5805,7 +5805,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5827,7 +5827,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5849,7 +5849,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5871,7 +5871,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5893,7 +5893,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5916,7 +5916,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5939,7 +5939,7 @@ Tests:
       torus_config: X
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5966,7 +5966,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -5988,7 +5988,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6010,7 +6010,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6032,7 +6032,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6054,7 +6054,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6076,7 +6076,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6098,7 +6098,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6120,7 +6120,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6142,7 +6142,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6164,7 +6164,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6186,7 +6186,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6208,7 +6208,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6230,7 +6230,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6253,7 +6253,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6276,7 +6276,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6299,7 +6299,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6322,7 +6322,7 @@ Tests:
       torus_config: Y
       routing_type: LowLatency
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6347,7 +6347,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6369,7 +6369,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6391,7 +6391,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6413,7 +6413,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6435,7 +6435,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6458,7 +6458,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6481,7 +6481,7 @@ Tests:
       torus_config: X
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6507,7 +6507,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6529,7 +6529,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6551,7 +6551,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6573,7 +6573,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6595,7 +6595,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6617,7 +6617,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6639,7 +6639,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6661,7 +6661,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6683,7 +6683,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6705,7 +6705,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6727,7 +6727,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6749,7 +6749,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6771,7 +6771,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6794,7 +6794,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6817,7 +6817,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6840,7 +6840,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -6863,7 +6863,7 @@ Tests:
       torus_config: Y
       routing_type: Dynamic
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
       ntype: unicast_write
