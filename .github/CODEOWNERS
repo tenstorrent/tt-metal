@@ -35,7 +35,7 @@ tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tens
 
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere @tenstorrent/metalium-codeowners-large-changes
+tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/metalium-codeowners-large-changes
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-codeowners-large-changes
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
