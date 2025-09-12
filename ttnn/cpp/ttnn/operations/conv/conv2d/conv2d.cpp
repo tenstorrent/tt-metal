@@ -523,10 +523,6 @@ Result conv2d_DRAM(
         auto conv_config_l1 = conv_config;
 
         // Setting both to true causes an error in pytest
-        // "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features[output_layout=Layout.TILE-math_fidelity=MathFidelity.HiFi4-filter=3-padding=(1,
-        // 2, 2,
-        // 3)-packer_l1_acc=True-fp32_accum=True-input_dtype=DataType.BFLOAT16-output_dtype=DataType.BFLOAT8_B-weights_dtype=DataType.BFLOAT16-output_channels=353-input_channels=384-input_height=8-input_width=8-shard_layout=TensorMemoryLayout.WIDTH_SHARDED-config=None-batch_size=2-stride=2-device_params={'l1_small_size':
-        // 16384}]"
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
