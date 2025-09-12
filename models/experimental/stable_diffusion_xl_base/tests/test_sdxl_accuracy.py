@@ -19,12 +19,12 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
     accuracy_check_clip,
     accuracy_check_fid,
     get_appr_delta_metric,
+    targets,
 )
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
-TARGET_JSON_PATH = "models/experimental/stable_diffusion_xl_base/tests/targets/targets.json"
 
 
 @pytest.mark.parametrize(
@@ -142,9 +142,6 @@ def test_accuracy_sdxl(
         )
     ]
     min_inference_time, max_inference_time = min(sum_times), max(sum_times)
-
-    with open(TARGET_JSON_PATH) as f:
-        targets = json.load(f)
 
     data = {
         "model": "sdxl",

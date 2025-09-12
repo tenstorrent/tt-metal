@@ -2,23 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# THRESHOLDS 5000 PROMPTS
-FID_VALID_RANGE_5000 = (23.01085758, 23.95007626)
-CLIP_VALID_RANGE_5000 = (31.68631873, 31.81331801)
-FID_SCORE_APPROX_RANGE_5000 = (
-    FID_VALID_RANGE_5000[0] * 0.97,
-    FID_VALID_RANGE_5000[1] * 1.03,
-)  # Approximate ranges (+/- 3%) from valid range
-CLIP_SCORE_APPROX_RANGE_5000 = (
-    CLIP_VALID_RANGE_5000[0] * 0.97,
-    CLIP_VALID_RANGE_5000[1] * 1.03,
-)  # Approximate ranges (+/- 3%) from valid range
+import json
 
-# THRESHOLDS 100 PROMPTS - calculated from nvidia results
-FID_VALID_RANGE_100 = (181.1513318972489, 184.97865376919088)
-CLIP_VALID_RANGE_100 = (31.65430683222675, 32.15949391210697)
-FID_APPROX_RANGE_100 = (179.20542453436752, 186.9656737959027)
-CLIP_APPROX_RANGE_100 = (30.70704558232445, 33.12187298301411)
+TARGET_JSON_PATH = "models/experimental/stable_diffusion_xl_base/targets/targets.json"
+
+with open(TARGET_JSON_PATH) as f:
+    targets = json.load(f)
+
+get_approx = lambda range_tuple: (range_tuple[0] * 0.97, range_tuple[1] * 1.03)
 
 
 def accuracy_check_fid(score, num_prompts, mode):
@@ -28,9 +19,17 @@ def accuracy_check_fid(score, num_prompts, mode):
         return 0
 
     if mode == "valid":
-        range_tuple = FID_VALID_RANGE_5000 if num_prompts == 5000 else FID_VALID_RANGE_100
+        range_tuple = (
+            targets["accuracy"]["fid_valid_range_5000"]
+            if num_prompts == 5000
+            else targets["accuracy"]["fid_valid_range_100"]
+        )
     elif mode == "approx":
-        range_tuple = FID_SCORE_APPROX_RANGE_5000 if num_prompts == 5000 else FID_APPROX_RANGE_100
+        range_tuple = (
+            get_approx(targets["accuracy"]["fid_valid_range_5000"])
+            if num_prompts == 5000
+            else targets["accuracy"]["fid_approx_range_100"]
+        )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "fid")
         return 3 if delta_score <= 0.5 else 2
@@ -45,9 +44,17 @@ def accuracy_check_clip(score, num_prompts, mode):
         return 0
 
     if mode == "valid":
-        range_tuple = CLIP_VALID_RANGE_5000 if num_prompts == 5000 else CLIP_VALID_RANGE_100
+        range_tuple = (
+            targets["accuracy"]["clip_valid_range_5000"]
+            if num_prompts == 5000
+            else targets["accuracy"]["clip_valid_range_100"]
+        )
     elif mode == "approx":
-        range_tuple = CLIP_SCORE_APPROX_RANGE_5000 if num_prompts == 5000 else CLIP_APPROX_RANGE_100
+        range_tuple = (
+            get_approx(targets["accuracy"]["clip_valid_range_5000"])
+            if num_prompts == 5000
+            else targets["accuracy"]["clip_approx_range_100"]
+        )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "clip")
         return 3 if delta_score <= 0.5 else 2
@@ -70,9 +77,17 @@ def get_appr_delta_metric(score, num_prompts, score_type):
         return -1
 
     if score_type == "fid":
-        valid_range_tuple = FID_VALID_RANGE_5000 if num_prompts == 5000 else FID_VALID_RANGE_100
+        valid_range_tuple = (
+            targets["accuracy"]["fid_valid_range_5000"]
+            if num_prompts == 5000
+            else targets["accuracy"]["fid_valid_range_100"]
+        )
     else:
-        valid_range_tuple = CLIP_VALID_RANGE_5000 if num_prompts == 5000 else CLIP_VALID_RANGE_100
+        valid_range_tuple = (
+            targets["accuracy"]["clip_valid_range_5000"]
+            if num_prompts == 5000
+            else targets["accuracy"]["clip_valid_range_100"]
+        )
 
     avg_val = (valid_range_tuple[0] + valid_range_tuple[1]) / 2
     return abs(avg_val - score) / ((valid_range_tuple[1] - valid_range_tuple[0]) * 1.06)
