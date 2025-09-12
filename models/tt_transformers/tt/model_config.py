@@ -433,7 +433,9 @@ class ModelArgs:
         "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
         "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
         "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
@@ -1630,6 +1632,8 @@ class ModelArgs:
             self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
@@ -1637,6 +1641,8 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_90b = True
@@ -1717,6 +1723,19 @@ class ModelArgs:
             with open(config_file, "r") as f:
                 config = json.load(f)
         self._set_params_from_dict(config, is_hf=True)
+
+        # compatibility with _set_params
+        if ("llama" in self.model_name.lower()) and ("3.2-11B" in checkpoint_dir):
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+        elif ("llama" in self.model_name.lower()) and ("3.1-70B" in checkpoint_dir):
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif ("llama" in self.model_name.lower()) and ("3.2-90B" in checkpoint_dir):
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
+            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.is_90b = True
 
     def __repr__(self):
         return f"""ModelArgs(
