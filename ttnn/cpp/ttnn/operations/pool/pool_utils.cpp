@@ -415,6 +415,8 @@ void validate_input_params(
     // tensor shape validation against provided NHWC dimensions
     const uint32_t nhw = batch_size * input_h * input_w;
     const auto& input_shape = input_tensor.logical_shape();
+    bool is_input_block_format =
+        input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B;
 
     // Support both (1, 1, nhw, c) and (n, h, w, c) formats
     bool is_flattened_format =
@@ -424,8 +426,10 @@ void validate_input_params(
          input_shape[3] == channels);
 
     TT_FATAL(
-        is_flattened_format || is_nhwc_format,
-        "Input tensor shape {} does not match expected shape (1, 1, {}, {}) or ({}, {}, {}, {})",
+        is_flattened_format || (is_nhwc_format && !is_input_block_format),
+        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
+        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
+        "format inputs.",
         input_shape,
         nhw,
         channels,
