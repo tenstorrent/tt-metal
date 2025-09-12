@@ -28,12 +28,15 @@ constexpr bool is_chip_multicast = get_compile_time_arg_val(6);
 constexpr bool additional_dir = get_compile_time_arg_val(7);
 
 inline void setup_header_routing_1d(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint32_t start_distance, uint32_t range) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t start_distance,
+    uint32_t range,
+    uint32_t dst_dev_id) {
     if constexpr (is_chip_multicast) {
         packet_header->to_chip_multicast(
             MulticastRoutingCommandHeader{static_cast<uint8_t>(start_distance), static_cast<uint8_t>(range)});
     } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(start_distance));
+        get_routing_info(dst_dev_id, packet_header);
     }
 }
 
@@ -206,7 +209,7 @@ void kernel_main() {
     setup_connection(fwd_fabric_connection);
 
     if constexpr (!is_2d_fabric) {  // 1D
-        setup_header_routing_1d(fwd_packet_header, fwd_start_distance, fwd_range);
+        setup_header_routing_1d(fwd_packet_header, fwd_start_distance, fwd_range, fwd_dev_id);
         DPRINT << "fwd_start_distance" << fwd_start_distance << ", fwd_range" << fwd_range << ENDL();
     } else {  // 2D
         setup_header_routing_2d(
@@ -231,7 +234,7 @@ void kernel_main() {
         setup_connection(bwd_fabric_connection);
 
         if constexpr (!is_2d_fabric) {  // 1D
-            setup_header_routing_1d(bwd_packet_header, bwd_start_distance, bwd_range);
+            setup_header_routing_1d(bwd_packet_header, bwd_start_distance, bwd_range, bwd_dev_id);
         } else {  // 2D
             setup_header_routing_2d(
                 bwd_packet_header, (eth_chan_directions)bwd_dir, bwd_range, my_dev_id, bwd_dev_id, bwd_mesh_id, ew_dim);
