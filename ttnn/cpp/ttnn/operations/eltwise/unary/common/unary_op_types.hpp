@@ -113,6 +113,7 @@ enum class UnaryOpType {
     SOFTSIGN,
     CELU,
     CLAMP_TSS,
+    RPOW,
 };
 
 enum class VecMode {
