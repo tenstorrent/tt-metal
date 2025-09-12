@@ -34,8 +34,7 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
     TensorSpec padded_spec(
         tensor.padded_shape(),
-        tt::tt_metal::TensorLayout(
-            tensor.dtype(), tt::tt_metal::PageConfig(layout, std::move(tile)), tensor.memory_config()));
+        tt::tt_metal::TensorLayout(tensor.dtype(), tt::tt_metal::PageConfig(layout, tile), tensor.memory_config()));
     return tensor.padded_shape() != padded_spec.padded_shape();
 }
 
