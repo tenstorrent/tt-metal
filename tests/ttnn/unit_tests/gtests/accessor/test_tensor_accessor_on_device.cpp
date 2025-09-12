@@ -202,6 +202,108 @@ static void test_multi_core_copy(
 }
 
 template <typename T>
+static void test_multi_core_interleaved_copy(
+    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const CoreRangeSet& cores) {
+    // Create interleaved memory config
+    MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
+    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+
+    const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+
+    auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), tensor_spec, mesh_device);
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto aligned_page_size = input_buffer->aligned_page_size();
+    if (output_buffer->aligned_page_size() != aligned_page_size) {
+        GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
+    }
+
+    auto program = CreateProgram();
+    const auto data_format = datatype_to_dataformat_converter(params.dtype);
+
+    // Create circular buffer for each core
+    constexpr auto num_tiles = 2;
+    CBHandle cb_idx = tt::CBIndex::c_0;
+    auto cb_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_idx, data_format}})
+                         .set_page_size(cb_idx, aligned_page_size);
+    CreateCircularBuffer(program, cores, cb_config);
+
+    auto cores_vec = corerange_to_cores(cores, std::nullopt, true);
+    auto num_cores = cores_vec.size();
+    auto total_pages = input_buffer->num_pages();
+
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+
+    // Reader compile-time args: input accessor args + cb_id + page_size
+    std::vector<uint32_t> reader_compile_time_args = input_accessor_args.get_compile_time_args();
+    reader_compile_time_args.push_back(cb_idx);
+    reader_compile_time_args.push_back(aligned_page_size);
+
+    // Writer compile-time args: output accessor args + cb_id + page_size
+    std::vector<uint32_t> writer_compile_time_args = output_accessor_args.get_compile_time_args();
+    writer_compile_time_args.push_back(cb_idx);
+    writer_compile_time_args.push_back(aligned_page_size);
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/reader_interleaved_multi_core.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args,
+        });
+
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/writer_interleaved_multi_core.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args,
+        });
+
+    // Set runtime args for each core
+    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+        const auto& core = cores_vec[core_idx];
+
+        // Calculate page range for this core
+        uint32_t pages_per_core = total_pages / num_cores;
+        uint32_t extra_pages = total_pages % num_cores;
+        uint32_t start_page_id = core_idx * pages_per_core + std::min(core_idx, extra_pages);
+        uint32_t end_page_id = start_page_id + pages_per_core + (core_idx < extra_pages ? 1 : 0);
+
+        // Reader runtime args: input accessor common runtime args + input_base_address + start_page_id + end_page_id
+        std::vector<uint32_t> reader_runtime_args;
+        reader_runtime_args.push_back(input_buffer->address());
+        reader_runtime_args.push_back(start_page_id);
+        reader_runtime_args.push_back(end_page_id);
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+
+        // Writer runtime args: output accessor common runtime args + output_base_address + start_page_id + end_page_id
+        std::vector<uint32_t> writer_runtime_args;
+        writer_runtime_args.push_back(output_buffer->address());
+        writer_runtime_args.push_back(start_page_id);
+        writer_runtime_args.push_back(end_page_id);
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+    }
+
+    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+
+    auto output_tensor_cpu = output_tensor.cpu(true);
+    Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_device.to_vector<T>();
+
+    EXPECT_EQ(output_vec, src);
+}
+
+template <typename T>
 static void test_single_core_copy(
     const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved = false) {
     // Create memory config based on whether it's interleaved or sharded
@@ -572,6 +674,22 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
         case DataType::UINT8: test_single_core_copy<uint8_t>(params, mesh_device_.get(), true); break;
         case DataType::UINT16: test_single_core_copy<uint16_t>(params, mesh_device_.get(), true); break;
         case DataType::BFLOAT16: test_single_core_copy<bfloat16>(params, mesh_device_.get(), true); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
+    const auto& params = GetParam();
+
+    // Use all available cores for multi-core testing
+    auto device = mesh_device_->get_devices().at(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_multi_core_interleaved_copy<uint8_t>(params, mesh_device_.get(), cores); break;
+        case DataType::UINT16: test_multi_core_interleaved_copy<uint16_t>(params, mesh_device_.get(), cores); break;
+        case DataType::BFLOAT16: test_multi_core_interleaved_copy<bfloat16>(params, mesh_device_.get(), cores); break;
         default: TT_THROW("Unsupported data type");
     }
 }
