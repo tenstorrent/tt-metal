@@ -1086,10 +1086,10 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         log_info(tt::LogOp, "Determined Conv DRAM Slice Type as WIDTH");
         return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
     } else {
-        if (input_width < 70) {
+        if (input_width < 130) {
             return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
         } else {
-            float threshold_ratio = 2;
+            float threshold_ratio = 0.9;
             if (input_height > input_width * threshold_ratio) {
                 log_info(tt::LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
                 return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
@@ -1165,7 +1165,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
-            log_debug(tt::LogOp, "Conv2D DRAM Auto Slice Selected Shard Layout: {}", conv_config.shard_layout);
         }
         ShardOrientation shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
