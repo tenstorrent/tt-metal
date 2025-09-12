@@ -156,13 +156,12 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
 
         bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
-
+        Tensor input_tensor_flattened = input_tensor;
         // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
         if (!is_tensor_already_flattened) {
             const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
             const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
-            input_tensor_sharded =
-                ttnn::reshape(input_tensor_sharded, flattened_input_shape, flattened_padded_input_shape);
+            input_tensor_flattened = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
             input_tensor_shape = flattened_input_shape;
         }
 
@@ -191,10 +190,11 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
+        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
+
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_padded, sharded_mem_config, std::nullopt);
+        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         TT_FATAL(
