@@ -11,8 +11,11 @@
 #include <vector>
 #include <memory>
 #include <set>
+#include <functional>
 
-#include <App.h>
+// websocketpp includes
+#include <websocketpp/config/asio_no_tls.hpp>
+#include <websocketpp/server.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/assert.hpp>
@@ -22,14 +25,16 @@
 
 using json = nlohmann::json;
 
+// websocketpp server type
+typedef websocketpp::server<websocketpp::config::asio> server;
+typedef server::message_ptr message_ptr;
+typedef websocketpp::connection_hdl connection_hdl;
+
 class TelemetryWebSocketServer : public TelemetrySubscriber {
 private:
-    struct PerSocketData {
-        // TODO
-    };
-
-    std::set<uWS::WebSocket<false, true, PerSocketData>*> clients_;
-    std::mutex clients_mutex_;
+    server ws_server_;
+    std::set<connection_hdl, std::owner_less<connection_hdl>> connections_;
+    std::mutex connections_mutex_;
     std::thread server_thread_;
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
@@ -52,16 +57,15 @@ private:
     }
 
     void send_message_to_clients(const std::string& message) {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        auto it = clients_.begin();
-        while (it != clients_.end()) {
-            auto* ws = *it;
-            auto result = ws->send(message, uWS::OpCode::TEXT);
-            if (result == uWS::WebSocket<false, true, PerSocketData>::SendStatus::DROPPED) {
-                // Client disconnected, remove from set
-                it = clients_.erase(it);
-            } else {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+
+        for (auto it = connections_.begin(); it != connections_.end();) {
+            try {
+                ws_server_.send(*it, message, websocketpp::frame::opcode::text);
                 ++it;
+            } catch (const websocketpp::exception& e) {
+                std::cout << "Failed to send message to client, removing: " << e.what() << std::endl;
+                it = connections_.erase(it);
             }
         }
     }
@@ -76,16 +80,62 @@ private:
                 continue;
             }
 
-            // For now, just send a simple message indicating we received telemetry
-            // In the future, this would serialize and send the actual telemetry data
+            // Serialize telemetry data to JSON and send to clients
             json j = *snapshot;
             std::string message = j.dump();
             send_message_to_clients(message);
         }
     }
 
+    // WebSocket event handlers
+    void on_open(connection_hdl hdl) {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        connections_.insert(hdl);
+
+        std::cout << "WebSocket client connected (total clients: " << connections_.size() << ")" << std::endl;
+
+        // Send hello message to the new client
+        try {
+            ws_server_.send(hdl, "hello", websocketpp::frame::opcode::text);
+        } catch (const websocketpp::exception& e) {
+            std::cout << "Failed to send hello message: " << e.what() << std::endl;
+        }
+    }
+
+    void on_close(connection_hdl hdl) {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        connections_.erase(hdl);
+
+        std::cout << "WebSocket client disconnected (total clients: " << connections_.size() << ")" << std::endl;
+    }
+
+    void on_message(connection_hdl hdl, message_ptr msg) {
+        // Echo the message back to the client
+        try {
+            ws_server_.send(hdl, msg->get_payload(), msg->get_opcode());
+        } catch (const websocketpp::exception& e) {
+            std::cout << "Failed to echo message: " << e.what() << std::endl;
+        }
+    }
+
 public:
-    TelemetryWebSocketServer(uint16_t port) : started_at_(std::chrono::steady_clock::now()), port_(port) {}
+    TelemetryWebSocketServer(uint16_t port) : started_at_(std::chrono::steady_clock::now()), port_(port) {
+        // Disable all websocketpp logging for clean output
+        ws_server_.clear_access_channels(websocketpp::log::alevel::all);
+        ws_server_.clear_error_channels(websocketpp::log::elevel::all);
+
+        // Initialize ASIO
+        ws_server_.init_asio();
+
+        // Set message handler
+        ws_server_.set_message_handler([this](connection_hdl hdl, message_ptr msg) { on_message(hdl, msg); });
+
+        // Set open handler
+        ws_server_.set_open_handler([this](connection_hdl hdl) { on_open(hdl); });
+
+        // Set close handler
+        ws_server_.set_close_handler([this](connection_hdl hdl) { on_close(hdl); });
+    }
 
     void start() {
         std::cout << "Starting WebSocket telemetry server on port " << port_ << "..." << std::endl;
@@ -94,90 +144,43 @@ public:
         running_ = true;
         server_thread_ = std::thread(&TelemetryWebSocketServer::process_telemetry, this);
 
-        // Run WebSocket server until completion
-        uWS::App()
-            .ws<PerSocketData>(
-                "/*",
-                {/* Settings */
-                 .compression = uWS::CompressOptions(uWS::DEDICATED_COMPRESSOR | uWS::DEDICATED_DECOMPRESSOR),
-                 .maxPayloadLength = 100 * 1024 * 1024,
-                 .idleTimeout = 16,
-                 .maxBackpressure = 100 * 1024 * 1024,
-                 .closeOnBackpressureLimit = false,
-                 .resetIdleTimeoutOnSend = false,
-                 .sendPingsAutomatically = true,
-                 /* Handlers */
-                 .upgrade = nullptr,
-                 .open =
-                     [this](auto* ws) {
-                         std::cout << "WebSocket client connected from " << ws->getRemoteAddressAsText() << std::endl;
+        try {
+            // Set reuse address
+            ws_server_.set_reuse_addr(true);
 
-                         // Add client to our set
-                         {
-                             std::lock_guard<std::mutex> lock(clients_mutex_);
-                             clients_.insert(ws);
-                         }
+            // Listen on specified port
+            ws_server_.listen(port_);
 
-                         // Send hello message to the new client
-                         ws->send("hello", uWS::OpCode::TEXT);
-                     },
-                 .message =
-                     [](auto* ws, std::string_view message, uWS::OpCode opCode) {
-                         /* This is the opposite of what you probably want; compress if message is LARGER than 16 kb
-                          * the reason we do the opposite here; compress if SMALLER than 16 kb is to allow for
-                          * benchmarking of large message sending without compression */
+            // Start the server accept loop
+            ws_server_.start_accept();
 
-                         /* Never mind, it changed back to never compressing for now */
-                         ws->send(message, opCode, false);
-                     },
-                 .dropped =
-                     [](auto* /*ws*/, std::string_view /*message*/, uWS::OpCode /*opCode*/) {
-                         /* A message was dropped due to set maxBackpressure and closeOnBackpressureLimit limit */
-                     },
-                 .drain =
-                     [](auto* /*ws*/) {
-                         /* Check ws->getBufferedAmount() here */
-                     },
-                 .ping =
-                     [](auto* /*ws*/, std::string_view) {
-                         /* Not implemented yet */
-                     },
-                 .pong =
-                     [](auto* /*ws*/, std::string_view) {
-                         /* Not implemented yet */
-                     },
-                 .close =
-                     [this](auto* ws, int /*code*/, std::string_view /*message*/) {
-                         std::cout << "WebSocket client disconnected" << std::endl;
+            std::cout << "WebSocket server listening on port " << port_ << std::endl;
 
-                         // Remove client from our set
-                         std::lock_guard<std::mutex> lock(clients_mutex_);
-                         clients_.erase(ws);
-                     }})
-            .get(
-                "/test",
-                [](auto* res, auto* req) {
-                    std::cout << "🌐 HTTP test route accessed" << std::endl;
-                    res->end("WebSocket server is running");
-                })
-            .listen(
-                port_,
-                [this](auto* listen_socket) {
-                    if (listen_socket) {
-                        std::cout << "Listening on port " << port_ << std::endl;
-                    } else {
-                        std::cout << "Failed to bind to port " << port_ << std::endl;
-                        running_ = false;
-                    }
-                })
-            .run();
+            // Start the ASIO io_service run loop
+            ws_server_.run();
+
+        } catch (const websocketpp::exception& e) {
+            std::cout << "WebSocket server error: " << e.what() << std::endl;
+            running_ = false;
+        } catch (const std::exception& e) {
+            std::cout << "Server error: " << e.what() << std::endl;
+            running_ = false;
+        }
 
         std::cout << "WebSocket server finished" << std::endl;
     }
 
     void stop() {
-        // TODO: we currently have no way of stopping the WebSocket server!
         running_ = false;
+
+        // Stop the WebSocket server
+        try {
+            ws_server_.stop();
+        } catch (const std::exception& e) {
+            std::cout << "Error stopping WebSocket server: " << e.what() << std::endl;
+        }
+
+        // Wait for telemetry thread to finish
         if (server_thread_.joinable()) {
             server_thread_.join();
         }

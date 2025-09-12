@@ -13,7 +13,7 @@
 /*
  * server/websocket_server.hpp
  *
- * WebSocket server for broadcasting telemetry data using uWebSockets.
+ * WebSocket server for broadcasting telemetry data using websocketpp.
  */
 
 std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_socket_server(
