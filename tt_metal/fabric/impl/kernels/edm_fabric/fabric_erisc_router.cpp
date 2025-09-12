@@ -1661,6 +1661,9 @@ void run_sender_channel_step_impl(
                 local_sender_channel_worker_interface
                     .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
                         completions_since_last_check);
+
+                // local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
+                // local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
             } else {
                 // Connection liveness checks are only done for connections that are not persistent
                 // For those connections, it's unsafe to use free-slots counters held in stream registers
@@ -3081,6 +3084,9 @@ void kernel_main() {
                 ASSERT(
                     get_ptr_val(downstream_edm_noc_interfaces_vc0[0].worker_credits_stream_id) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
+
+                DPRINT << "worker_credits_stream_id0 " << downstream_edm_noc_interfaces_vc0[0].worker_credits_stream_id
+                       << ENDL();
             }
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
@@ -3088,6 +3094,8 @@ void kernel_main() {
                 ASSERT(
                     get_ptr_val(downstream_edm_noc_interface_vc1.worker_credits_stream_id) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
+                DPRINT << "worker_credits_stream_id1 " << downstream_edm_noc_interface_vc1.worker_credits_stream_id
+                       << ENDL();
             }
         }
     }

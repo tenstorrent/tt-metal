@@ -304,7 +304,8 @@ struct WorkerToFabricEdmSenderImpl {
             return (this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr) <
                    this->num_buffers_per_channel;
         } else {
-            return *this->edm_buffer_local_free_slots_read_ptr != 0;
+            // return *this->edm_buffer_local_free_slots_read_ptr != 0;
+            return get_ptr_val(worker_credits_stream_id) != 0;
         }
     }
 
