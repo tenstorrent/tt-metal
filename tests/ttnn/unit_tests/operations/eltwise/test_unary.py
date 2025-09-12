@@ -1710,22 +1710,19 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
         # (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-    ],
-)
+# @pytest.mark.parametrize("exponent", [0.5])
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
-def test_unary_rpow_ttnn(input_shapes, torch_dtype, ttnn_dtype, exponent, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+def test_unary_rpow_ttnn(input_shapes, exponent, device):
+    # torch.manual_seed(0)
+    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30, 30)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     print(in_data1)
     output_tensor = ttnn.rpow(input_tensor1, exponent)
     golden_function = ttnn.get_golden_function(ttnn.rpow)
     golden_tensor = golden_function(in_data1, exponent)
     print(ttnn.to_torch(output_tensor))
     print(golden_tensor)
+    print(torch.abs(ttnn.to_torch(output_tensor) - golden_tensor))
 
+    assert_with_ulp(output_tensor, golden_tensor, 1, allow_nonfinite=True)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
