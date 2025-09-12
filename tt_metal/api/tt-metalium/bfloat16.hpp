@@ -27,10 +27,8 @@ public:
     // create from arithmetic type: tie-to-even rounding
     template <class T>
         requires std::is_arithmetic_v<T>
-    constexpr bfloat16(T v) noexcept {
-        float f = static_cast<float>(v);
-        uint16_data = from_float(f);
-    }
+    constexpr bfloat16(T v) noexcept
+        : uint16_data(from_float(static_cast<float>(v))) {}
 
     // create from float: truncate rounding
     static bfloat16 truncate(float float_num);
