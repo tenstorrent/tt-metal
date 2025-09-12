@@ -38,9 +38,7 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    // TODO: Change this to fp32
-    uint16_t bfloat16_lr = float_to_bfloat16(uint32_to_float(lr));
-    generate_tile_with_bfloat16_value(kLrCbIndex, bfloat16_lr);
+    generate_tile_with_float32_value(kLrCbIndex, lr);
 
     const uint32_t tile_size_bytes = get_tile_size(kParamInCbIndex);
 
