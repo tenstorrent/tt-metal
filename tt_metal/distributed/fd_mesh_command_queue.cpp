@@ -718,7 +718,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    while (thread_exception_state_.load() == false) {
+    while (!thread_exception_state_.load()) {
         try {
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);

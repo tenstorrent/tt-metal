@@ -196,7 +196,6 @@ Checks: >
   -readability-redundant-string-cstr,
   -readability-redundant-string-init,
   -readability-reference-to-constructed-temporary,
-  -readability-simplify-boolean-expr,
   -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,

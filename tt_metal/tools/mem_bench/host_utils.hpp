@@ -7,6 +7,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -32,6 +33,18 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices);
 
 // Returns the number of MMIO connected chips.
 int get_number_of_mmio_devices();
+
+// Validate that a device ID is MMIO-capable
+bool is_valid_mmio_device(int device_id);
+
+// Get devices with optional override for single device use case
+std::vector<int> get_device_ids_for_single_device(std::optional<int> override_device_id = std::nullopt);
+
+// Get devices with optional override for multi-device same node use case
+std::vector<int> get_device_ids_for_multi_device_same_node(std::optional<int> override_device_id = std::nullopt);
+
+// Get devices with optional override for multi-device different nodes use case
+std::vector<int> get_device_ids_for_multi_device_different_nodes(std::optional<int> override_device_id = std::nullopt);
 
 // Returns the hugepage pointer assigned to a device.
 void* get_hugepage(int device_id, uint32_t base_offset);

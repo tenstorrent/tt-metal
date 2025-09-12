@@ -9,6 +9,7 @@
 #include <chrono>
 #include <limits>
 #include <random>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace tt::tt_metal::tools::mem_bench {
@@ -57,6 +58,7 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (numa_node == -1 || associated_node == numa_node) {
             device_ids.push_back(device_id);
+            std::cout << "Using Device: " << device_id << std::endl;
         }
     }
 
@@ -70,8 +72,10 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
     std::unordered_set<uint32_t> numa_nodes;
 
     for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
+
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (!numa_nodes.contains(associated_node)) {
+            std::cout << "Using Device: " << device_id << std::endl;
             device_ids.push_back(device_id);
             numa_nodes.insert(associated_node);
         }
@@ -83,6 +87,53 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
 int get_number_of_mmio_devices() {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     return cluster.number_of_pci_devices();
+}
+
+bool is_valid_mmio_device(int device_id) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto pcie_devices = cluster.number_of_pci_devices();
+
+    if (device_id < 0 || device_id >= pcie_devices) {
+        return false;
+    }
+
+    return cluster.get_associated_mmio_device(device_id) == device_id;
+}
+
+std::vector<int> get_device_ids_for_single_device(std::optional<int> override_device_id) {
+    if (override_device_id.has_value()) {
+        int device_id = override_device_id.value();
+        if (!is_valid_mmio_device(device_id)) {
+            throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
+        }
+        std::cout << "Using Device: " << device_id << std::endl;
+        return {device_id};
+    }
+    return get_mmio_device_ids(1, -1);
+}
+
+std::vector<int> get_device_ids_for_multi_device_same_node(std::optional<int> override_device_id) {
+    if (override_device_id.has_value()) {
+        int device_id = override_device_id.value();
+        if (!is_valid_mmio_device(device_id)) {
+            throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
+        }
+        std::cout << "Using Device: " << device_id << std::endl;
+        return {device_id};
+    }
+    return get_mmio_device_ids(get_number_of_mmio_devices(), 0);
+}
+
+std::vector<int> get_device_ids_for_multi_device_different_nodes(std::optional<int> override_device_id) {
+    if (override_device_id.has_value()) {
+        int device_id = override_device_id.value();
+        if (!is_valid_mmio_device(device_id)) {
+            throw std::runtime_error("Invalid or non-MMIO device ID: " + std::to_string(device_id));
+        }
+        std::cout << "Using Device: " << device_id << std::endl;
+        return {device_id};
+    }
+    return get_mmio_device_ids_unique_nodes(get_number_of_mmio_devices());
 }
 
 }  // namespace tt::tt_metal::tools::mem_bench
