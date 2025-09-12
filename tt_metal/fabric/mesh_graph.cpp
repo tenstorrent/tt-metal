@@ -67,11 +67,10 @@ FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
     TT_THROW("Invalid torus topology");
     return FabricType::MESH;
 }
-}  // namespace
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-    MeshGraph::cluster_type_to_mesh_graph_descriptor =
-        *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+    cluster_type_to_mesh_graph_descriptor =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
             std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
                 {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
@@ -92,25 +91,26 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-MeshGraph::cluster_type_to_mesh_graph_descriptor_mgd2 =
-    *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
-        std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
-            {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
-        });
+    cluster_type_to_mesh_graph_descriptor_mgd2 =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+            std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
+                {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+            });
+}  // namespace
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 

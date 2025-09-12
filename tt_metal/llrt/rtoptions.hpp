@@ -495,6 +495,7 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
 
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    // TODO: This will be removed after MGD 1.0 is deprecated
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
 private:
