@@ -45,6 +45,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
+#include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
 
 namespace tt::tt_fabric {
@@ -1048,6 +1049,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     // NOTE: This MUST be called after ordering ethernet channels
     this->trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
+    this->collect_and_merge_router_port_directions_from_all_hosts();
+
     this->convert_fabric_routing_table_to_chip_routing_table();
 }
 
@@ -1238,9 +1241,8 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     auto dst_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
         dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
     // The src node is considered valid in this API if its owned by the current host. This requires the node to be in a
-    // mesh and coordinate range on this host.
-    bool valid_src =
-        this->is_local_mesh(src_fabric_node_id.mesh_id) and host_local_coord_range.contains(src_mesh_coord);
+    // mesh on this host.
+    bool valid_src = this->is_local_mesh(src_fabric_node_id.mesh_id);
     // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
     // mesh or coordinate range owned by the host.
     bool end_route_at_exit_node =
@@ -1327,31 +1329,17 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 
 std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
-    const auto& router_direction_eth_channels =
-        this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id);
     auto src_mesh_id = src_fabric_node_id.mesh_id;
     auto src_chip_id = src_fabric_node_id.chip_id;
     auto dst_mesh_id = dst_fabric_node_id.mesh_id;
     auto dst_chip_id = dst_fabric_node_id.chip_id;
-    for (const auto& [direction, eth_chans] : router_direction_eth_channels) {
-        for (const auto& src_chan_id : eth_chans) {
-            chan_id_t next_chan_id = 0;
-            if (src_mesh_id != dst_mesh_id) {
-                // Inter-mesh routing
-                next_chan_id = this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id];
-            } else if (src_chip_id != dst_chip_id) {
-                // Intra-mesh routing
-                next_chan_id = this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_chip_id];
-            }
-            if (src_chan_id != next_chan_id) {
-                continue;
-            }
-
-            // dimension-order routing: only 1 direction should give the desired shortest path from src to dst
-            return direction;
-        }
+    if (src_mesh_id != dst_mesh_id) {
+        const auto& inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
+        return inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id];
+    } else if (src_chip_id != dst_chip_id) {
+        const auto& intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+        return intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id];
     }
-
     return std::nullopt;
 }
 
@@ -1372,9 +1360,9 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
         this->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
     for (const auto& src_chan_id : active_channels) {
         // check for end-to-end route before accepting this channel
-        if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
-            continue;
-        }
+        // if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
+        //     continue;
+        // }
         forwarding_channels.push_back(src_chan_id);
     }
 
@@ -2262,6 +2250,84 @@ void ControlPlane::populate_fabric_connection_info(
             risc_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
+    }
+}
+
+void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    if (*distributed_context.size() == 1) {
+        // No need to collect from other hosts when running a single process
+        return;
+    }
+
+    // Create RouterPortDirectionsData from local data
+    RouterPortDirectionsData local_data;
+    local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+    local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
+    local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
+
+    auto serialized_data = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
+    std::vector<uint8_t> serialized_remote_data;
+    auto my_rank = *(distributed_context.rank());
+
+    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+        if (my_rank == bcast_root) {
+            // Issue the broadcast from the current process to all other processes in the world
+            int local_data_size_bytes = serialized_data.size();  // Send data size first
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
+                distributed_context.rank());
+
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
+                distributed_context.rank());
+        } else {
+            // Acknowledge the broadcast issued by the root
+            int remote_data_size_bytes = 0;  // Receive the size of the serialized data
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
+                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+            serialized_remote_data.clear();
+            serialized_remote_data.resize(remote_data_size_bytes);
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
+                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+
+            RouterPortDirectionsData deserialized_remote_data =
+                tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
+
+            // Merge remote data into local router_port_directions_to_physical_eth_chan_map_
+            for (const auto& [fabric_node_id, direction_map] : deserialized_remote_data.router_port_directions_map) {
+                // Only merge if this fabric node is not already in our local map
+                if (router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id) ==
+                    router_port_directions_to_physical_eth_chan_map_.end()) {
+                    router_port_directions_to_physical_eth_chan_map_[fabric_node_id] = direction_map;
+                } else {
+                    // If fabric node exists, merge direction maps
+                    for (const auto& [direction, channels] : direction_map) {
+                        auto& local_direction_map = router_port_directions_to_physical_eth_chan_map_[fabric_node_id];
+                        if (local_direction_map.find(direction) == local_direction_map.end()) {
+                            local_direction_map[direction] = channels;
+                        } else {
+                            // Merge channels, avoiding duplicates
+                            auto& local_channels = local_direction_map[direction];
+                            for (const auto& channel : channels) {
+                                if (std::find(local_channels.begin(), local_channels.end(), channel) ==
+                                    local_channels.end()) {
+                                    local_channels.push_back(channel);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
+        // root
+        distributed_context.barrier();
     }
 }
 
