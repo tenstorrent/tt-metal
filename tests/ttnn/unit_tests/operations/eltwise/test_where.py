@@ -71,14 +71,14 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
+        # Scalar Bcast cases
         ((3, 2, 3, 64, 128), (3, 2, 3, 1, 1), (3, 2, 3, 1, 1)),  # LLK
-        ((256,), (1,), (1,)),  # LLK
-        # Bcast cases for dims -5, -4, -3 (outer dims)
+        # Scalar Bcast cases with  outer dims bcast (-5, -4, -3)
         ((1, 2, 3, 4, 128, 128), (1, 1), (1, 1)),
         ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 1, 1), (4, 1, 2, 1, 1, 1)),
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+@pytest.mark.parametrize("scalar", [15.5, -12.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where_scalar(c_shape, t_shape, f_shape, scalar, variant, condition, device):

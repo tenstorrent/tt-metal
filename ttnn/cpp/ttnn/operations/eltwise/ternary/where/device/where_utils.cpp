@@ -177,7 +177,6 @@ std::map<std::string, std::string> make_dataflow_defines(
     }
     if (c_dtype.has_value()) {
         // Add defines for third tensor (false tensor)
-        c_dtype = c_dtype.value();
         if (c_dtype == DataType::FLOAT32) {
             defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
             defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
@@ -270,8 +269,8 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::NONE;
     }
 
-    bool same_width = (predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-1] == b_shape[-1]);
-    bool same_height = (predicate_shape[-2] == b_shape[-2]) && (predicate_shape[-2] == b_shape[-2]);
+    bool same_width = (predicate_shape[-1] == b_shape[-1]);
+    bool same_height = (predicate_shape[-2] == b_shape[-2]);
 
     if (same_height && same_width) {
         return WhereBroadcastType::OUTER_BCAST;

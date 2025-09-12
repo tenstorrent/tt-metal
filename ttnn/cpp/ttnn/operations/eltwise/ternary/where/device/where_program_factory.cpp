@@ -179,9 +179,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                  // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+            if (broadcast_type != WhereBroadcastType::NONE) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -236,9 +234,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                   // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+            if (broadcast_type != WhereBroadcastType::NONE) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -324,10 +320,8 @@ void set_or_update_runtime_arguments(
         // Compute runtime args - binary_ng style for TTT column broadcast
         if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
             // Get output shape dimensions for freq/counter calculation
-            const auto& output_shape = output.padded_shape();
-            const auto& tile = output.tensor_spec().tile();
-            uint32_t output_Ht = output_shape[-2] / tile.get_height();
-            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+            uint32_t output_Ht = cHt;
+            uint32_t output_Wt = cWt;
 
             // Calculate freq and counter like binary_ng for column broadcast
             uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
@@ -342,10 +336,8 @@ void set_or_update_runtime_arguments(
             variant == WhereVariant::TTS && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                              broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
             // Get output shape dimensions for freq/counter calculation
-            const auto& output_shape = output.padded_shape();
-            const auto& tile = output.tensor_spec().tile();
-            uint32_t output_Ht = output_shape[-2] / tile.get_height();
-            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+            uint32_t output_Ht = cHt;
+            uint32_t output_Wt = cWt;
 
             // Calculate freq and counter like binary_ng for scalar broadcast
             auto HtWt = output_Ht * output_Wt;
@@ -366,10 +358,8 @@ void set_or_update_runtime_arguments(
             variant == WhereVariant::TST && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                              broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
             // Get output shape dimensions for freq/counter calculation
-            const auto& output_shape = output.padded_shape();
-            const auto& tile = output.tensor_spec().tile();
-            uint32_t output_Ht = output_shape[-2] / tile.get_height();
-            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+            uint32_t output_Ht = cHt;
+            uint32_t output_Wt = cWt;
 
             // Calculate freq and counter like binary_ng for scalar broadcast
             auto HtWt = output_Ht * output_Wt;
