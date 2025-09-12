@@ -218,7 +218,6 @@ class TT_CCL:
             else ttnn.create_sharded_memory_config(
                 # shape=(32, 64),
                 # shape=(32, 160),
-                shape=(32, 128),
                 core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
