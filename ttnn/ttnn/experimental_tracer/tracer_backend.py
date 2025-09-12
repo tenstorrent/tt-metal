@@ -24,7 +24,6 @@ from tracer_backend_utils import (
     TupleOp,
     InputOp,
 )
-from utils import LazyParams
 from collections import OrderedDict
 
 
@@ -47,7 +46,6 @@ class TracerData:
         self.constants: Dict[str, ConstantTensor] = {}
         self.id = 0
         self.save_original_tensors = save_original_tensors
-        self.fake_original_tensor = False
         ConstantTensor.ConstantTensorFromModel = save_original_tensors
 
     def get_next_id(self):
@@ -101,6 +99,29 @@ class TracerData:
         self.graph_output_to_node.update(self.post_run_output_to_node)
         self.topological_sort_reorder()
 
+    def get_node_statistics(self):
+        """
+        Get statistics about the nodes in the graph.
+
+        Returns:
+            dict: A dictionary containing statistics about the nodes.
+        """
+
+        types_of_nodes = {}
+        for node in self.graph_output_to_node.values():
+            op_type = node["op_type"]
+            if op_type not in types_of_nodes:
+                types_of_nodes[op_type] = 0
+            types_of_nodes[op_type] += 1
+        stats = {
+            "total_nodes": len(self.graph_output_to_node),
+            "node_histogram": {
+                k: types_of_nodes[k] for k in sorted(types_of_nodes, key=lambda x: types_of_nodes[x], reverse=True)
+            },
+            "total_constants": len(self.constants),
+        }
+        return stats
+
 
 class TrackableTensorArgument:
     def __init__(self, tensor, index, index2=None):
@@ -110,7 +131,7 @@ class TrackableTensorArgument:
         self.index2 = index2
 
     def __repr__(self):
-        return f"TrackableTensorArgument(pid={self.tensor.id}, tensor={self.tensor.shape}, index={self.index}, index2={self.index2})"
+        return f"TrackableTensorArgument(pid={self.tensor.id}, tensor={self.tensor.trackable_shape}, index={self.index}, index2={self.index2})"
 
     def to_frozen(self):
         """
@@ -135,7 +156,7 @@ class FrozenTrackableTensor:
             self.graph_output_index = tensor.graph_output_index
 
     def __repr__(self):
-        return f"FrozenTrackableTensor(pid={self.id}, tensor={self.tensor.shape})"
+        return f"FrozenTrackableTensor(pid={self.id}, tensor={self.shape})"
 
     @property
     def is_graph_input(self):
@@ -235,13 +256,13 @@ class Trackable_Tensor(torch.Tensor):
         # It prevents infinite recursion.
         with no_dispatch():
             if func.name() == "aten::_local_scalar_dense":
+                print(
+                    "Found item() operation. Please rewrite it to avoid non-deterministic behavior. Tracer tool will continue, but result will be for different graph input."
+                )
                 if Trackable_Tensor.tracer_data.save_original_tensors:
                     # If the tensor is a Trackable_Tensor, return its elem
                     return args[0].elem.item() if isinstance(args[0], Trackable_Tensor) else args[0].item()
                 else:
-                    print(
-                        f"Evaluating item() when no inference is enabled might cause incorrect tracing. Please make sure .item() is not used in the model as it may lead to non-deterministic behavior."
-                    )
                     return (
                         torch.zeros(args[0].trackable_shape, dtype=args[0].trackable_dtype).item()
                         if isinstance(args[0], Trackable_Tensor)
@@ -815,7 +836,10 @@ def get_attrs_for_op(operation: Operation, node) -> Dict[str, Any]:
     attrs = {}
     if operation.function_call_name == "torch.ops.aten.convolution":
         attrs["hidden_units"] = operation.args[1].shape[0]
-        attrs["kernel"] = [operation.args[1].shape[2], operation.args[1].shape[3]]
+        if len(operation.args[1].shape) == 4:
+            attrs["kernel"] = [operation.args[1].shape[2], operation.args[1].shape[3]]
+        elif len(operation.args[1].shape) == 3:
+            attrs["kernel"] = [operation.args[1].shape[2]]
         attrs["stride"] = operation.args[3]
         attrs["padding"] = operation.args[4]
         attrs["dilation"] = operation.args[5]
@@ -941,7 +965,7 @@ def set_is_graph_output(outputs, index=0):
         print(f"Warning: Output {outputs} are not Trackable_Tensor instances, cannot set is_graph_output.")
 
 
-def wrap_state_dict(state_dict, save_original_tensors):
+def wrap_state_dict(state_dict):
     """
     Wrap the tensors in the state_dict with Trackable_Tensor.
 
@@ -962,7 +986,6 @@ def wrap_state_dict(state_dict, save_original_tensors):
         else:
             wrapped_state_dict[key] = value
     wrapped_state_dict = OrderedDict(wrapped_state_dict)
-    # wrapped_state_dict._metadata = {}
     return wrapped_state_dict
 
 
@@ -987,14 +1010,9 @@ def trace_torch_model(
     assert len(input_shapes) > 0, "Input shapes must be provided"
 
     tracer = TracerData(save_original_tensors=save_original_tensors)
-    try:
-        if isinstance(model.params, LazyParams):
-            tracer.fake_original_tensor = model.params.fake
-    except:
-        pass
     state_dict = model.state_dict()
     Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
-    wrapped_state_dict = wrap_state_dict(state_dict, save_original_tensors)
+    wrapped_state_dict = wrap_state_dict(state_dict)
     model.load_state_dict(wrapped_state_dict, assign=True)
     input_tensors = []
     if input_dtypes is None:
@@ -1041,12 +1059,13 @@ def trace_torch_model(
                     value["res"],
                 )
 
-    # Call the function to remove Trackable_Tensor instances
+    print(f"Nodes before optimizations: {tracer.get_node_statistics()}")
     remove_trackable_tensors(tracer)
     remove_None_and_fix_inplace(tracer.graph_output_to_input, tracer.graph_output_to_node)
     tracer.finalize()
     remove_trackable_tensors(tracer)
     remove_tuple_get_item_detach_clone_with_no_consumers(tracer.graph_output_to_input, tracer.graph_output_to_node)
+    print(f"Nodes after optimizations: {tracer.get_node_statistics()}")
     propagate_module_name(tracer.graph_output_to_input, tracer.graph_output_to_node)
 
     try:

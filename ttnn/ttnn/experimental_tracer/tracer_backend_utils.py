@@ -202,20 +202,39 @@ class AtenConvolution(WrappedOperation):
 
     def __post_init__(self):
         if self.attrs is None:
-            self.attrs = ConvAttrs(
-                input_batch=self.meta_data.meta["i_shapes"][0][0],
-                input_height=self.meta_data.meta["i_shapes"][0][2],
-                input_width=self.meta_data.meta["i_shapes"][0][3],
-                input_depth=self.meta_data.meta["i_shapes"][0][1],
-                hidden_units=self.args[1].shape[0],
-                kernel=[self.args[1].shape[2], self.args[1].shape[3]],
-                stride=self.args[3],
-                padding=self.args[4],
-                dilation=self.args[5],
-                transposed=self.args[6],
-                output_padding=self.args[7],
-                groups=self.args[8],
-            )
+            input_shape = self.args[0].shape
+            if len(input_shape) == 4:
+                self.attrs = ConvAttrs(
+                    input_batch=input_shape[0],
+                    input_height=input_shape[2],
+                    input_width=input_shape[3],
+                    input_depth=input_shape[1],
+                    hidden_units=self.args[1].shape[0],
+                    kernel=[self.args[1].shape[2], self.args[1].shape[3]],
+                    stride=self.args[3],
+                    padding=self.args[4],
+                    dilation=self.args[5],
+                    transposed=self.args[6],
+                    output_padding=self.args[7],
+                    groups=self.args[8],
+                )
+            elif len(input_shape) == 3:
+                self.attrs = ConvAttrs(
+                    input_batch=input_shape[0],
+                    input_height=1,
+                    input_width=input_shape[2],
+                    input_depth=input_shape[1],
+                    hidden_units=self.args[1].shape[0],
+                    kernel=[1, self.args[1].shape[2]],
+                    stride=[1, self.args[3][0]],
+                    padding=[0, self.args[4][0]],
+                    dilation=[1, self.args[5][0]],
+                    transposed=self.args[6],
+                    output_padding=[0, self.args[7][0]] if self.args[7] is not None else None,
+                    groups=self.args[8],
+                )
+            else:
+                raise ValueError(f"Unsupported input shape {input_shape} for convolution")
 
     @property
     def ops(self) -> int:
