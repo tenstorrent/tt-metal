@@ -239,29 +239,16 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-template <uint8_t dim, bool compressed = true>
-bool get_routing_info(uint16_t dst_dev_id, volatile uint8_t* out_route_buffer) {
-    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
-    tt_l1_ptr routing_path_t<dim, compressed>* routing_info;
-    if constexpr (dim == 1) {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-    } else {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
-    }
-    return routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
-}
-
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 template <bool compressed = true>
 bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
-    bool ok = get_routing_info<2, compressed>(dst_dev_id, packet_header->route_buffer);
+    tt_l1_ptr routing_path_t<2, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.hop_index = 0;
     packet_header->routing_fields.branch_east_offset = 0;
     packet_header->routing_fields.branch_west_offset = 0;
-
-    tt_l1_ptr routing_path_t<2, compressed>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
 
     const auto& compressed_route = routing_info->paths[dst_dev_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
@@ -283,7 +270,9 @@ bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPack
 // Overload: For 1D LowLatencyPacketHeader
 template <bool compressed = true>
 bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
-    return get_routing_info<1, compressed>(dst_dev_id, (uint8_t*)&packet_header->routing_fields.value);
+    tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+    return routing_info->decode_route_to_buffer(dst_dev_id, (uint8_t*)&packet_header->routing_fields.value);
 }
 
 }  // namespace tt::tt_fabric
