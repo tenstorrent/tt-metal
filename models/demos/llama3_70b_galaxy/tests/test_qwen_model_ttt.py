@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers, iterations",
     [
-        ("instruct", 3, 20),
+        ("instruct", 64, 20),
     ],
     ids=["quick"],
 )
@@ -122,7 +122,7 @@ def test_qwen_model_ttt_inference(
 
     model_name = {
         (80): "qwen3_70b",
-        (3): "qwen3_1layer",
+        (64): "qwen3_1layer",
     }[(layers if layers is not None else model_args.n_layers)]
 
     # Define minimum PCC for each iteration
