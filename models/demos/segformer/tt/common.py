@@ -17,7 +17,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         groups=1,
         dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,

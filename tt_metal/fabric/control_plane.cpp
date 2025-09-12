@@ -498,13 +498,6 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
             "Chip {} not connected to chip {}",
             physical_chip_id,
             physical_chip_id_other);
-        TT_FATAL(
-            eth_links_to_other->second.size() >= num_ports_per_side,
-            "Chip {} to chip {} has {} links but expecting {}",
-            physical_chip_id,
-            physical_chip_id_other,
-            eth_links.at(physical_chip_id_other).size(),
-            num_ports_per_side);
     };
     const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {
@@ -1811,7 +1804,7 @@ void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_conf
 
 FabricContext& ControlPlane::get_fabric_context() const {
     TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
-    return *this->fabric_context_.get();
+    return *this->fabric_context_;
 }
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
