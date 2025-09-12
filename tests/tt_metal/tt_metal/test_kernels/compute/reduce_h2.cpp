@@ -8,7 +8,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reduce.h"
-#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -125,11 +125,32 @@ void MAIN {
         }
 
         // Debug: Print the destination register contents
-        dprint_tensix_dest_reg(reduce_dst_idx);
+        DPRINT_MATH({ DPRINT << "Destination register " << reduce_dst_idx << " contents:" << ENDL(); });
 
         // Pack and output the reduced result
         cb_reserve_back(cb_out0, onetile);
         pack_tile(reduce_dst_idx, cb_out0);
+
+        DPRINT_PACK({
+            DPRINT << "Output tile in cb_out0:" << ENDL();
+            for (uint16_t r = 0; r < 32; ++r) {
+                DPRINT << (uint)r << " : "
+                       << TileSlice(
+                              cb_out0,
+                              0,
+                              SliceRange{
+                                  .h0 = (uint8_t)r,
+                                  .h1 = (uint8_t)(r + 1),
+                                  .hs = (uint8_t)1,
+                                  .w0 = (uint8_t)0,
+                                  .w1 = (uint8_t)32,
+                                  .ws = (uint8_t)1},
+                              true,
+                              false)
+                       << ENDL();
+            }
+        });
+
         cb_push_back(cb_out0, onetile);
 
         release_dst();  // Release destination registers

@@ -252,11 +252,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         // Create test data
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 10.0f, std::chrono::system_clock::now().time_since_epoch().count());
+        // std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+        //     dram_buffer_size, 10.0f, std::chrono::system_clock::now().time_since_epoch().count());
 
-        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 10.0f, std::chrono::system_clock::now().time_since_epoch().count() + 1);
+        // std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
+        //     dram_buffer_size, 10.0f, std::chrono::system_clock::now().time_since_epoch().count() + 1);
+
+        // input is hardcoded to be 1.0f
+        std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
         // Write input data to device
         EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
