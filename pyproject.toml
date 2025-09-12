@@ -57,7 +57,7 @@ build-verbosity = 2
 # pyproject.toml
 [tool.setuptools_scm]
 tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+)$'  # only vX.Y.Z
-scm.git.describe_command = [
+git_describe_command = [
   "git","describe","--dirty","--tags","--long",
   "--match","v[0-9]*.[0-9]*.[0-9]*",
   "--exclude","*-*"
