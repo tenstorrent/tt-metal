@@ -149,7 +149,7 @@ struct __attribute__((packed)) routing_path_t {
     static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
 
     static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
-    static const uint16_t MAX_CHIPS_LOWLAT_2D = 1024;
+    static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
     static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
     static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
@@ -182,9 +182,12 @@ struct __attribute__((packed)) routing_path_t {
     inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
 #endif
 };
+// 16 chips * 4 bytes = 64
 static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+// 16 chips * 1 byte = 16
 static_assert(sizeof(routing_path_t<1, true>) == 16, "1D compressed routing path must be 16 bytes");
-static_assert(sizeof(routing_path_t<2, true>) == 2048, "2D compressed routing path must be 2048 bytes");
+// 256 chips * 2 bytes = 512
+static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;  // Current mesh ID
