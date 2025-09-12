@@ -17,10 +17,7 @@ class GalaxyFixture : public DispatchFixture {
 protected:
     bool SkipTestSuiteIfNotGalaxyMotherboard() {
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (!(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32)) {
-            return true;
-        }
-        return false;
+        return !(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32);
     }
 
     void SetUp() override {

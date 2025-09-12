@@ -39,7 +39,7 @@ bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float at
     auto absdiff = fabsf(af - bf);
     auto reldenom = fmaxf(fabsf(af), fabsf(bf));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
-    if (result != true) {
+    if (!result) {
         log_error(tt::LogTest, "Discrepacy: A={}, B={}", af, bf);
         log_error(tt::LogTest, "   absdiff={}, atol={}", absdiff, atol);
         log_error(tt::LogTest, "   reldiff={}, rtol={}", absdiff / (reldenom + 1e-6f), rtol);
