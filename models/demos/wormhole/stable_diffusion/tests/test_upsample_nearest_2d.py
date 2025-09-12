@@ -6,9 +6,9 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull, torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
-from models.utility_functions import skip_for_grayskull, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

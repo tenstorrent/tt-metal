@@ -8,8 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
-from models.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

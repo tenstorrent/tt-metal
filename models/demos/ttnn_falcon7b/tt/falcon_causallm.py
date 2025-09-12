@@ -5,8 +5,8 @@
 from typing import Optional, Tuple
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.ttnn_falcon7b.tt.falcon_model import TtFalconModelShared
-from models.utility_functions import is_wormhole_b0
 
 
 class TtFalconCausalLM(TtFalconModelShared):

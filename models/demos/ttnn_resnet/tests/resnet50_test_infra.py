@@ -12,9 +12,9 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
-from models.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 

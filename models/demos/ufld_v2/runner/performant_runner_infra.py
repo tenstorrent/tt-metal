@@ -8,10 +8,10 @@ from loguru import logger
 from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.ufld_v2.common import load_torch_model
 from models.demos.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import create_custom_mesh_preprocessor, get_mesh_mappers
 from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

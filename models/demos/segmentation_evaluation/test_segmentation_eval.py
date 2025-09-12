@@ -18,9 +18,9 @@ from skimage.io import imsave
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
-from models.utility_functions import disable_persistent_kernel_cache
 
 
 def iou(y_true, y_pred):

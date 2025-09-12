@@ -9,11 +9,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.yolov6l.common import YOLOV6L_L1_SMALL_SIZE
 from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 from models.demos.yolov6l.tt.common import get_mesh_mappers
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
 def get_expected_times(name):

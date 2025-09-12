@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
