@@ -53,14 +53,14 @@ TtDeiTSelfAttention::TtDeiTSelfAttention(
         throw std::runtime_error("Required weight parameters not found in state_dict for base_address: " + base_address);
     }
 
-    query_weight = helper_funcs::from_torch(query_weight_it->second);
-    query_bias = (query_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::from_torch(query_bias_it->second)) : std::nullopt;
+    query_weight = helper_funcs::torch_to_tt_tensor_tile(query_weight_it->second, device);
+    query_bias = (query_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::torch_to_tt_tensor_tile(query_bias_it->second, device)) : std::nullopt;
     
-    key_weight = helper_funcs::from_torch(key_weight_it->second);
-    key_bias = (key_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::from_torch(key_bias_it->second)) : std::nullopt;
+    key_weight = helper_funcs::torch_to_tt_tensor_tile(key_weight_it->second, device);
+    key_bias = (key_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::torch_to_tt_tensor_tile(key_bias_it->second, device)) : std::nullopt;
     
-    value_weight = helper_funcs::from_torch(value_weight_it->second);
-    value_bias = (value_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::from_torch(value_bias_it->second)) : std::nullopt;
+    value_weight = helper_funcs::torch_to_tt_tensor_tile(value_weight_it->second, device);
+    value_bias = (value_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::torch_to_tt_tensor_tile(value_bias_it->second, device)) : std::nullopt;
 }
 
 ttnn::Tensor TtDeiTSelfAttention::transpose_for_scores( ttnn::Tensor& x) {
