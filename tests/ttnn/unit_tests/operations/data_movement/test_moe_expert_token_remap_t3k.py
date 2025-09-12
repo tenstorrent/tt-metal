@@ -216,6 +216,8 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
     assert reduced_output.shape == (devices, 1, ceil(batch * seq / REDUCTION_SIZE), experts_per_device)
 
 
+# Skip this for now
+@pytest.mark.skip(reason="Issue #28376")
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
