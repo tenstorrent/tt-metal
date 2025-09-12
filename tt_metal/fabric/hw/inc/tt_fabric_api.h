@@ -251,4 +251,39 @@ bool get_routing_info(uint16_t dst_dev_id, volatile uint8_t* out_route_buffer) {
     return routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
 }
 
+// Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+template <bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
+    bool ok = get_routing_info<2, compressed>(dst_dev_id, packet_header->route_buffer);
+
+    packet_header->routing_fields.hop_index = 0;
+    packet_header->routing_fields.branch_east_offset = 0;
+    packet_header->routing_fields.branch_west_offset = 0;
+
+    tt_l1_ptr routing_path_t<2, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+
+    const auto& compressed_route = routing_info->paths[dst_dev_id];
+    uint8_t ns_hops = compressed_route.get_ns_hops();
+    uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t ew_direction = compressed_route.get_ew_direction();
+    uint8_t turn_point = compressed_route.get_turn_point();
+
+    if (ns_hops > 0 && ew_hops > 0) {
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
+        } else {
+            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
+        }
+    }
+
+    return ok;
+}
+
+// Overload: For 1D LowLatencyPacketHeader
+template <bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
+    return get_routing_info<1, compressed>(dst_dev_id, (uint8_t*)&packet_header->routing_fields.value);
+}
+
 }  // namespace tt::tt_fabric
