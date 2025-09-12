@@ -4555,7 +4555,6 @@ def test_conv_bs_grid(
 
 # fmt: off
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
-@pytest.mark.parametrize("enable_split_reader", [False, True])
 @pytest.mark.parametrize("config_in_dram", [False, True])
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
@@ -4595,7 +4594,6 @@ def test_conv2d_activation_reuse(
     packer_l1_acc,
     input_dtype,
     input_layout,
-    enable_split_reader,
     enable_activation_reuse,
     config_in_dram
 ):
@@ -4637,7 +4635,6 @@ def test_conv2d_activation_reuse(
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
         input_layout= input_layout,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
@@ -4649,7 +4646,6 @@ def test_conv2d_activation_reuse(
 
 @skip_for_blackhole()
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
-@pytest.mark.parametrize("enable_split_reader", [False, True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
@@ -4687,7 +4683,6 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
     config_override,
     output_layout,
     in_place,
-    enable_split_reader,
     enable_activation_reuse,
 ):
     batch_size = 1
@@ -4733,6 +4728,5 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         input_dtype=ttnn.bfloat16,
         sharded_cfg=memory_config,
-        enable_split_reader=enable_split_reader,
         enable_activation_reuse=enable_activation_reuse
     )

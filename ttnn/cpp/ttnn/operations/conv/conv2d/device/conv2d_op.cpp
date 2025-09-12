@@ -294,6 +294,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         has_bias,
         is_1d_deptwise_conv(
             groups, input_tensor_shape[3], output_channels, kernel_dims[1], output_image_width, has_bias),
+        input_channels_padded,
         skip_mcast.skip_activation_mcast);
 
     TT_FATAL(

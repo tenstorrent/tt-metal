@@ -93,12 +93,31 @@ std::vector<CBInfo> get_cb_info(
 
     const TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
 
-    // Block dims
+    const uint32_t per_core_out_matrix_height_ntiles = pconfig.per_core_out_matrix_height_ntile;
+    const uint32_t per_core_out_matrix_width_ntiles = pconfig.per_core_out_matrix_width_ntile;
     const uint32_t tilized_act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
     uint32_t act_block_num_tiles, act_block_split_num_tiles = 0;
     const uint32_t padded_in_channels = weights_shape[2] / (kernel_size[0] * kernel_size[1]);
-    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !conv_config.enable_split_reader ||
-        is_1d_depthwise_conv) {
+    const uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles;
+
+    const bool split_reader_enabled =
+        is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
+        is_split_reader_viable(
+            block_config.act_block_h_ntiles,
+            input_channels_padded,
+            kernel_size[1],
+            tt::tt_metal::hal::get_arch(),
+            input_datatype,
+            per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
+            weights_tile_size,
+            dilation[1],
+            num_blocks_act_h,
+            block_config.act_block_w_ntiles,
+            fp32_dest_acc_en,
+            output_datatype);
+
+    // Block dims
+    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {
         if (!conv_config.enable_activation_reuse) {
             act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
         } else {
@@ -143,12 +162,8 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t weight_matrix_height_ntiles = weights_shape[2] / tt::constants::TILE_HEIGHT;
     const uint32_t weight_matrix_width_ntiles = weights_shape[3] / tt::constants::TILE_WIDTH;
 
-    const uint32_t per_core_out_matrix_width_ntiles = pconfig.per_core_out_matrix_width_ntile;
-    const uint32_t per_core_out_matrix_height_ntiles = pconfig.per_core_out_matrix_height_ntile;
     const uint32_t per_core_out_ntiles =
         pconfig.per_core_out_matrix_height_ntile * pconfig.per_core_out_matrix_width_ntile;
-
-    const uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles;
 
     const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
@@ -199,20 +214,7 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
-            is_split_reader_viable(
-                block_config.act_block_h_ntiles,
-                input_channels_padded,
-                kernel_size[1],
-                tt::tt_metal::hal::get_arch(),
-                input_datatype,
-                per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
-                weights_tile_size,
-                dilation[1],
-                num_blocks_act_h,
-                block_config.act_block_w_ntiles,
-                fp32_dest_acc_en,
-                output_datatype)) {
+        if (split_reader_enabled) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
