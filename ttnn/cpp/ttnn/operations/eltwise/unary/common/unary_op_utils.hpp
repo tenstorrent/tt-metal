@@ -21,14 +21,16 @@ using DataType = tt::tt_metal::DataType;
 template <typename T = float>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type,
-    const std::vector<T>& params = {},
+    std::span<const T> params = {},
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// type_identity_t suppresses template argument deduction
+// this allows get_defines(...) without a template list to use the default type float
 template <typename T = float>
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
-    const std::optional<std::vector<std::type_identity_t<T>>>& params = std::nullopt,
+    std::optional<std::span<const std::type_identity_t<T>>> params = std::nullopt,
     const std::string& id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);

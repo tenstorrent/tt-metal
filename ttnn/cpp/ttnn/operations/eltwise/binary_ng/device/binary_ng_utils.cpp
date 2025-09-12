@@ -470,8 +470,8 @@ void add_activation_defines(
         std::string{},
         [&](std::string&& process, const unary::EltwiseUnaryWithParam& a) {
             const auto& [op_init, op_func] = std::visit(
-                [=](const auto& op) { return unary::utils::get_op_init_and_func(op.op_type, op.params, "i", dtype); },
-                a.base);
+                [&](auto params) { return unary::utils::get_op_init_and_func(a.type(), params, "i", dtype); },
+                a.get_params());
             process += op_init;
             process += op_func;
             unary::utils::update_macro_defines(a.type(), defines);
