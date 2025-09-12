@@ -30,8 +30,8 @@ TtDeiTSelfOutput::TtDeiTSelfOutput(
         throw std::runtime_error("Required dense weight parameter not found in state_dict for base_address: " + base_address);
     }
 
-    dense_weight = helper_funcs::from_torch(dense_weight_it->second);
-    dense_bias = (dense_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::from_torch(dense_bias_it->second)) : std::nullopt;
+    dense_weight = helper_funcs::torch_to_tt_tensor_tile(dense_weight_it->second, device);
+    dense_bias = (dense_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::torch_to_tt_tensor_tile(dense_bias_it->second, device)) : std::nullopt;
 }
 
 ttnn::Tensor TtDeiTSelfOutput::forward(
