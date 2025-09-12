@@ -40,7 +40,7 @@ tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/metalium-codeowners-
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-codeowners-large-changes
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
-tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu # this should go away @tenstorrent/metalium-codeowners-large-changes
+tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-codeowners-large-changes # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-codeowners-large-changes
