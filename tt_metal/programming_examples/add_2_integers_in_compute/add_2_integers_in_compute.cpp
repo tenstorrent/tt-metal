@@ -79,24 +79,60 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
-    KernelHandle binary_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    
+    // Check for environment variables to use pre-compiled binaries
+    const char* reader_binary_path = std::getenv("READER_KERNEL_BINARY_PATH");
+    const char* writer_binary_path = std::getenv("WRITER_KERNEL_BINARY_PATH");
+    const char* compute_binary_path = std::getenv("COMPUTE_KERNEL_BINARY_PATH");
+    
+    KernelHandle binary_reader_kernel_id;
+    if (reader_binary_path) {
+        fmt::print("Loading pre-compiled reader kernel from: {}\n", reader_binary_path);
+        binary_reader_kernel_id = CreateKernelFromBinary(
+            program,
+            reader_binary_path,
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    } else {
+        binary_reader_kernel_id = CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    }
 
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    KernelHandle unary_writer_kernel_id;
+    if (writer_binary_path) {
+        fmt::print("Loading pre-compiled writer kernel from: {}\n", writer_binary_path);
+        unary_writer_kernel_id = CreateKernelFromBinary(
+            program,
+            writer_binary_path,
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    } else {
+        unary_writer_kernel_id = CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    }
 
     // This kernel performs the actual addition of the two input tiles
-    KernelHandle eltwise_binary_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
-        core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+    KernelHandle eltwise_binary_kernel_id;
+    if (compute_binary_path) {
+        fmt::print("Loading pre-compiled compute kernel from: {}\n", compute_binary_path);
+        eltwise_binary_kernel_id = CreateKernelFromBinary(
+            program,
+            compute_binary_path,
+            core,
+            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+    } else {
+        eltwise_binary_kernel_id = CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
+            core,
+            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+    }
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.
