@@ -71,11 +71,10 @@ class Conv2dConfiguration:
     activation: str = ""
     bias: Optional[torch.Tensor] = None
 
-    activation_dtype = ttnn.bfloat16
-    weights_dtype = ttnn.bfloat16
-    output_dtype = ttnn.bfloat16
-
-    output_layout = ttnn.TILE_LAYOUT
+    activation_dtype: ttnn.DataType = ttnn.bfloat16
+    weights_dtype: ttnn.DataType = ttnn.bfloat16
+    output_dtype: ttnn.DataType = ttnn.bfloat16
+    output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
 
     sharding_strategy: ShardedStrategyConfiguration = AutoShardedStrategyConfiguration()
 

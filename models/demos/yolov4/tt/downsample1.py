@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov4.tt.common import Conv
+from models.demos.yolov4.tt.common import create_conv2d_from_params
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
@@ -34,43 +34,43 @@ def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensor
 class Down1:
     def __init__(self, device, parameters, conv_args) -> None:
         self.parameters = parameters
-        self.conv1 = Conv(
+        self.conv1 = create_conv2d_from_params(
             device,
             conv_args.c1,
             parameters.c1,
         )
 
-        self.conv2 = Conv(
+        self.conv2 = create_conv2d_from_params(
             device,
             conv_args.c2,
             parameters.c2,
         )
-        self.conv3 = Conv(
+        self.conv3 = create_conv2d_from_params(
             device,
             conv_args.c3,
             parameters.c3,
         )
-        self.conv4 = Conv(
+        self.conv4 = create_conv2d_from_params(
             device,
             conv_args.c4,
             parameters.c4,
         )
-        self.conv5 = Conv(
+        self.conv5 = create_conv2d_from_params(
             device,
             conv_args.c5,
             parameters.c5,
         )
-        self.conv6 = Conv(
+        self.conv6 = create_conv2d_from_params(
             device,
             conv_args.c6,
             parameters.c6,
         )
-        self.conv7 = Conv(
+        self.conv7 = create_conv2d_from_params(
             device,
             conv_args.c7,
             parameters.c7,
         )
-        self.conv8 = Conv(
+        self.conv8 = create_conv2d_from_params(
             device,
             conv_args.c8,
             parameters.c8,
@@ -78,31 +78,31 @@ class Down1:
         self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
 
     def __call__(self, input_tensor):
-        output_tensor = self.conv1(input_tensor)[0]
+        output_tensor = self.conv1(input_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
         if self.parameters.resolution[0] != 320:
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        output_tensor_split = self.conv2(output_tensor)[0]
+        output_tensor_split = self.conv2(output_tensor)
         ttnn.deallocate(output_tensor)
         output_tensor_split = ttnn.mish(output_tensor_split)
 
-        output_tensor_left = self.conv3(output_tensor_split)[0]
+        output_tensor_left = self.conv3(output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
 
-        output_tensor_split_2 = self.conv4(output_tensor_split)[0]
+        output_tensor_split_2 = self.conv4(output_tensor_split)
         ttnn.deallocate(output_tensor_split)
         output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
-        output_tensor = self.conv5(output_tensor_split_2)[0]
+        output_tensor = self.conv5(output_tensor_split_2)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor = self.conv6(output_tensor)[0]
+        output_tensor = self.conv6(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         output_tensor = output_tensor_split_2 + output_tensor
 
         ttnn.deallocate(output_tensor_split_2)
         if self.parameters.resolution[0] != 320:
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = self.conv7(output_tensor)[0]
+        output_tensor = self.conv7(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -126,7 +126,7 @@ class Down1:
 
         ttnn.deallocate(output_tensor_left)
 
-        output_tensor = self.conv8(output_tensor)[0]
+        output_tensor = self.conv8(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         return output_tensor
 

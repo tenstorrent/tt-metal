@@ -3,83 +3,66 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.tt_cnn.tt.builder import (
+    AutoShardedStrategyConfiguration,
+    BlockShardedStrategyConfiguration,
+    Conv2dConfiguration,
+    DeviceDescriptor,
+    HeightShardedStrategyConfiguration,
+    TtConv2d,
+    WidthShardedStrategyConfiguration,
+)
 
 
-class Conv:
-    def __init__(self, device, conv_param, conv_pth, activation="") -> None:
-        self.conv_param = conv_param
-        self.conv_pth = conv_pth
-        self.device = device
-        self.cache = {}
-
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-            math_approx_mode=False,
-        )
-        self.conv_output_dtype = conv_param.dtype
-        self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
-            activation=activation,
-            shard_layout=conv_param.shard_layout,
+def to_sharding_strategy(conv_param):
+    if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return HeightShardedStrategyConfiguration(
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
-            deallocate_activation=conv_param.deallocate_activation,
-            enable_act_double_buffer=True,
-            enable_split_reader=True if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else False,
-            output_layout=ttnn.TILE_LAYOUT,
+            act_block_h_override=conv_param.act_block_h if conv_param.act_block_h is not None else 0,
         )
-        config_override = None
-        if conv_param.act_block_h is not None:
-            self.conv_config.act_block_h_override = conv_param.act_block_h
-
-        if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
-        else:
-            self.bias = None
-
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
-
-        if conv_param.shard_layout is None:
-            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        elif (
-            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        ):
-            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        else:
-            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-
-        self.conv_kwargs = {
-            "in_channels": conv_param.in_channels,
-            "out_channels": conv_param.out_channels,
-            "batch_size": conv_param.batch_size,
-            "input_height": conv_param.input_height,
-            "input_width": conv_param.input_width,
-            "kernel_size": conv_param.kernel_size,
-            "stride": conv_param.stride,
-            "padding": conv_param.padding,
-            "dilation": conv_param.dilation,
-            "groups": conv_param.groups,
-            "device": device,
-            "conv_config": self.conv_config,
-        }
-
-    def __str__(self) -> str:
-        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
-
-    def __call__(self, input_tensor):
-        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
-            input_tensor=input_tensor,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
-            **self.conv_kwargs,
-            compute_config=self.compute_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-            dtype=self.conv_output_dtype,
+    elif conv_param.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return WidthShardedStrategyConfiguration(
+            reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
         )
-        return x, output_height, output_width
+    elif conv_param.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        return BlockShardedStrategyConfiguration(
+            reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
+        )
+    else:
+        return AutoShardedStrategyConfiguration()
+
+
+def create_conv2d_from_params(device, params, conv_pth, activation=""):
+    weight = ttnn.from_device(conv_pth.weight)
+    bias = ttnn.from_device(conv_pth.bias) if conv_pth.bias else None
+
+    sharding_strategy = to_sharding_strategy(params)
+    config = Conv2dConfiguration(
+        input_height=params.input_height,
+        input_width=params.input_width,
+        in_channels=params.in_channels,
+        out_channels=params.out_channels,
+        batch_size=params.batch_size,
+        kernel_size=params.kernel_size,
+        stride=params.stride,
+        padding=params.padding,
+        groups=params.groups,
+        dilation=params.dilation,
+        activation=activation,
+        weights_dtype=ttnn.bfloat8_b,
+        output_dtype=params.dtype,
+        weight=weight,
+        bias=bias,
+        sharding_strategy=sharding_strategy,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        enable_act_double_buffer=True,
+        enable_split_reader=True if params.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else False,
+        deallocate_activation=params.deallocate_activation,
+        reallocate_halo_output=True,
+    )
+
+    device_descriptor = DeviceDescriptor(device, grid_size=(8, 8))
+    conv2d = TtConv2d(config, device_descriptor)
+    return conv2d
