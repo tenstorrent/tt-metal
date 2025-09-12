@@ -77,7 +77,7 @@ struct OpConfig {
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
