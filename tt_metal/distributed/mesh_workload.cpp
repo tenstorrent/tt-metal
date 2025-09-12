@@ -18,7 +18,7 @@
 #include <vector>
 #include <atomic>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"

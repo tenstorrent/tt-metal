@@ -11,6 +11,7 @@ using namespace tt::tt_metal::blackhole::idle_eth;
 
 #include <cstdint>
 
+#include <tt_stl/assert.hpp>
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"

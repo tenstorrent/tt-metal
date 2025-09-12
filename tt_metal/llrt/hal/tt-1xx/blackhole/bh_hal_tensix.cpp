@@ -8,6 +8,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 
 #include <cstdint>
 
+#include <tt_stl/assert.hpp>
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_tensix_asserts.hpp"
 #include "dev_mem_map.h"

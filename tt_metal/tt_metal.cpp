@@ -5,7 +5,8 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
+#include "dev_msgs.h"
 #include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>

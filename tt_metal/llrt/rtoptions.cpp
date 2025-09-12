@@ -12,8 +12,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt_stl/assert.hpp>
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 
