@@ -16,6 +16,7 @@
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_fabric::bench {
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
@@ -98,6 +99,12 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
               << " dst_is_dram=" << (p.use_dram_dst ? 1 : 0) << "\n";
 
     // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
+    reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+    reader_cta.push_back(NUM_PAGES);
+    reader_cta.push_back(p.page_size);
+
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
         std::string(KDIR) + "unicast_tx_reader_to_cb.cpp",
@@ -105,10 +112,15 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {1u /*SRC_IS_DRAM*/, NUM_PAGES, p.page_size}});
+            .compile_args = reader_cta});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
     // WRITER kernel (CB->Fabric->dst + final sem INC)
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
+    writer_cta.push_back(NUM_PAGES);  // == TOTAL_PAGES in kernel
+    writer_cta.push_back(p.page_size);
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
         std::string(KDIR) + "unicast_tx_writer_cb_to_dst.cpp",
@@ -116,7 +128,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = {NUM_PAGES, p.page_size}});
+            .compile_args = writer_cta});
 
     // Writer runtime args
     std::vector<uint32_t> writer_rt = {
