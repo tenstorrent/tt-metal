@@ -14,6 +14,7 @@ Description:
 from collections import namedtuple
 from io import BytesIO
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
@@ -247,16 +248,9 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     return section_stream.getvalue()
 
 
-def check_binary_integrity(location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData):
-    # Caching ELF files
-    if not hasattr(check_binary_integrity, "elf_cache"):
-        check_binary_integrity.elf_cache: dict[str, ELFFile] = {}
-
-    def load_elf_file(path: str) -> ELFFile:
-        if path not in check_binary_integrity.elf_cache:
-            check_binary_integrity.elf_cache[path] = ELFFile.load_from_path(path)
-        return check_binary_integrity.elf_cache[path]
-
+def check_binary_integrity(
+    location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
+):
     dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
@@ -265,7 +259,7 @@ def check_binary_integrity(location: OnChipCoordinate, risc_name: str, dispatche
         f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
     )
     if os.path.exists(dispatcher_core_data.firmware_path):
-        elf_file = load_elf_file(dispatcher_core_data.firmware_path)
+        elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
             section = elf_file.get_section_by_name(section_name)
@@ -296,7 +290,7 @@ def check_binary_integrity(location: OnChipCoordinate, risc_name: str, dispatche
             and dispatcher_core_data.kernel_offset is not None
             and dispatcher_core_data.kernel_offset != 0xFFC00000
         ):
-            elf_file = load_elf_file(dispatcher_core_data.kernel_path)
+            elf_file = elfs_cache[dispatcher_core_data.kernel_path].elf
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
                 section = elf_file.get_section_by_name(section_name)
@@ -318,9 +312,10 @@ def check_binary_integrity(location: OnChipCoordinate, risc_name: str, dispatche
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     dispatcher_data = get_dispatcher_data(args, context)
+    elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_binary_integrity(location, risc_name, dispatcher_data),
+        lambda location, risc_name: check_binary_integrity(location, risc_name, dispatcher_data, elfs_cache),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
