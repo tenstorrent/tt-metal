@@ -63,5 +63,5 @@ git_describe_command = [
   "--exclude","*-*"
 ]
 version_scheme = "no-guess-dev"
-local_scheme   = "node"
+local_scheme = "node"
 fallback_version = "0.0.0.dev0"
