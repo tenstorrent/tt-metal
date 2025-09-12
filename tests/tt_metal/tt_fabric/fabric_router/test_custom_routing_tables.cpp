@@ -47,4 +47,11 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
         tt::tt_metal::distributed::MeshShape(2, 2));
 }
 
+TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
+    [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
