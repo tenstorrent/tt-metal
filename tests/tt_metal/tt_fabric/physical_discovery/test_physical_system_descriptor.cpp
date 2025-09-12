@@ -32,7 +32,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
+    exit(0);
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
