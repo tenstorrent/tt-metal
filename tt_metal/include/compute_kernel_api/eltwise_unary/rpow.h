@@ -36,7 +36,7 @@ ALWI void rpow_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rpow_init<APPROX>
  */
 // clang-format on
 ALWI void rpow_tile(uint32_t idst, uint32_t log_val, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX>(idst, log_val, vector_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst, log_val, vector_mode)));
 }
 
 }  // namespace ckernel
