@@ -15,8 +15,8 @@ void kernel_main() {
     // Use PagesAddressIterator - this benchmark only runs with all-static configuration
     auto pages = tensor_accessor.pages();
 
-    constexpr size_t benchmark_iterations = 125;
-    for (size_t iteration = 0; iteration < benchmark_iterations; ++iteration) {
+    constexpr size_t max_tracy_zones = 125;
+    for (size_t iteration = 0; iteration < max_tracy_zones; ++iteration) {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             // Iterator-based iteration over all pages

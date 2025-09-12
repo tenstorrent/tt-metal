@@ -1,0 +1,194 @@
+name: "Performance Regression"
+
+on:
+  push:
+    branches: ["philei/tensor-accessor-perf-regression-tests"]
+  workflow_dispatch:
+    inputs:
+      branch:
+        required: false
+        default: "main"
+        type: string
+        description: "Branch to test (default: main)"
+      version:
+        required: false
+        default: "22.04"
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+run-name: Accessor Performance Regression Tests${{ github.event_name == 'workflow_dispatch' && format(' - {0}', inputs.branch || 'main') || format(' - {0}', github.ref_name) }}
+
+jobs:
+  # TODO: Change base branch from philei/tensor-accessor-perf-regression-tests to main
+  build-baseline-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      tracy: true
+      build-wheel: true
+      version: ${{ inputs.version || '22.04' }}
+      ref: philei/tensor-accessor-perf-regression-tests
+
+  generate-baseline-performance:
+    name: "📊 Generate Baseline Performance Data"
+    needs: build-baseline-artifact
+    runs-on: >-
+      ${{
+        (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
+        || fromJSON('["N150", "in-service", "cloud-virtual-machine"]')
+      }}
+    container:
+      image: ${{ needs.build-baseline-artifact.outputs.dev-docker-image }}
+      env:
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job-baseline:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 60
+    outputs:
+      baseline-artifact-name: baseline-performance-data
+
+    steps:
+      - name: ⬇️ Checkout baseline branch
+        uses: actions/checkout@v4
+        with:
+          ref: philei/tensor-accessor-perf-regression-tests
+          submodules: recursive
+          path: docker-job-baseline
+
+      - name: ⬇️ Setup Baseline Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
+          path: docker-job-baseline
+
+      - name: 📊 Generate Baseline Performance Data
+        timeout-minutes: 15
+        run: |
+          echo "🚀 Generating baseline performance data..."
+          mkdir -p ./baseline-results
+          python3 tests/ttnn/benchmark/python/accessor_benchmarks.py --export-results-to ./baseline-results
+          echo "✅ Baseline results generated successfully"
+
+      - name: 📤 Upload Baseline Results
+        id: upload-baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-performance-data
+          path: ${{ github.workspace }}/docker-job-baseline/baseline-results
+          retention-days: 1
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+        with:
+          path: /__w/tt-metal/tt-metal/docker-job-baseline
+
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      tracy: true
+      build-wheel: true
+      version: ${{ inputs.version || '22.04' }}
+      ref: ${{ inputs.branch || 'main' }}
+
+  accessor-perf-regression-tests:
+    name: "📊 Accessor Performance Regression Tests"
+    needs: [build-artifact, generate-baseline-performance]
+    runs-on: >-
+      ${{
+        (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
+        || fromJSON('["N150", "in-service", "cloud-virtual-machine"]')
+      }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 60
+
+    steps:
+      - name: ⬇️ Checkout specific branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || 'main' }}
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: ⬇️ Download Baseline Performance Data
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}
+          path: ${{ github.workspace }}/docker-job/baseline-performance-data
+
+      - name: 📊 Run Accessor Performance Regression Tests
+        timeout-minutes: 15
+        run: |
+          echo "🚀 Starting accessor performance regression tests..."
+          echo "🔍 Checking if baseline data is available inside container:"
+          ls -la ./baseline-performance-data/ || echo "baseline-performance-data directory not found"
+          python -m pytest tests/ttnn/benchmark/python/perf_regression/test_accessor_perf_regression.py -v --tb=short --perf-baseline-path ./baseline-performance-data
+
+      - name: 📊 Generate Performance Report
+        if: always()
+        run: |
+          echo "## Accessor Performance Regression Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "perf_regression_results.log" ]; then
+            echo "### Test Results Summary" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat perf_regression_results.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No performance regression results file found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+        with:
+          path: /__w/tt-metal/tt-metal/docker-job

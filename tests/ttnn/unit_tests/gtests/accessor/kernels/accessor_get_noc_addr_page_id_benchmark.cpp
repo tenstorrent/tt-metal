@@ -5,6 +5,10 @@
 #include <cstdint>
 #include "accessor/tensor_accessor.h"
 
+#ifndef N_REPEAT
+#define N_REPEAT 100
+#endif
+
 void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 0;
@@ -22,12 +26,15 @@ void kernel_main() {
      *     * You can verify by inserting a dummy marker or removing the volatile since compiler will optimize out the
      * calls
      */
-    constexpr size_t loop_count = 125;
-    for (size_t i = 0; i < loop_count; ++i) {
+    constexpr size_t max_tracy_zones = 125;
+    constexpr size_t n_repeat = N_REPEAT;
+    for (size_t i = 0; i < max_tracy_zones; ++i) {
         auto page_id = i % tensor_accessor.dspec().tensor_volume();
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            volatile auto _ = tensor_accessor.get_noc_addr(i);
+            for (size_t j = 0; j < n_repeat; ++j) {
+                volatile auto _ = tensor_accessor.get_noc_addr(i);
+            }
         }
     }
 }

@@ -646,6 +646,7 @@ def timeseries_analysis(riscData, name, analysis):
                 "Median": tmpDF.loc[:, "duration_cycles"].median(),
                 "Sum": tmpDF.loc[:, "duration_cycles"].sum(),
                 "First": tmpDF.loc[0, "duration_cycles"],
+                "Samples": tmpDF.loc[:, "duration_cycles"].tolist(),
             },
             "series": tmpList,
         }

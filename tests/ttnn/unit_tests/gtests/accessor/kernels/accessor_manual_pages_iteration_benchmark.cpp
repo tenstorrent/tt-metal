@@ -14,8 +14,8 @@ void kernel_main() {
 
     auto tensor_volume = tensor_accessor.dspec().tensor_volume();
 
-    constexpr size_t benchmark_iterations = 125;
-    for (size_t iteration = 0; iteration < benchmark_iterations; ++iteration) {
+    constexpr size_t max_tracy_zones = 125;
+    for (size_t iteration = 0; iteration < max_tracy_zones; ++iteration) {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             // Manual iteration over all pages
