@@ -152,6 +152,8 @@ ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbrade
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT @nsorabaTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
