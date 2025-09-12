@@ -14,9 +14,115 @@
 #include "autograd/graph.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
-#include "tt-metalium/mesh_coord.hpp"
 
 namespace ttml::autograd {
+
+nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
+    const auto tensor_spec = tensor.tensor_spec();
+    const auto impl = [&tensor_spec]<typename T>(const tt::tt_metal::Tensor& t) {
+        const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
+
+        const auto tensor_shape_rank = tensor_shape.rank();
+        std::vector<size_t> numpy_shape(tensor_shape_rank);
+        std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
+
+        const auto tensor_strides = t.strides();
+        std::vector<int64_t> numpy_strides(tensor_strides.rank());
+        std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
+
+        const auto tensor_data = t.template to_vector<T>();
+        T* numpy_data = new T[tensor_data.size()];
+        std::copy(tensor_data.cbegin(), tensor_data.cend(), numpy_data);
+
+        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+        return nb::ndarray<nb::numpy>(
+            numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+    };
+
+    const auto ensure_row_major = [&impl]<typename T>(const tt::tt_metal::Tensor& t) {
+        if (t.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+            auto const rm_tensor = t.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
+            return impl.template operator()<T>(rm_tensor);
+        }
+        return impl.template operator()<T>(t);
+    };
+
+    switch (tensor_spec.data_type()) {
+        case tt::tt_metal::DataType::INT32: return ensure_row_major.template operator()<int32_t>(tensor);
+        case tt::tt_metal::DataType::UINT32: return ensure_row_major.template operator()<uint32_t>(tensor);
+        case tt::tt_metal::DataType::FLOAT32: return ensure_row_major.template operator()<float>(tensor);
+        case tt::tt_metal::DataType::BFLOAT16: return ensure_row_major.template operator()<bfloat16>(tensor);
+        case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+        case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+        case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+        case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+        case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+    }
+
+    TT_THROW("Unsupported type: unknown");
+}
+
+tt::tt_metal::Tensor make_metal_tensor(const nb::ndarray<>& data) {
+    const auto data_type = data.dtype();
+    TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
+
+    const auto rank = data.ndim();
+    tt::tt_metal::ShapeBase::Container shape_container(rank);
+    for (size_t dimension = 0; dimension < rank; ++dimension) {
+        const auto dimension_size = data.shape(dimension);
+        TT_FATAL(
+            dimension_size >= std::numeric_limits<uint32_t>::min(),
+            "Invalid shape parameter for dimension {}: {} is too small",
+            dimension,
+            dimension_size);
+        TT_FATAL(
+            dimension_size <= std::numeric_limits<uint32_t>::max(),
+            "Invalid shape parameter for dimension {}: {} is too large",
+            dimension,
+            dimension_size);
+        shape_container[dimension] = dimension_size;
+    }
+    const tt::tt_metal::Shape tensor_shape(shape_container);
+    const tt::tt_metal::MemoryConfig tensor_memory_config{};
+    const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto impl = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
+        TT_FATAL(
+            data_type.bits == (sizeof(T) * 8),
+            "Unsupported precision: expected {} bits, got {} bits",
+            sizeof(T) * 8,
+            data_type.bits);
+
+        tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
+        tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        tt::tt_metal::Tensor tensor = tt::tt_metal::Tensor::from_span(
+            tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
+        tensor = tensor.to_device(device, tensor_memory_config);
+        return tensor;
+    };
+
+    switch (static_cast<nb::dlpack::dtype_code>(data_type.code)) {
+        case nb::dlpack::dtype_code::Int:
+            return impl.template operator()<int32_t>(tt::tt_metal::DataType::INT32);
+            break;
+        case nb::dlpack::dtype_code::UInt:
+            return impl.template operator()<uint32_t>(tt::tt_metal::DataType::UINT32);
+            break;
+        case nb::dlpack::dtype_code::Float:
+            return impl.template operator()<float>(tt::tt_metal::DataType::FLOAT32);
+            break;
+        case nb::dlpack::dtype_code::Bfloat:
+            return impl.template operator()<bfloat16>(tt::tt_metal::DataType::BFLOAT16);
+            break;
+        case nb::dlpack::dtype_code::Complex: TT_THROW("Unsupported type: Complex"); break;
+        case nb::dlpack::dtype_code::Bool: TT_THROW("Unsupported type: Bool"); break;
+    }
+
+    TT_THROW("Unsupported type: unknown");
+}
 
 void py_module_types(nb::module_& m) {
     nb::export_enum<GradMode>(m);
@@ -79,99 +185,11 @@ void py_module(nb::module_& m) {
     py_autocast_tensor.def(nb::init<AutocastTensor&&>());
     // py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
     // py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
-    py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& data) {
-        const auto data_type = data.dtype();
-        TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
-
-        const auto rank = data.ndim();
-        tt::tt_metal::ShapeBase::Container shape_container(rank);
-        for (size_t dimension = 0; dimension < rank; ++dimension) {
-            const auto dimension_size = data.shape(dimension);
-            TT_FATAL(
-                dimension_size >= std::numeric_limits<uint32_t>::min(),
-                "Invalid shape parameter for dimension {}: {} is too small",
-                dimension,
-                dimension_size);
-            TT_FATAL(
-                dimension_size <= std::numeric_limits<uint32_t>::max(),
-                "Invalid shape parameter for dimension {}: {} is too large",
-                dimension,
-                dimension_size);
-            shape_container[dimension] = dimension_size;
-        }
-        tt::tt_metal::Shape tensor_shape(shape_container);
-        tt::tt_metal::MemoryConfig tensor_memory_config{};
-        tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
-
-        auto* device = &ttml::autograd::ctx().get_device();
-        device->enable_program_cache();
-
-        const auto set_autocast_tensor = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
-            TT_FATAL(
-                data_type.bits == (sizeof(T) * 8),
-                "Unsupported precision: expected {} bits, got {} bits",
-                sizeof(T) * 8,
-                data_type.bits);
-
-            tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
-            tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-            tt::tt_metal::Tensor tensor = tt::tt_metal::Tensor::from_span(
-                tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
-            tensor = tensor.to_device(device, tensor_memory_config);
-
-            autocast_tensor.set_tensor(tensor);
-        };
-
-        switch (static_cast<nb::dlpack::dtype_code>(data_type.code)) {
-            case nb::dlpack::dtype_code::Int:
-                set_autocast_tensor.template operator()<int32_t>(tt::tt_metal::DataType::INT32);
-                break;
-            case nb::dlpack::dtype_code::UInt:
-                set_autocast_tensor.template operator()<uint32_t>(tt::tt_metal::DataType::UINT32);
-                break;
-            case nb::dlpack::dtype_code::Float:
-                set_autocast_tensor.template operator()<float>(tt::tt_metal::DataType::FLOAT32);
-                break;
-            case nb::dlpack::dtype_code::Bfloat:
-                set_autocast_tensor.template operator()<bfloat16>(tt::tt_metal::DataType::BFLOAT16);
-                break;
-            case nb::dlpack::dtype_code::Complex: TT_THROW("Unsupported type: Complex"); break;
-            case nb::dlpack::dtype_code::Bool: TT_THROW("Unsupported type: Bool"); break;
-        }
+    py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& numpy_tensor) {
+        autocast_tensor.set_tensor(make_metal_tensor(numpy_tensor));
     });
     py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
-        const tt::tt_metal::Tensor& tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
-        const tt::tt_metal::TensorSpec& tensor_spec = tensor.tensor_spec();
-        const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
-
-        const auto tensor_shape_rank = tensor_shape.rank();
-        std::vector<size_t> numpy_shape(tensor_shape_rank);
-        std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
-
-        const auto tensor_strides = tensor.strides();
-        std::vector<int64_t> numpy_strides(tensor_strides.rank());
-        std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
-
-        auto make_numpy_tensor =
-            [&numpy_shape, &numpy_strides, tensor_shape_rank]<typename T>(std::vector<T>&& tensor_data) {
-                T* numpy_data = new T[tensor_data.size()];
-                std::copy(tensor_data.cbegin(), tensor_data.cend(), numpy_data);
-                nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
-                return nb::ndarray<nb::numpy>(
-                    numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
-            };
-
-        switch (tensor_spec.data_type()) {
-            case tt::tt_metal::DataType::INT32: return make_numpy_tensor(tensor.to_vector<int32_t>());
-            case tt::tt_metal::DataType::UINT32: return make_numpy_tensor(tensor.to_vector<uint32_t>());
-            case tt::tt_metal::DataType::FLOAT32: return make_numpy_tensor(tensor.to_vector<float>());
-            case tt::tt_metal::DataType::BFLOAT16: return make_numpy_tensor(tensor.to_vector<bfloat16>());
-            case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
-            case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
-            case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
-            case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
-            case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
-        }
+        return make_numpy_tensor(autocast_tensor.get_tensor(PreferredPrecision::FULL));
     });
 
     auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
