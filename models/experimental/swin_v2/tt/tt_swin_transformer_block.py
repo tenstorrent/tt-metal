@@ -7,6 +7,13 @@ import torch.nn as nn
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
 from models.experimental.swin_v2.tt.tt_shifted_window_attention_v2 import TtShiftedWindowAttentionV2
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSwinTransformerBlock(nn.Module):
     def __init__(
@@ -21,6 +28,9 @@ class TtSwinTransformerBlock(nn.Module):
         attn_mask=None,
     ):
         super().__init__()
+        if use_signpost:
+            signpost(header="swin_transformer_block")
+
         self.device = device
         self.parameters = parameters
         self.attn = TtShiftedWindowAttentionV2(

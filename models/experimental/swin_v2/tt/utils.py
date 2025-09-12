@@ -4,8 +4,18 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def ttnn_custom_normalize(x, dim, device):
+    if use_signpost:
+        signpost(header="utils-swin_custom_normalize")
+
     # Convert input to tiled layout
     if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)

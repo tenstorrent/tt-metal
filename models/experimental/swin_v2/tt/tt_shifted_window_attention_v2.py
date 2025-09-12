@@ -6,6 +6,13 @@ import ttnn
 from typing import List
 from models.experimental.swin_v2.tt.utils import ttnn_custom_normalize
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtShiftedWindowAttentionV2:
     def __init__(
@@ -27,6 +34,9 @@ class TtShiftedWindowAttentionV2:
         self.attn_mask = attn_mask
 
     def forward(self, x):
+        if use_signpost:
+            signpost(header="swin_shifted_window_attention_v2")
+
         relative_position_bias = self.parameters["relative_position_bias"]
         logit_scale = self.parameters["logit_scale"]
 
@@ -54,30 +64,25 @@ class TtShiftedWindowAttentionV2:
         )
 
         x = ttnn.permute(x, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        qkv_bias = self.parameters.qkv.bias
-
         x = ttnn.reshape(
             x, (B * num_windows, self.window_size[0] * self.window_size[1], C), memory_config=ttnn.L1_MEMORY_CONFIG
         )
-
-        qkv_weight = self.parameters.qkv.weight
-
         qkv = ttnn.linear(
             x,
-            qkv_weight,
-            bias=qkv_bias,
+            self.parameters.qkv.weight,
+            bias=self.parameters.qkv.bias,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
 
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.reshape(
             qkv, (x.shape[0], x.shape[1], 3, self.num_heads, C // self.num_heads), memory_config=ttnn.L1_MEMORY_CONFIG
         )
-
+        print(f"qkv: {qkv.shape}")
         qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         q = qkv[0:1, :, :, :, :]
@@ -86,6 +91,7 @@ class TtShiftedWindowAttentionV2:
         q = ttnn.squeeze(q, 0)
         k = ttnn.squeeze(k, 0)
         v = ttnn.squeeze(v, 0)
+
         q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -137,6 +143,7 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
 
         x = ttnn.reshape(
@@ -156,5 +163,4 @@ class TtShiftedWindowAttentionV2:
         x = ttnn.reshape(x, (B, H, W, C), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x[:, :H, :W, :]
-        ttnn.ReadDeviceProfiler(self.device)
         return x

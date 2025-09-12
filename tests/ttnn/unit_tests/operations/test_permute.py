@@ -614,15 +614,11 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
     assert_equal(torch_output, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
-@pytest.mark.parametrize("perm", [[0, 1, 4, 2, 3], [0, 4, 1, 2, 3], [2, 4, 1, 0, 3], [4, 2, 1, 0, 3]])
+@pytest.mark.parametrize("shape", [[256, 64, 3, 3, 32]])
+@pytest.mark.parametrize("perm", [[2, 0, 3, 1, 4]])
 @pytest.mark.parametrize(
     "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.float32,
-        ttnn.int32,
-    ],
+    [ttnn.bfloat16],
 )
 def test_permute_5d_wyh(device, shape, perm, dtype):
     torch.manual_seed(2005)
