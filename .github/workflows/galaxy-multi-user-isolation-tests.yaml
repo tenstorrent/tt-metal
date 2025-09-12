@@ -46,16 +46,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Run tests on multiple hosts with Docker Compose
-        run: |
-          docker compose -f docker-compose.yaml up 
-      - name: Tear down containers
-        if: always()
-        run: docker compose -f docker-compose.temp.yaml down
-
-
----- ${image}
-
       - name: Create Docker Compose file
         run: |
           cat <<EOF > docker-compose.temp.yml
