@@ -1710,7 +1710,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, true>(MeshId mesh_id) cons
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        compressed_routing_path_t<1, true> routing_path;
+        routing_path_t<1, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         // Calculate routing fields within the same mesh only
@@ -1744,7 +1744,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         mesh_shape[1]);
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        compressed_routing_path_t<2, true> routing_path;
+        routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);

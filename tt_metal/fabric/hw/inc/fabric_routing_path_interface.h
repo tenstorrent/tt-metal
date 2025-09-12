@@ -11,7 +11,7 @@ namespace tt::tt_fabric {
 // Common helper function for both 1D and 2D routing
 template <uint8_t dim>
 inline bool decode_route_to_buffer_common(
-    const compressed_routing_path_t<dim, false>& routing_path,
+    const routing_path_t<dim, false>& routing_path,
     uint16_t dst_chip_id,
     volatile uint8_t* out_route_buffer,
     uint16_t max_chips,
@@ -32,16 +32,9 @@ inline bool decode_route_to_buffer_common(
     return true;
 }
 
-// Device-side decoder function for 2D routing (packed paths)
-template <>
-inline bool compressed_routing_path_t<2, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
-    return decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
-}
-
 // Device-side decoder function for 1D routing (packed paths)
 template <>
-inline bool compressed_routing_path_t<1, false>::decode_route_to_buffer(
+inline bool routing_path_t<1, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     return decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
@@ -66,7 +59,7 @@ inline void pack_command_into_buffer(
 
 // Device-side compressed decoder function for 2D routing
 template <>
-inline bool compressed_routing_path_t<2, true>::decode_route_to_buffer(
+inline bool routing_path_t<2, true>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
@@ -150,7 +143,7 @@ inline bool compressed_routing_path_t<2, true>::decode_route_to_buffer(
 
 // Device-side compressed decoder function for 1D routing
 template <>
-inline bool compressed_routing_path_t<1, true>::decode_route_to_buffer(
+inline bool routing_path_t<1, true>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
