@@ -309,13 +309,18 @@ FORCE_INLINE
     if constexpr (increment_pointers) {
         update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     }
-    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
-        enable_deadlock_avoidance,
-        vc1_has_different_downstream_dest,
-        tt::tt_fabric::edm_to_downstream_noc,
-        stateful_api,
-        increment_pointers>(
-        reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+
+    if (fabric_node_id == 6 && ((my_x[0] == 31 && my_y[0] == 25))) {
+    } else {
+        downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
+            enable_deadlock_avoidance,
+            vc1_has_different_downstream_dest,
+            tt::tt_fabric::edm_to_downstream_noc,
+            stateful_api,
+            increment_pointers>(
+            reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+    }
+
     if constexpr (!increment_pointers) {
         update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value);
     }

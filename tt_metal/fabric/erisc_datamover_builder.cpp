@@ -247,8 +247,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
     }
+    log_info(tt::LogTest, "next_l1_addr: {}", next_l1_addr);
+    next_l1_addr += 32;
 
     this->handshake_addr = next_l1_addr;
+    log_info(tt::LogTest, "this->handshake_addr: {}", this->handshake_addr);
     next_l1_addr += eth_channel_sync_size;
 
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -260,8 +263,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
         this->risc_configs.emplace_back(risc_id);
     }
 
-    log_info(tt::LogTest, "this->sender_txq_id: {}", this->sender_txq_id);
-    log_info(tt::LogTest, "this->receiver_txq_id: {}", this->receiver_txq_id);
+    // log_info(tt::LogTest, "this->sender_txq_id: {}", this->sender_txq_id);
+    // log_info(tt::LogTest, "this->receiver_txq_id: {}", this->receiver_txq_id);
 
     for (size_t i = 0; i < 4; i++) {
         this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
@@ -1235,8 +1238,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         !control_plane.is_intermesh_eth_link(local_physical_chip_id, this->my_eth_core_logical),
         "cannot have inter llink");
 
-    log_info(tt::LogTest, "config.sender_txq_id: {}", config.sender_txq_id);
-    log_info(tt::LogTest, "config.receiver_txq_id: {}", config.receiver_txq_id);
+    // log_info(tt::LogTest, "config.sender_txq_id: {}", config.sender_txq_id);
+    // log_info(tt::LogTest, "config.receiver_txq_id: {}", config.receiver_txq_id);
 
     ct_args.push_back(local_physical_chip_id);
 

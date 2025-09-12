@@ -1757,8 +1757,9 @@ private:
         bool wrap_around_mesh = this->route_manager_.wrap_around_mesh(devices.front());
 
         std::unordered_map<RoutingDirection, uint32_t> hops;
-        for (const auto& src_node : devices) {
-            if (wrap_around_mesh) {
+        for (int i = 0; i < devices.size(); ++i) {
+            auto& src_node = devices[i];
+            if (wrap_around_mesh && (src_node.chip_id == 0 || src_node.chip_id == 1)) {
                 // Get ring neighbors - returns nullopt for non-perimeter devices
                 auto ring_neighbors = this->route_manager_.get_wrap_around_mesh_ring_neighbors(src_node, devices);
 
@@ -1793,7 +1794,7 @@ private:
                 } else {
                     test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
                 }
-            } else {
+            } else if (!wrap_around_mesh) {
                 for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
                     // Skip dimensions with only one device
                     if (this->route_manager_.get_mesh_shape()[dim] < 2) {

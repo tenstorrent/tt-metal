@@ -382,12 +382,52 @@ FORCE_INLINE void send_next_data(
 
     prev_dest_addr = dest_addr;
 
+    volatile auto* pkt_payload = reinterpret_cast<volatile uint32_t*>(src_addr + sizeof(PACKET_HEADER_TYPE));
+
     if (sender_channel_index == 0) {
+        *pkt_payload = 7;
+        asm volatile("fence" ::: "memory");
+        auto back = *pkt_payload;
+        if (back != 7) {
+            ASSERT(false);
+        }
+
         pkt_header->src_ch_id = 7;
+
+        asm volatile("fence" ::: "memory");
+        auto ch_id = pkt_header->src_ch_id;
+
+        if (ch_id != 7) {
+            ASSERT(false);
+        }
     } else if (sender_channel_index == 1) {
+        *pkt_payload = 31;
+        asm volatile("fence" ::: "memory");
+        auto back = *pkt_payload;
+        if (back != 31) {
+            ASSERT(false);
+        }
+
         pkt_header->src_ch_id = 31;
+        asm volatile("fence" ::: "memory");
+        auto ch_id = pkt_header->src_ch_id;
+        if (ch_id != 31) {
+            ASSERT(false);
+        }
     } else if (sender_channel_index == 2) {
+        *pkt_payload = 65;
+        asm volatile("fence" ::: "memory");
+        auto back = *pkt_payload;
+        if (back != 65) {
+            ASSERT(false);
+        }
+
         pkt_header->src_ch_id = 65;
+        asm volatile("fence" ::: "memory");
+        auto ch_id = pkt_header->src_ch_id;
+        if (ch_id != 65) {
+            ASSERT(false);
+        }
     } else {
         ASSERT(false);
     }
@@ -1768,6 +1808,15 @@ void run_receiver_channel_step_impl(
     bool unwritten_packets = false;
     uint32_t current_sender_count = 0;
 
+    if (fabric_node_id == 2) {
+        if (my_x[0] == 28 && my_x[0] == 25) {
+            return;
+        }
+        if (my_x[0] == 30 && my_x[0] == 25) {
+            return;
+        }
+    }
+
     if (to_receiver_pkts_sent_id == 0) {
         volatile uint32_t* to_receiver_sent_addr_ptr = reinterpret_cast<volatile uint32_t*>(to_receiver_receive_addr);
         current_sender_count = *to_receiver_sent_addr_ptr;
@@ -1808,17 +1857,34 @@ void run_receiver_channel_step_impl(
             receiver_received_counter_ch1++;
         }
 
-        if (packet_header->src_ch_id == 7) {
+        uint32_t src_addr = local_receiver_channel.template get_buffer_address(receiver_buffer_index);
+        volatile auto* pkt_payload = reinterpret_cast<volatile uint32_t*>(src_addr + sizeof(PACKET_HEADER_TYPE));
+
+        if (*pkt_payload == 7) {
             ch_id = 0;
-        } else if (packet_header->src_ch_id == 31) {
+        } else if (*pkt_payload == 31) {
             ch_id = 1;
-        } else if (packet_header->src_ch_id == 65) {
+        } else if (*pkt_payload == 65) {
             ch_id = 2;
         } else {
-            if (packet_header->src_ch_id == 255) {
+            if (*pkt_payload == 255) {
                 ASSERT(false);
             }
         }
+
+        *pkt_payload = 255;
+
+        // if (packet_header->src_ch_id == 7) {
+        //     ch_id = 0;
+        // } else if (packet_header->src_ch_id == 31) {
+        //     ch_id = 1;
+        // } else if (packet_header->src_ch_id == 65) {
+        //     ch_id = 2;
+        // } else {
+        //     if (packet_header->src_ch_id == 255) {
+        //         ASSERT(false);
+        //     }
+        // }
 
         bool can_send_to_all_local_chip_receivers = false;
         while (!can_send_to_all_local_chip_receivers) {
@@ -2860,6 +2926,14 @@ void kernel_main() {
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
         receiver_channel_base_id);
+
+    // if (fabric_node_id == 2) {
+    DPRINT << "my x/y " << (uint)my_x[0] << " " << (uint)my_y[0] << ENDL();
+    DPRINT << "downstream_edm_noc_interfaces_vc0 x/y " << (uint)downstream_edm_noc_interfaces_vc0[0].edm_noc_x << " "
+           << (uint)downstream_edm_noc_interfaces_vc0[0].edm_noc_y << ENDL();
+    DPRINT << "downstream_edm_noc_interface_vc1 x/y " << (uint)downstream_edm_noc_interface_vc1.edm_noc_x << " "
+           << (uint)downstream_edm_noc_interface_vc1.edm_noc_y << ENDL();
+    // }
 
     // DPRINT << "my x/y " << (uint)my_x[0] << " " << (uint)my_y[0] <<ENDL();
     // DPRINT << "downstream_edm_vc0_buffer_base_address "  << (uint)downstream_edm_vc0_buffer_base_address <<ENDL();

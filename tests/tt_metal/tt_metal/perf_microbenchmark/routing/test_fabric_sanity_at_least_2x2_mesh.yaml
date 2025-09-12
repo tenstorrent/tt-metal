@@ -109,11 +109,11 @@ Tests:
       - type: half_ring
 
     # senders:
-    #   - device: [0, 3]
+    #   - device: [0, 0]
     #     patterns:
     #       -
     #         destination:
-    #           device: [0, 7]
+    #           device: [0, 3]
 
   # - name: "HalfRingMulticast"
   #   fabric_setup:
