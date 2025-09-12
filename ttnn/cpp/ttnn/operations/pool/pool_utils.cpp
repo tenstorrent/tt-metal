@@ -425,6 +425,7 @@ void validate_input_params(
         (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
          input_shape[3] == channels);
 
+    // Unflattened tesnor currently supported for non_block formats only.
     TT_FATAL(
         is_flattened_format || (is_nhwc_format && !is_input_block_format),
         "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
