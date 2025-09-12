@@ -188,6 +188,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
         EXPECT_EQ(moved.size(), 2u);
         EXPECT_EQ(moved[0].value, 10);
         EXPECT_EQ(moved[1].value, 20);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_TRUE(small.empty());
     }
     {
@@ -203,6 +204,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
         EXPECT_GE(moved.capacity(), oldCapacity);
         // When moved, it is typical for the heap storage to be transferred.
         EXPECT_EQ(moved.data(), oldData);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_TRUE(large.empty());
         // The moved-from vector may have shrunk its capacity but should be
         // functional; pushing into it should work.

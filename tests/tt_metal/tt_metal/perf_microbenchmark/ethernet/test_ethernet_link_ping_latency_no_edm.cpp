@@ -71,7 +71,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
+        for (const auto& [device_id, device_ptr] : devices_) {
             device_ptr->close();
         }
     }
@@ -175,8 +175,6 @@ void run(
             tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, true);
         });
         std::thread th1 = std::thread([&] {
-            tt::tt_metal::distributed::MeshWorkload mesh_workload1 = tt::tt_metal::distributed::CreateMeshWorkload();
-            tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload1, std::move(program1), device_range1);
             tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, true);
         });
 

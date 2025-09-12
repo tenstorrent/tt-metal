@@ -13,6 +13,9 @@
 #include <fmt/format.h>
 #include "tt_cluster.hpp"
 
+// TODO: Cleanup this file
+// https://github.com/tenstorrent/tt-metal/issues/28324
+
 namespace {
 std::string GetToolchainPath(const std::string& root_dir) {
     const std::array<std::string, 2> sfpi_roots = {
@@ -111,6 +114,8 @@ int CompileFabricLite(
         // We do not access the PCIe cores
         "PCIE_NOC_X=0",
         "PCIE_NOC_Y=0",
+        // Lite Fabric is intended to run on risc1
+        "PROCESSOR_INDEX=1",
     };
 
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
