@@ -55,6 +55,14 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify local actions exist
+        run: |
+          test -f .github/actions/docker-run/action.yml
+          test -f .github/actions/upload-data-via-sftp/action.yaml
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -347,7 +355,7 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Save environment data
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         env:
           LOGURU_LEVEL: INFO
         with:
@@ -363,7 +371,7 @@ jobs:
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

@@ -94,6 +94,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      # Ensure local composite actions are present before use
+      - name: Verify local actions exist
+        run: |
+          test -f .github/actions/docker-run/action.yml
+          test -f .github/actions/upload-data-via-sftp/action.yaml
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -139,7 +144,7 @@ jobs:
             env python3 models/perf/merge_perf_results.py
       - name: Save environment data
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         env:
           LOGURU_LEVEL: INFO
         with:
@@ -155,7 +160,7 @@ jobs:
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
