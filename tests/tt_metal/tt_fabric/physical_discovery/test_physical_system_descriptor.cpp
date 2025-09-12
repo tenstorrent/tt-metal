@@ -52,7 +52,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         }
         // All to All connectivity for hosts
         auto neighbors = physical_system_desc.get_host_neighbors(host);
-        EXPECT_EQ(neighbors.size(), 2);
+        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
 
         for (const auto& neighbor : neighbors) {
             EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());
