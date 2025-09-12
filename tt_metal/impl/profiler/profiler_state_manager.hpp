@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <unordered_set>
 
 #include "core_coord.hpp"
@@ -15,23 +16,43 @@ namespace tt_metal {
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager() :
-        device_profiler_map({}),
-        device_host_time_pair({}),
-        device_device_time_pair({}),
-        smallest_host_time({}),
-        do_sync_on_close(true),
-        sync_set_devices({}) {
+    ProfilerStateManager() : do_sync_on_close(true) {};
 
-        };
-    ~ProfilerStateManager() {
+    ~ProfilerStateManager() = default;
+
+    void cleanup_device_profilers() {
+        std::vector<std::thread> threads(this->device_profiler_map.size());
+
+        uint32_t i = 0;
+        for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
+            threads[i] = std::thread([it]() {
+                DeviceProfiler& profiler = it->second;
+                profiler.dumpDeviceResults();
+                profiler.destroyTracyContexts();
+            });
+            i++;
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+
         this->device_profiler_map.clear();
-        this->device_host_time_pair.clear();
-        this->device_device_time_pair.clear();
-        this->smallest_host_time.clear();
-        this->do_sync_on_close = false;
-        this->sync_set_devices.clear();
-    };
+    }
+
+    uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const {
+        const uint32_t num_threads_available = std::thread::hardware_concurrency();
+
+        if (num_threads_available == 0 || this->device_profiler_map.size() > num_threads_available) {
+            // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
+            // number of device profilers is greater than the max number of threads, return 2
+            return 2;
+        } else {
+            // Otherwise, return min(8, number of threads available / number of device profilers)
+            // Empirically, 8 threads per device profiler seems to result in optimal performance
+            return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
+        }
+    }
 
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
@@ -47,9 +68,11 @@ public:
         device_device_time_pair{};
     std::unordered_map<chip_id_t, uint64_t> smallest_host_time{};
 
-    bool do_sync_on_close = false;
+    bool do_sync_on_close{};
 
     std::unordered_set<chip_id_t> sync_set_devices{};
+
+    std::mutex file_write_mutex{};
 };
 
 }  // namespace tt_metal
