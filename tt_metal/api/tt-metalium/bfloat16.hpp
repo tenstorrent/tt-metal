@@ -16,7 +16,7 @@
 
 class bfloat16 {
 private:
-    uint16_t uint16_data = 0;
+    uint16_t uint16_data;
 
 public:
     // --- Constructors ---
