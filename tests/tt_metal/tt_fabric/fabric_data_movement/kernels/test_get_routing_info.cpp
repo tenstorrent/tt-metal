@@ -33,8 +33,8 @@ void kernel_main() {
 
     auto packet_header = PacketHeaderPool::allocate_header();
     for (uint32_t dst_idx = 0; dst_idx < num_devices; dst_idx++) {
-        uint32_t dst_mesh_id = get_arg_val<uint32_t>(6 + dst_idx * 2);
-        uint32_t dst_fabric_dev_id = get_arg_val<uint32_t>(6 + dst_idx * 2 + 1);
+        uint32_t dst_mesh_id = get_arg_val<uint32_t>(5 + dst_idx * 2);
+        uint32_t dst_fabric_dev_id = get_arg_val<uint32_t>(5 + dst_idx * 2 + 1);
 
         bool routing_success = false;
         for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
@@ -53,7 +53,7 @@ void kernel_main() {
             fabric_set_unicast_route(packet_header, src_fabric_dev_id, dst_fabric_dev_id, dst_mesh_id, ew_dim);
             // The route_buffer in LowLatencyMeshPacketHeader contains 4-bit commands
             // Pack two 4-bit commands into each byte of expected_route_buffer
-            for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE / 2; i++) {
+            for (uint32_t i = 0; i < expected_route_buffer_loop; i++) {
                 uint8_t low_4bits = packet_header->route_buffer[i * 2] & 0x0F;
                 uint8_t high_4bits = packet_header->route_buffer[i * 2 + 1] & 0x0F;
                 expected_route_buffer[i] = (high_4bits << 4) | low_4bits;
@@ -79,24 +79,23 @@ void kernel_main() {
         }
 
         // Store results
-        uint32_t result_offset = dst_idx * (2 + (MAX_ROUTE_BUFFER_SIZE * 2));
+        uint32_t result_offset = dst_idx * (MAX_ROUTE_BUFFER_SIZE * 2);
 #ifdef FABRIC_2D
         // NOTE: copy each 8 bits (2 commands) as uint32_t, not efficient
         for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
             if (i < expected_route_buffer_loop) {
-                result_ptr[result_offset + 2 + i] = static_cast<uint32_t>(route_buffer[i]);
-                result_ptr[result_offset + 2 + MAX_ROUTE_BUFFER_SIZE + i] =
-                    static_cast<uint32_t>(expected_route_buffer[i]);
+                result_ptr[result_offset + i] = static_cast<uint32_t>(route_buffer[i]);
+                result_ptr[result_offset + MAX_ROUTE_BUFFER_SIZE + i] = static_cast<uint32_t>(expected_route_buffer[i]);
             } else {
-                result_ptr[result_offset + 2 + i] = 0;
-                result_ptr[result_offset + 2 + MAX_ROUTE_BUFFER_SIZE + i] = 0;
+                result_ptr[result_offset + i] = 0;
+                result_ptr[result_offset + MAX_ROUTE_BUFFER_SIZE + i] = 0;
             }
         }
 #else
         // For 1D fabric, store only the first 4 bytes (single 32-bit value)
         for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
-            result_ptr[result_offset + 2 + i] = static_cast<uint32_t>(route_buffer[i]);
-            result_ptr[result_offset + 2 + MAX_ROUTE_BUFFER_SIZE + i] = static_cast<uint32_t>(expected_route_buffer[i]);
+            result_ptr[result_offset + i] = static_cast<uint32_t>(route_buffer[i]);
+            result_ptr[result_offset + MAX_ROUTE_BUFFER_SIZE + i] = static_cast<uint32_t>(expected_route_buffer[i]);
         }
 #endif
     }
