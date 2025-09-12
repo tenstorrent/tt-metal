@@ -78,7 +78,7 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintMuting) {
-    for (auto mesh_device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }

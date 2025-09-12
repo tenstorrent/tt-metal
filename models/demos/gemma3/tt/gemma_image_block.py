@@ -100,6 +100,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
     def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
+        batch_size = x_11SH.shape[0]
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
@@ -118,6 +119,10 @@ class TtGemmaImageTransformerBlock(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+
+        # Align x_11SH shape with attn_out
+        x_11SH = ttnn.reshape(x_11SH, [batch_size, 1, seq_len, -1])
+
         res = ttnn.add(x_11SH, attn_out)
 
         mlp_out = self.mlp(self.ln_2(res))
