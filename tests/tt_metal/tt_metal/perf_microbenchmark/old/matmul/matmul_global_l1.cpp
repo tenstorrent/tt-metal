@@ -47,6 +47,8 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using std::vector;
 using namespace tt;
@@ -65,7 +67,7 @@ CoreCoord get_core_range(
 
 // took & revise from bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
 tt_metal::Program create_program_mcast_in0_in1(
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice* device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B,
@@ -78,10 +80,10 @@ tt_metal::Program create_program_mcast_in0_in1(
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    const std::shared_ptr<tt_metal::Buffer>& in0_buffer,
-    const std::shared_ptr<tt_metal::Buffer>& in1_buffer,
-    const std::shared_ptr<tt_metal::Buffer>& bias_buffer,
-    const std::shared_ptr<tt_metal::Buffer>& out_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& in0_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& in1_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& bias_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
@@ -217,7 +219,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+        in3_is_dram = bias_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM;
     }
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
@@ -989,7 +991,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Inputs Setup
@@ -1021,16 +1023,21 @@ int main(int argc, char** argv) {
         BufferType in1_buffer_type = (l1_in1 == 0) ? (BufferType::DRAM) : (BufferType::L1);
         BufferType out_buffer_type = (l1_out == 0) ? (BufferType::DRAM) : (BufferType::L1);
 
-        tt_metal::InterleavedBufferConfig in0_config{
-            .device = device, .size = in0_buffer_size, .page_size = single_tile_size, .buffer_type = in0_buffer_type};
-        tt_metal::InterleavedBufferConfig in1_config{
-            .device = device, .size = in1_buffer_size, .page_size = single_tile_size, .buffer_type = in1_buffer_type};
-        tt_metal::InterleavedBufferConfig out_config{
-            .device = device, .size = out_buffer_size, .page_size = single_tile_size, .buffer_type = out_buffer_type};
+        tt_metal::distributed::ReplicatedBufferConfig global_in0_config{.size = in0_buffer_size};
+        tt_metal::distributed::DeviceLocalBufferConfig local_in0_config{
+            .page_size = single_tile_size, .buffer_type = in0_buffer_type};
 
-        auto in0_buffer = CreateBuffer(in0_config);
-        auto in1_buffer = CreateBuffer(in1_config);
-        auto out_buffer = CreateBuffer(out_config);
+        tt_metal::distributed::ReplicatedBufferConfig global_in1_config{.size = in1_buffer_size};
+        tt_metal::distributed::DeviceLocalBufferConfig local_in1_config{
+            .page_size = single_tile_size, .buffer_type = in1_buffer_type};
+
+        tt_metal::distributed::ReplicatedBufferConfig global_out_config{.size = out_buffer_size};
+        tt_metal::distributed::DeviceLocalBufferConfig local_out_config{
+            .page_size = single_tile_size, .buffer_type = out_buffer_type};
+
+        auto in0_buffer = tt_metal::distributed::MeshBuffer::create(global_in0_config, local_in0_config, device.get());
+        auto in1_buffer = tt_metal::distributed::MeshBuffer::create(global_in1_config, local_in1_config, device.get());
+        auto out_buffer = tt_metal::distributed::MeshBuffer::create(global_out_config, local_out_config, device.get());
 
         SHAPE in0_shape = {1, 1, Mt * 32, Kt * 32};
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
@@ -1043,14 +1050,20 @@ int main(int argc, char** argv) {
         auto activations_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        tt_metal::detail::WriteToBuffer(in0_buffer, activations);
+        tt_metal::distributed::WriteShard(
+            device->mesh_command_queue(0),
+            in0_buffer,
+            activations,
+            tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            true);
 
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
         auto identity_tilized = tilize_swizzled(identity, Kt * 32, Nt * 32);
         auto weights_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::detail::WriteToBuffer(in1_buffer, weights);
+        tt_metal::distributed::WriteShard(
+            device->mesh_command_queue(0), in1_buffer, weights, tt::tt_metal::distributed::MeshCoordinate(0, 0), true);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup
@@ -1072,7 +1085,7 @@ int main(int argc, char** argv) {
         MathFidelity math_fidelity = MathFidelity::HiFi4;
 
         auto program = create_program_mcast_in0_in1(
-            device,
+            device.get(),
             math_fidelity,
             core_range,
             B,
@@ -1097,12 +1110,16 @@ int main(int argc, char** argv) {
         std::chrono::duration<double, std::nano> duration{};
 
         // took from run_operation.cpp
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
         auto start = std::chrono::high_resolution_clock::now();
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::detail::ReadDeviceProfilerResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
@@ -1117,14 +1134,19 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(out_buffer, result_vec);
+        tt_metal::distributed::ReadShard(
+            device->mesh_command_queue(0),
+            result_vec,
+            out_buffer,
+            tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            true);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
         pass &= (golden == result_untilized);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
 
     } catch (const std::exception& e) {
         pass = false;
