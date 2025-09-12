@@ -469,7 +469,6 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights)
     with torch.no_grad():
         ref_output = reference_model(torch_input)
 
-    breakpoint()
     logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.989)
 
