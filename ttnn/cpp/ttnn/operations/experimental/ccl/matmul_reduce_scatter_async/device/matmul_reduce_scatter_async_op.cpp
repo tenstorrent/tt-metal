@@ -273,6 +273,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         matmul_struct.create_output_tensors({input_tensor, weight_tensor}, optional_output_tensors)[0];
 
     /* ReduceScatter setup */
+    constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
         devices,
         dim,
@@ -287,7 +288,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         sub_device_id,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
+        DEFAULT_WORKERS_PER_LINK,
         std::nullopt);
 
     std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(
