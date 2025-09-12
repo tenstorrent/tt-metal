@@ -354,7 +354,7 @@ void set_or_update_runtime_arguments(
                 // For TTS column broadcast, calculate freq and counter for dedicated kernel
 
                 uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_th = start_t / cWt;
+                uint32_t start_tw = start_t % cWt;
 
                 uint32_t freq = cWt;
                 uint32_t counter = start_tw;
@@ -371,7 +371,7 @@ void set_or_update_runtime_arguments(
                 // For TST column broadcast, calculate freq and counter for dedicated kernel
 
                 uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_th = start_t / cWt;
+                uint32_t start_tw = start_t % cWt;
 
                 uint32_t freq = cWt;
                 uint32_t counter = start_tw;
