@@ -17,7 +17,6 @@
 namespace ttnn::operations::reduction::accumulation {
 
 Tensor CumprodOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     std::optional<DataType>& dtype,
@@ -25,7 +24,7 @@ Tensor CumprodOperation::invoke(
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
     return common::accumulation_invoke(
-        queue_id, input_tensor, dim, dtype, optional_out, reverse_order, memory_config, AccumulationOp::CUMPROD);
+        input_tensor, dim, dtype, optional_out, reverse_order, memory_config, AccumulationOp::CUMPROD);
 }
 
 }  // namespace ttnn::operations::reduction::accumulation

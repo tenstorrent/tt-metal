@@ -17,7 +17,6 @@ namespace ttnn::operations::experimental::conv3d {
 
 struct ExecuteConv3d {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const std::optional<ttnn::Tensor>& bias_tensor,

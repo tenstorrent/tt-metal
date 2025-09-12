@@ -25,7 +25,6 @@ using namespace tt::tt_metal::distributed;
 void apply_device_delay(
     ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
-    ttnn::QueueId queue_id,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     SubDeviceId sd = subdevice_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd);

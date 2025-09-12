@@ -23,7 +23,6 @@ using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
 Tensor loss_function(
-    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossFunction loss_kind,
@@ -36,8 +35,7 @@ Tensor loss_function(
         case LossFunction::MSE: fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
-    Tensor result =
-        ttnn::subtract(queue_id, ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
+    Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
 
     switch (reduce_mode) {
         case LossReductionMode::SUM:
@@ -58,25 +56,23 @@ Tensor loss_function(
 }  // namespace loss_utils
 
 Tensor MseLossOperation::invoke(
-    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     return loss_utils::loss_function(
-        queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, std::move(optional_output_tensor));
+        ref, prediction, LossFunction::MSE, mode, memory_config, std::move(optional_output_tensor));
 }
 
 Tensor MaeLossOperation::invoke(
-    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     return loss_utils::loss_function(
-        queue_id, ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
+        ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
 }
 
 }  // namespace operations::loss

@@ -15,7 +15,6 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
-
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
@@ -27,7 +26,6 @@ void bind_reduction_argmax_operation(py::module& module) {
                 keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: Output tensor containing the indices of the maximum value.
@@ -88,17 +86,9 @@ void bind_reduction_argmax_operation(py::module& module) {
                const std::optional<CoreRangeSet>& sub_core_grids,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               std::optional<ttnn::Tensor> optional_output_tensor) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    dim,
-                    keepdim,
-                    sub_core_grids,
-                    use_multicore,
-                    memory_config,
-                    optional_output_tensor);
+                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = std::nullopt,
@@ -107,8 +97,7 @@ void bind_reduction_argmax_operation(py::module& module) {
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail
