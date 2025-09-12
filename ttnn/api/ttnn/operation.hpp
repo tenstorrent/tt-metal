@@ -136,11 +136,10 @@ struct OpPerformanceModelGeneral {
     std::vector<int> inputs_bytes = {};
     std::vector<int> outputs_bytes = {};
 
-    OpPerformanceModelGeneral(Tensors input_tensors, OutputTensors output_tensors, int ideal_compute_cycles) {
+    OpPerformanceModelGeneral(Tensors input_tensors, OutputTensors output_tensors, int ideal_compute_cycles) :
+        ideal_compute_cycles(ideal_compute_cycles) {
         const auto& t = input_tensors.at(0);
         const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
-
-        this->ideal_compute_cycles = ideal_compute_cycles;
 
         float clock_rate_ghz = (arch == ARCH::WORMHOLE_B0) ? 1.0 : 1.2;
         this->ideal_compute_ns = std::ceil(ideal_compute_cycles / clock_rate_ghz);

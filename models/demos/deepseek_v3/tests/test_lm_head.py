@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.lm_head import LMHead
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -63,7 +64,7 @@ def test_forward_pass(
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
     reference_model = DeepseekV3LMHead(hf_config).eval()
-    state_dict = reference_model.state_dict()
+    state_dict = sub_state_dict(reference_model.state_dict(), "lm_head.")
     torch_input = torch.randn(1, 1, seq_len, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
 

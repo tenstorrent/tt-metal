@@ -342,7 +342,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(
         output_index_start = output_index_end + 1;
     }
 
-    for (auto& boundary : shard_boundaries) {
+    for ([[maybe_unused]] auto& boundary : shard_boundaries) {
         log_trace(
             tt::LogOp,
             "shard_boundary={}, input_size = {}",
@@ -655,7 +655,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     remote_config.resize(num_cores_nhw);
 
     // Split off padding, local transfer, remote transfer operations into their own configs
-    for (auto [src_dst, data] : per_core_gather_data) {
+    for (const auto& [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
         bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
@@ -865,7 +865,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     local_config.resize(num_cores_nhw);
     remote_config.resize(num_cores_nhw);
 
-    for (auto [src_dst, data] : per_core_gather_data) {
+    for (const auto& [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
         bool is_pad = src_core_id == pad_local;
         bool is_local = src_core_id == dst_core_id;

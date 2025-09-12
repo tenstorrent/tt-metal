@@ -399,18 +399,24 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_and_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
             }
         case BITWISE_OR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
             }
         case BITWISE_XOR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
             }
@@ -533,8 +539,9 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
-    return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    auto scalar_bf16 = bfloat16::truncate(scalar);
+    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);

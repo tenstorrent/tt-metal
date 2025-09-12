@@ -190,146 +190,6 @@ def map_hf_to_meta_keys(loaded_weights):
     return meta_state_dict
 
 
-def map_vision_meta_to_hf_keys(loaded_weights):
-    language_weights = {
-        key[len("language_model.") :]: tensor
-        for key, tensor in loaded_weights.items()
-        if key.startswith("language_model.")
-    }
-    mapped_language_weights = map_meta_to_hf_keys(language_weights, language_prefix="language_model.")
-    other_weights = {key: tensor for key, tensor in loaded_weights.items() if not key.startswith("language_model.")}
-    hf_state_dict = {**mapped_language_weights}
-    loaded_weights = {**other_weights}
-    meta_to_hf_mappings = {
-        # vision MLP
-        "c_fc.weight": "fc1.weight",
-        "c_fc.bias": "fc1.bias",
-        "c_proj.weight": "fc2.weight",
-        "c_proj.bias": "fc2.bias",
-        # vision attention
-        # "wq.weight": "q_proj.weight",
-        # "wk.weight": "k_proj.weight",
-        # "wv.weight": "v_proj.weight",
-        # "wo.weight": "out_proj.weight",
-        # "wq.bias": "q_proj.bias",
-        # "wk.bias": "k_proj.bias",
-        # "wv.bias": "v_proj.bias",
-        # "wo.bias": "out_proj.bias",
-        # vision encoder block
-        "attn.wq.weight": "self_attn.q_proj.weight",
-        "attn.wk.weight": "self_attn.k_proj.weight",
-        "attn.wv.weight": "self_attn.v_proj.weight",
-        "attn.wo.weight": "self_attn.out_proj.weight",
-        "attn.wq.bias": "self_attn.q_proj.bias",
-        "attn.wk.bias": "self_attn.k_proj.bias",
-        "attn.wv.bias": "self_attn.v_proj.bias",
-        "attn.wo.bias": "self_attn.out_proj.bias",
-        "ln_1.weight": "layer_norm1.weight",
-        "ln_1.bias": "layer_norm1.bias",
-        "ln_2.weight": "layer_norm2.weight",
-        "ln_2.bias": "layer_norm2.bias",
-        "mlp.c_fc.weight": "mlp.fc1.weight",
-        "mlp.c_fc.bias": "mlp.fc1.bias",
-        "mlp.c_proj.weight": "mlp.fc2.weight",
-        "mlp.c_proj.bias": "mlp.fc2.bias",
-        # vision encoder
-        "layers.{layer}.attn.wq.weight": "layers.{layer}.self_attn.q_proj.weight",
-        "layers.{layer}.attn.wk.weight": "layers.{layer}.self_attn.k_proj.weight",
-        "layers.{layer}.attn.wv.weight": "layers.{layer}.self_attn.v_proj.weight",
-        "layers.{layer}.attn.wo.weight": "layers.{layer}.self_attn.out_proj.weight",
-        "layers.{layer}.attn.wq.bias": "layers.{layer}.self_attn.q_proj.bias",
-        "layers.{layer}.attn.wk.bias": "layers.{layer}.self_attn.k_proj.bias",
-        "layers.{layer}.attn.wv.bias": "layers.{layer}.self_attn.v_proj.bias",
-        "layers.{layer}.attn.wo.bias": "layers.{layer}.self_attn.out_proj.bias",
-        "layers.{layer}.ln_1.weight": "layers.{layer}.layer_norm1.weight",
-        "layers.{layer}.ln_1.bias": "layers.{layer}.layer_norm1.bias",
-        "layers.{layer}.ln_2.weight": "layers.{layer}.layer_norm2.weight",
-        "layers.{layer}.ln_2.bias": "layers.{layer}.layer_norm2.bias",
-        "layers.{layer}.mlp.c_fc.weight": "layers.{layer}.mlp.fc1.weight",
-        "layers.{layer}.mlp.c_fc.bias": "layers.{layer}.mlp.fc1.bias",
-        "layers.{layer}.mlp.c_proj.weight": "layers.{layer}.mlp.fc2.weight",
-        "layers.{layer}.mlp.c_proj.bias": "layers.{layer}.mlp.fc2.bias",
-        # vision transformer
-        "encoder.layers.{layer}.attn.wq.weight": "encoder.layers.{layer}.self_attn.q_proj.weight",
-        "encoder.layers.{layer}.attn.wk.weight": "encoder.layers.{layer}.self_attn.k_proj.weight",
-        "encoder.layers.{layer}.attn.wv.weight": "encoder.layers.{layer}.self_attn.v_proj.weight",
-        "encoder.layers.{layer}.attn.wo.weight": "encoder.layers.{layer}.self_attn.out_proj.weight",
-        "encoder.layers.{layer}.attn.wq.bias": "encoder.layers.{layer}.self_attn.q_proj.bias",
-        "encoder.layers.{layer}.attn.wk.bias": "encoder.layers.{layer}.self_attn.k_proj.bias",
-        "encoder.layers.{layer}.attn.wv.bias": "encoder.layers.{layer}.self_attn.v_proj.bias",
-        "encoder.layers.{layer}.attn.wo.bias": "encoder.layers.{layer}.self_attn.out_proj.bias",
-        "ln_post.weight": "post_layernorm.weight",
-        "ln_post.bias": "post_layernorm.bias",
-        # Top level
-        "_linear.weight": "weight",  # patch_embedding
-        "_linear.bias": "bias",  # patch_embedding
-        "positional_embedding": "weight",  # pos_emb
-        "visual.embeddings.patch_embedding._linear.weight": "visual.embeddings.patch_embedding.weight",
-        "visual.embeddings.patch_embedding._linear.bias": "visual.embeddings.patch_embedding._linear.bias",
-        "visual.embeddings.position_embedding.positional_embedding": "visual.embeddings.position_embedding.weight",
-        "visual.encoder.layers.{layer}.attn.wq.weight": "visual.encoder.layers.{layer}.self_attn.q_proj.weight",
-        "visual.encoder.layers.{layer}.attn.wk.weight": "visual.encoder.layers.{layer}.self_attn.k_proj.weight",
-        "visual.encoder.layers.{layer}.attn.wv.weight": "visual.encoder.layers.{layer}.self_attn.v_proj.weight",
-        "visual.encoder.layers.{layer}.attn.wo.weight": "visual.encoder.layers.{layer}.self_attn.out_proj.weight",
-        "visual.encoder.layers.{layer}.attn.wq.bias": "visual.encoder.layers.{layer}.self_attn.q_proj.bias",
-        "visual.encoder.layers.{layer}.attn.wk.bias": "visual.encoder.layers.{layer}.self_attn.k_proj.bias",
-        "visual.encoder.layers.{layer}.attn.wv.bias": "visual.encoder.layers.{layer}.self_attn.v_proj.bias",
-        "visual.encoder.layers.{layer}.attn.wo.bias": "visual.encoder.layers.{layer}.self_attn.out_proj.bias",
-        "visual.encoder.layers.{layer}.ln_1.weight": "visual.encoder.layers.{layer}.layer_norm1.weight",
-        "visual.encoder.layers.{layer}.ln_1.bias": "visual.encoder.layers.{layer}.layer_norm1.bias",
-        "visual.encoder.layers.{layer}.ln_2.weight": "visual.encoder.layers.{layer}.layer_norm2.weight",
-        "visual.encoder.layers.{layer}.ln_2.bias": "visual.encoder.layers.{layer}.layer_norm2.bias",
-        "visual.encoder.layers.{layer}.mlp.c_fc.weight": "visual.encoder.layers.{layer}.mlp.fc1.weight",
-        "visual.encoder.layers.{layer}.mlp.c_fc.bias": "visual.encoder.layers.{layer}.mlp.fc1.bias",
-        "visual.encoder.layers.{layer}.mlp.c_proj.weight": "visual.encoder.layers.{layer}.mlp.fc2.weight",
-        "visual.encoder.layers.{layer}.mlp.c_proj.bias": "visual.encoder.layers.{layer}.mlp.fc2.bias",
-        "visual.ln_post.weight": "visual.post_layernorm.weight",
-        "visual.ln_post.bias": "visual.post_layernorm.bias",
-    }
-
-    for key, tensor in loaded_weights.items():
-        # Handle full model paths with layer numbers
-        if "model.vision_tower.vision_model.encoder.layers." in key:
-            parts = key.split(".")
-            layer_num = parts[5]
-            remainder = ".".join(parts[6:])
-            if remainder in meta_to_hf_mappings:
-                new_key = f"model.vision_tower.vision_model.encoder.layers.{layer_num}.{meta_to_hf_mappings[remainder]}"
-                hf_state_dict[new_key] = tensor
-            continue
-
-        # Handle full vision encoder paths with layer numbers
-        if "layers." in key:
-            parts = key.split(".")
-            layer_num = parts[1]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
-            template_key = "layers.{layer}." + ".".join(parts[2:])
-            if template_key in meta_to_hf_mappings:
-                hf_state_dict[meta_to_hf_mappings[template_key].format(layer=layer_num)] = tensor
-                continue
-
-        # Try exact matches first
-        if key in meta_to_hf_mappings:
-            hf_state_dict[meta_to_hf_mappings[key]] = tensor
-            continue
-
-        # For submodule state dicts, try matching the end of the key
-        matched = False
-        for meta_pattern, hf_pattern in meta_to_hf_mappings.items():
-            if key.endswith("." + meta_pattern):
-                # Replace only the matching part at the end
-                prefix = key[: -len(meta_pattern)]
-                new_key = prefix + hf_pattern
-                hf_state_dict[new_key] = tensor
-                matched = True
-                break
-
-        # If no mapping found, keep the original key
-        if not matched:
-            hf_state_dict[key] = tensor
-
-    return hf_state_dict
-
-
 def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
     hf_to_meta = {
         # vision MLP
@@ -544,8 +404,69 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     return converted_weights
 
 
-def convert_meta_to_hf(state_dict, head_dim):
+def fuse_mlp_meta(state_dict):
+    key_map = {"w_gate": "w1.weight", "w_up": "w3.weight", "w_gate_up_proj": "w1_w3.weight"}
+
+    wgate_list = sorted(list(filter(lambda x: key_map["w_gate"] in x, state_dict.keys())))
+    wproj_list = sorted(list(filter(lambda x: key_map["w_up"] in x, state_dict.keys())))
+
+    for wgate_key, wproj_key in zip(wgate_list, wproj_list):
+        wgate = state_dict[wgate_key]
+        wproj = state_dict[wproj_key]
+
+        prefix_gate = wgate_key[: -len(key_map["w_gate"])]
+
+        fused_gate_up_proj = torch.vstack((wgate, wproj))
+        state_dict[f"{prefix_gate}{key_map['w_gate_up_proj']}"] = fused_gate_up_proj
+
+        del state_dict[wgate_key], state_dict[wproj_key]
+
+    return state_dict
+
+
+def fuse_qkv_meta(state_dict):
+    # Weight keys list
+    wq_list = sorted(list(filter(lambda x: "wq.weight" in x, state_dict.keys())))
+    wk_list = sorted(list(filter(lambda x: "wk.weight" in x, state_dict.keys())))
+    wv_list = sorted(list(filter(lambda x: "wv.weight" in x, state_dict.keys())))
+    # Bias keys list
+    wq_bias_list = sorted(list(filter(lambda x: "wq.bias" in x, state_dict.keys())))
+    wk_bias_list = sorted(list(filter(lambda x: "wk.bias" in x, state_dict.keys())))
+    wv_bias_list = sorted(list(filter(lambda x: "wv.bias" in x, state_dict.keys())))
+
+    for wq_key, wk_key, wv_key in zip(wq_list, wk_list, wv_list):
+        wq = state_dict[wq_key]
+        wk = state_dict[wk_key]
+        wv = state_dict[wv_key]
+
+        prefix = wq_key[: -len("wq.weight")]
+        fused_qkv_weights = torch.vstack((wq, wk, wv))
+        state_dict[f"{prefix}wqkv.weight"] = fused_qkv_weights
+
+        del state_dict[wq_key], state_dict[wk_key], state_dict[wv_key]
+
+    # Checking for bias
+    if len(wq_bias_list) > 0:
+        for wq_bias_key, wk_bias_key, wv_bias_key in zip(wq_bias_list, wk_bias_list, wv_bias_list):
+            wq_bias = state_dict[wq_bias_key]
+            wk_bias = state_dict[wk_bias_key]
+            wv_bias = state_dict[wv_bias_key]
+
+            prefix = wq_bias_key[: -len("wq.bias")]
+            fused_qkv_bias = torch.vstack((wq_bias, wk_bias, wv_bias))
+            state_dict[f"{prefix}wqkv.bias"] = fused_qkv_bias
+
+            del state_dict[wq_bias_key], state_dict[wk_bias_key], state_dict[wv_bias_key]
+
+    return state_dict
+
+
+def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False):
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    if fuse_qkv:
+        state_dict = fuse_qkv_meta(state_dict)
+    if fuse_mlp:
+        state_dict = fuse_mlp_meta(state_dict)
     state_dict = map_meta_to_hf_keys(state_dict)
     return state_dict
 
@@ -596,12 +517,6 @@ def map_hf_to_meta_keys(loaded_weights):
     return replace_keys(loaded_weights, replacements)
 
 
-def convert_vision_meta_to_hf(state_dict, head_dim):
-    # state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
-    state_dict = map_vision_meta_to_hf_keys(state_dict)
-    return state_dict
-
-
 def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
     # Define mappings at each level of the hierarchy
     meta_to_hf_mappings = {
@@ -625,6 +540,8 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "attention.q_norm.weight": "self_attn.q_norm.weight",
         "attention.k_norm.weight": "self_attn.k_norm.weight",
         "attention.wo.bias": "self_attn.o_proj.bias",
+        "attention.wqkv.weight": "self_attn.qkv_proj.weight",
+        "attention.wqkv.bias": "self_attn.qkv_proj.bias",
         # Feed forward module
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
@@ -633,7 +550,9 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "feed_forward.w1.bias": "mlp.gate_proj.bias",
         "feed_forward.w3.bias": "mlp.up_proj.bias",
         "feed_forward.w2.bias": "mlp.down_proj.bias",
+        "feed_forward.w1_w3.weight": "mlp.gate_up_proj.weight",
         # Direct mappings for when we get just the final components
+        "w1_w3.weight": "gate_up_proj.weight",
         "w1.weight": "gate_proj.weight",
         "w2.weight": "down_proj.weight",
         "w3.weight": "up_proj.weight",
@@ -649,6 +568,9 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "w1.bias": "gate_proj.bias",
         "w3.bias": "up_proj.bias",
         "w2.bias": "down_proj.bias",
+        # Fused qkv mapping
+        "wqkv.weight": "qkv_proj.weight",
+        "wqkv.bias": "qkv_proj.bias",
         # Host embeddings
         "emb.weight": "weight",
     }

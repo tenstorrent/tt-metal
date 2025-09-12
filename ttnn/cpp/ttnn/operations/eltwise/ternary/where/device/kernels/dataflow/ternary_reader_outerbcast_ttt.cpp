@@ -14,7 +14,7 @@ void kernel_main() {
     const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
     const uint32_t start_tile_id = get_arg_val<uint32_t>(4);  // start_tile_id
 
-    // Additional arguments for column broadcast (args 5-26)
+    // Additional arguments for broadcast (args 5-26)
     const uint32_t nD_stride = get_arg_val<uint32_t>(5);
     const uint32_t d_stride = get_arg_val<uint32_t>(6);
     const uint32_t n_stride = get_arg_val<uint32_t>(7);
@@ -38,9 +38,9 @@ void kernel_main() {
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t srcA_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
-    constexpr auto predicate_cb = tt::CBIndex::c_0;
-    constexpr auto true_cb = tt::CBIndex::c_1;
-    constexpr auto false_cb = tt::CBIndex::c_2;
+    constexpr auto predicate_cb = get_compile_time_arg_val(0);
+    constexpr auto true_cb = get_compile_time_arg_val(1);
+    constexpr auto false_cb = get_compile_time_arg_val(2);
 
     // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<3>();

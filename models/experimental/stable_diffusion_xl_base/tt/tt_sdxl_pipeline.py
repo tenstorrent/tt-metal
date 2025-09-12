@@ -68,6 +68,9 @@ class TtSDXLPipeline(LightweightModule):
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
+            assert (
+                os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
+            ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config)
@@ -162,7 +165,7 @@ class TtSDXLPipeline(LightweightModule):
 
             self.image_processing_compiled = True
 
-    def encode_prompts(self, prompts):
+    def encode_prompts(self, prompts, negative_prompts):
         # Encode prompts using the text encoders.
 
         if self.pipeline_config.encoders_on_device:
@@ -174,6 +177,11 @@ class TtSDXLPipeline(LightweightModule):
             all_embeds = []
             for i in range(0, len(prompts), self.batch_size):
                 batch_prompts = prompts[i : i + self.batch_size]
+                current_negative_prompts = (
+                    negative_prompts[i : i + self.batch_size]
+                    if isinstance(negative_prompts, list)
+                    else negative_prompts
+                )
                 batch_embeds = batch_encode_prompt_on_device(
                     self.torch_pipeline,
                     self.tt_text_encoder,
@@ -184,7 +192,7 @@ class TtSDXLPipeline(LightweightModule):
                     device=self.cpu_device,
                     num_images_per_prompt=1,
                     do_classifier_free_guidance=True,
-                    negative_prompt=None,
+                    negative_prompt=current_negative_prompts,
                     negative_prompt_2=None,
                     prompt_embeds=None,
                     negative_prompt_embeds=None,
@@ -225,7 +233,7 @@ class TtSDXLPipeline(LightweightModule):
                 device=self.cpu_device,
                 num_images_per_prompt=1,
                 do_classifier_free_guidance=True,
-                negative_prompt=None,
+                negative_prompt=negative_prompts,
                 negative_prompt_2=None,
                 prompt_embeds=None,
                 negative_prompt_embeds=None,
