@@ -257,7 +257,7 @@ class SingleCoreSingleCardSfpuParameterizedFixture
     : public UnitMeshCQFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 
@@ -305,7 +305,7 @@ class SingleCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 
@@ -353,7 +353,7 @@ class MultiCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 
