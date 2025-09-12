@@ -114,7 +114,8 @@ std::vector<CBInfo> get_cb_info(
             num_blocks_act_h,
             block_config.act_block_w_ntiles,
             fp32_dest_acc_en,
-            output_datatype);
+            output_datatype,
+            conv_config.enable_activation_reuse);
 
     // Block dims
     if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {
@@ -554,6 +555,8 @@ static uint32_t get_tilize_cycles_per_tile(
 /*
     Split reader viability is determined by comparing the time required before matmul computation begins.
 
+    NOTE: if activation reuse is enabled, we always enable split reader (for now)
+
     Thread organization and dependencies differ based on split reader configuration:
 
     Without split reader:
@@ -601,7 +604,12 @@ bool is_split_reader_viable(
     uint32_t num_blocks_act_h,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
-    DataType output_datatype) {
+    DataType output_datatype,
+    bool act_reuse_enabled) {
+    // If activation reuse is enabled, we always enable split_reader
+    if (act_reuse_enabled) {
+        return true;
+    }
     // Clock frequency in GHz used in the transfer rate lookup tables for this architecture
     // This is the reference clock frequency that the lookup tables were measured against
     const float clock_frequency_ghz = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;

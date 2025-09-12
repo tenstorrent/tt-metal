@@ -107,6 +107,7 @@ bool is_split_reader_viable(
     uint32_t num_blocks_act_h,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
-    DataType output_datatype);
+    DataType output_datatype,
+    bool act_reuse_enabled);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv
