@@ -136,6 +136,10 @@ FORCE_INLINE
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
+    static_assert(tt::tt_fabric::edm_to_local_chip_noc == 1, "edm_to_local_chip_noc must be 1");
+    static_assert(
+        tt::tt_fabric::local_chip_data_cmd_buf == write_cmd_buf ||
+        tt::tt_fabric::local_chip_data_cmd_buf == read_cmd_buf);
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
@@ -166,7 +170,7 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(
                 dest_address,
                 value,
                 0xF,

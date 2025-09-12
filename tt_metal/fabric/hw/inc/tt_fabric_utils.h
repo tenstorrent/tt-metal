@@ -75,7 +75,7 @@ inline void wait_for_notification(uint32_t address, uint32_t value) {
     while (*poll_addr != value) {
         invalidate_l1_cache();
         // context switch while waiting to allow slow dispatch traffic to go through
-        run_routing();
+        // run_routing();
     }
 }
 

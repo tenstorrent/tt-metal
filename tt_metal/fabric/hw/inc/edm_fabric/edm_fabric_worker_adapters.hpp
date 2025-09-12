@@ -249,7 +249,9 @@ struct WorkerToFabricEdmSenderImpl {
 
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
+        ASSERT(false);
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
+        ASSERT(this->data_noc_cmd_buf == write_cmd_buf || this->data_noc_cmd_buf == read_cmd_buf);
         noc_async_write_one_packet_with_trid_set_state<true>(
             edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
         const uint64_t noc_sem_addr = get_noc_addr(
@@ -330,6 +332,7 @@ struct WorkerToFabricEdmSenderImpl {
     template <bool inc_pointers = true>
     FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
         uint64_t noc_addr;
+        ASSERT(noc == 1);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             noc_addr = get_noc_addr(
                 this->edm_noc_x,
@@ -690,8 +693,5 @@ private:
 };
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
-
-template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = WorkerToFabricEdmSenderImpl<true, EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
 }  // namespace tt::tt_fabric

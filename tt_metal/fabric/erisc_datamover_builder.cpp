@@ -937,6 +937,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 
     // set default noc and cmd bufs (current setup in TG 4U)
+    TT_FATAL(
+        FabricEriscDatamoverConfig::num_receiver_channels <= this->receiver_channel_forwarding_noc_ids.size(),
+        "Internal error - num_receiver_channels exceeds the size of receiver_channel_forwarding_noc_ids");
+    TT_FATAL(
+        FabricEriscDatamoverConfig::num_receiver_channels <= this->receiver_channel_forwarding_data_cmd_buf_ids.size(),
+        "Internal error - num_receiver_channels exceeds the size of receiver_channel_forwarding_data_cmd_buf_ids");
+    TT_FATAL(
+        FabricEriscDatamoverConfig::num_receiver_channels <= this->receiver_channel_forwarding_sync_cmd_buf_ids.size(),
+        "Internal error - num_receiver_channels exceeds the size of receiver_channel_forwarding_sync_cmd_buf_ids");
+    TT_FATAL(
+        FabricEriscDatamoverConfig::num_receiver_channels <= this->receiver_channel_local_write_noc_ids.size(),
+        "Internal error - num_receiver_channels exceeds the size of receiver_channel_local_write_noc_ids");
+    TT_FATAL(
+        FabricEriscDatamoverConfig::num_receiver_channels <= this->receiver_channel_local_write_cmd_buf_ids.size(),
+        "Internal error - num_receiver_channels exceeds the size of receiver_channel_local_write_cmd_buf_ids");
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
         this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
@@ -946,9 +961,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
         if (requires_forced_assignment_to_noc1()) {
             this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
-            this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
         }
     }
+    TT_FATAL(requires_forced_assignment_to_noc1(), "Requires forced assignment to noc1");
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
@@ -1257,6 +1275,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // instead of downstream tensix exntension.
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
+
+    ASSERT(this->get_configured_risc_count() == 1, "Configured risc count must be 1");
 
     const std::vector<uint32_t> main_args = {
         num_sender_channels,

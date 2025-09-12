@@ -2062,24 +2062,24 @@ void run_fabric_edm_main_loop(
             }
         }
 
-        if constexpr (enable_context_switch) {
-            // shouldn't do noc counter sync since we are not incrementing them
-            if constexpr (IDLE_CONTEXT_SWITCHING) {
-                if (did_something) {
-                    did_nothing_count = 0;
-                } else {
-                    if (did_nothing_count++ > SWITCH_INTERVAL) {
-                        did_nothing_count = 0;
-                        run_routing_without_noc_sync();
-                    }
-                }
-            } else {
-                if (did_nothing_count++ > SWITCH_INTERVAL) {
-                    did_nothing_count = 0;
-                    run_routing_without_noc_sync();
-                }
-            }
-        }
+        // if constexpr (enable_context_switch) {
+        //     // shouldn't do noc counter sync since we are not incrementing them
+        //     if constexpr (IDLE_CONTEXT_SWITCHING) {
+        //         if (did_something) {
+        //             did_nothing_count = 0;
+        //         } else {
+        //             if (did_nothing_count++ > SWITCH_INTERVAL) {
+        //                 did_nothing_count = 0;
+        //                 run_routing_without_noc_sync();
+        //             }
+        //         }
+        //     } else {
+        //         if (did_nothing_count++ > SWITCH_INTERVAL) {
+        //             did_nothing_count = 0;
+        //             run_routing_without_noc_sync();
+        //         }
+        //     }
+        // }
 
         close_perf_recording_window(inner_loop_perf_telemetry_collector);
         if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
@@ -2351,6 +2351,12 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode();
         }
     }
+
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc_index]);
+    ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc_index]);
 
     //
     // COMMON CT ARGS (not specific to sender or receiver)
@@ -2959,6 +2965,18 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
+
+    WAYPOINT("MAIN");
+
+    // ASSERT(noc_index == 1);
+    // noc_async_full_barrier(noc_index);
+
+    ASSERT(noc_mode == DM_DEDICATED_NOC);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED) == noc_reads_num_issued[noc_index]);
+    ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc_index]);
+    // ASSERT(NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc_index]);
 
     //////////////////////////////
     //////////////////////////////

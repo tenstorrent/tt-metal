@@ -24,6 +24,8 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
 
+    TT_FATAL(noc_id == tt::tt_metal::NOC::NOC_1, "Noc must be 1");
+
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
@@ -56,6 +58,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
+    TT_FATAL(false, "Not expected to be called");
     return generate_edm_kernel_impl(
         program,
         device,

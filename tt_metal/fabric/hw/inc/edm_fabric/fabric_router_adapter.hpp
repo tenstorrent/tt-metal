@@ -152,6 +152,7 @@ struct RouterElasticChannelWriterAdapter {
 
     template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
+        static_assert(WORKER_HANDSHAKE_NOC == 1, "Worker handshake noc must be 1");
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
@@ -226,6 +227,7 @@ struct RouterElasticChannelWriterAdapter {
 public:
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
+        ASSERT(false);
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
         noc_async_write_one_packet_with_trid_set_state<true>(
             edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
@@ -243,7 +245,7 @@ public:
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
-        return *this->edm_buffer_local_free_slots_read_ptr != 0;
+        return (*this->edm_buffer_local_free_slots_read_ptr & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1)) != 0;
     }
 
     template <
@@ -265,6 +267,7 @@ public:
     template <bool inc_pointers = true>
     FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
         uint64_t noc_addr;
+        ASSERT(noc == 1);
         noc_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + offset, noc);
 
@@ -296,8 +299,8 @@ private:
     uint32_t worker_credits_stream_id;
     // Local copy of the the free slots on the downstream router
     // Downstream router will increment this when it frees up a slot
-    volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
-    volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
+    volatile uint32_t* edm_buffer_local_free_slots_read_ptr;
+    volatile uint32_t* edm_buffer_local_free_slots_update_ptr;
     size_t edm_buffer_remote_free_slots_update_addr;
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
@@ -324,12 +327,14 @@ private:
         bool enable_deadlock_avoidance = false,
         bool vc1_has_different_downstream_dest = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
+        ASSERT(noc == 1);
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 if constexpr (vc1_has_different_downstream_dest) {
                     noc_inline_dw_write<InlineWriteDst::REG>(
                         noc_sem_addr_, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
                 } else {
+                    ASSERT(false);
                     noc_inline_dw_write_with_state<true, false, true>(
                         0,  // val unused
                         this->edm_buffer_remote_free_slots_update_addr,
@@ -337,6 +342,7 @@ private:
                         noc);
                 }
             } else {
+                ASSERT(false);
                 noc_inline_dw_write_with_state<false, false, true>(
                     0,  // val unused
                     0,  // addr unused

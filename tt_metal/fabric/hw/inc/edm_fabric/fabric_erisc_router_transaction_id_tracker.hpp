@@ -105,6 +105,9 @@ struct WriteTransactionIdTracker {
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t trid = OFFSET_PARAM; trid < INVALID_TRID; ++trid) {
+            static_assert(
+                EDM_TO_LOCAL_NOC == 1 && EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC,
+                "EDM_TO_LOCAL_NOC must be 1 and equal to EDM_TO_DOWNSTREAM_NOC");
             if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
                 noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
             } else {

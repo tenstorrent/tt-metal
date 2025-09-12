@@ -10,6 +10,9 @@
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
 
+#include "debug/waypoint.h"
+#include "debug/ring_buffer.h"
+
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
@@ -352,10 +355,20 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_s
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
+    WAYPOINT("yo15");
     return (status_reg_val == (self_risc_acked + other_risc_acked));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
+    if (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) > noc_nonposted_writes_num_issued[noc]) {
+        WAYPOINT("HANG");
+        WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+        WATCHER_RING_BUFFER_PUSH(noc);
+        WATCHER_RING_BUFFER_PUSH(NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT));
+        WATCHER_RING_BUFFER_PUSH(noc_nonposted_writes_num_issued[noc]);
+        WATCHER_RING_BUFFER_PUSH(0xc0ffee);
+        ASSERT(false);
+    }
     return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc]);
 }
 
@@ -681,17 +694,22 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t static_vc,
     bool mcast,
     bool posted = false) {
+    WAYPOINT("YO11");
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
     ASSERT((dest_addr & 0x3) == 0);
+    WAYPOINT("YO12");
     uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
+    WAYPOINT("YO13");
 
     // Flush to make sure write left L1 before updating it
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        WAYPOINT("yo14");
         while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
     } else {
+        WAYPOINT("YO14");
         while (!ncrisc_noc_nonposted_writes_sent(noc));
     }
 
@@ -781,16 +799,21 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t static_vc,
     bool mcast,
     bool posted = false) {
+    WAYPOINT("YO=0");
     if constexpr (dst_type == InlineWriteDst::DEFAULT) {
         if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
+            WAYPOINT("YO_0");
             noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
         } else {
+            WAYPOINT("YO_1");
             noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
         }
     } else if constexpr (dst_type == InlineWriteDst::L1) {
+        WAYPOINT("YO_2");
         noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
     } else {
         ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
+        WAYPOINT("YO_3");
         noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
     }
 }

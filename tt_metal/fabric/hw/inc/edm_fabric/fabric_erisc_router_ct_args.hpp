@@ -299,6 +299,80 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids =
     fill_array_with_next_n_args<uint8_t, RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX, NUM_RECEIVER_CHANNELS>();
 
+constexpr bool validate_sender_channel_ack_noc_ids() {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (sender_channel_ack_noc_ids[i] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_sender_channel_ack_cmd_buf_ids() {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (sender_channel_ack_cmd_buf_ids[i] == write_cmd_buf || sender_channel_ack_cmd_buf_ids[i] == read_cmd_buf) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_receiver_channel_forwarding_noc_ids() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (receiver_channel_forwarding_noc_ids[i] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_receiver_channel_local_write_noc_ids() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (receiver_channel_local_write_noc_ids[i] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_receiver_channel_forwarding_data_cmd_buf_ids() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (receiver_channel_forwarding_data_cmd_buf_ids[i] != write_cmd_buf &&
+            receiver_channel_forwarding_data_cmd_buf_ids[i] != read_cmd_buf) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_receiver_channel_forwarding_sync_cmd_buf_ids() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (receiver_channel_forwarding_sync_cmd_buf_ids[i] != write_cmd_buf &&
+            receiver_channel_forwarding_sync_cmd_buf_ids[i] != read_cmd_buf) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool validate_receiver_channel_local_write_cmd_buf_ids() {
+    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        if (receiver_channel_local_write_cmd_buf_ids[i] != write_cmd_buf &&
+            receiver_channel_local_write_cmd_buf_ids[i] != read_cmd_buf) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(validate_sender_channel_ack_noc_ids());
+static_assert(validate_sender_channel_ack_cmd_buf_ids());
+static_assert(validate_receiver_channel_forwarding_noc_ids());
+static_assert(validate_receiver_channel_local_write_noc_ids());
+static_assert(validate_receiver_channel_forwarding_data_cmd_buf_ids());
+static_assert(validate_receiver_channel_forwarding_sync_cmd_buf_ids());
+static_assert(validate_receiver_channel_local_write_cmd_buf_ids());
+
 // TODO: Add a special marker in CT args so we don't misalign unintentionally
 constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
@@ -444,9 +518,12 @@ static constexpr uint8_t worker_handshake_noc = noc_index;
 #else
 static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
 #endif
+static_assert(worker_handshake_noc == 1);
+static_assert(edm_to_downstream_noc == 1);
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_val(EDM_NOC_VC_IDX);
+static_assert(local_chip_data_cmd_buf == write_cmd_buf || local_chip_data_cmd_buf == read_cmd_buf);
 
 }  // namespace tt::tt_fabric
