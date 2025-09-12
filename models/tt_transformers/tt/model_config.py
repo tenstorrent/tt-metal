@@ -30,7 +30,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
-    convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
@@ -2396,20 +2395,6 @@ class ModelArgs:
             else:
                 return model
 
-    def reference_vision_multi_modal(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_rms_norm(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
     def reference_rms_norm(self):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
@@ -2446,81 +2431,6 @@ class ModelArgs:
                 return wrapper
             else:
                 return model
-
-    def reference_gemma_model(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_model(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_mlp(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_siglip_patch_embed(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.patch_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_pos_embedding(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.position_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_embedding(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_layernorm(self, layer_name="layer_norm1"):
-        model = self.reference_vision_transformer(wrap=False)
-        if layer_name == "layer_norm1":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
-        elif layer_name == "layer_norm2":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
-        else:
-            layer = model.vision_tower.vision_model.post_layernorm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_attention(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_encoder_block(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0]
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_encoder(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
 
     def reference_mlp(self):
         if self.checkpoint_type == CheckpointType.Meta:
