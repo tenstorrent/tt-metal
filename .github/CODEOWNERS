@@ -47,7 +47,7 @@ tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @dam
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @pgkeller @tenstorrent/metalium-codeowners-large-changes
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-codeowners-large-changes
-tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT # this should go away @tenstorrent/metalium-codeowners-large-changes
+tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tenstorrent/metalium-codeowners-large-changes # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
@@ -76,7 +76,7 @@ tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickov
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/**/CMakeLists.txt @pgkeller @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests @tenstorrent/metalium-codeowners-large-changes
+tt_metal/kernels/ @abhullar-tt @tenstorrent/metalium-codeowners-large-changes # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885 @tenstorrent/metalium-codeowners-large-changes
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
@@ -85,7 +85,7 @@ tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema @tenstorrent/metalium-co
 tt_metal/test @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark? @tenstorrent/metalium-codeowners-large-changes
+tt_metal/tools/mem_bench @nhuang-tt @tenstorrent/metalium-codeowners-large-changes # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/tools/watcher_dump/ @pgkeller @tenstorrent/metalium-codeowners-large-changes
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/metalium-codeowners-large-changes
@@ -127,7 +127,7 @@ ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tenstorrent/metalium-developers-inf
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards @tenstorrent/metalium-codeowners-large-changes
+ttnn/**/kernels/ @tenstorrent/metalium-codeowners-large-changes # Removes the owners above from owning kernels unless specified afterwards
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-codeowners-large-changes
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
