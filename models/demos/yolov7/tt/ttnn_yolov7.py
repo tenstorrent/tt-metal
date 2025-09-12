@@ -291,25 +291,31 @@ class ttnn_detect:
             ttnn.deallocate(d)
             ttnn.deallocate(e)
 
+            y_cat = ttnn.to_layout(y_cat, ttnn.ROW_MAJOR_LAYOUT)
             y_cat = ttnn.to_memory_config(y_cat, memory_config=ttnn.L1_MEMORY_CONFIG)
             y_cat = ttnn.permute(y_cat, (0, 1, 3, 4, 2))
+            print(y_cat.shape)
 
             reshaped = ttnn.reshape(y_cat, (bs, -1, self.no))
+            print(reshaped.shape)
             if i == 0:
                 z_0 = reshaped
             if i == 1:
                 z_1 = reshaped
             if i == 2:
                 z_2 = reshaped
-            ttnn.deallocate(y_cat)
 
         concatenated = concat(1, False, z_0, z_1, z_2)
+        concatenated = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT)
+        print(concatenated.shape)
         out = (concatenated, x)
 
         for t in [z_0, z_1, z_2]:
             ttnn.deallocate(t)
         if i == 3:
             ttnn.deallocate(x)
+
+        ttnn.deallocate(y_cat)
         return out
 
 
