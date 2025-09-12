@@ -92,6 +92,7 @@ enum class SfpuType {
     unary_max,
     unary_min,
     softplus,
+    logsigmoid,
     tiled_prod,
     bitwise_xor,
     bitwise_not,
