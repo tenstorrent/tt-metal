@@ -561,6 +561,8 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
     [
         ttnn.lt,
         ttnn.gt,
+        ttnn.ge,
+        ttnn.le,
     ],
 )
 def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
@@ -599,6 +601,8 @@ def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
     [
         ttnn.lt,
         ttnn.gt,
+        ttnn.ge,
+        ttnn.le,
     ],
 )
 def test_comp_ops_edge_cases(ttnn_op, device):
@@ -629,5 +633,4 @@ def test_comp_ops_edge_cases(ttnn_op, device):
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
-
     assert torch.equal(output_tensor, torch_output_tensor)
