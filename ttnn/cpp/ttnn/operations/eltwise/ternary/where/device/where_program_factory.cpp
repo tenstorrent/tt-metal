@@ -251,7 +251,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                   // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            if (broadcast_type != WhereBroadcastType::NONE) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -272,29 +272,6 @@ void set_or_update_runtime_arguments(
                 reader_runtime_args[22] = 0u;                                    // 22: true_n_stride (zero for TST)
                 reader_runtime_args[23] = 0u;                                    // 23: true_c_stride (zero for TST)
                 reader_runtime_args[24] = 0u;                                    // 24: true_num_tiles (zero for TST)
-                reader_runtime_args[25] = c_current_shard_width;                 // 25: dst_shard_width
-                reader_runtime_args[26] = a_num_tiles;                           // 26: src_num_tiles (predicate)
-            } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
-                reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
-                reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
-                reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
-                reader_runtime_args[8] = aHt * aWt * (aC > 1);                   // 8: c_stride
-                reader_runtime_args[9] = cD;                                     // 9: D
-                reader_runtime_args[10] = cN;                                    // 10: N
-                reader_runtime_args[11] = cC;                                    // 11: C
-                reader_runtime_args[12] = cHt;                                   // 12: Ht
-                reader_runtime_args[13] = cWt;                                   // 13: Wt
-                reader_runtime_args[14] = cND;                                   // 14: cND
-                reader_runtime_args[15] = fHt * fWt * fC * fN * fD * (fND > 1);  // 15: false_nD_stride
-                reader_runtime_args[16] = fHt * fWt * fC * fN * (fD > 1);        // 16: false_d_stride
-                reader_runtime_args[17] = fHt * fWt * fC * (fN > 1);             // 17: false_n_stride
-                reader_runtime_args[18] = fHt * fWt * (fC > 1);                  // 18: false_c_stride
-                reader_runtime_args[19] = f_num_tiles;                           // 19: false_num_tiles
-                reader_runtime_args[20] = 0u;                                    // 20:
-                reader_runtime_args[21] = 0u;                                    // 21:
-                reader_runtime_args[22] = 0u;                                    // 22:
-                reader_runtime_args[23] = 0u;                                    // 23:
-                reader_runtime_args[24] = 0u;                                    // 24:
                 reader_runtime_args[25] = c_current_shard_width;                 // 25: dst_shard_width
                 reader_runtime_args[26] = a_num_tiles;                           // 26: src_num_tiles (predicate)
             }
