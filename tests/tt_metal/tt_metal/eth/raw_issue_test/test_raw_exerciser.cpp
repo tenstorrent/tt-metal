@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
         // Get HAL instance for L1 address queries
         auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
-        uint32_t unreserved_l1_start = hal.get_dev_size(
+        uint32_t unreserved_l1_start = hal.get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
         // Get active Ethernet cores
