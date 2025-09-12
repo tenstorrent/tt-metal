@@ -55,12 +55,9 @@ class EfficientNetb0Conv2D:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=self.shard_layout,
-            act_block_w_div=1,
-            transpose_shards=False,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            output_layout=self.output_layout,
-            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             reshard_if_not_optimal=True,
         )
 
