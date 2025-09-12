@@ -22,6 +22,22 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 def custom_preprocessor(torch_model, name, mesh_mapper=None):
     parameters = {}
     if isinstance(torch_model, PatchMerging):
+        out_channels = [96, 192, 384]
+        positions = {
+            "tl": (0, 0),
+            "tr": (0, 1),
+            "bl": (1, 0),
+            "br": (1, 1),
+        }
+
+        for out_channel in out_channels:
+            for name, (r, c) in positions.items():
+                w = torch.zeros((out_channel, 1, 2, 2))
+                w[:, 0, r, c] = 1.0
+
+                key = f"conv_{out_channel}_weights_{name}"
+                parameters[key] = ttnn.from_torch(w, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
         parameters["reduction"] = {}
         parameters["reduction"]["weight"] = preprocess_linear_weight(
             torch_model.reduction.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper

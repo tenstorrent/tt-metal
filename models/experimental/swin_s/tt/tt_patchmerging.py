@@ -3,6 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.swin_s.tt.common import StridedConv
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 program_configs = {
     "linear_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -35,14 +43,60 @@ class TtPatchMerging:
         self.device = device
         self.parameters = parameters
 
+        out_channels = [96, 192, 384]
+        positions = {
+            "tl": (0, 0),
+            "tr": (0, 1),
+            "bl": (1, 0),
+            "br": (1, 1),
+        }
+        for out_channel in out_channels:
+            for name, (r, c) in positions.items():
+                key = f"conv_{out_channel}_weights_{name}"
+                if out_channel == 384:
+                    conv = StridedConv(
+                        [2, 2, 0, 0],
+                        parameters=parameters[f"conv_{out_channel}_weights_{name}"],
+                        groups=out_channel,
+                        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    )
+                else:
+                    conv = StridedConv(
+                        [2, 2, 0, 0],
+                        parameters=parameters[f"conv_{out_channel}_weights_{name}"],
+                        reshard=True,
+                        groups=out_channel,
+                    )
+                setattr(self, f"conv_{out_channel}_{name}", conv)
+
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="patchmerging")
         _, H, W, _ = input_tensor.shape
         input_tensor = ttnn.pad(input_tensor, input_tensor.shape, [0, 0, 0, 0], 0)
-        input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        input_tensor_0 = input_tensor[..., 0::2, 0::2, :]  # ... H/2 W/2 C
-        input_tensor_1 = input_tensor[..., 1::2, 0::2, :]  # ... H/2 W/2 C
-        input_tensor_2 = input_tensor[..., 0::2, 1::2, :]  # ... H/2 W/2 C
-        input_tensor_3 = input_tensor[..., 1::2, 1::2, :]  # ... H/2 W/2 C
+
+        channel = input_tensor.shape[-1]
+        if channel == 96:
+            input_tensor_0 = self.conv_96_tl(self.device, input_tensor)
+            input_tensor_1 = self.conv_96_bl(self.device, input_tensor)
+            input_tensor_2 = self.conv_96_tr(self.device, input_tensor)
+            input_tensor_3 = self.conv_96_br(self.device, input_tensor)
+        elif channel == 192:
+            input_tensor_0 = self.conv_192_tl(self.device, input_tensor)
+            input_tensor_1 = self.conv_192_bl(self.device, input_tensor)
+            input_tensor_2 = self.conv_192_tr(self.device, input_tensor)
+            input_tensor_3 = self.conv_192_br(self.device, input_tensor)
+        elif channel == 384:
+            input_tensor_0 = self.conv_384_tl(self.device, input_tensor)
+            input_tensor_1 = self.conv_384_bl(self.device, input_tensor)
+            input_tensor_2 = self.conv_384_tr(self.device, input_tensor)
+            input_tensor_3 = self.conv_384_br(self.device, input_tensor)
+
+        input_tensor_0 = ttnn.sharded_to_interleaved(input_tensor_0, ttnn.L1_MEMORY_CONFIG)
+        input_tensor_1 = ttnn.sharded_to_interleaved(input_tensor_1, ttnn.L1_MEMORY_CONFIG)
+        input_tensor_2 = ttnn.sharded_to_interleaved(input_tensor_2, ttnn.L1_MEMORY_CONFIG)
+        input_tensor_3 = ttnn.sharded_to_interleaved(input_tensor_3, ttnn.L1_MEMORY_CONFIG)
+
         output_tensor = ttnn.concat(
             [input_tensor_0, input_tensor_1, input_tensor_2, input_tensor_3], -1, memory_config=ttnn.L1_MEMORY_CONFIG
         )
