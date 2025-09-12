@@ -209,6 +209,11 @@ class DestSync(Enum):
     Full = 1
 
 
+class Tilize(Enum):
+    Yes = "true"
+    No = "false"
+
+
 class Mailbox(Enum):
     Unpacker = 0x19FFC
     Math = 0x19FF8

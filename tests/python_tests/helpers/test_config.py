@@ -18,6 +18,7 @@ from .format_arg_mapping import (
     MathFidelity,
     MathOperation,
     StochasticRounding,
+    Tilize,
     Transpose,
     format_tile_sizes,
 )
@@ -199,6 +200,14 @@ def generate_build_header(
     header_content.append(
         f"constexpr auto dest_sync = ckernel::DstSync::Sync{dest_sync.name};"
     )
+
+    # Tilize
+    tilize_en = test_config.get("tilize", Tilize.No)
+    header_content.append(f"constexpr bool tilize_en = {tilize_en.value};")
+
+    # Dest index
+    dest_index = test_config.get("dest_index", 0)
+    header_content.append(f"constexpr int dst_index = {dest_index};")
 
     # Data format configuration
     header_content.extend(["", "// Data format configuration"])

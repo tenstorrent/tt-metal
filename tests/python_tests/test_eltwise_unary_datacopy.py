@@ -7,10 +7,11 @@ from helpers.device import (
     collect_results,
     write_stimuli_to_l1,
 )
-from helpers.format_arg_mapping import DestAccumulation, DestSync, format_dict
+from helpers.format_arg_mapping import DestAccumulation, Tilize, format_dict
 from helpers.format_config import DataFormat
-from helpers.golden_generators import DataCopyGolden, get_golden_generator
+from helpers.golden_generators import DataCopyGolden, TilizeGolden, get_golden_generator
 from helpers.param_config import (
+    generate_tilize_aware_datacopy_combinations,
     input_output_formats,
     parametrize,
 )
@@ -18,24 +19,31 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.utils import passed_test
 
+DATACOPY_FORMATS = input_output_formats(
+    [
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+    ]
+)
+
 
 @parametrize(
     test_name="eltwise_unary_datacopy_test",
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ]
+    datacopy_parameters=generate_tilize_aware_datacopy_combinations(
+        DATACOPY_FORMATS, result_tiles=4
     ),
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    num_faces=[1, 2, 4],
-    dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_unary_datacopy(test_name, formats, dest_acc, num_faces, dest_sync):
+def test_unary_datacopy(test_name, datacopy_parameters):
 
     input_dimensions = [64, 64]
+
+    formats = datacopy_parameters[0]
+    dest_acc = datacopy_parameters[1]
+    num_faces = datacopy_parameters[2]
+    tilize_en = datacopy_parameters[3]
+    dest_index = datacopy_parameters[4]
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format,
@@ -43,12 +51,20 @@ def test_unary_datacopy(test_name, formats, dest_acc, num_faces, dest_sync):
         input_dimensions=input_dimensions,
     )
 
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A, formats.output_format, num_faces, input_dimensions
-    )
+    if tilize_en == Tilize.No:
+        generate_golden = get_golden_generator(DataCopyGolden)
+        golden_tensor = generate_golden(
+            src_A, formats.output_format, num_faces, input_dimensions
+        )
+    else:
+        generate_golden = get_golden_generator(TilizeGolden)
+        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
-    unpack_to_dest = formats.input_format.is_32_bit()
+    unpack_to_dest = (
+        False
+        if tilize_en == Tilize.Yes and formats.input_format == DataFormat.Float32
+        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
 
     test_config = {
         "formats": formats,
@@ -59,7 +75,8 @@ def test_unary_datacopy(test_name, formats, dest_acc, num_faces, dest_sync):
         "unpack_to_dest": unpack_to_dest,
         "tile_cnt": tile_cnt,
         "num_faces": num_faces,
-        "dest_sync": dest_sync,
+        "tilize": tilize_en,
+        "dest_index": dest_index,
     }
 
     res_address = write_stimuli_to_l1(
