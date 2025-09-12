@@ -45,9 +45,9 @@ class Linear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)
@@ -137,9 +137,9 @@ class ColParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)
@@ -267,9 +267,9 @@ class RowParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)

@@ -16,6 +16,30 @@ namespace conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
+// to enable activation reuse feature, we need to allocate space for input needed for
+// one output image width + extra space for diff we need to add for each following output image width
+uint32_t calculate_act_cb_size_with_reuse(
+    const uint32_t act_block_h_tiles,
+    const uint32_t act_block_w_tiles,
+    const uint32_t output_image_width,
+    const uint32_t padded_in_channels,
+    const std::array<uint32_t, 2>& kernel_size,
+    const uint32_t input_tile_size,
+    DataType input_datatype) {
+    const uint32_t image_width_tiles = tt::div_up(output_image_width, tt::constants::TILE_HEIGHT);
+    const uint32_t reuse_loops = std::ceil(static_cast<float>(act_block_h_tiles) / image_width_tiles);
+    const uint32_t image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
+    const uint32_t image_width_tile_leftover =
+        image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input_datatype);
+    const uint32_t dtype_size_bytes = datum_size(data_format);
+    const uint32_t reuse_length = reuse_loops * padded_in_channels * kernel_size[1] *
+                                  (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
+    const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
+
+    return image_width_tiles * act_block_w_tiles + reuse_tiles;
+}
+
 std::vector<CBInfo> get_cb_info(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
@@ -26,6 +50,7 @@ std::vector<CBInfo> get_cb_info(
     DataType input_datatype,
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
+    uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create) {
@@ -57,8 +82,55 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t bias_tile_size = weights_tile_size;
     const uint32_t output_tile_size = tt::tile_size(output_df);
 
+    const TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
+
     // Block dims
-    const uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
+    const uint32_t tilized_act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
+    uint32_t act_block_num_tiles, act_block_split_num_tiles = 0;
+    const uint32_t padded_in_channels = weights_shape[2] / (kernel_size[0] * kernel_size[1]);
+    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !conv_config.enable_split_reader ||
+        is_1d_depthwise_conv) {
+        if (!conv_config.enable_activation_reuse) {
+            act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
+        } else {
+            act_block_num_tiles = calculate_act_cb_size_with_reuse(
+                block_config.act_block_h_ntiles,
+                block_config.act_block_w_ntiles,
+                output_image_width,
+                padded_in_channels,
+                kernel_size,
+                input_tile_size,
+                input_datatype);
+        }
+    } else {
+        // Calculate split reader parameters
+        uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
+        uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
+        uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
+
+        if (!conv_config.enable_activation_reuse) {
+            act_block_num_tiles = act_block_h_nsubblocks_split * block_config.act_block_w_ntiles;
+            act_block_split_num_tiles = act_block_h_nsubblocks_split_last * block_config.act_block_w_ntiles;
+        } else {
+            act_block_num_tiles = calculate_act_cb_size_with_reuse(
+                act_block_h_nsubblocks_split,
+                block_config.act_block_w_ntiles,
+                output_image_width,
+                padded_in_channels,
+                kernel_size,
+                input_tile_size,
+                input_datatype);
+            act_block_split_num_tiles = calculate_act_cb_size_with_reuse(
+                act_block_h_nsubblocks_split_last,
+                block_config.act_block_w_ntiles,
+                output_image_width,
+                padded_in_channels,
+                kernel_size,
+                input_tile_size,
+                input_datatype);
+        }
+    }
+
     const uint32_t weight_matrix_height_ntiles = weights_shape[2] / tt::constants::TILE_HEIGHT;
     const uint32_t weight_matrix_width_ntiles = weights_shape[3] / tt::constants::TILE_WIDTH;
 
@@ -71,7 +143,6 @@ std::vector<CBInfo> get_cb_info(
 
     const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
-    const TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     const uint32_t in0_num_blocks_w =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
@@ -87,8 +158,9 @@ std::vector<CBInfo> get_cb_info(
             per_core_out_matrix_width_ntiles *
             (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (num_blocks_act_h > 1) {
-                // Fully buffered weights
+            // If activation reuse is enabled, we already have full inner dim
+            const bool enable_fully_buffered_weights = num_blocks_act_h > 1 && !conv_config.enable_activation_reuse;
+            if (enable_fully_buffered_weights) {
                 weight_block_num_tiles *= kernel_size[0];
             } else if (conv_config.enable_weights_double_buffer) {
                 weight_block_num_tiles *= 2;
@@ -114,19 +186,8 @@ std::vector<CBInfo> get_cb_info(
 
     {
         // ACT and ACT_SECOND_READER CB
-        uint32_t act_cb_num_tiles = act_block_num_tiles;
-        uint32_t act_block_split_num_tiles = 0;
-        if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.enable_split_reader &&
-            !is_1d_depthwise_conv) {
-            uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
-            uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
-            uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
-
-            act_cb_num_tiles = act_block_h_nsubblocks_split * block_config.act_block_w_ntiles;
-            act_block_split_num_tiles = act_block_h_nsubblocks_split_last * block_config.act_block_w_ntiles;
-        }
         if (conv_config.enable_act_double_buffer) {
-            act_cb_num_tiles *= 2;
+            act_block_num_tiles *= 2;
             act_block_split_num_tiles *= 2;
         }
 
@@ -137,7 +198,7 @@ std::vector<CBInfo> get_cb_info(
         const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = overlap_act_cb ? 0 : act_cb_num_tiles,
+            .num_pages = overlap_act_cb ? 0 : act_block_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format,
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
@@ -158,7 +219,7 @@ std::vector<CBInfo> get_cb_info(
     // Tilized act CB
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::ACT_TILIZED,
-        .num_pages = act_block_num_tiles,
+        .num_pages = tilized_act_block_num_tiles,
         .page_size = output_tile_size,
         .data_format = output_df});
 
