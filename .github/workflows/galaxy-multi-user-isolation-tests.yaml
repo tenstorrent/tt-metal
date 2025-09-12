@@ -48,6 +48,8 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
         run: |
+          rm -rf ./multihosttest
+          mkdir -p ./multihosttest
           cat <<EOF > docker-compose.temp.yml
           version: "3.9"
           services:
@@ -127,7 +129,6 @@ jobs:
                 - "/dev/tenstorrent/30:/dev/tenstorrent/30"
                 - "/dev/tenstorrent/31:/dev/tenstorrent/31"
           EOF
-
       - name: Run Docker Compose
         run: |
           docker compose -f docker up --abort-on-container-exit
