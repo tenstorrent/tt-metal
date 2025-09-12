@@ -11,8 +11,7 @@ Options:
     --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
 
 Description:
-    Unified data provider that combines functionality of devices_to_check, block_locations_to_check,
-    check_per_device, and check_per_block_location. This script provides a single interface for:
+     Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
     - Device selection and filtering
     - Block location extraction and filtering
     - Running checks per device
