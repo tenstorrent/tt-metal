@@ -405,7 +405,8 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-def test_reshape_tile_program_cache(device):
+@pytest.mark.parametrize("recreate_mapping_tensor", (False, True))
+def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -414,7 +415,7 @@ def test_reshape_tile_program_cache(device):
             input_tensor = ttnn.from_torch(
                 torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
             )
-            ttnn_output = ttnn.reshape(input_tensor, output_shape)
+            ttnn_output = ttnn.reshape(input_tensor, output_shape, recreate_mapping_tensor=recreate_mapping_tensor)
 
             output = ttnn.to_torch(ttnn_output)
             assert_with_pcc(torch_result, output, 0.9999)
