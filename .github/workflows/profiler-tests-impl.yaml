@@ -1,5 +1,4 @@
 name: "[internal] profiler tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -22,15 +21,13 @@ on:
         default: "config-t3000"
 
 jobs:
-  profiler-tests:
-    strategy:
-      fail-fast: false
-    name: "profiler tests"
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
-    container:
+  # create a template job that is not actually run hence the if: false
+  profiler_job_template:
+    if: false
+    # runs-on is required by GH even for template jobs. This is never used
+    runs-on: ubuntu-latest
+    # Anchor the container block
+    container: &container-config
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
@@ -48,11 +45,15 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
-    defaults:
+
+    # Anchor the defaults block
+    defaults: &defaults-config
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
+
+    # Anchor the steps
+    steps: &steps-sequence
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -75,3 +76,26 @@ jobs:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  profiler-tests-t3000:
+    name: "profiler tests t3000"
+    if: inputs.topology == 'config-t3000'
+    runs-on: tt-ubuntu-2204-N300-llmbox-stable
+    strategy:
+      fail-fast: false
+    container: *container-config
+    defaults: *defaults-config
+    steps: *steps-sequence
+
+  profiler-tests-galaxy:
+    name: "profiler tests galaxy"
+    if: inputs.topology == 'topology-6u'
+    runs-on: 
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - ${{ inputs.extra-tag }}
+    strategy:
+      fail-fast: false
+    container: *container-config
+    defaults: *defaults-config
+    steps: *steps-sequence
