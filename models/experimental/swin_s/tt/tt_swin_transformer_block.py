@@ -37,7 +37,7 @@ class TtSwinTransformerBlock(nn.Module):
             [int(dim * mlp_ratio), dim],
             device,
             parameters.mlp,
-            activation_layer=ttnn.gelu,
+            activation_layer="gelu",
             inplace=None,
         )
 
