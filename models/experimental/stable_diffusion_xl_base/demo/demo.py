@@ -35,7 +35,6 @@ def run_demo_inference(
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
-    torch.manual_seed(0)
 
     if isinstance(prompts, str):
         prompts = [prompts]
