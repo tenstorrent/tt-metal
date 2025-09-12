@@ -186,7 +186,7 @@ class ShardedMeshBufferTestSuite
     : public LargeMeshBufferTestSuiteBase,
       public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
-TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // shard_shape: shape on device (elements)
     // page_size: (bytes)
     auto [tensor_and_grid, page_size] = GetParam();
