@@ -487,7 +487,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
             return_tensors="pt",
         )
 
-        assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+        assert processed_inputs.input_ids.shape[0] == 1, "Expected to process one input prompt at a time in processor"
         prompt_token_ids = processed_inputs.input_ids[0].tolist()
 
         mm_inputs = MultiModalInputs(
