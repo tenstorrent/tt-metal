@@ -107,7 +107,6 @@ void py_bind_reduce_scatter_async(pybind11::module& module) {
         module,
         ttnn::experimental::reduce_scatter_async,
         R"doc(
-
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent
         fabric to be enabled in order to function.
 
