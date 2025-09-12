@@ -22,18 +22,11 @@
 namespace tt::tt_fabric {
 namespace physical_discovery {
 
-// uint32_t phys_to_log_eth_core_index(uint8_t phys_eth_core_index) {
-//     static const std::vector<uint8_t> phy_eth_chans = {0, 1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13};
-//     return std::distance(
-//         phy_eth_chans.begin(), std::find(phy_eth_chans.begin(), phy_eth_chans.end(), phys_eth_core_index));
-// }
-
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    // distributed_context.barrier();
-    // exit(0);
+
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();

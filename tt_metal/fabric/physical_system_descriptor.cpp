@@ -547,6 +547,7 @@ void PhysicalSystemDescriptor::validate_graphs() {
                                    exit_node_conn.eth_conn.src_chan == eth_conn.src_chan &&
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
+
                     TT_FATAL(
                         exit_conn_found,
                         "Physical Discovery Error: Global Connection between {} and {} is not found in the "

@@ -119,20 +119,12 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
-    const std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<uint8_t, uint32_t>>>&
-    get_physical_to_logical_eth_chan() const {
-        return physical_to_logical_eth_chan_;
-    }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
-    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<uint8_t, uint32_t>>>&
-    get_physical_to_logical_eth_chan() {
-        return physical_to_logical_eth_chan_;
-    }
 
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
@@ -153,8 +145,6 @@ private:
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
-    std::unordered_map<std::string, std::unordered_map<uint64_t, std::unordered_map<uint8_t, uint32_t>>>
-        physical_to_logical_eth_chan_;
     bool all_hostnames_unique_ = true;
 };
 
