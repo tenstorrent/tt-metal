@@ -17,6 +17,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/allocator_dependency_manager.hpp>
 
 namespace tt {
 
@@ -36,7 +37,11 @@ public:
 
     DeviceAddr allocate_buffer(Buffer* buffer);
 
+    // AllocatorID-aware buffer allocation methods
+    DeviceAddr allocate_buffer(Buffer* buffer, distributed::AllocatorDependencyManager::AllocatorID allocator_id);
+
     void deallocate_buffer(Buffer* buffer);
+    void deallocate_buffer(Buffer* buffer, distributed::AllocatorDependencyManager::AllocatorID allocator_id);
     void deallocate_buffers();
 
     std::unordered_set<Buffer*> get_allocated_buffers() const;

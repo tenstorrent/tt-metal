@@ -221,6 +221,7 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
+    allocator_dependency_manager_(std::make_unique<AllocatorDependencyManager>()),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
@@ -427,6 +428,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     }
 
     submeshes_.push_back(submesh);
+    // Register the submesh with the allocator dependency manager
+    allocator_dependency_manager_->register_submesh(submesh, shared_from_this());
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
     log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
     return submesh;
@@ -1026,6 +1029,24 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
 }
 const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+}
+
+// AllocatorID-aware allocator methods
+const std::unique_ptr<Allocator>& MeshDevice::allocator(AllocatorDependencyManager::AllocatorID allocator_id) const {
+    // For now, ignore allocator_id and use default allocator since we only have one allocator state
+    (void)allocator_id;  // Suppress unused parameter warning
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+}
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator(
+    SubDeviceId sub_device_id, AllocatorDependencyManager::AllocatorID allocator_id) const {
+    // For now, ignore allocator_id and use existing sub_device_id logic since we only have one allocator state
+    (void)allocator_id;  // Suppress unused parameter warning
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+}
+
+AllocatorDependencyManager::AllocatorID MeshDevice::get_allocator_id() const {
+    return allocator_dependency_manager_->get_allocator_id(this);
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }

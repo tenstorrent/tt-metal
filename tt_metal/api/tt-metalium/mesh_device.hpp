@@ -32,6 +32,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/allocator_dependency_manager.hpp>
 #include <umd/device/types/arch.h>
 
 enum class CoreType;
@@ -114,6 +115,9 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
+    // Allocator dependency manager for handling submesh allocator relationships
+    std::unique_ptr<AllocatorDependencyManager> allocator_dependency_manager_;
+
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
@@ -187,6 +191,14 @@ public:
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
+
+    // AllocatorID-aware allocator methods
+    const std::unique_ptr<Allocator>& allocator(AllocatorDependencyManager::AllocatorID allocator_id) const;
+    const std::unique_ptr<Allocator>& allocator(
+        SubDeviceId sub_device_id, AllocatorDependencyManager::AllocatorID allocator_id) const;
+
+    // Get the AllocatorID for this mesh device
+    AllocatorDependencyManager::AllocatorID get_allocator_id() const;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
