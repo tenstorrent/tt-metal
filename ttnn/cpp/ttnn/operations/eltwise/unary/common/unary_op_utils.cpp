@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <optional>
 #include <tt-metalium/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -83,6 +84,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
@@ -417,12 +419,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             std::string where_call;
             if (input_dtype == DataType::INT32) {
                 where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-                where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else if (input_dtype == DataType::FLOAT32) {
                 where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-                where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else {
-                where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
                 where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             }
             op_init_and_name = std::make_pair("where_tile_init();", where_call);
@@ -547,6 +546,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             } else if (input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
+            } else if (input_dtype == DataType::UINT16) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
@@ -579,6 +581,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+            } else if (input_dtype.value() == DataType::UINT16) {
+                op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
                 op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
             }
@@ -879,7 +883,12 @@ std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
-        case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
+        case UnaryOpType::TANHSHRINK:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return fmt::format("{}/{}", compute_root, "tanhshrink_sfpu_kernel.cpp");
+            } else {
+                return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
+            }
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
         case UnaryOpType::WHERE_TSS: return fmt::format("{}/{}", compute_root, "where_tss_kernel.cpp");
         case UnaryOpType::HARDSHRINK:
