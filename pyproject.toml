@@ -50,8 +50,6 @@ skip = ["__init__.py"]
 [tool.ruff]
 line-length = 120
 
-[tool.setuptools_scm]
-
 [tool.cibuildwheel]
 skip = "*-musllinux_*"
 build-verbosity = 2
