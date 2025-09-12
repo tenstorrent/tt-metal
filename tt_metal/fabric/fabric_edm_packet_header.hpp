@@ -10,6 +10,7 @@
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -494,7 +495,6 @@ struct LowLatencyRoutingFields {
 };
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
-    static constexpr uint8_t default_high_vc_distance = LowLatencyRoutingFields::MAX_NUM_ENCODINGS;
     LowLatencyRoutingFields routing_fields;
 
 private:
@@ -502,7 +502,10 @@ private:
         // Example of unicast 3 hops away
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
         // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
-        // the 3rd chip, we will write only Together this means the final encoding is 0b011010
+        // the 3rd chip, we will write only. Together this means the final encoding is 0b011010
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
+#endif
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
                (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
@@ -512,11 +515,16 @@ private:
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
         // (forward to neighbor is not encoded in the field) Second line will do 0xFFFFFFFF & 0b11 = 0b11. 0b11 << 4 =
-        // 0b110000. This means starting from the 3rd chip, we will write and forward once Last line will do 0b01 << 6 =
-        // 0b01000000. This means that on the 5th chip, we will write only Together this means the final encoding is
+        // 0b110000. This means starting from the 3rd chip, we will write and forward once. Last line will do 0b01 << 6
+        // = 0b01000000. This means that on the 5th chip, we will write only. Together this means the final encoding is
         // 0b01111010
         uint32_t distance_in_hops =
             chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 1;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(
+            chip_multicast_command_header.start_distance_in_hops > 0 &&
+            distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
+#endif
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
                // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost
