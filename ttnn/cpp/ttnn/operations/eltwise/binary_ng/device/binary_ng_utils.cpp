@@ -151,7 +151,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : binary_op(EnumT::SUB) {
+OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+    binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
         case BinaryOpType::SUB: break;
@@ -173,10 +174,34 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 binary_op = FpuBinaryOp::ADD;
             }
             break;
-        case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
-        case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::LT:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LTZ;
+            } else {
+                binary_op = SfpuBinaryOp::LT;
+            }
+            break;
+        case BinaryOpType::GT:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GTZ;
+            } else {
+                binary_op = SfpuBinaryOp::GT;
+            }
+            break;
+        case BinaryOpType::GE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GEZ;
+            } else {
+                binary_op = SfpuBinaryOp::GE;
+            }
+            break;
+        case BinaryOpType::LE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LEZ;
+            } else {
+                binary_op = SfpuBinaryOp::LE;
+            }
+            break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -438,6 +463,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
+        case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
+        case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
+        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
+        case GE: return {"le_int32_tile_init();", "le_int32_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -544,7 +573,7 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>);
+template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
 
 }  // namespace ttnn::operations::binary_ng
