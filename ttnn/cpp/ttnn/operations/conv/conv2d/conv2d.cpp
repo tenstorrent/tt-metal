@@ -275,38 +275,47 @@ Result conv2d_DRAM(
         auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         uint32_t current_num_slices = 1;
         log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-        while (current_num_slices < output_sliced_dim) {
+        while (current_num_slices <= output_sliced_dim) {
             dram_slice_config.num_slices = current_num_slices;
-            if (L1_stats.total_free_bytes >=
-                calculate_conv_dram_slice_L1_usage(
-                    ConvDRAMParamters{
-                        .in_channels = in_channels,
-                        .out_channels = out_channels,
-                        .batch_size = batch_size,
-                        .input_height = input_height,
-                        .input_width = input_width,
-                        .output_height = output_height,
-                        .output_width = output_width,
-                        .kernel_size = kernel_size,
-                        .stride = stride,
-                        .padding_n4 = padding_n4,
-                        .dilation = dilation,
-                        .groups = groups,
-                        .conv_config = conv_config,
-                        .compute_kernel_config = compute_config,
-                        .compute_grid = compute_grid_size,
-                        .weights_shape = weight_tensor.padded_shape(),
-                        .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
-                        .input_datatype = input_tensor.dtype(),
-                        .output_datatype = output_dtype,
-                        .enable_bias = bias_tensor.has_value(),
-                        .mm_conv = mm_conv,
-                    },
-                    device,
-                    dram_slice_config)) {
+            auto l1_usage = calculate_conv_dram_slice_L1_usage(
+                ConvDRAMParamters{
+                    .in_channels = in_channels,
+                    .out_channels = out_channels,
+                    .batch_size = batch_size,
+                    .input_height = input_height,
+                    .input_width = input_width,
+                    .output_height = output_height,
+                    .output_width = output_width,
+                    .kernel_size = kernel_size,
+                    .stride = stride,
+                    .padding_n4 = padding_n4,
+                    .dilation = dilation,
+                    .groups = groups,
+                    .conv_config = conv_config,
+                    .compute_kernel_config = compute_config,
+                    .compute_grid = compute_grid_size,
+                    .weights_shape = weight_tensor.padded_shape(),
+                    .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+                    .input_datatype = input_tensor.dtype(),
+                    .output_datatype = output_dtype,
+                    .enable_bias = bias_tensor.has_value(),
+                    .mm_conv = mm_conv,
+                },
+                device,
+                dram_slice_config);
+            log_debug(
+                tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
+            if (L1_stats.total_free_bytes >= l1_usage) {
                 break;
             }
             current_num_slices++;
+        }
+        if (conv_config.output_layout == tt_metal::Layout::TILE &&
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+            // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
+            const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
+            dram_slice_config.num_slices = std::min(dram_slice_config.num_slices, max_slices);
         }
         TT_FATAL(
             current_num_slices <= output_sliced_dim,
@@ -522,7 +531,6 @@ Result conv2d_DRAM(
 
         auto conv_config_l1 = conv_config;
 
-        // Setting both to true causes an error in pytest
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
