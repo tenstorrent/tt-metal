@@ -1275,11 +1275,7 @@ static Fabric1DWorkerConfig get_fabric_1d_worker_config(
         } else {
             TT_THROW("Invalid fabric mode");
         }
-        if (config.num_fwd_hops >= config.num_bwd_hops) {
-            config.unicast_forward = true;
-        } else {
-            config.unicast_forward = false;
-        }
+        config.unicast_forward = config.num_fwd_hops >= config.num_bwd_hops;
     } else {
         config.backward_device = device_index == 0 ? nullptr : devices[device_index - 1];
         config.forward_device = device_index == line_size - 1 ? nullptr : devices[device_index + 1];

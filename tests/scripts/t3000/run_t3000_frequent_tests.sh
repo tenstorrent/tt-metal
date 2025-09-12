@@ -359,9 +359,9 @@ run_t3000_sd35large_tests() {
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
   # Run test_model for sd35 large
-  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "t3k" ; fail+=$?
-  SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_patch_embedding.py -k "t3k"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "t3k"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

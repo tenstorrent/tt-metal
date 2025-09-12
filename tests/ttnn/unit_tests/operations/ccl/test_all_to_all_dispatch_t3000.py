@@ -193,6 +193,7 @@ def run_all_to_all_dispatch_test(
     test_skew=False,
 ):
     torch.manual_seed(2005)
+    random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
 
