@@ -78,7 +78,7 @@ inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::s
 }
 
 template <typename... Args>
-[[noreturn]] void tt_throw_impl(
+[[noreturn]] inline void tt_throw_impl(
     char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
     if (std::getenv("TT_ASSERT_ABORT")) {
         if constexpr (sizeof...(args) > 0) {
@@ -105,7 +105,7 @@ template <typename... Args>
 }
 
 template <typename... Args>
-[[noreturn]] void tt_throw(
+[[noreturn]] inline void tt_throw(
     char const* file,
     int line,
     char const* assert_type,
@@ -122,7 +122,7 @@ inline void tt_assert(char const* file, int line, char const* assert_type, bool 
 }
 
 template <typename... Args>
-void tt_assert(
+inline void tt_assert(
     char const* file,
     int line,
     char const* assert_type,
