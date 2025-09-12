@@ -193,7 +193,7 @@ private:
     }
 
 public:
-    explicit MockTelemetryProvider(std::initializer_list<std::shared_ptr<TelemetrySubscriber>> subscribers) :
+    explicit MockTelemetryProvider(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) :
         subscribers_(subscribers), gen_(rd_()), bool_dist_(0, 1), uint_dist_(0, 1000), num_updates_dist_(1, 4) {
         // Init telemetry randomly
         bool_metric_ids_.clear();
