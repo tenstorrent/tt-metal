@@ -239,19 +239,19 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
+
 # OFT
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (1, 64, 185, 612, 16, 2, 8, 8),
-        (1, 64, 93, 306, 16, 2, 8, 8),
-        (1, 128, 47, 153, 16, 2, 8, 8),
-        (1, 256, 24, 77, 16, 2, 8, 8),
-        (1, 512, 12, 39, 16, 2, 8, 8),
-        (1, 256, 47, 153, 16, 2, 8, 8),
-        (1, 256, 12, 39, 16, 2, 8, 8),
-        (1, 256, 159, 159, 16, 2, 8, 8),
+        (1, 64, 185, 612, 16, 64, 1, 2),
+        (1, 64, 93, 306, 16, 32, 1, 2),
+        (1, 128, 47, 153, 16, 16, 1, 4),
+        (1, 256, 24, 77, 16, 4, 2, 8),
+        (1, 512, 12, 39, 16, 8, 1, 8),
+        (1, 256, 47, 153, 16, 16, 1, 8),
+        (1, 256, 12, 39, 16, 8, 1, 8),
+        (1, 256, 159, 159, 16, 16, 1, 8),
     ],
 )
 def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
