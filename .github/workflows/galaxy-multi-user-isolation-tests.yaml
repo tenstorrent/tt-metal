@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - slee/multiusergalaxy
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
