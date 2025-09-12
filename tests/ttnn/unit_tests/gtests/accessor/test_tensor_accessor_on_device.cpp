@@ -135,7 +135,7 @@ struct CopyParams {
     DataType dtype;
     BufferType buffer_type;
 
-    std::optional<NdShardSpec> input_shard_spec = std::nullopt;
+    std::optional<NdShardSpec> input_shard_spec;
 };
 
 template <typename T>
