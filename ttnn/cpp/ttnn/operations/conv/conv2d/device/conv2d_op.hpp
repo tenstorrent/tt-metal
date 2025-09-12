@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -279,10 +280,10 @@ struct OptimizedConvNew {
         sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
-        activation(activation),
+        activation(std::move(activation)),
         parallelization_config(p_config),
         block_config(b_config),
-        memory_config(memory_config),
+        memory_config(std::move(memory_config)),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
         compute_kernel_config(compute_kernel_config),

@@ -102,7 +102,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -468,7 +468,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
