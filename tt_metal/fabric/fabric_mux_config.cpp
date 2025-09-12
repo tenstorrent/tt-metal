@@ -208,9 +208,9 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     if (tensix_config_enabled) {
         const auto& fabric_tensix_config =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_tensix_config();
-        set_fabric_endpoint_channel_num_buffers(fabric_tensix_config.get_num_buffers_per_channel());
+        fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
     } else {
-        set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+        fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
     }
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
@@ -224,8 +224,8 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
 
     // For relay mux, always use fabric router config
-    set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
-    set_wait_for_fabric_endpoint_ready(true);
+    fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
+    wait_for_fabric_endpoint_ready_ = true;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
@@ -319,11 +319,11 @@ void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
     num_iters_between_teardown_checks_ = new_val;
 }
 
-void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) const {
+void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
     wait_for_fabric_endpoint_ready_ = wait_for_ready;
 }
 
-void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) const {
+void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) {
     fabric_endpoint_channel_num_buffers_ = num_buffers;
 }
 
