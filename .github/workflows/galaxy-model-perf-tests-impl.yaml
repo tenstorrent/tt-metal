@@ -68,7 +68,7 @@ jobs:
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
-            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "tg_cfg2_sp4_tp4"',
+            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "4x8cfg1sp0tp1"',
             owner_id: U03FJB5TM5Y # Colman Glagovich
           },
           {

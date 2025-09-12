@@ -359,7 +359,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Create and enqueue mesh workloads
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::MeshCoordinate zero_coord =
             tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device_ptr->shape().dims());
         tt::tt_metal::distributed::MeshCoordinateRange device_range =
@@ -371,12 +371,12 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Wait for completion
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::Finish(mesh_device_ptr->mesh_command_queue());
     }
 
     // Read profiler results
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::detail::ReadDeviceProfilerResults(mesh_device_ptr->get_devices()[0]);
     }
 }

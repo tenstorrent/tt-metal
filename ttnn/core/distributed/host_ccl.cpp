@@ -13,6 +13,7 @@
 #include <ttnn/tensor/storage.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
+#include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
 namespace ttnn::distributed::host_ccl {
@@ -35,28 +36,68 @@ Tensor all_gather(const Tensor& tensor) {
     // Destination buffer for all-gather data is fully local on each host.
     auto all_gather_buffer = DistributedHostBuffer::create(tensor.host_storage().buffer().shape());
 
-    for (const auto& coord : tensor.host_storage().buffer().shard_coords()) {
+    // Prepare shard presence data: first element is rank, rest are 1/0 for shard presence
+    const int this_rank = *ctx->rank();
+    constexpr int kShardPresent = 1;
+    constexpr int kShardAbsent = 0;
+
+    // Note the use of `std::set` is required to ensure the ordering of the shard coordinates.
+    const std::set<distributed::MeshCoordinate>& shard_coords = tensor.host_storage().buffer().shard_coords();
+    std::vector<int> local_shard_info;
+    local_shard_info.reserve(1 + shard_coords.size());
+    local_shard_info.push_back(this_rank);
+
+    for (const auto& coord : shard_coords) {
         auto shard = tensor.host_storage().buffer().get_shard(coord);
+        local_shard_info.push_back(shard.has_value() ? kShardPresent : kShardAbsent);
+    }
 
-        // Run all-reduce to determine which rank has data for this shard.
-        int has_data = shard.has_value() ? *ctx->rank() : -1;
-        int has_data_rank = -1;
+    std::vector<int> global_shard_info(local_shard_info.size() * *ctx->size());
+    ctx->all_gather(
+        ttsl::as_writable_bytes(ttsl::make_span(local_shard_info)),
+        ttsl::as_writable_bytes(ttsl::make_span(global_shard_info)));
 
-        ctx->all_reduce(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&has_data), sizeof(int)),
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&has_data_rank), sizeof(int)),
-            tt::tt_metal::distributed::multihost::ReduceOp::MAX,
-            tt::tt_metal::distributed::multihost::DType::INT32);
+    auto find_shard_distribution = [&](size_t shard_index) -> std::pair<std::optional<int>, bool> {
+        std::optional<int> lowest_rank_with_shard;
+        bool any_host_missing = false;
 
-        TT_FATAL(has_data_rank != -1, "Failed to find shard for rank {}", *ctx->rank());
+        for (int host = 0; host < *ctx->size(); ++host) {
+            int base_idx = host * local_shard_info.size();
+            int rank = global_shard_info[base_idx];
+            int has_shard = global_shard_info[base_idx + 1 + shard_index];
 
-        if (shard.has_value()) {
-            ctx->broadcast(shard->view_bytes(), tt::tt_metal::distributed::multihost::Rank(has_data_rank));
-            all_gather_buffer.emplace_shard(coord, [&shard]() { return *shard; });
+            if (has_shard) {
+                lowest_rank_with_shard = std::min(lowest_rank_with_shard.value_or(rank), rank);
+            } else {
+                any_host_missing = true;
+            }
+        }
+
+        return {lowest_rank_with_shard, any_host_missing};
+    };
+
+    size_t shard_idx = 0;
+    for (const auto& coord : shard_coords) {
+        auto local_shard = tensor.host_storage().buffer().get_shard(coord);
+
+        const auto [lowest_rank_with_shard, any_host_missing_shard] = find_shard_distribution(shard_idx++);
+        TT_FATAL(lowest_rank_with_shard.has_value(), "No host has shard at coordinate {}", coord);
+
+        // Only broadcast if at least one host is missing the shard.
+        if (any_host_missing_shard) {
+            if (local_shard.has_value() && *lowest_rank_with_shard == this_rank) {
+                ctx->broadcast(
+                    local_shard->view_bytes(), tt::tt_metal::distributed::multihost::Rank(*lowest_rank_with_shard));
+                all_gather_buffer.emplace_shard(coord, [&local_shard]() { return *local_shard; });
+            } else {
+                HostBuffer buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor.tensor_spec());
+                ctx->broadcast(
+                    buffer.view_bytes(), tt::tt_metal::distributed::multihost::Rank(*lowest_rank_with_shard));
+                all_gather_buffer.emplace_shard(coord, [&buffer]() { return std::move(buffer); });
+            }
         } else {
-            HostBuffer buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor.tensor_spec());
-            ctx->broadcast(buffer.view_bytes(), tt::tt_metal::distributed::multihost::Rank(has_data_rank));
-            all_gather_buffer.emplace_shard(coord, [&buffer]() { return std::move(buffer); });
+            TT_FATAL(local_shard.has_value(), "Expected all hosts to have shard at coordinate {}", coord);
+            all_gather_buffer.emplace_shard(coord, [&local_shard]() { return *local_shard; });
         }
     }
 

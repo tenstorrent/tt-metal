@@ -136,7 +136,7 @@ using tt::tt_metal::CommandQueueSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(runTestsuite(mesh_device, core));
     }
 }

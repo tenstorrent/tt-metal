@@ -34,3 +34,7 @@ def save_cache_dict(cache_dict, cache_path):
 def load_cache_dict(cache_path):
     with open(os.path.join(cache_path, CACHE_DICT_FILE), "r") as f:
         return json.load(f)
+
+
+def cache_dict_exists(cache_path):
+    return os.path.exists(os.path.join(cache_path, CACHE_DICT_FILE))

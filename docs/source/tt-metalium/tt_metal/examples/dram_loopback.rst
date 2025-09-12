@@ -56,7 +56,7 @@ Note that almost all operations on the Tensix are aligned with tiles. And a tile
 
 Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
 
-The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.
+The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
 
 .. code-block:: cpp
 
@@ -73,7 +73,7 @@ The L1 buffer is created with a size equal to the size of a single tile, which w
 
   Buffer l1_buffer = CreateBuffer(l1_config);
 
-The only difference between the L1 and DRAM buffer is the ``BufferType``. The L1 buffer is created with a ``BufferType::L1`` and the DRAM buffer is created with a ``BufferType::DRAM``.
+The DRAM buffers differ from the L1 buffer in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
 
 .. code-block:: cpp
 
@@ -136,7 +136,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.
 
-The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
+The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
 The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
 
@@ -167,7 +167,7 @@ The ``TensorAccessor`` object handles bank addressing and page size automaticall
     }
 
 .. note::
-  ``TensorAccessor`` handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically, including the complexity of bank interleaving. Without the helper, the kernel implementation would need to manually calculate NoC addresses for each tile, taking into account how data is distributed across DRAM banks. The ``TensorAccessor`` abstraction greatly simplifies this by handling all the bank addressing and page size calculations internally. Here's what the manual implementation would look like:
 
   .. code-block:: cpp
 

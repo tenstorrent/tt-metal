@@ -7,10 +7,10 @@ on:
         required: false
         default: false
         type: boolean
-  schedule:
-    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
-    # dev testing and builds for beginning of work week
-    - cron: "0 0 * * *"
+  # schedule:
+  #   # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+  #   # dev testing and builds for beginning of work week
+  #   - cron: "0 0 * * *"
 
 permissions:
   contents: write

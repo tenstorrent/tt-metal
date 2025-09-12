@@ -29,7 +29,7 @@ DeviceStorage::DeviceStorage(
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
-    if (this->mesh_buffer.get() != nullptr) {
+    if (this->mesh_buffer != nullptr) {
         return this->mesh_buffer->get_reference_buffer();
     }
     TT_THROW("Buffer is not allocated");
@@ -40,19 +40,17 @@ std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const 
     return mesh_buffer;
 }
 
-bool DeviceStorage::is_allocated() const {
-    return this->mesh_buffer.get() != nullptr && this->mesh_buffer->is_allocated();
-}
+bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
 
 distributed::MeshDevice* DeviceStorage::get_device() const {
-    if (this->mesh_buffer.get() != nullptr) {
+    if (this->mesh_buffer != nullptr) {
         return this->mesh_buffer->device();
     }
     TT_THROW("Buffer is not allocated");
 }
 
 bool DeviceStorage::is_uniform_storage() const {
-    if (mesh_buffer.get() == nullptr) {
+    if (mesh_buffer == nullptr) {
         return true;
     }
     return coords.size() == mesh_buffer->device()->num_devices();

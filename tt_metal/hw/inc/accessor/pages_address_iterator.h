@@ -198,11 +198,7 @@ private:
         uint32_t current_shard_coord = page_coord[dspec.rank() - 1] / dspec.shard_shape()[dspec.rank() - 1];
         uint32_t next_shard_coord = next_coord / dspec.shard_shape()[dspec.rank() - 1];
 
-        if (current_shard_coord != next_shard_coord) {
-            return false;  // Would cross shard boundary
-        }
-
-        return true;  // Safe to increment
+        return current_shard_coord == next_shard_coord;
     }
 
     // Apply the simple increment (called after can_use_simple_increment returns true)

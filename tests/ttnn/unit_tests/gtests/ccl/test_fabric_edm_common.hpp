@@ -843,7 +843,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
         test_fixture.mesh_device_.get(),
-        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        test_fixture.mesh_device_->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                            // initial value
         tt::tt_metal::BufferType::L1  // buffer type
     );
