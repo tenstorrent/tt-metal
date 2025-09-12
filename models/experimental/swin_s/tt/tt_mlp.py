@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 program_configs = {
     "linear_1_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -13,7 +20,7 @@ program_configs = {
         per_core_M=8,
         per_core_N=12,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         mcast_in0=False,
     ),
     "linear_1_config_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -24,7 +31,7 @@ program_configs = {
         per_core_M=2,
         per_core_N=24,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         mcast_in0=False,
     ),
     "linear_1_config_4": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -89,7 +96,7 @@ class TtMLP:
         device,
         parameters,
         inplace=None,
-        activation_layer=ttnn.relu,
+        activation_layer="relu",
         norm_layer=None,
     ):
         self.params = {} if inplace is None else {"inplace": inplace}
@@ -100,6 +107,8 @@ class TtMLP:
         self.activation_layer = activation_layer
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="mlp")
         for hidden_dim in self.hidden_channels[:-1]:
             if input_tensor.shape[-1] == 96:
                 input_tensor = ttnn.to_memory_config(
@@ -152,6 +161,7 @@ class TtMLP:
                     input_tensor,
                     self.parameters[0].weight,
                     bias=self.parameters[0].bias,
+                    activation=self.activation_layer,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
@@ -163,6 +173,7 @@ class TtMLP:
                     input_tensor,
                     self.parameters[0].weight,
                     bias=self.parameters[0].bias,
+                    activation=self.activation_layer,
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
@@ -171,17 +182,6 @@ class TtMLP:
                 )
 
             output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            if self.norm_layer is not None:
-                output_tensor = ttnn.layer_norm(
-                    output_tensor,
-                    weight=self.parameters.norm_weight,
-                    bias=self.parameters.norm_bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-            output_tensor = self.activation_layer(
-                output_tensor,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
 
         if output_tensor.shape[-1] == 384:
             output_tensor = ttnn.to_memory_config(
