@@ -304,6 +304,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_settings.interval_ms = sleep_val;
     }
 
+    watcher_settings.fw_enabled = (getenv("TT_METAL_WATCHER_RUNTIME_KERNELS") != nullptr);
     watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);
     watcher_settings.append = (getenv("TT_METAL_WATCHER_APPEND") != nullptr);
     watcher_settings.noinline = (getenv("TT_METAL_WATCHER_NOINLINE") != nullptr);
