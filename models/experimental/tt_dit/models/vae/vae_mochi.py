@@ -327,6 +327,7 @@ class ResBlock:
         HW = x_tiled_NTHWC.shape[2]
         C = x_tiled_NTHWC.shape[3]
         num_out_blocks = self.num_out_blocks_map[C][HW]
+
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_tiled_NTHWC)
         x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
@@ -340,6 +341,7 @@ class ResBlock:
                 cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
                 memory_config=x_NTHWC.memory_config(),
             )
+
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
@@ -348,7 +350,7 @@ class ResBlock:
                 dim=2,
                 padding_left=1,
                 padding_right=1,
-                padding_mode="zeros",
+                padding_mode="replicate",
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
@@ -396,7 +398,7 @@ class ResBlock:
                 dim=2,
                 padding_left=1,
                 padding_right=1,
-                padding_mode="zeros",
+                padding_mode="replicate",
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
