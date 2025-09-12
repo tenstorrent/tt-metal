@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, SfpuType::lt>,
+        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::lt>,
         dst_index0,
         dst_index1,
         odst,
@@ -37,7 +37,7 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, SfpuType::gt>,
+        ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::gt>,
         dst_index0,
         dst_index1,
         odst,

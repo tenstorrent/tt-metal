@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise relational operation with the two integer inputs: y = relational(x0,x1)
+ * Performs an elementwise comparison operation with the two integer inputs: y = comparison_op(x0,x1)
  * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
