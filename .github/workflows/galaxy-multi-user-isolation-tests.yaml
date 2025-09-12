@@ -131,7 +131,7 @@ jobs:
           EOF
       - name: Run Docker Compose
         run: |
-          docker compose up -d
+          docker compose -f docker-compose.yaml" up -d
 
       - name: Tear down containers
         if: always()
