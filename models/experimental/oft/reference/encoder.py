@@ -51,23 +51,24 @@ class ObjectEncoder(nn.Module):
 
     def decode(self, heatmaps, pos_offsets, dim_offsets, ang_offsets, grid):
         # Apply NMS to find positive heatmap locations
-        peaks, max_inds, scores, classids = self._decode_heatmaps(heatmaps)
+        peaks, max_inds, scores, classids, smoothed, mp = self._decode_heatmaps(heatmaps)
         positions = self._decode_positions(pos_offsets, peaks, grid)
         dimensions = self._decode_dimensions(dim_offsets, peaks)
         angles = self._decode_angles(ang_offsets, peaks)
-        return peaks, max_inds, scores, classids, positions, dimensions, angles
-        # THIS SHOULD BE ADDED BACK
-        objects = list()
+        return [scores, classids, positions, dimensions, angles], [peaks, max_inds, smoothed, mp]
+
+    def create_objects(self, scores, classids, positions, dimensions, angles):
+        """Separate method to create ObjectData list from tensors"""
+        objects = []
         for score, cid, pos, dim, ang in zip(scores, classids, positions, dimensions, angles):
             objects.append(ObjectData(self.classnames[cid], pos, dim, ang, score))
-
-        return objects, peaks
+        return objects
 
     def _decode_heatmaps(self, heatmaps):
-        peaks, max_inds = self._non_maximum_suppression(heatmaps)
+        peaks, max_inds, smoothed, mp = self._non_maximum_suppression(heatmaps)
         scores = heatmaps[peaks]
         classids = torch.nonzero(peaks)[:, 0]
-        return peaks, max_inds, scores, classids
+        return peaks, max_inds, scores, classids, smoothed, mp
 
     def _decode_positions(self, pos_offsets, peaks, grid):
         # Compute the center of each grid cell
@@ -100,15 +101,12 @@ class ObjectEncoder(nn.Module):
         Returns:
             List of ObjectData containing detected objects
         """
-        peaks, max_inds, scores, classids, positions, dimensions, angles = self.decode(
+        [scores, classids, positions, dimensions, angles], _ = self.decode(
             heatmaps, pos_offsets, dim_offsets, ang_offsets, grid
         )
 
-        objects = []
-        for score, cid, pos, dim, ang in zip(scores, classids, positions, dimensions, angles):
-            objects.append(ObjectData(self.classnames[cid], pos, dim, ang, score))
-
-        return objects, peaks
+        objects = self.create_objects(scores, classids, positions, dimensions, angles)
+        return objects
 
     def _non_maximum_suppression(self, heatmaps, thresh=0.05, max_peaks=50):
         # Smooth with a Gaussian kernel
@@ -119,18 +117,18 @@ class ObjectEncoder(nn.Module):
         # smoothed = F.conv2d(heatmaps[None], kernel, padding=int((kernel.size(2) - 1) / 2))
         smoothed = self.nms_conv(heatmaps[None])
         # Max pool over the heatmaps
-        max_inds = F.max_pool2d(smoothed, 3, stride=1, padding=1, return_indices=True)[1].squeeze(0)
+        mp, max_inds = F.max_pool2d(smoothed, 3, stride=1, padding=1, return_indices=True)
+        max_inds = max_inds.squeeze(0)
 
         _, height, width = heatmaps.size()
         flat_inds = torch.arange(height * width).type_as(max_inds).view(height, width)
         peaks = flat_inds == max_inds
-        logger.debug(f"PEAKS {peaks.long().sum()}")
-        peaks = peaks & (heatmaps > thresh)
+
+        peaks = peaks & (heatmaps > self.nms_thresh)
         if peaks.long().sum() > max_peaks:
             scores = heatmaps[peaks]
             scores, _ = torch.sort(scores, descending=True)
             peaks = peaks & (heatmaps > scores[max_peaks - 1])
 
-        logger.debug(f"TORCH: Final PEAKS value {peaks.long().sum()}")
-
-        return peaks, max_inds
+        logger.debug(f"ref_peaks {peaks.long().sum()}")
+        return peaks, max_inds, smoothed, mp

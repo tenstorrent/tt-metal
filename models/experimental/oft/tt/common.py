@@ -103,7 +103,6 @@ class Conv:
         return f"Conv: {self.weights.shape} {self.bias.shape if self.has_bias else ''} {self.kernel_size}"
 
     def __call__(self, device, input_tensor):
-        # logger.debug(f"ULAZ: Conv output layout: {self.output_layout}")
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=self.shard_layout,
@@ -122,9 +121,6 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        # logger.debug(
-        #     f"inpit_tensor shape: {input_tensor.shape}, conv_pt: {self.conv_pt} stride: {self.stride}, padding: {self.padding}"
-        # )
         [output_tensor, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,

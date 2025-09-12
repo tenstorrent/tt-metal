@@ -13,8 +13,8 @@ from models.experimental.oft.reference.utils import (
     load_calib,
     load_image,
     make_grid,
-    visualize_score,
 )
+from models.experimental.oft.reference.utils_objects import print_object_comparison
 from models.experimental.oft.tests.test_common import (
     GRID_HEIGHT,
     GRID_RES,
@@ -25,8 +25,10 @@ from models.experimental.oft.tests.test_common import (
     Y_OFFSET,
     load_checkpoint,
 )
-from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
+from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters, create_decoder_model_parameters
+from models.experimental.oft.tt.utils import visualize_tensor_distributions
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
+from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
 
@@ -53,10 +55,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, True,  False, 0.92, .98, 0.99, 0.94),
-    ],
-    ids=[
-        "use_host_decoder"
+       ( torch.float32, False, False, False, False,  False, 0.92, .98, 0.99, 0.94),
     ],
     # fmt: on
 )
@@ -79,7 +78,7 @@ def test_oftnet(
     pcc_dimensions_oft,
     pcc_angles_oft,
 ):
-    assert use_host_decoder == True, "Only use_host_decoder=True is supported for now"
+    assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
     os.makedirs(output_dir, exist_ok=True)
@@ -90,10 +89,13 @@ def test_oftnet(
 
     # ========================================================
     # OFT model configuration based on real model parameters
+
+    # 1 Handle inputs
     input_tensor = load_image(input_image_path, pad_hw=(H_PADDED, W_PADDED), dtype=model_dtype)[None].to(model_dtype)
     calib = load_calib(calib_path, dtype=model_dtype)[None].to(model_dtype)
     grid = make_grid(GRID_SIZE, (-GRID_SIZE[0] / 2.0, Y_OFFSET, 0.0), GRID_RES, dtype=model_dtype)[None].to(model_dtype)
 
+    # 2 Create reference OFTnet
     topdown_layers = 8
     ref_model = OftNet(
         num_classes=1,
@@ -106,33 +108,42 @@ def test_oftnet(
     )
 
     ref_model = load_checkpoint(checkpoints_path, ref_model)
-
-    # def initialize_weights_and_biases(model):
-    #     """Initialize all weights to 1 and all biases to 0"""
-    #     import torch
-    #     import torch.nn as nn
-    #     for name, param in model.named_parameters():
-    #         if 'weight' in name:
-    #             nn.init.ones_(param)
-    #         elif 'bias' in name:
-    #             nn.init.zeros_(param)
-    #     return model
-    # ref_model = initialize_weights_and_biases(ref_model)
-
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
+    # 3 Create reference encoder
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=model_dtype)
+
+    # ========================================================
+    # 4 Run torch oftnet inference pass
+    intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
+
+    # ========================================================
+    # 0 Load encoder parameters
+    scores = scores.squeeze(0)
+    pos_offsets = pos_offsets.squeeze(0)
+    dim_offsets = dim_offsets.squeeze(0)
+    ang_offsets = ang_offsets.squeeze(0)
+    grid_ = grid.clone().squeeze(0)
+    decoder_params = create_decoder_model_parameters(
+        ref_encoder, [scores, pos_offsets, dim_offsets, ang_offsets, grid_], device
+    )
+
+    # ========================================================
+    # 6 Run torch encoder inference pass
+    ref_outs, ref_enc_intermediates = ref_encoder.decode(scores, pos_offsets, dim_offsets, ang_offsets, grid_)
+    ref_objects = ref_encoder.create_objects(*ref_outs)
 
     # ========================================================
     # TT model configuration
 
-    # Handle inputs
+    # 1 Handle inputs
     tt_input = input_tensor.permute((0, 2, 3, 1))
     tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_calib = ttnn.from_torch(calib, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_grid = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grid_ = ttnn.from_torch(grid_, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Create TT OftNet
+    # 2 Create tt OFTnet
     tt_module = TTOftNet(
         device,
         parameters,
@@ -154,30 +165,28 @@ def test_oftnet(
         scale_features=scale_features,
     )
 
-    # Create TT Encoder
-    # TODO(mbezulj)
+    # 3 Create tt encoder
+    tt_encoder = TTObjectEncoder(device, decoder_params, nms_thresh=NMS_THRESH)
 
     # ========================================================
-    # Run torch and ttnn inference pass
+    # Run ttnn inference pass
+    # intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
 
-    intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
-    grid = grid.squeeze(0)  # TODO(mbezulj) align all shapes to get rid of squeezing/unsqueezing at random places
-    ref_pred_encoded = [t.squeeze(0) for t in (scores, pos_offsets, dim_offsets, ang_offsets)]
-    ref_detections, peaks = ref_encoder.forward(*ref_pred_encoded, grid)
-
+    # 4 Run tt oftnet inference pass
     (tt_intermediates, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
         device, tt_input, tt_calib, tt_grid
     )
-    ttnn_pred_encoded = [
-        t.squeeze(0)
-        for t in (
-            ttnn.to_torch(tt_scores, dtype=model_dtype),
-            ttnn.to_torch(tt_pos_offsets, dtype=model_dtype),
-            ttnn.to_torch(tt_dim_offsets, dtype=model_dtype),
-            ttnn.to_torch(tt_ang_offsets, dtype=model_dtype),
-        )
-    ]
-    ttnn_detections, peaks = ref_encoder.forward(*ttnn_pred_encoded, grid)
+
+    # 5 Run tt encoder inference pass
+    tt_scores = ttnn.to_layout(ttnn.squeeze(tt_scores, 0), layout=ttnn.TILE_LAYOUT)
+    tt_pos_offsets = ttnn.to_layout(ttnn.squeeze(tt_pos_offsets, 0), layout=ttnn.TILE_LAYOUT)
+    tt_dim_offsets = ttnn.to_layout(ttnn.squeeze(tt_dim_offsets, 0), layout=ttnn.TILE_LAYOUT)
+    tt_ang_offsets = ttnn.to_layout(ttnn.squeeze(tt_ang_offsets, 0), layout=ttnn.TILE_LAYOUT)
+
+    tt_outs, tt_enc_intermediates, enc_names, enc_names_intermediates = tt_encoder.decode(
+        device, tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets, tt_grid_
+    )
+    tt_objects = tt_encoder.create_objects(*tt_outs)
 
     # ========================================================
     # Compare results
@@ -242,15 +251,16 @@ def test_oftnet(
     input_tensor = input_tensor.to(torch.float32)
 
     # Visualize scores/heatmaps
-    visualize_score(scores, tt_scores, grid.unsqueeze(0))
-    plt.suptitle(basename, fontsize=16)
-    plt.tight_layout()
-    # Create an ID from the test parameters
+    # tt_scores = tt_scores.reshape(scores.shape)
+    # visualize_score(scores, tt_scores, grid_.unsqueeze(0))
+    # plt.suptitle(basename, fontsize=16)
+    # plt.tight_layout()
+    # # Create an ID from the test parameters
     test_id = f"{'scaled_' if scale_features else ''}{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
 
-    output_file = os.path.join(output_dir, f"oft_scores_{basename}_{test_id}.png")
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    logger.info(f"Saved scores comparison visualization to {output_file}")
+    # output_file = os.path.join(output_dir, f"oft_scores_{basename}_{test_id}.png")
+    # plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    # logger.info(f"Saved scores comparison visualization to {output_file}")
 
     # Visualize predictions
     _, (ax1, ax2) = plt.subplots(nrows=2)
@@ -259,9 +269,9 @@ def test_oftnet(
     input_tensor = input_tensor.squeeze(
         0
     )  # TODO(mbezulj) align all shapes to get rid of squeezing/unsqueezing at random places
-    visualize_objects(input_tensor, calib, ref_detections, ax=ax1)
+    visualize_objects(input_tensor, calib, ref_objects, ax=ax1)
     ax1.set_title("Ref detections")
-    visualize_objects(input_tensor, calib, ttnn_detections, ax=ax2)
+    visualize_objects(input_tensor, calib, tt_objects, ax=ax2)
     ax2.set_title("TTNN detections")
 
     # Save the comparison plot to a file
@@ -270,55 +280,102 @@ def test_oftnet(
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     logger.info(f"Saved detection comparison visualization to {output_file}")
 
+    # # Validate decoder intermediates
+    # for i, (ref, tt, name) in enumerate(zip(ref_enc_intermediates, tt_enc_intermediates, enc_names_intermediates)):
+    #     if name in ["peaks", "max_inds"]:
+    #         continue
+    #     logger.warning(f"Visualizing output {i} {name}")
+
+    #     tt = tt.reshape(ref.shape)
+
+    #     passed, pcc = check_with_pcc(ref, tt, 0.999)
+    #     abs, rel = get_abs_and_relative_error(ref, tt)
+    #     special_char = "✅" if passed else "❌"
+    #     logger.warning(f"{special_char} Output {i} {name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+
+    #     visualize_score(ref, tt, grid.unsqueeze(0))
+    #     plt.suptitle(name, fontsize=16)
+    #     plt.tight_layout()
+    #     # Create an ID from the test parameters
+    #     output_file = f"decoder_debug_{name}.png"
+    #     plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    #     logger.info(f"Saved scores comparison visualization to {output_file}")
+
+    #     # Plot the absolute difference between reference and tt tensors
+    #     plt.figure(figsize=(10, 6))
+    #     diff = torch.abs(ref - tt)[0]
+    #     plt.imshow(diff.detach().numpy().squeeze(), cmap='hot')
+    #     plt.colorbar(label='Absolute Difference')
+    #     plt.title(f'Absolute Difference for {name}')
+    #     output_diff_file = f"decoder_diff_{name}.png"
+    #     plt.savefig(output_diff_file, dpi=300, bbox_inches="tight")
+    #     plt.close()
+    #     logger.info(f"Saved absolute difference visualization to {output_diff_file}")
+
+    # print_object_comparison(ref_objects, tt_objects)
+    # # Add PCC testing for smooth and mp intermediates from tt_encoder
+    # logger.info("=== Testing PCC for encoder intermediates (smooth and mp) ===")
+    # for i, (ref, tt, name) in enumerate(zip(ref_encoder_intermediates, tt_encoder_intermediates, tt_encoder_names_intermediates)):
+    #     if name in ["peaks", "max_inds"]:
+    #         continue
+
+    #     logger.warning(f"Testing PCC for intermediate {i} {name}")
+
+    #     # Reshape tt tensor to match ref shape
+    #     tt = tt.reshape(ref.shape)
+
+    #     # Test PCC with threshold 0.999
+    #     passed, pcc = check_with_pcc(ref, tt, 0.999)
+    #     abs_err, rel_err = get_abs_and_relative_error(ref, tt)
+    #     special_char = "✅" if passed else "❌"
+    #     logger.warning(f"{special_char} Intermediate {i} {name}: {passed=}, {pcc=}, abs_err={abs_err:.3f}, rel_err={rel_err:.3f}")
+
+    #     # Visualize the intermediate results
+    #     visualize_score(ref, tt, grid.unsqueeze(0))
+    #     plt.suptitle(f"{name} - {basename}", fontsize=16)
+    #     plt.tight_layout()
+    #     output_file = os.path.join(output_dir, f"encoder_intermediate_{name}_{basename}_{test_id}.png")
+    #     plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    #     logger.info(f"Saved encoder intermediate visualization to {output_file}")
+
+    #     # Plot the absolute difference between reference and tt tensors
+    #     plt.figure(figsize=(10, 6))
+    #     diff = torch.abs(ref - tt)[0]
+    #     plt.imshow(diff.detach().numpy().squeeze(), cmap='hot')
+    #     plt.colorbar(label='Absolute Difference')
+    #     plt.title(f'Absolute Difference for {name}')
+    #     output_diff_file = os.path.join(output_dir, f"encoder_diff_{name}_{basename}_{test_id}.png")
+    #     plt.savefig(output_diff_file, dpi=300, bbox_inches="tight")
+    #     plt.close()
+    #     logger.info(f"Saved encoder absolute difference visualization to {output_diff_file}")
+
+    # =======================================================
+    # Compare encoder objects using shared function
+    logger.info("=== Comparing encoder objects ===")
+    print_object_comparison(ref_objects, tt_objects)
+
+    # Save outputs to files, useful when debugging encoder
+    SAVE_OUTPUTS = False
+    if SAVE_OUTPUTS:
+        # Construct a unique filename based on test parameters
+        output_file = os.path.join(output_dir, f"encoded_outputs_{basename}_{test_id}.pt")
+
+        # Package all outputs in a dictionary
+        output_dict = {
+            "ref_scores": ref_outs[0],
+            "ref_pos_offsets": ref_outs[1],
+            "ref_dim_offsets": ref_outs[2],
+            "ref_ang_offsets": ref_outs[3],
+            "tt_scores": tt_outs[0],
+            "tt_pos_offsets": tt_outs[1],
+            "tt_dim_offsets": tt_outs[2],
+            "tt_ang_offsets": tt_outs[3],
+        }
+
+        # Save outputs to file using torch.save
+        torch.save(output_dict, output_file)
+        logger.info(f"Saved outputs to {output_file}")
+
     # =======================================================
     # Fail test based on PCC results
     assert all(all_passed), f"OFTnet outputs did not pass the PCC check {all_passed=}"
-
-
-def visualize_tensor_distributions(tensor1, tensor2, title1="Tensor 1", title2="Tensor 2"):
-    """
-    Visualizes the distribution of values in two tensors.
-
-    Args:
-        tensor1: First tensor to visualize
-        tensor2: Second tensor to visualize
-        title1: Title for the first tensor's histogram
-        title2: Title for the second tensor's histogram
-
-    Returns:
-        matplotlib.axes.Axes: Axes object containing the plots
-    """
-    if isinstance(tensor1, ttnn.Tensor):
-        tensor1 = ttnn.to_torch(tensor1)
-    if isinstance(tensor2, ttnn.Tensor):
-        tensor2 = ttnn.to_torch(tensor2)
-
-    # Flatten tensors to 1D
-    t1_flat = tensor1.float().flatten().detach().cpu().numpy()
-    t2_flat = tensor2.float().flatten().detach().cpu().numpy()
-
-    # Calculate statistics
-    t1_mean, t1_std = t1_flat.mean(), t1_flat.std()
-    t2_mean, t2_std = t2_flat.mean(), t2_flat.std()
-
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Plot histogram for tensor1
-    ax1.hist(t1_flat, bins=50, alpha=0.7)
-    ax1.axvline(t1_mean, color="r", linestyle="--", label=f"Mean: {t1_mean:.4f}")
-    ax1.axvline(t1_mean + t1_std, color="g", linestyle=":", label=f"Std: {t1_std:.4f}")
-    ax1.axvline(t1_mean - t1_std, color="g", linestyle=":")
-    ax1.set_title(f"{title1}\nMean: {t1_mean:.4f}, Std: {t1_std:.4f}")
-    ax1.legend()
-
-    # Plot histogram for tensor2
-    ax2.hist(t2_flat, bins=50, alpha=0.7)
-    ax2.axvline(t2_mean, color="r", linestyle="--", label=f"Mean: {t2_mean:.4f}")
-    ax2.axvline(t2_mean + t2_std, color="g", linestyle=":", label=f"Std: {t2_std:.4f}")
-    ax2.axvline(t2_mean - t2_std, color="g", linestyle=":")
-    ax2.set_title(f"{title2}\nMean: {t2_mean:.4f}, Std: {t2_std:.4f}")
-    ax2.legend()
-
-    plt.tight_layout()
-    return fig
