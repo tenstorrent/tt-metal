@@ -1,0 +1,7 @@
+{
+  "perf": {
+    "functional": 125,
+    "complete":   25,
+    "target":     12.5
+  }
+}

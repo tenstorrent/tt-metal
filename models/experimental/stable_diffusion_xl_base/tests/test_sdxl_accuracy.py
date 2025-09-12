@@ -24,6 +24,7 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
+TARGET_JSON_PATH = "models/experimental/stable_diffusion_xl_base/tests/targets/targets.json"
 
 
 @pytest.mark.parametrize(
@@ -142,6 +143,9 @@ def test_accuracy_sdxl(
     ]
     min_inference_time, max_inference_time = min(sum_times), max(sum_times)
 
+    with open(TARGET_JSON_PATH) as f:
+        targets = json.load(f)
+
     data = {
         "model": "sdxl",
         "metadata": {
@@ -163,11 +167,17 @@ def test_accuracy_sdxl(
                 "avg_gen_time": average_inference_time,
                 "target_checks": {
                     "functional": {
-                        "avg_gen_time": 125,
-                        "avg_gen_time_check": 3 if 125 >= average_inference_time else 2,
+                        "avg_gen_time": targets["perf"]["functional"],
+                        "avg_gen_time_check": 3 if targets["perf"]["functional"] >= average_inference_time else 2,
                     },
-                    "complete": {"avg_gen_time": 25, "avg_gen_time_check": 3 if 25 >= average_inference_time else 2},
-                    "target": {"avg_gen_time": 12.5, "avg_gen_time_check": 3 if 12.5 >= average_inference_time else 2},
+                    "complete": {
+                        "avg_gen_time": targets["perf"]["complete"],
+                        "avg_gen_time_check": 3 if targets["perf"]["complete"] >= average_inference_time else 2,
+                    },
+                    "target": {
+                        "avg_gen_time": targets["perf"]["target"],
+                        "avg_gen_time_check": 3 if targets["perf"]["target"] >= average_inference_time else 2,
+                    },
                 },
                 "average_denoising_time": profiler.get("denoising_loop"),
                 "average_vae_time": profiler.get("vae_decode"),
