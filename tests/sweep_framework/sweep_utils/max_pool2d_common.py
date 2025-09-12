@@ -73,7 +73,9 @@ def run_max_pool2d(
     act_permuted = torch.permute(act, (0, 2, 3, 1))
 
     if dtype == ttnn.bfloat8_b:
-        ttact = ttnn.from_torch(act_permuted, dtype, layout=ttnn.TILE_LAYOUT)
+        act_shape = (1, 1, in_n * in_h * in_w, in_c)
+        act_reshaped = act_permuted.reshape(act_shape)
+        ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_permuted, dtype)
 
