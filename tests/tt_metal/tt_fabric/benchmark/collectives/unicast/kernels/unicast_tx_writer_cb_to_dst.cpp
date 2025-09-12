@@ -10,6 +10,8 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "debug/dprint.h"
+#include "accessor/tensor_accessor.h"
+#include "accessor/tensor_accessor_args.h"
 
 using namespace tt;
 using namespace tt::tt_fabric;
@@ -28,8 +30,10 @@ using namespace tt::tt_fabric;
 //   6: sem_l1_addr    (u32)  // receiver L1 semaphore address
 
 void kernel_main() {
-    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(0);
-    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(1);
+    constexpr auto ta_args = TensorAccessorArgs<0>();
+    constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();
+    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
+    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     size_t idx = 0;
@@ -71,6 +75,8 @@ void kernel_main() {
     DPRINT << "[WR] open conn dst_dev=" << dst_dev_id << " dst_mesh=" << dst_mesh_id << " total_pages=" << TOTAL_PAGES
            << "\n";
 
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
@@ -80,8 +86,7 @@ void kernel_main() {
         // Compute destination NOC address (DRAM interleaved vs L1 + XY)
         uint64_t dest_noc_addr;
         if (dst_is_dram) {
-            const InterleavedAddrGen<true> gen{.bank_base_address = dst_base, .page_size = PAGE_SIZE};
-            dest_noc_addr = get_noc_addr(/*page_idx=*/i, gen, /*remote_noc=*/0, /*NOC_INDEX=*/0);
+            dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
         } else {
             const uint32_t l1_off = dst_base + i * PAGE_SIZE;
             dest_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, l1_off, /*NOC_INDEX=*/0);
