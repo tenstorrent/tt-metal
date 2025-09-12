@@ -281,28 +281,29 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    // Helper for clamping ranges according to address_limit
+    // Helper for clamping ranges in-place according to address_limit
     // This is needed because the allocator's available_addresses method does not clamp to address_limit
-    auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges) {
+    auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>>& ranges) {
         if (address_limit == 0) {
-            return ranges;
+            return;
         }
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
-        out.reserve(ranges.size());
-        for (auto r : ranges) {
+
+        // First pass: clamp ranges in-place
+        for (auto& r : ranges) {
             if (r.first < address_limit) {
                 r.first = address_limit;
             }
-            if (r.second > r.first) {
-                out.emplace_back(r.first, r.second);
-            }
         }
-        return out;
+
+        // Second pass: remove empty ranges (where r.second <= r.first)
+        ranges.erase(
+            std::remove_if(ranges.begin(), ranges.end(), [](const auto& r) { return r.second <= r.first; }),
+            ranges.end());
     };
 
     // Current allocator's available ranges (clamped if needed)
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
-        clamp_ranges(alloc->available_addresses(size_per_bank));
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = alloc->available_addresses(size_per_bank);
+    clamp_ranges(available_ranges);
     std::sort(available_ranges.begin(), available_ranges.end(), [](const auto& a, const auto& b) {
         return a.first < b.first;
     });
