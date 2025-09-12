@@ -5,7 +5,7 @@
 
 """
 Usage:
-    unified_device_block_checker [--dev=<device_id>]...
+    run_checks [--dev=<device_id>]...
 
 Options:
     --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
@@ -14,17 +14,18 @@ Description:
     Unified data provider that combines functionality of devices_to_check, block_locations_to_check,
     check_per_device, and check_per_block_location. This script provides a single interface for:
     - Device selection and filtering
-    - Block location enumeration and filtering
+    - Block location extraction and filtering
     - Running checks per device
     - Running checks per block location
+    - Running checks per RISC core
 
     This enables other scripts to easily run comprehensive checks across all devices and their
-    block locations without needing to depend on multiple separate scripts.
+    block locations and RISC coreswithout needing to depend on multiple separate scripts.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Tuple, TypeAlias
+from typing import Literal, TypeAlias
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script
@@ -47,6 +48,7 @@ BLOCK_TYPES = [
     "eth",
 ]
 
+# List of RISC cores currently supported
 CORE_TYPES = {
     "brisc",
     "trisc0",
@@ -131,7 +133,7 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
     return [context.devices[id] for id in device_ids]
 
 
-class UnifiedDeviceBlockChecker:
+class RunChecks:
     def __init__(self, devices: list[Device]):
         self.devices = devices
         # Pre-compute block locations for all devices and block types
@@ -164,7 +166,7 @@ class UnifiedDeviceBlockChecker:
         return result if len(result) > 0 else None
 
     def run_per_block_check(
-        self, check: Callable[[Device, OnChipCoordinate], object], block_filter: list[str] | str | None = None
+        self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
     ) -> list[PerBlockLocationCheckResult] | None:
         """Run a check function on each block location, collecting results."""
         block_types_to_check = (
@@ -176,7 +178,7 @@ class UnifiedDeviceBlockChecker:
             per_device_results: list[PerBlockLocationCheckResult] = []
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
-                    check_result = check(device, location)
+                    check_result = check(location)
                     # Use the common result collection helper
                     results = self._collect_results(
                         check_result,
@@ -193,28 +195,35 @@ class UnifiedDeviceBlockChecker:
         # Flatten the results: extract PerBlockLocationCheckResult objects from PerDeviceCheckResult wrappers
         block_location_results: list[PerBlockLocationCheckResult] = []
         for device_result in device_results:
-            block_location_results.extend(device_result.result)
+            if isinstance(device_result.result, list):
+                block_location_results.extend(device_result.result)
+            else:
+                block_location_results.append(device_result.result)
 
         return block_location_results if len(block_location_results) > 0 else None
 
     def run_per_core_check(
         self,
-        check: Callable[[Device, OnChipCoordinate, CoreType], object],
+        check: Callable[[OnChipCoordinate, CoreType], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
 
         cores_to_check = (
-            CORE_TYPES if core_filter is None else [core_filter] if isinstance(core_filter, str) else core_filter
+            CORE_TYPES
+            if core_filter is None
+            else set(core_filter)
+            if isinstance(core_filter, str)
+            else set(core_filter)
         )
 
-        def per_block_cores_check(device: Device, location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
+        def per_block_cores_check(location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
             """Check all RISC cores for a single block location."""
             per_block_results: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
-            noc_block = device.get_block(location)
+            noc_block = location._device.get_block(location)
             risc_names = noc_block.risc_names
 
             for risc_name in risc_names:
@@ -222,11 +231,13 @@ class UnifiedDeviceBlockChecker:
                 if risc_name not in cores_to_check:
                     continue
 
-                check_result = check(device, location, risc_name)
+                check_result = check(location, risc_name)
                 # Use the common result collection helper
                 results = self._collect_results(
                     check_result,
-                    lambda item: PerCoreCheckResult(device=device, location=location, risc_name=risc_name, result=item),
+                    lambda item: PerCoreCheckResult(
+                        device=location._device, location=location, risc_name=risc_name, result=item
+                    ),
                 )
                 per_block_results.extend(results)
 
@@ -240,7 +251,10 @@ class UnifiedDeviceBlockChecker:
         # Flatten the results: extract PerCoreCheckResult objects from PerBlockLocationCheckResult wrappers
         core_results: list[PerCoreCheckResult] = []
         for block_result in block_results:
-            core_results.extend(block_result.result)
+            if isinstance(block_result.result, list):
+                core_results.extend(block_result.result)
+            else:
+                core_results.append(block_result.result)
 
         return core_results if len(core_results) > 0 else None
 
@@ -250,7 +264,7 @@ def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
     devices = get_devices(devices_to_check, inspector_data, context)
-    return UnifiedDeviceBlockChecker(devices)
+    return RunChecks(devices)
 
 
 if __name__ == "__main__":

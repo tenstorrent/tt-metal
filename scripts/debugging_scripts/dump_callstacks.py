@@ -21,10 +21,9 @@ Description:
 from dataclasses import dataclass
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from check_per_block_location import run as get_check_per_block_location
+from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.device import Device
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
@@ -34,7 +33,7 @@ import re
 import subprocess
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
+    depends=["run_checks", "dispatcher_data"],
 )
 
 
@@ -217,8 +216,6 @@ def format_callstack(callstack: list[CallstackEntry]) -> str:
 
 @dataclass
 class DumpCallstacksData:
-    location: OnChipCoordinate = triage_field("Loc")
-    risc_name: str = triage_field("Proc")
     dispatcher_core_data: DispatcherCoreData = recurse_field()
     pc: int | None = triage_field("PC", hex_serializer)
     kernel_callstack: list[CallstackEntry] = triage_field("Kernel Callstack", format_callstack)
@@ -226,13 +223,14 @@ class DumpCallstacksData:
 
 def dump_callstacks(
     location: OnChipCoordinate,
+    risc_name: str,
     dispatcher_data: DispatcherData,
     context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
     active_cores: bool,
     port: int | None,
-) -> list[DumpCallstacksData]:
+) -> DumpCallstacksData | None:
     if not hasattr(dump_callstacks, "elfs_cache"):
         dump_callstacks.elfs_cache: dict[str, ParsedElfFile] = {}
     if not hasattr(dump_callstacks, "gdb_server"):
@@ -240,7 +238,7 @@ def dump_callstacks(
     if not hasattr(dump_callstacks, "process_ids"):
         dump_callstacks.process_ids: dict[OnChipCoordinate, dict[str, int]] = {}
 
-    result: list[DumpCallstacksData] = []
+    result: DumpCallstacksData | None = None
 
     if gdb_callstack and dump_callstacks.gdb_server is None:
         if port is None:
@@ -258,41 +256,34 @@ def dump_callstacks(
     process_ids = dump_callstacks.process_ids
 
     try:
-        noc_block = location._device.get_block(location)
+        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+        if active_cores and dispatcher_core_data.go_message != "GO":
+            return result
+        if gdb_callstack:
+            risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+            if risc_debug.is_in_reset():
+                return result
 
-        for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-            if active_cores and dispatcher_core_data.go_message != "GO":
-                continue
-            if gdb_callstack:
-                risc_debug = noc_block.get_risc_debug(risc_name)
-                if risc_debug.is_in_reset():
-                    continue
-
-                if risc_name == "ncrisc":
-                    # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                    callstack = [CallstackEntry()]
-                else:
-                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
-                # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-                if len(callstack) > 0 and callstack[0].pc is None:
-                    try:
-                        callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-                    except:
-                        pass
+            if risc_name == "ncrisc":
+                # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
+                callstack = [CallstackEntry()]
             else:
-                callstack = get_callstack(
-                    location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
-                )
-            result.append(
-                DumpCallstacksData(
-                    location=location,
-                    risc_name=risc_name,
-                    dispatcher_core_data=dispatcher_core_data,
-                    pc=callstack[0].pc if len(callstack) > 0 else None,
-                    kernel_callstack=callstack,
-                )
+                callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+            # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+            if len(callstack) > 0 and callstack[0].pc is None:
+                try:
+                    callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                except:
+                    pass
+        else:
+            callstack = get_callstack(
+                location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
             )
+        result = DumpCallstacksData(
+            dispatcher_core_data=dispatcher_core_data,
+            pc=callstack[0].pc if len(callstack) > 0 else None,
+            kernel_callstack=callstack,
+        )
 
     except Exception as e:
         log_check(
@@ -310,11 +301,12 @@ def run(args, context: Context):
     active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
-    check_per_block_location = get_check_per_block_location(args, context)
+    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    callstacks_data = check_per_block_location.run_check(
-        lambda location: dump_callstacks(
+    callstacks_data = run_checks.run_per_core_check(
+        lambda location, risc_name: dump_callstacks(
             location,
+            risc_name,
             dispatcher_data,
             context,
             full_callstack,

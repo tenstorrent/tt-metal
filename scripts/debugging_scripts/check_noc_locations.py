@@ -12,12 +12,12 @@ Description:
 """
 
 from ttexalens.coordinate import OnChipCoordinate
-from check_per_block_location import run as get_check_per_block_location
+from run_checks import run as get_run_checks
 from ttexalens.context import Context
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
-    depends=["block_locations_to_check"],
+    depends=["run_checks"],
 )
 
 
@@ -37,14 +37,9 @@ def check_noc_location(location: OnChipCoordinate, noc_id: int):
 
 def run(args, context: Context):
     block_types = ["tensix", "eth"]
-    check_per_block_location = get_check_per_block_location(args, context)
-    check_per_block_location.run_check(
-        lambda location: check_noc_location(location, noc_id=0), block_filter=block_types
-    )
-
-    check_per_block_location.run_check(
-        lambda location: check_noc_location(location, noc_id=1), block_filter=block_types
-    )
+    run_checks = get_run_checks(args, context)
+    run_checks.run_per_block_check(lambda location: check_noc_location(location, noc_id=0), block_filter=block_types)
+    run_checks.run_per_block_check(lambda location: check_noc_location(location, noc_id=1), block_filter=block_types)
 
 
 if __name__ == "__main__":

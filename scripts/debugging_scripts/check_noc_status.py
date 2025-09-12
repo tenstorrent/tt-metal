@@ -15,24 +15,24 @@ Description:
 from ttexalens.tt_exalens_lib import read_tensix_register, parse_elf
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.parse_elf import ELFFile, mem_access
+from ttexalens.parse_elf import mem_access
 from ttexalens.firmware import ELF
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from check_per_block_location import run as get_check_per_block_location
+from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
-    depends=["check_per_block_location", "dispatcher_data"],
+    depends=["run_checks", "dispatcher_data"],
 )
 
 
 def check_noc_status(
     location: OnChipCoordinate,
+    risc_name: str,
     dispatcher_data: DispatcherData,
     context: Context,
     var_to_reg_map: dict[str, str],
-    risc_name: str = "brisc",
     noc_id: int = 0,
 ):
     """
@@ -74,7 +74,7 @@ def check_noc_status(
 
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = "tensix"
-    RISC_NAME = "brisc"
+    RISC_CORES_TO_CHECK = "brisc"
     NOC_ID = 0
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
@@ -86,10 +86,13 @@ def run(args, context: Context):
     }
 
     dispatcher_data = get_dispatcher_data(args, context)
-    check_per_block_location = get_check_per_block_location(args, context)
-    check_per_block_location.run_check(
-        lambda location: check_noc_status(location, dispatcher_data, context, VAR_TO_REG_MAP, RISC_NAME, NOC_ID),
+    run_checks = get_run_checks(args, context)
+    run_checks.run_per_core_check(
+        lambda location, risc_name: check_noc_status(
+            location, risc_name, dispatcher_data, context, VAR_TO_REG_MAP, NOC_ID
+        ),
         block_filter=BLOCK_TYPES_TO_CHECK,
+        core_filter=RISC_CORES_TO_CHECK,
     )
 
 
