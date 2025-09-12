@@ -96,7 +96,7 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
         return {"image": None, "video": 0}  # [INFO] videos are not supported yet
 
 
-# TOOD: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
+# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
     MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
@@ -177,7 +177,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] else tokens
+        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
@@ -187,7 +187,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             ],
             dim=0,
         )
-        if images[0] and "pixel_values" in images[0]:
+        if images[0] is not None and "pixel_values" in images[0]:
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)

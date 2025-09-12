@@ -501,7 +501,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         return mm_inputs
 
 
-# TOOD: Eventually replace MultiModalProcessor with vllm.model_executor.models.gemma3_mm::Gemma3MultiModalProcessor
+# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.gemma3_mm::Gemma3MultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(MultiModalProcessor, info=Gemma3ProcessingInfo, dummy_inputs=DummyInputsBuilder)
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
