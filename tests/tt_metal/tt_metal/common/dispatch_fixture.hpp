@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include "context/metal_context.hpp"
 #include "gtest/gtest.h"
