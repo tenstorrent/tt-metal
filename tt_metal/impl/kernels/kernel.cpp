@@ -679,12 +679,29 @@ void ComputeKernel::read_binaries(IDevice* device) {
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
+    
+    std::vector<std::string> binary_paths;
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        // For compute kernels with binary path, expect three paths separated by colons
+        // Format: "path/to/trisc0.elf:path/to/trisc1.elf:path/to/trisc2.elf"
+        std::string paths_str = this->kernel_src_.path_.string();
+        size_t pos = 0;
+        size_t delimiter_pos;
+        while ((delimiter_pos = paths_str.find(':', pos)) != std::string::npos) {
+            binary_paths.push_back(paths_str.substr(pos, delimiter_pos - pos));
+            pos = delimiter_pos + 1;
+        }
+        binary_paths.push_back(paths_str.substr(pos));
+        
+        TT_FATAL(binary_paths.size() == 3, 
+                 "Compute kernel binary path must contain exactly 3 paths separated by colons (trisc0:trisc1:trisc2), got {} paths", 
+                 binary_paths.size());
+    }
+    
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         std::string binary_path;
         if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
-            // Use the provided binary path directly
-            // For compute kernels, we need to handle multiple binaries (trisc0, trisc1, trisc2)
-            binary_path = this->kernel_src_.path_.string();
+            binary_path = binary_paths[trisc_id];
         } else {
             const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
                 device->build_id(), tensix_core_type, compute_class_idx, trisc_id);

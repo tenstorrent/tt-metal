@@ -118,6 +118,7 @@ int main() {
     }
 
     // This kernel performs the actual addition of the two input tiles
+    // For compute kernels, binary path must be in format: "path/to/trisc0.elf:path/to/trisc1.elf:path/to/trisc2.elf"
     KernelHandle eltwise_binary_kernel_id;
     if (compute_binary_path) {
         fmt::print("Loading pre-compiled compute kernel from: {}\n", compute_binary_path);
