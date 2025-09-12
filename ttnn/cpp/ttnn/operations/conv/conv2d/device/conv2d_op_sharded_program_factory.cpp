@@ -307,7 +307,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
             act_block_w_ntiles,
             fp32_dest_acc_en,
-            output.dtype());
+            output.dtype(),
+            enable_activation_reuse);
     log_debug(
         tt::LogOp,
         "enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, act_block_h_ntiles: {}",
