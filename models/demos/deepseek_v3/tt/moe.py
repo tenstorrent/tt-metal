@@ -85,9 +85,18 @@ class MoE(SharedStateAddOn, AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        remap_topk_tensors = ttnn.from_torch(
+            torch.ones((1, 32 * 4, 1, 256), dtype=torch.bfloat16),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
+            "remap_topk_tensors": remap_topk_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "num_links": 1,
@@ -202,9 +211,15 @@ class MoE(SharedStateAddOn, AbstractModule):
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
-        post_all_to_all_dispatch_output = ttnn.repeat(post_all_to_all_dispatch_output, **cfg["activations_repeat"])
+        # post_all_to_all_dispatch_output = ttnn.repeat(post_all_to_all_dispatch_output, **cfg["activations_repeat"])
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            cfg["remap_topk_tensors"],
+            cfg["expert_mapping_tensors"],
+            all_to_all_dispatch_metadata_tensors,
+            reduction_size=32,
+        )
         post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, cfg["moe_experts"])
+        experts_output = MoEExperts._forward_sparse(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
         ttnn.deallocate(post_all_to_all_dispatch_output)
         experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
         experts_output = ttnn.reshape(

@@ -222,6 +222,46 @@ class Experts(AbstractModule):
         return output
 
     @classmethod
+    def _forward_sparse(cls, x: ttnn.Tensor, sparsity: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
+        x = ttnn.reshape(x, shape=(1, 128 // 32, 32, 7168))
+        output_tile = ttnn.Tile([32, 32])
+        # Gate and up projections
+        w1_out = ttnn.sparse_matmul(
+            x,
+            cfg["w1_experts"]["input_tensor_b"],
+            sparsity=sparsity,
+            memory_config=cfg["w1_experts"]["memory_config"],
+            compute_kernel_config=cfg["w1_experts"]["compute_kernel_config"],
+            output_tile=output_tile,
+        )
+
+        w3_out = ttnn.sparse_matmul(
+            x,
+            cfg["w3_experts"]["input_tensor_b"],
+            sparsity=sparsity,
+            memory_config=cfg["w3_experts"]["memory_config"],
+            compute_kernel_config=cfg["w3_experts"]["compute_kernel_config"],
+            output_tile=output_tile,
+        )
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+
+        # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
+        activated = ttnn.permute(activated, (0, 2, 3, 1, 4, 5))
+        activated = ttnn.reshape(activated, shape=(1, 8, 128, 2048))
+
+        # Down projection
+        output = ttnn.linear(activated, **cfg["w2_experts"])
+        ttnn.deallocate(activated)
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
+
+    @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         return cls._forward(x, cfg)
 
