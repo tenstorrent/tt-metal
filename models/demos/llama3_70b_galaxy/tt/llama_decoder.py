@@ -149,20 +149,20 @@ class TtTransformerBlock(LightweightModule):
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
-            if not mode == "prefill":
-                attn_in_sharded = ttnn.to_memory_config(
-                    attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-                )
+            # if not mode == "prefill":
+            #     attn_in_sharded = ttnn.to_memory_config(
+            #         attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+            #     )
             h = x
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             h = ttnn.add(x, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-            attn_in_sharded, _ = self.attention_norm(h, h, mode)
+            attn_in_sharded, _ = self.attention_norm(h, None, mode)
             # attn_in_sharded, _ = self.attention_norm(x, h, mode)
-            attn_in_sharded = ttnn.to_memory_config(
-                attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-            )
+            # attn_in_sharded = ttnn.to_memory_config(
+            #     attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+            # )
 
         attn_out = self.attention.forward(
             attn_in_sharded,
@@ -183,8 +183,8 @@ class TtTransformerBlock(LightweightModule):
         if mode == "decode":
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             h = ttnn.add(attn_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-            ff_in_sharded, _ = self.ff_norm(h, h, mode)
-            ff_in_sharded = ttnn.to_memory_config(ff_in_sharded, self.model_config["SHARDED_FF12_RING_MEMCFG"])
+            ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            # ff_in_sharded = ttnn.to_memory_config(ff_in_sharded, self.model_config["SHARDED_FF12_RING_MEMCFG"])
             # attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs

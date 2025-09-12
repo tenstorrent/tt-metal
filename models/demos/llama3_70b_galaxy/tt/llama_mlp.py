@@ -227,9 +227,6 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
-
-        # breakpoint()
-
         w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
             w2_out,
             cluster_axis=0,

@@ -216,7 +216,9 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.create_sharded_memory_config(
-                shape=(32, 64),
+                # shape=(32, 64),
+                # shape=(32, 160),
+                shape=(32, 128),
                 core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -235,8 +237,9 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.from_torch(
-                torch.zeros((1, 1, M, 64)),
-                # torch.zeros((1, 1, M, 128)),
+                # torch.zeros((1, 1, M, 64)),
+                # torch.zeros((1, 1, M, 160)),
+                torch.zeros((1, 1, M, 128)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
@@ -312,7 +315,8 @@ class TT_CCL:
         N_per_shard = (
             2048 // 16 * cluster_shape[cluster_axis]
             if not self.use_qwen_mlp
-            else 1280 // 20 * cluster_shape[cluster_axis]
+            # else 1280 // 20 * cluster_shape[cluster_axis]
+            else 1280 // 10 * cluster_shape[cluster_axis]
         )  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -633,7 +637,6 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
-
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,

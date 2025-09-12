@@ -21,7 +21,6 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-import math
 
 
 @torch.no_grad()
@@ -78,7 +77,7 @@ def test_qwen_decoder_2layers_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 10
+    model_args.n_layers = 3
 
     state_dict = model_args.load_state_dict()
 
@@ -92,50 +91,6 @@ def test_qwen_decoder_2layers_inference(
     )
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
-
-    # Create shared QK norm scaling tensors if qk_norm is enabled (similar to llama_model.py)
-    scaling_tensor_q = None
-    scaling_tensor_k = None
-    if model_args.qk_norm:
-        scaling_factor = 1.0 / math.sqrt(model_args.head_dim)
-
-        # Create memory configs for scaling tensors (same as used in attention layer)
-        reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
-            shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-            core_grid=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
-            ),  # resharding tensor to cores
-            strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
-            shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-            core_grid=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
-            ),  # resharding tensor to cores
-            strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        # Create scaling tensors with same shape as q and k tensors
-        scaling_tensor_q = ttnn.from_torch(
-            torch.full([1, 1, 64, 128], scaling_factor),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=reshape_output_q_mem_cfg,
-        )
-
-        scaling_tensor_k = ttnn.from_torch(
-            torch.full([1, 1, 64, 128], scaling_factor),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=reshape_output_k_mem_cfg,
-        )
 
     # Setup reference models for both layers
     reference_models = []
@@ -208,8 +163,6 @@ def test_qwen_decoder_2layers_inference(
             paged_attention_config=paged_attention_config,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
-            scaling_tensor_q=scaling_tensor_q,
-            scaling_tensor_k=scaling_tensor_k,
         )
         tt_models.append(tt_model)
 

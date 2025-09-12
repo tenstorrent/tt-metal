@@ -165,7 +165,7 @@ def test_qwen_attention_inference(
 
     cos, sin = precompute_freqs(
         model_args.head_dim,
-        model_args.max_seq_len * 2,
+        model_args.max_seq_len,
         model_args.rope_theta,
         model_args.use_scaled_rope,
         model_args.rope_scaling_factor,

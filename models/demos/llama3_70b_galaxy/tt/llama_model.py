@@ -618,7 +618,7 @@ class TtTransformer(LightweightModule):
             return x
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
-        x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
+        # x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
         # inp_torch = ttnn.to_torch(
         #     x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
         # )[:, :1, :, :]

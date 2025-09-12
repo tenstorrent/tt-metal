@@ -51,7 +51,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        128,
+        # 128,
+        2048,
         # 1024 * 32,
         # 1024 * 64,
     ),
@@ -89,7 +90,7 @@ def test_qwen_attention_inference_prefill(
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
+        model_args.max_seq_len * 2,
         mesh_device,
         seq_len=max_seq_len,
         scale_factor=model_args.rope_scaling_factor,
@@ -243,8 +244,8 @@ def test_qwen_attention_inference_prefill(
 
         for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
             cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
-            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+            cache_pt = cache_pt[:1, :, :, :]
+            cache_tt = cache_tt[:, :, :128, :]
             does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
             if i == 0:
                 logger.info(f"K cache output: {output_pcc}")

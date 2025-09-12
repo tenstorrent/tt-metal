@@ -352,12 +352,14 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
-            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            # core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
             # num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
-            num_cores_ln = 20
+            # num_cores_ln = 20
+            num_cores_ln = 10
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
@@ -370,8 +372,8 @@ class TtQwenModelArgs(TtModelArgs):
                     core_grid=ttnn.CoreRangeSet(
                         [
                             core_range,
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
+                            # ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                            # ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
                         ]
                     ),
                     strategy=ttnn.ShardStrategy.WIDTH,
