@@ -1980,7 +1980,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
 
-        (std::uint32_t)reciprocals.has_value()};
+        (std::uint32_t)num_reciprocals};
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -2014,7 +2014,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
 
-        (std::uint32_t)reciprocals.has_value()};
+        (std::uint32_t)num_reciprocals};
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
         (std::uint32_t)0,
@@ -2049,7 +2049,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
 
-        (std::uint32_t)reciprocals.has_value()};
+        (std::uint32_t)num_reciprocals};
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -2083,7 +2083,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
 
-        (std::uint32_t)reciprocals.has_value()};
+        (std::uint32_t)num_reciprocals};
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

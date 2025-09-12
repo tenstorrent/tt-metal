@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
@@ -36,6 +38,9 @@ namespace ckernel {
  * @tparam convert_M2_to_var_on_end      True: if final_row-current_row <= 32 then LLK converts M2 (dst reg at tile
  * offset 2) to variance
  *
+ * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
+ *                        be computed using float division.
+ *
  * @param current_row     The current row index (starting from 0). Should follow 0 <= current_row <= 32 and current_row
  * <= final_row. When current_row is 0, the previous mean and m2 are ignored.
  * @param final_row       The final row index. This index is not included in the update. Should follow current_row <=
@@ -43,7 +48,7 @@ namespace ckernel {
  * @param num_skip_rows   Number of initial rows to skip in the update. Must be >= 0. Default is 0.
  *                        Setting this to a value greater than 0 skips the first num_skip_rows rows of the update.
  *                        Should follow 0 <= num_skip_rows <= 32.
- * @param reciprocal_lut_ptr       The pointer to the reciprocal lookup table. If nullptr, the reciprocal will
+ * @param reciprocal_lut       The optional reference to the reciprocal lookup table. If nullptr, the reciprocal will
  *                        be computed using float division.
  *
  * @note All 32 rows of the input tile are processed by this function.
@@ -56,14 +61,20 @@ template <
     uint32_t mean_dst_index,
     uint32_t m2_dst_index,
     bool reformat_dst_to_col_on_end,
-    bool convert_M2_to_var_on_end>
-ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows, uint32_t* reciprocal_lut_ptr) {
+    bool convert_M2_to_var_on_end,
+    uint32_t reciprocal_size>
+ALWI void welford_tile(
+    uint32_t current_row,
+    uint32_t final_row,
+    uint32_t num_skip_rows,
+    const std::optional<std::reference_wrapper<const std::array<uint32_t, reciprocal_size>>>& reciprocal_lut) {
     MATH((llk_math_welfords_sfpu<
           input_dst_index,
           mean_dst_index,
           m2_dst_index,
           reformat_dst_to_col_on_end,
-          convert_M2_to_var_on_end>(current_row, final_row, num_skip_rows, reciprocal_lut_ptr)));
+          convert_M2_to_var_on_end,
+          reciprocal_size>(current_row, final_row, num_skip_rows, reciprocal_lut)));
 }
 
 /**
@@ -77,19 +88,31 @@ ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_sk
  * compute the variance, and stores the result in the same location. Both the mean and variance are packed into the DST
  * register.
  *
+ * @tparam input_dst_index   The index of the tile in DST register buffer containing the inputs.
+ *                           Must be less than the size of the DST register.
+ * @tparam mean_dst_index    The index of the tile in DST register buffer containing the means.
+ *                           Must be less than the size of the DST register.
+ * @tparam m2_dst_index     M2 is the short hand name for the sum of squares
+ *                          The index of the tile in DST register buffer containing the m2s.
+ *                           Must be less than the size of the DST register.
+ * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
+ *                        be computed using float division.
+ *
  * @param scale_factor The reciprocal of this value (1/scale_factor) is multiplied with the M2 value in the DST register
  * at tile offset 2 to compute the variance.
- * @param reciprocal_lut_ptr The pointer to the reciprocal lookup table. If nullptr, the reciprocal will
+ * @param reciprocal_lut The optional reference to the reciprocal lookup table. If nullptr, the reciprocal will
  *                        be computed using float division.
  *
  * @return None. The mean and variance tiles are updated in place. 32 values each are written to the DST register.
  *         All 32 values are written to the first face of the DST register. Each valid value is followed by an invalid
  * value.
  */
-template <uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index>
-ALWI void welford_M2_to_var(uint32_t scale_factor, uint32_t* reciprocal_lut_ptr) {
-    MATH((llk_math_welfords_sfpu<input_dst_index, mean_dst_index, m2_dst_index, false, true>(
-        scale_factor, 0, 0, reciprocal_lut_ptr)));
+template <uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reciprocal_size>
+ALWI void welford_M2_to_var(
+    uint32_t scale_factor,
+    const std::optional<std::reference_wrapper<const std::array<uint32_t, reciprocal_size>>>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu<input_dst_index, mean_dst_index, m2_dst_index, false, true, reciprocal_size>(
+        scale_factor, 0, 0, reciprocal_lut)));
 }
 
 /**
