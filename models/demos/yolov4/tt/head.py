@@ -8,6 +8,7 @@ from models.demos.yolov4.tt.common import Conv
 
 class TtHead:
     def __init__(self, device, parameters, conv_args) -> None:
+        self.parameters = parameters
         self.conv1 = Conv(
             device,
             conv_args.c1,
@@ -148,6 +149,8 @@ class TtHead:
             outfromNeck2.memory_config().is_sharded()
         ):  # This is used because test of head sub_module passes interleaved tensor
             outfromNeck2 = ttnn.sharded_to_interleaved(outfromNeck2, ttnn.L1_MEMORY_CONFIG)
+        if self.parameters.resolution[0] == 640:
+            output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat([output_tensor, outfromNeck2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv12(output_tensor)[0]
