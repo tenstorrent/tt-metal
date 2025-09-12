@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
     constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
     constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
-    constexpr uint32_t x_dim_in_input = get_named_compile_time_arg_val("x_dim_in_input");
+    constexpr uint32_t x_dim_index_in_input = get_named_compile_time_arg_val("x_dim_index_in_input");
     constexpr uint32_t X = get_named_compile_time_arg_val("X");
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
     constexpr uint32_t Y = get_named_compile_time_arg_val("Y");
@@ -155,9 +155,9 @@ void kernel_main() {
         uint32_t w_end =
             (w_start + w_block_size < input_shape[RANK - 1]) ? (w_start + w_block_size) : input_shape[RANK - 1];
 
-        // Fill idxs except for x_dim_in_input
+        // Fill idxs except for x_dim_index_in_input
         for (int32_t d = RANK - 2; d >= 0; --d) {
-            if (d == (int32_t)x_dim_in_input) {
+            if (d == (int32_t)x_dim_index_in_input) {
                 idxs[d] = 0;
                 continue;
             }
