@@ -93,7 +93,7 @@ class CustomNamespace(SimpleNamespace):
 
 class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        return {"image": None, "video": 0}  # [INFO] videos are not supported yet
+        return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
 # TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
