@@ -25,6 +25,7 @@ struct Pool2D {
         sliding_window::SlidingWindowConfig sliding_window_config_;
         Pool2DType pool_type_;
         DataType output_dtype_;
+        Layout output_layout_;
         MemoryConfig memory_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
@@ -82,6 +83,7 @@ struct Pool2D {
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
+        Layout output_layout,
         MemoryConfig memory_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,

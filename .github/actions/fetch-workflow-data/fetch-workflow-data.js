@@ -6,6 +6,7 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
+const path = require('path');
 
 // Constants for pagination and filtering
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
@@ -46,20 +47,28 @@ function getLatestCachedDate(runs) {
  * @param {Date} sinceDate - Only fetch runs after this date
  * @returns {Promise<Array>} Array of workflow run objects
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
+async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='') {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
+  const createdDateFilter = `>=${cutoffDate.toISOString()}`;
+
+  core.info(`createdDateFilter: ${createdDateFilter}`);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+    const params = {
       owner: context.repo.owner,
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
-      page
-    });
+      page,
+    }
+    if (eventType) {
+      params.event = eventType;
+    }
+    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params);
     if (!runs.workflow_runs.length) {
       break;
     }
+
     for (const run of runs.workflow_runs) {
       const runDate = new Date(run.created_at);
       if (sinceDate && runDate <= sinceDate) {
@@ -71,7 +80,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
       }
     }
     // If we got fewer runs than requested, we've reached the end
-    if (runs.workflow_runs.length < RUNS_PER_PAGE) break;
+    if (!runs.workflow_runs.length) break;
   }
   return allRuns;
 }
@@ -101,40 +110,40 @@ async function run() {
     // Get inputs
     const branch = core.getInput('branch') || 'main';
     const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
-    const cachePath = core.getInput('cache-path', { required: true });
+    const rawCachePath = core.getInput('cache-path', { required: false });
+    const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
+    const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     // Load previous cache if it exists
     let previousRuns = [];
     let latestCachedDate = null;
-    if (fs.existsSync(cachePath)) {
-      try {
-        const rawCache = fs.readFileSync(cachePath, 'utf8');
-        const prev = JSON.parse(rawCache);
-        if (Array.isArray(prev)) {
-          if (prev.length && Array.isArray(prev[0])) {
-            // Array of [name, runs[]] pairs
-            previousRuns = prev.flatMap(([_, runs]) => runs);
-          } else if (prev.length && prev[0] && prev[0].id) {
-            // Array of runs
-            previousRuns = prev;
-          } else {
-            previousRuns = [];
-          }
-        } else if (typeof prev === 'object' && prev !== null) {
-          previousRuns = Object.values(prev).flat();
-        } else {
-          previousRuns = [];
-        }
-        latestCachedDate = getLatestCachedDate(previousRuns);
-      } catch (e) {
-        core.warning('Could not parse previous cache, ignoring.');
-      }
-    }
+
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
-    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+
+    // 1. Fetch runs for each event type separately
+
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+
+    core.info('Fetching all runs...');
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+    core.info(`Fetched allRuns count: ${allRuns.length}`);
+
+    // Wait for 1 second to avoid rate limiting
+    await delay(1000);
+
+    core.info('Fetching scheduled runs...');
+    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
+    core.info(`Fetched scheduledRuns count: ${scheduledRuns.length}`);
+
+    // 2. Combine all the results into a single array
+    const newRuns = [...scheduledRuns, ...allRuns];
+
+    core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
+
     core.info(`Fetched newRuns count: ${newRuns.length}`);
     // Merge and deduplicate by run id
     // This ensures we keep the most recent data for each run and avoid duplicates
@@ -150,16 +159,17 @@ async function run() {
     );
     // Group runs by workflow name
     const grouped = groupRunsByName(mergedRuns);
-    // Ensure cache directory exists
-    const cacheDir = require('path').dirname(cachePath);
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
+    // Ensure output directory exists
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
     }
-    // Save grouped runs to cache file
-    fs.writeFileSync(cachePath, JSON.stringify(Array.from(grouped.entries())));
+    // Save grouped runs to artifact file
+    fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
     // Set output
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
+    core.setOutput('cache-path', outputPath);
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();
     const remaining = rateLimit.data.resources.core.remaining;

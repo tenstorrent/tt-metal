@@ -39,7 +39,7 @@ namespace ttnn {
 
 namespace detail {
 
-uint32_t all_gather_async_core_count(
+uint32_t all_gather_async_core_count_per_link(
     uint32_t num_workers_per_direction,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
@@ -73,7 +73,8 @@ uint32_t default_workers(
     }
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
-            all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+            num_links * all_gather_async_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
         if (num_cores >= core_count) {
             log_trace(
                 tt::LogOp,
@@ -216,7 +217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         ring_size,
         num_directions_per_link,
         num_mux_cores_per_direction_per_link));
-    uint32_t num_cores_per_link = detail::all_gather_async_core_count(
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);

@@ -45,17 +45,17 @@ int main() {
         constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
         // Configuration for the buffers.
-        tt::tt_metal::InterleavedBufferConfig dram_config{
+        InterleavedBufferConfig dram_config{
             .device = device,              // Device which owns the buffer
             .size = dram_buffer_size,      // Size of the buffer in bytes
             .page_size = tile_size_bytes,  // Number of bytes when round-robin between banks. Usually this is the same
                                            // as the tile size for efficiency.
-            .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-        tt::tt_metal::InterleavedBufferConfig l1_config{
+            .buffer_type = BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
+        InterleavedBufferConfig l1_config{
             .device = device,
             .size = tile_size_bytes,
             .page_size = tile_size_bytes,
-            .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
+            .buffer_type = BufferType::L1};  // This time we allocate on L1
 
         // Allocate the buffers
         auto l1_buffer = CreateBuffer(l1_config);

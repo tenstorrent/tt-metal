@@ -114,7 +114,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         } else if (input_shape.rank() < detail::RANK_FOUR) {
             input_tensor_4d = core::unsqueeze_to_4D(input_tensor);
         } else {
-            input_tensor_4d = std::move(input_tensor);
+            input_tensor_4d = input_tensor;
         }
         const auto outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
         std::vector<ttnn::Tensor> outputs;

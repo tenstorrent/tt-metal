@@ -63,8 +63,21 @@ def test_sd35_pipeline(
     model_location_generator,
     traced,
     use_cache,
+    is_ci_env,
+    monkeypatch,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
+
+    model_version = f"stabilityai/stable-diffusion-3.5-{model_name}"
+
+    # Setup CI environment
+    if is_ci_env:
+        if use_cache:
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     # Create timing collector
     timing_collector = TimingCollector()
@@ -83,9 +96,7 @@ def test_sd35_pipeline(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(
-            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
-        ),
+        model_checkpoint_path=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
         use_cache=use_cache,
     )
 

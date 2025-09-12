@@ -46,7 +46,7 @@ public:
     ElfFile operator=(ElfFile const&) = delete;
 
     // Move constructable & assignable -- take ownership
-    ElfFile(ElfFile&& s) : pimpl_(s.pimpl_), contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
+    ElfFile(ElfFile&& s) : pimpl_(s.pimpl_), contents_(s.contents_), segments_(std::move(s.segments_)) {
         s.contents_ = std::span<std::byte>();
         s.pimpl_ = nullptr;
     }
