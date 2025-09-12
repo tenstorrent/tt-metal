@@ -1698,3 +1698,44 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
         golden_function = ttnn.get_golden_function(ttnn.clamp)
         golden_tensor = golden_function(in_data1, min, max)
         assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([10, 10])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 102400, 32])),
+        (torch.Size([1, 1, 102400, 64])),
+        (torch.Size([1, 1, 400, 512])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_range",
+    [
+        (-100, 100),
+        (-2, 2),
+        (-1, 1),
+        (-200, 0),
+        (0, 200),
+    ],
+)
+def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, input_range, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(input_range[0], input_range[1])
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.hardmish(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+
+    golden_tensor = golden_function(in_data1, device=device)
+    tt_res = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
