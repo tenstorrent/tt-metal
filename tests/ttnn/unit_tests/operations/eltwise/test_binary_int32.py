@@ -570,7 +570,6 @@ def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
     max_int = torch.iinfo(torch.int32).max
     torch_input_tensor_a = torch.randint(low=min_int, high=max_int, size=shapes[0], dtype=torch.int32)
     torch_input_tensor_b = torch.randint(low=min_int, high=max_int, size=shapes[1], dtype=torch.int32)
-
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
