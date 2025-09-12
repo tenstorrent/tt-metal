@@ -40,9 +40,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate& sender_device_coord,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensors,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -58,8 +58,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -78,7 +78,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
@@ -259,21 +265,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            const auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            const auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }

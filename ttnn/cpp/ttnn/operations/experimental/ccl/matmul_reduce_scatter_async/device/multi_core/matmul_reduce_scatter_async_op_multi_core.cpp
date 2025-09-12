@@ -39,8 +39,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
 
     /* All Gather Params */
     IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -73,8 +74,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             matmul_output_tensor,
             persistent_intermediate_tensor,
             target_device,
-            forward_device,
-            backward_device,
+            target_device_coord,
+            forward_coord,
+            backward_coord,
             reduce_scatter_output_tensor,
             dim,
             num_links,

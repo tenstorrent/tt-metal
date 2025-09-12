@@ -99,21 +99,28 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     IDevice* target_device =
         input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    auto target_device_coord = coord;
+
+    std::optional<MeshCoordinate> backward_coord = std::nullopt;
+    std::optional<MeshCoordinate> forward_coord = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_coord = MeshCoordinate(
+                    (this->cluster_axis == 0) ? i - 1 : coord[0], (this->cluster_axis == 0) ? coord[1] : i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
+                backward_coord = MeshCoordinate(
+                    (this->cluster_axis == 0) ? ring_size - 1 : coord[0],
+                    (this->cluster_axis == 0) ? coord[1] : ring_size - 1);
             }
             if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_coord = MeshCoordinate(
+                    (this->cluster_axis == 0) ? i + 1 : coord[0], (this->cluster_axis == 0) ? coord[1] : i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_coord =
+                    MeshCoordinate((this->cluster_axis == 0) ? 0 : coord[0], (this->cluster_axis == 0) ? coord[1] : 0);
             }
         }
     }
@@ -144,8 +151,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         input_tensors[0],
         input_tensors[1],
         target_device,
-        forward_device,
-        backward_device,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
         output_tensors[0],
         this->dtype,
         this->num_links,

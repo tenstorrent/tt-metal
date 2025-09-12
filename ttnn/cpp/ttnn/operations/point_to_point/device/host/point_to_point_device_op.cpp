@@ -82,7 +82,7 @@ Fabric1DRoute fabric_1d_routing(
 
         TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
         auto next_device = mesh_device->get_device(neighbor_coord.value());
-        const auto next_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(next_device->id());
+        const auto next_fabric_id = mesh_device->get_fabric_node_id(neighbor_coord.value());
 
         TT_FATAL(next_device != nullptr, "Did not find next device");
         return next_fabric_id;
