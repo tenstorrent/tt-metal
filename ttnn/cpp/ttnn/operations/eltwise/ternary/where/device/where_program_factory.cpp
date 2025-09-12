@@ -356,8 +356,8 @@ void set_or_update_runtime_arguments(
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t start_th = start_t / cWt;
 
-                uint32_t freq = cHt;
-                uint32_t counter = start_th;
+                uint32_t freq = cWt;
+                uint32_t counter = start_tw;
 
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
@@ -373,8 +373,8 @@ void set_or_update_runtime_arguments(
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t start_th = start_t / cWt;
 
-                uint32_t freq = cHt;
-                uint32_t counter = start_th;
+                uint32_t freq = cWt;
+                uint32_t counter = start_tw;
 
                 auto bit_cast_scalar =
                     pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
