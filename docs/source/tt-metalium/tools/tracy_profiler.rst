@@ -31,6 +31,7 @@ You can enable the profiler by running:
 
     # Via CMake flags
     cmake . -DENABLE_TRACY=ON
+    ninja
     ninja install
 
 Note that Tracy support is not included in prebuilt binariecsvs or release builds by default. You must build from source with the profiler enabled to use these features.
@@ -45,7 +46,7 @@ Installing for Mac users
 
 Mac users can install Tracy using Homebrew. Open a terminal and run:
 
-..  code-block:: sh
+..  code-block:: bash
 
     brew uninstall tracy # Remove any old version of Tracy
     wget -P ~/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
@@ -54,14 +55,26 @@ Mac users can install Tracy using Homebrew. Open a terminal and run:
 
 After installation, start the Tracy GUI with:
 
-..  code-block:: sh
+..  code-block:: bash
 
     tracy
 
 Building for Linux users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-**TODO: Write this after https://github.com/tenstorrent/tracy/pull/23 merged**
+For Linux users, you need to build the Tracy GUI from source. First, clone the Tracy repository.
+
+..  code-block:: bash
+
+    git clone https://github.com/tenstorrent/tracy.git
+    cd tracy/profiler/build/unix
+    make -j8
+
+A ``Tracy-release`` binary will be generated in the current directory after the build completes. You can run it directly from there or copy it to a directory in your PATH for easier access
+
+.. code-block:: bash
+
+    ./Tracy-release
 
 Starting the GUI
 ~~~~~~~~~~~~~~~~
@@ -79,15 +92,21 @@ Set the client address to the IP address of the remote machine and port 8086 (e.
 
 A "Waiting for connection ..." dialog will appear after clicking connect.
 
+.. image:: ../_static/tracy-waiting-connection-dialog.webp
+    :alt: Tracy waiting for connection
+
 When the host machine starts running a tracy-enabled application, the GUI will automatically collect profiling data and display it in real time.
 
-Note that the Tracy GUI acts as a TCP client while the profiled application acts as a TCP server. Applications listen on port 8086 by default for connections. For remote development where the application host is not on the same LAN as the Tracy GUI, you may need to set up port forwarding or a VPN connection, typically via SSH:
+The Tracy GUI connects as a TCP client, while the profiled application runs as a TCP server, usually listening on port 8086. If your application host is on a different network than the Tracy GUI, you may need to set up port forwarding or a VPN connection. SSH port forwarding is a common solution:
 
 .. code-block:: bash
 
     ssh -NL 8086:127.0.0.1:8086 user@remote-machine
 
-Alternatively, use the ``capture-release`` CLI tool built under ``tt-metal/build/tools/profiler/bin`` when Tracy is enabled. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
+Capturing via Command Line
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Alternatively, use the ``capture-release`` CLI tool built under **tt-metal** when Tracy is enabled, under ``tt-metal/build/tools/profiler/bin`` when Tracy is enabled. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:
 
 .. code-block:: bash
 
