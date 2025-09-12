@@ -7,16 +7,22 @@ cmake_minimum_required(VERSION 3.16)
 # Define the tt_cpp library for DeiT components
 set(DEIT_TT_CPP_SOURCES
     deit_attention.cpp
+    deit_embeddings.cpp
     deit_self_attention.cpp
     deit_self_output.cpp
+    deit_intermediate.cpp
+    deit_pooler.cpp
     helper_funcs.cpp
 )
 
 set(DEIT_TT_CPP_HEADERS
     deit_config.h
     deit_attention.h
+    deit_embeddings.h
     deit_self_attention.h
     deit_self_output.h
+    deit_intermediate.h
+    deit_pooler.h
     helper_funcs.h
 )
 
