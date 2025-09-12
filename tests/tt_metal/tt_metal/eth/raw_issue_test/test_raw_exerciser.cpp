@@ -48,12 +48,8 @@ int main(int argc, char** argv) {
 
         // Select core for emitter (prefer another eth core, fallback to worker {0,0})
         CoreCoord logical_emitter_core;
-        bool emitter_on_eth = active_eth_cores.size() >= 2;
-        if (emitter_on_eth) {
-            logical_emitter_core = *(++active_eth_cores.begin());
-        } else {
-            logical_emitter_core = {0, 0};
-        }
+        bool emitter_on_eth = false;
+        logical_emitter_core = {0, 0};
 
         // Create kernels
         auto exerciser_kernel = tt::tt_metal::CreateKernel(
@@ -73,7 +69,7 @@ int main(int argc, char** argv) {
         uint32_t range_start = unreserved_l1_start;
         uint32_t range_end = range_start + 128;
         uint32_t addr_step = 16;
-        uint32_t num_attempts = 1000000;
+        uint32_t num_attempts = 1000000000;
 
         tt::tt_metal::SetRuntimeArgs(
             program, exerciser_kernel, logical_exerciser_core, {range_start, range_end, addr_step, num_attempts});
@@ -84,7 +80,7 @@ int main(int argc, char** argv) {
         uint32_t valid_write_range_end = valid_write_range_start + 10000;
         uint32_t dest_noc_x = physical_exerciser_core.x;
         uint32_t dest_noc_y = physical_exerciser_core.y;
-        uint32_t noc_write_size = 128;
+        uint32_t noc_write_size = 4096;
 
         uint32_t num_iters_hi = static_cast<uint32_t>(num_iters >> 32);
         uint32_t num_iters_lo = static_cast<uint32_t>(num_iters & 0xFFFFFFFFULL);
@@ -93,8 +89,8 @@ int main(int argc, char** argv) {
             program,
             emitter_kernel,
             logical_emitter_core,
-            {num_iters_hi,
-             num_iters_lo,
+            {num_iters_lo,
+             num_iters_hi,
              valid_write_range_start,
              valid_write_range_end,
              dest_noc_x,

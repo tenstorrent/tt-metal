@@ -24,24 +24,38 @@ void kernel_main() {
     uint32_t addr_step = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_attempts = get_arg_val<uint32_t>(arg_idx++);
 
-    for (uint32_t src_addr = range_start; src_addr < range_end; src_addr += addr_step) {
-        for (uint32_t attempt = 0; attempt < num_attempts; ++attempt) {
+    constexpr bool use_byte_writes = false;
+    using ptr_t = std::conditional_t<use_byte_writes, uint8_t*, uint32_t*>;
+    for (uint32_t attempt = 0; attempt < num_attempts; ++attempt) {
+        for (uint32_t src_addr = range_start; src_addr < range_end; src_addr += addr_step) {
             uint8_t written_value = static_cast<uint8_t>(attempt % 256);
 
             constexpr uint32_t src_ch_id_offset = 27;
             const uint32_t src_ch_id_addr = src_addr + src_ch_id_offset;
             const uint32_t base_word_addr = src_ch_id_addr & ~0x3;
+            volatile ptr_t ptr_to_word_with_src_ch_id;
             const uint32_t src_ch_id_offset_bits = (src_ch_id_addr - base_word_addr) * 8;
-            volatile uint32_t* ptr_to_word_with_src_ch_id = reinterpret_cast<volatile uint32_t*>(base_word_addr);
-
-            uint32_t word_with_src_ch_id = *ptr_to_word_with_src_ch_id;
-            word_with_src_ch_id = word_with_src_ch_id & ~(0xFFu << src_ch_id_offset_bits);
-            word_with_src_ch_id = word_with_src_ch_id | (static_cast<uint32_t>(written_value) << src_ch_id_offset_bits);
-            *ptr_to_word_with_src_ch_id = word_with_src_ch_id;
+            if constexpr (use_byte_writes) {
+                ptr_to_word_with_src_ch_id = reinterpret_cast<volatile ptr_t>(base_word_addr);
+                *ptr_to_word_with_src_ch_id = written_value;
+            } else {
+                volatile uint32_t* ptr_to_word_with_src_ch_id = reinterpret_cast<volatile ptr_t>(base_word_addr);
+                uint32_t word_with_src_ch_id = *ptr_to_word_with_src_ch_id;
+                word_with_src_ch_id = word_with_src_ch_id & ~(0xFFu << src_ch_id_offset_bits);
+                word_with_src_ch_id =
+                    word_with_src_ch_id | (static_cast<uint32_t>(written_value) << src_ch_id_offset_bits);
+                *ptr_to_word_with_src_ch_id = word_with_src_ch_id;
+            }
 
             asm volatile("fence" ::: "memory");
 
-            uint32_t ch_id = (*ptr_to_word_with_src_ch_id >> src_ch_id_offset_bits) & 0xFF;
+            invalidate_l1_cache();
+            uint32_t ch_id;
+            if constexpr (use_byte_writes) {
+                ch_id = (*ptr_to_word_with_src_ch_id >> src_ch_id_offset_bits) & 0xFF;
+            } else {
+                ch_id = *ptr_to_word_with_src_ch_id;
+            }
 
             if (ch_id != written_value) {
                 invalidate_l1_cache();
@@ -56,8 +70,8 @@ void kernel_main() {
                 *src_ch_id_ptr = written_value;
                 *src_ch_id_ptr = written_value;
 
-                ch_id = *src_ch_id_ptr;
-                ASSERT(ch_id == written_value);
+                ch_id = *src_ch_id_ptr;  // this is the correct value
+                ASSERT(false);
             }
         }
     }

@@ -19,7 +19,8 @@
  */
 void kernel_main() {
     uint32_t arg_idx = 0;
-    uint64_t num_iters = ((uint64_t)get_arg_val<uint32_t>(arg_idx) << 32) | (uint64_t)get_arg_val<uint32_t>(arg_idx);
+    uint64_t num_iters =
+        ((uint64_t)get_arg_val<uint32_t>(arg_idx + 1) << 32) | (uint64_t)get_arg_val<uint32_t>(arg_idx);
     arg_idx += 2;
     uint32_t valid_write_range_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t valid_write_range_end = get_arg_val<uint32_t>(arg_idx++);
