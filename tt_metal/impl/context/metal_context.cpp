@@ -920,17 +920,36 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
-    // launch_message during program execution need to at least have the correct dispatch mode.
+    // Initialize the launch_msg ring buffer. Entry 0 contains the proper firmware startup message,
+    // while entries 1 through N-1 are initialized with DISPATCH_MODE_NONE since they are unused during
+    // firmware initialization.
+    //
+    // For reference, during program execution, cores that don't get a valid launch_message need to have
+    // the correct dispatch mode configured as follows:
     // When using Fast Dispatch on Tensix:
-    // dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // Idle Eth cores configured with DISPATCH_MODE_HOST but not used
+    // - dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
+    // - worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
+    // - Idle Eth cores configured with DISPATCH_MODE_HOST but not used
     // When using Fast Dispatch on Idle Eth:
-    // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
+    // - dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
+    // - worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries);
+
+    // Entry 0: Use the proper firmware startup message
+    init_launch_msg_data[0] = *launch_msg;
+
+    // Entries 1 to N-1: Initialize with DISPATCH_MODE_NONE to avoid misleading dispatch mode settings
+    if (launch_msg_buffer_num_entries > 1) {
+        launch_msg_t unused_buffer_msg = *launch_msg;
+        unused_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
+        unused_buffer_msg.kernel_config.enables = 0;  // Ensure no kernels execute
+        unused_buffer_msg.kernel_config.preload = 0;  // Clear preload flag
+
+        for (uint32_t i = 1; i < launch_msg_buffer_num_entries; i++) {
+            init_launch_msg_data[i] = unused_buffer_msg;
+        }
+    }
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
