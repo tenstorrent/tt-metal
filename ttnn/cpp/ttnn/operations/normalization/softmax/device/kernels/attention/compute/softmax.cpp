@@ -12,6 +12,9 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+
+#include "ttnn/cpp/ttnn/operations/kernel_helper_functions/kahan.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -253,21 +256,43 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+#define KA
 
+#ifndef KA
+        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+#endif
+
+        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
+#ifdef KA
+            kahan_iterative_sum(cb_exps, wt);
+#else
             reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
                 /*iCB=*/cb_exps,
                 /*icb_scaler=*/cb_bcast_scaler,
                 /*itile=*/wt,
                 /*itile_scaler=*/bcast_scaler0,
                 /*idst0=*/dst0);
+#endif
         }
+#ifdef KA
+        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        // reduce_tile_math<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(dst0);
+        // reduce_tile_math(dst0);
+        reduce_uninit();
+        copy_tile_init(cb_bcast_scaler);
+        constexpr uint32_t dst1 = 1;
+        copy_tile(cb_bcast_scaler, bcast_scaler0, dst1);
+        mul_binary_tile_init();
+        mul_binary_tile(dst0, dst1, dst0);
+        recip_tile_init<false>();
+        recip_tile<false>(dst0);  // DST[0] = 1/sum(exp(x))
+#else
         reduce_uninit();
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
+#endif
         pack_tile(dst0, cb_recipsumexps);
         cb_push_back(cb_recipsumexps, 1);
 

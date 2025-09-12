@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+
+#define MMM
+#ifdef MMM
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
+#else
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -56,7 +62,11 @@ void kernel_main() {
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
+#ifdef MMM
+        generate_mm_scaler(cb_in_2, reduce_scaler);
+#else
         generate_reduce_scaler(cb_in_2, reduce_scaler);
+#endif
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
