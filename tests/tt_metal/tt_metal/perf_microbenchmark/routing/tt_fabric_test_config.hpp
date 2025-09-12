@@ -105,6 +105,12 @@ static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
     {"Mux", FabricTensixConfig::MUX},
 });
 
+static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_mapper({
+    {"STRICT_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
+    {"RELAXED_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE},
+    {"DYNAMIC_RECONFIGURATION_SETUP_MODE", FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -571,6 +577,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
     } else {
         log_info(tt::LogTest, "No fabric tensix config specified, defaulting to DISABLED");
         fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
+    }
+
+    if (fabric_setup_yaml["fabric_reliability_mode"]) {
+        auto reliability_mode_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_reliability_mode"]);
+        fabric_setup.fabric_reliability_mode =
+            detail::fabric_reliability_mode_mapper.from_string(reliability_mode_str, "FabricReliabilityMode");
+    } else {
+        log_info(tt::LogTest, "No fabric reliability mode specified, defaulting to STRICT_SYSTEM_HEALTH_SETUP_MODE");
+        fabric_setup.fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     }
 
     if (fabric_setup_yaml["num_links"]) {
@@ -2215,6 +2230,9 @@ private:
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
+    static std::string to_string(FabricReliabilityMode mode) {
+        return detail::fabric_reliability_mode_mapper.to_string(mode, "FabricReliabilityMode");
+    }
 
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
@@ -2388,6 +2406,10 @@ private:
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.fabric_reliability_mode.has_value()) {
+            out << YAML::Key << "fabric_reliability_mode";
+            out << YAML::Value << to_string(config.fabric_reliability_mode.value());
         }
         if (config.topology == Topology::Torus && config.torus_config.has_value()) {
             out << YAML::Key << "torus_config";
