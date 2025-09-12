@@ -57,15 +57,8 @@ public:
 
 private:
     uint16_t from_float(float val);
-    friend constexpr bfloat16 bfloat16_from_bits(std::uint16_t raw) noexcept;
     friend constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept;
 };
-
-constexpr bfloat16 bfloat16_from_bits(std::uint16_t raw) noexcept {
-    bfloat16 x;
-    x.uint16_data = raw;
-    return x;
-}
 
 constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept { return bf.uint16_data; }
 

@@ -33,7 +33,7 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
-    return bfloat16_from_bits(U32 >> 16);
+    return std::bit_cast<bfloat16>(static_cast<uint16_t>(U32 >> 16));
 }
 
 // -- Arithmetic Operators ---
@@ -97,8 +97,8 @@ uint32_t pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16> two_bfloats
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data) {
     std::pair<bfloat16, bfloat16> two_bfloats;
 
-    two_bfloats.first = bfloat16_from_bits(uint32_data & 0xffff);  // lower 16
-    two_bfloats.second = bfloat16_from_bits(uint32_data >> 16);    // upper 16
+    two_bfloats.first = std::bit_cast<bfloat16>(static_cast<uint16_t>(uint32_data & 0xffff));  // lower 16
+    two_bfloats.second = std::bit_cast<bfloat16>(static_cast<uint16_t>(uint32_data >> 16));    // upper 16
 
     return two_bfloats;
 }
@@ -228,8 +228,8 @@ std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
     std::vector<uint32_t> result(in.size() / 2);
     TT_ASSERT(in.size() % 2 == 0);
     for (size_t i = 0; i < in.size(); i += 2) {
-        auto val1 = bfloat16_from_bits(in.at(i));
-        auto val2 = bfloat16_from_bits(in.at(i + 1));
+        auto val1 = std::bit_cast<bfloat16>(in.at(i));
+        auto val2 = std::bit_cast<bfloat16>(in.at(i + 1));
         auto packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
         result[i / 2] = packed;
     }

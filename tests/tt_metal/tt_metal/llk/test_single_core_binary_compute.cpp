@@ -248,9 +248,9 @@ bool single_core_binary(
             } else if (test_config.binary_op == "mul") {
                 return (
                     static_cast<float>(
-                        bfloat16_from_bits(std::bit_cast<uint32_t>(bfloat16_to_bits(lhs) & srca_fid_mask))) *
+                        std::bit_cast<bfloat16>(static_cast<uint16_t>(bfloat16_to_bits(lhs) & srca_fid_mask))) *
                     static_cast<float>(
-                        bfloat16_from_bits(std::bit_cast<uint32_t>(bfloat16_to_bits(rhs) & srcb_fid_mask))));
+                        std::bit_cast<bfloat16>(static_cast<uint16_t>(bfloat16_to_bits(rhs) & srcb_fid_mask))));
             } else if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
                 return static_cast<float>(lhs);
             } else {
@@ -270,9 +270,9 @@ bool single_core_binary(
             } else if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
                     static_cast<float>(
-                        bfloat16_from_bits(std::bit_cast<uint32_t>(bfloat16_to_bits(lhs) & srca_fid_mask))) *
-                    static_cast<float>(
-                        bfloat16_from_bits(std::bit_cast<uint32_t>(bfloat16_to_bits(bfloat16(rhs)) & srcb_fid_mask))));
+                        std::bit_cast<bfloat16>(static_cast<uint16_t>(bfloat16_to_bits(lhs) & srca_fid_mask))) *
+                    static_cast<float>(std::bit_cast<bfloat16>(
+                        static_cast<uint16_t>(bfloat16_to_bits(bfloat16(rhs)) & srcb_fid_mask))));
             } else {
                 return rhs;
             }
