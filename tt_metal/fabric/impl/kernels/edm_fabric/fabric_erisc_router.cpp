@@ -362,7 +362,7 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
+    tt::tt_fabric::SenderEthChannel<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
@@ -401,8 +401,7 @@ FORCE_INLINE void send_next_data(
         BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
     receiver_buffer_channel.set_cached_next_buffer_slot_addr(
         receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
-    sender_buffer_channel.set_cached_next_buffer_slot_addr(
-        sender_buffer_channel.get_buffer_address(local_sender_write_counter.get_buffer_index()));
+    sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
     // update the remote reg
     static constexpr uint32_t packets_to_forward = 1;
@@ -1536,7 +1535,7 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 void run_sender_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
+    tt::tt_fabric::SenderEthChannel<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
@@ -1564,15 +1563,14 @@ void run_sender_channel_step_impl(
     if (can_send) {
         did_something = true;
         if constexpr (enable_packet_header_recording) {
-            auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(
-                local_sender_channel_worker_interface.local_write_counter.get_buffer_index()));
+            auto packet_header =
+                reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_cached_next_buffer_slot_addr());
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        // In run_sender_channel_step_impl, before send_next_data
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -2602,8 +2600,9 @@ void kernel_main() {
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the sender channel buffers with input array of number of buffers
-    auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+    auto local_sender_channels =
+        tt::tt_fabric::SenderEthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(

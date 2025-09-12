@@ -68,7 +68,7 @@ void setup_channel(
     StreamId my_channel_free_slots_stream_id,
     bool is_persistent_channel) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
-        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
+        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE));
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 

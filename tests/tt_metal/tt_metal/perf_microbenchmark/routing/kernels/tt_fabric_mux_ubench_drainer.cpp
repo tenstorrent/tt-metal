@@ -72,7 +72,7 @@ void kernel_main() {
     init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
 
     tt::tt_fabric::DrainerChannelBuffer drainer_channel(
-        channel_base_address, BUFFER_SIZE_BYTES, sizeof(PACKET_HEADER_TYPE), 0 /* channel_id */);
+        channel_base_address, BUFFER_SIZE_BYTES, sizeof(PACKET_HEADER_TYPE));
 
     auto connection_worker_info_ptr =
         reinterpret_cast<volatile tt::tt_fabric::DrainerChannelClientLocationInfo*>(connection_info_address);
