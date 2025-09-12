@@ -57,6 +57,7 @@ jobs:
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
               - models/demos/yolov11/tests/perf/
+              - models/demos/yolov11m/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/bert_tiny/tests/test_performance.py
               - models/demos/yolov4/tests/perf/
