@@ -123,10 +123,10 @@ inline void _init_reciprocal_()
     if constexpr (!legacy_compat)
     {
         // The polynomial y = k2 - k1*x + k0*x**2 minimises the maximum
-        // absolute error for 1/x over the interval [1,2), found via Sollya.
-        sfpi::vConstFloatPrgm0 = 0.343145549297332763671875f;
-        sfpi::vConstFloatPrgm1 = 1.51471805572509765625f;
-        sfpi::vConstFloatPrgm2 = 2.1642131805419921875f;
+        // relative error for 1/x over the interval [1,2), via Sollya.
+        sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;
+        sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;
+        sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
     }
 }
 
