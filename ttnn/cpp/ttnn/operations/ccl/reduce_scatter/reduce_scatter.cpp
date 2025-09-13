@@ -31,18 +31,19 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
-    // when not all devices are mmio capable Manually doing it requires the use if "is_mmio_capable" counting, but as
+    // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     return ttnn::prim::reduce_scatter(
-        input_tensor,
-        normalized_dim,
-        cluster_axis,
-        subdevice_id,
-        memory_config_,
-        optional_output_tensor,
-        num_links_,
-        topology_);
+               input_tensor,
+               normalized_dim,
+               cluster_axis,
+               subdevice_id,
+               memory_config_,
+               optional_output_tensor,
+               num_links_,
+               topology_)
+        .at(1);  // first is the intermediate tensor
 }
 
 }  // namespace ttnn::operations::ccl

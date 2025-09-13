@@ -26,26 +26,48 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
-    auto mem_config = operation_attributes.memory_config;
-    auto output_spec = TensorSpec(
-        Shape(input_tensor.tensor_spec().logical_shape()),
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto mesh_device = input_tensor.device();
+    auto mesh_view = mesh_device->get_view();
+    auto inter_shape = input_tensor.tensor_spec().logical_shape();
 
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value().tensor_spec();
+    if (operation_attributes.topology == ::ttnn::ccl::Topology::Linear) {
+        inter_shape[0] *= 2;
     }
-    return output_spec;
+
+    auto output_shape = input_tensor.logical_shape();
+    uint32_t reduction_devices = mesh_view.num_devices();
+    if (operation_attributes.cluster_axis.has_value()) {
+        uint32_t axis = operation_attributes.cluster_axis.value();
+        log_debug(tt::LogOp, "axis: {}", axis);
+        TT_FATAL(axis == 0 || axis == 1, "axis must be 0 or 1");
+        reduction_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    }
+    output_shape[operation_attributes.dim] /= reduction_devices;
+    // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
+    // TODO: add L1 estimation similar to the one in all_to_all_dispatch and choose to use L1 as an intermediate buffer
+    // if enough space is available. L1 estimation has to be done outside the program cache
+    auto mem_config = operation_attributes.memory_config;
+    auto intermediate_mem_config =
+        MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
+    return {
+        TensorSpec(
+            inter_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(), input_tensor.tensor_spec().page_config(), intermediate_mem_config)),
+        TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), mem_config)),
+    };
 }
 
 ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor.value();
-    }
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    auto output_tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-    return output_tensor;
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    ttnn::Tensor output_tensor = tensor_args.optional_output_tensor.value_or(
+        create_device_tensor(output_specs.at(1), tensor_args.input_tensor.device()));
+    ttnn::Tensor intermediate_tensor = create_device_tensor(output_specs.at(0), tensor_args.input_tensor.device());
+    return {intermediate_tensor, output_tensor};
 }
 
 ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
