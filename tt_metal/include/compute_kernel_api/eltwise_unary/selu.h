@@ -18,7 +18,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs element-wise computation of:  selu = scale *(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile
- * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * in DST register at index tile_index. The value is provided as const scale, alpha. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
@@ -27,12 +27,12 @@ namespace ckernel {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | scale value                                                                | uint32_t |                                                       | True     |
- * | param1          | alpha value                                                                | uint32_t |                                                       | True     |
+ * | scale           | scale value                                                                | uint32_t |                                                       | True     |
+ * | alpha           | alpha value                                                                | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_selu<APPROX, DST_ACCUM_MODE>(idst, param0, param1)));
+ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
+    MATH((llk_math_eltwise_unary_sfpu_selu<APPROX, DST_ACCUM_MODE>(idst, scale, alpha)));
 }
 
 /**
