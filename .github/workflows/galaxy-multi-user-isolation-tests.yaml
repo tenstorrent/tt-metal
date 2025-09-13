@@ -61,7 +61,9 @@ jobs:
               working_dir: /app/tt-metal
               environment:
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -83,7 +85,9 @@ jobs:
               working_dir: /app/tt-metal
               environment:
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -105,7 +109,9 @@ jobs:
               working_dir: /app/tt-metal
               environment:
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -127,7 +133,9 @@ jobs:
               working_dir: /app/tt-metal
               environment:
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
                 - "/dev/tenstorrent/25:/dev/tenstorrent/25"
