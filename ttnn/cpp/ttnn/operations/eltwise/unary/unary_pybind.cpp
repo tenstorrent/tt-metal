@@ -257,13 +257,7 @@ void bind_unary_operation(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
@@ -478,14 +472,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const bool parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("fast_and_approximate_mode") = fast_approx_mode,
@@ -555,14 +542,7 @@ void bind_unary_operation_with_float_parameter(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const float parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg(parameter_name.c_str()),
             py::kw_only(),
@@ -634,14 +614,7 @@ void bind_unary_operation_with_float_parameter_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const float parameter,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name.data()) = parameter_default,
@@ -703,14 +676,7 @@ void bind_unary_composite_with_default_float(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) {
-                return self(input_tensor, parameter_a, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::kw_only(),
@@ -780,14 +746,7 @@ void bind_unary_operation_with_int_parameter(
             module,
             operation,
             doc,
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                   const Tensor& input_tensor,
-                   const std::optional<int>& parameter,
-                   const std::optional<MemoryConfig>& memory_config,
-                   const std::optional<ttnn::Tensor>& output_tensor) {
-                    return self(input_tensor, parameter, memory_config, output_tensor);
-                },
+            ttnn::pybind_arguments_t{
                 py::arg("input_tensor"),
                 py::kw_only(),
                 py::arg(parameter_name.c_str()) = 0,
@@ -855,15 +814,8 @@ void bind_unary_operation_with_dim_parameter(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               int dim,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, dim, memory_config); },
-            py::arg("input_tensor"),
-            py::arg("dim") = -1,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"), py::arg("dim") = -1, py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -930,15 +882,7 @@ void bind_unary_rdiv(
                 module,
                 operation,
                 doc,
-                ttnn::pybind_overload_t{
-                    [](const unary_operation_t& self,
-                       const ttnn::Tensor& input_tensor,
-                       float parameter_a,
-                       const std::optional<std::string> parameter_b,
-                       const std::optional<MemoryConfig>& memory_config,
-                       const std::optional<ttnn::Tensor>& output_tensor) {
-                        return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-                    },
+                ttnn::pybind_arguments_t{
                     py::arg("input_tensor"),
                     py::arg(parameter_name_a.c_str()),
                     py::kw_only(),
@@ -993,15 +937,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
         module,
         ttnn::softplus,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const float beta,
-               const float threshold,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input, beta, threshold, memory_config, output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("beta") = 1.0f,
@@ -1056,12 +992,7 @@ void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               bool approx) { return self(input, memory_config, output_tensor, approx); },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
@@ -1113,13 +1044,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
                             module,
                             ttnn::sigmoid_accurate,
                             doc,
-                            ttnn::pybind_overload_t{
-                                [](const unary_operation_t& self,
-                                   const Tensor& input_tensor,
-                                   const std::optional<MemoryConfig>& memory_config,
-                                   const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                                    return self(input_tensor, memory_config, output_tensor);
-                                },
+                            ttnn::pybind_arguments_t{
                                 py::arg("input_tensor"),
                                 py::kw_only(),
                                 py::arg("memory_config") = std::nullopt,
@@ -1172,15 +1097,7 @@ void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operati
                                 module,
                                 ttnn::sigmoid,
                                 doc,
-                                ttnn::pybind_overload_t{
-                                    [](const unary_operation_t& self,
-                                       const Tensor& input_tensor,
-                                       const int vector_mode,
-                                       const bool parameter,
-                                       const std::optional<MemoryConfig>& memory_config,
-                                       const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                                        return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
-                                    },
+                                ttnn::pybind_arguments_t{
                                     py::arg("input_tensor"),
                                     py::kw_only(),
                                     py::arg("vector_mode") = 4,
@@ -1236,14 +1153,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
                                     module,
                                     ttnn::unary_chain,
                                     doc,
-                                    ttnn::pybind_overload_t{
-                                        [](const unary_operation_t& self,
-                                           const Tensor& input_tensor,
-                                           const FusedActivations& ops_chain,
-                                           const std::optional<MemoryConfig>& memory_config,
-                                           const std::optional<Tensor>& output_tensor) {
-                                            return self(input_tensor, ops_chain, memory_config, output_tensor);
-                                        },
+                                    ttnn::pybind_arguments_t{
                                         py::arg("input_tensor"),
                                         py::arg("ops_chain"),
                                         py::kw_only(),
@@ -1252,60 +1162,54 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
 }
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {
-                                    auto doc = fmt::format(
-                                        R"doc(
-        Returns a copy of the :attr:`input_tensor`; useful for profiling the SFPU.
-        This shouldn't normally be used. Users should normally use clone operation instead for the same functionality since this results in lower performance.
+    auto doc = fmt::format(
+        R"doc(
+Returns a copy of the :attr:`input_tensor`; useful for profiling the SFPU.
+This shouldn't normally be used. Users should normally use clone operation instead for the same functionality since this results in lower performance.
 
-        .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+.. math::
+\mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+Args:
+input_tensor (ttnn.Tensor): the input tensor.
 
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+Keyword Args:
+memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
+Returns:
+ttnn.Tensor: the output tensor.
 
-        Note:
-            Supported dtypes, layouts, and ranks:
+Note:
+Supported dtypes, layouts, and ranks:
 
-            .. list-table::
-               :header-rows: 1
+.. list-table::
+:header-rows: 1
 
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
-                 - TILE
-                 - 2, 3, 4
+* - Dtypes
+- Layouts
+- Ranks
+* - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
+- TILE
+- 2, 3, 4
 
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
-        )doc",
-                                        ttnn::identity.base_name(),
-                                        ttnn::identity.python_fully_qualified_name());
+Example:
+>>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+>>> output = {1}(tensor)
+)doc",
+        ttnn::identity.base_name(),
+        ttnn::identity.python_fully_qualified_name());
 
-                                    bind_registered_operation(
-                                        module,
-                                        ttnn::identity,
-                                        doc,
-                                        ttnn::pybind_overload_t{
-                                            [](const unary_operation_t& self,
-                                               const Tensor& input_tensor,
-                                               const std::optional<MemoryConfig>& memory_config,
-                                               const std::optional<Tensor>& output_tensor) {
-                                                return self(input_tensor, memory_config, output_tensor);
-                                            },
-                                            py::arg("input_tensor"),
-                                            py::kw_only(),
-                                            py::arg("memory_config") = std::nullopt,
-                                            py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::identity,
+        doc,
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -1365,13 +1269,7 @@ void bind_unary_composite(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor"), py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
 // OpHandler_1int
@@ -1431,13 +1329,7 @@ void bind_unary_composite_int_with_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1506,14 +1398,7 @@ void bind_unary_composite_floats_with_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1570,13 +1455,7 @@ void bind_unary_composite_int(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),
@@ -1639,14 +1518,7 @@ void bind_unary_threshold(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::arg(parameter_name_b.c_str()),
@@ -1709,13 +1581,7 @@ void bind_unary_composite_float_with_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1778,13 +1644,7 @@ void bind_unary_composite_rpow(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg(parameter_name_a.c_str()),
             py::kw_only(),

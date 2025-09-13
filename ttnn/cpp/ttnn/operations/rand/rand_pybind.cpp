@@ -46,16 +46,7 @@ void bind_rand_operation(py::module& pymodule) {
         pymodule,
         ttnn::rand,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& shape,
-               MeshDevice& device,
-               const DataType dtype,
-               const Layout layout,
-               const MemoryConfig& memory_config,
-               float from,
-               float to,
-               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
+        ttnn::pybind_arguments_t{
             py::arg("shape"),
             py::arg("device"),
             py::kw_only(),

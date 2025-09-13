@@ -37,30 +37,18 @@ void bind_tilize_with_val_padding(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::tilize_with_val_padding);
     ttnn::bind_registered_operation(
         module,
         ttnn::tilize_with_val_padding,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& output_padded_shape,
-               const PadValue value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore) {
-                return self(input_tensor, output_padded_shape, value, memory_config, output_dtype, use_multicore);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("output_tensor_shape"),
             py::arg("pad_value"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = true}
-
-    );
+            py::arg("use_multicore") = true});
 }
 
 void bind_tilize_with_zero_padding(py::module& module) {
@@ -88,12 +76,7 @@ void bind_tilize_with_zero_padding(py::module& module) {
         module,
         ttnn::tilize_with_zero_padding,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore) { return self(input_tensor, memory_config, output_dtype, use_multicore); },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

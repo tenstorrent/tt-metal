@@ -27,15 +27,8 @@ void bind_convert_to_chw(py::module& module) {
         module,
         ttnn::experimental::convert_to_chw,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype) { return self(input, memory_config, dtype); },
-            py::arg("input"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("input"), py::kw_only(), py::arg("memory_config") = std::nullopt, py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

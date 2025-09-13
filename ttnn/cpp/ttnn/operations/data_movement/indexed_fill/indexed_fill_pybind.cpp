@@ -37,18 +37,11 @@ void bind_indexed_fill(pybind11::module& module) {
         )doc",
         ttnn::indexed_fill.base_name());
 
-    using OperationType = decltype(ttnn::indexed_fill);
     ttnn::bind_registered_operation(
         module,
         ttnn::indexed_fill,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& batch_id,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               int64_t dim) { return self(batch_id, input_tensor_a, input_tensor_b, memory_config, dim); },
+        ttnn::pybind_arguments_t{
             pybind11::arg("batch_id").noconvert(),
             pybind11::arg("input_tensor_a").noconvert(),
             pybind11::arg("input_tensor_b").noconvert(),

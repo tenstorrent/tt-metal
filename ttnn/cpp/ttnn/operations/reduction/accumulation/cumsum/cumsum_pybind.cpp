@@ -78,21 +78,11 @@ void bind_reduction_cumsum_operation(py::module& module) {
             tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, out=preallocated_output)
         )doc";
 
-    using OperationType = decltype(ttnn::cumsum);
     bind_registered_operation(
         module,
         ttnn::cumsum,
         docstring,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t& dim,
-               std::optional<DataType>& dtype,
-               const bool& reverse_order,
-               std::optional<Tensor> preallocated_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input").noconvert(),
             py::arg("dim"),
             py::kw_only(),

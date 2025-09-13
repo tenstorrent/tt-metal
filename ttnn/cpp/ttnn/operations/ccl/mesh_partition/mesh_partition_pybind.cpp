@@ -37,19 +37,11 @@ void py_bind_mesh_partition(py::module& module) {
                                 cluster_axis=1,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::mesh_partition);
     ttnn::bind_registered_operation(
         module,
         ttnn::mesh_partition,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, cluster_axis, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
             py::arg("cluster_axis") = std::nullopt,

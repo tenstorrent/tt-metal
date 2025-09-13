@@ -25,15 +25,7 @@ void bind_repeat_and_interleave_eltwise_mul(py::module& module) {
         module,
         ttnn::experimental::repeat_and_interleave_eltwise_mul,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& a,
-               const ttnn::Tensor& b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               const std::optional<MathFidelity> math_fidelity) {
-                return self(a, b, memory_config, dtype, math_fidelity);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("a"),
             py::arg("b"),
             py::kw_only(),

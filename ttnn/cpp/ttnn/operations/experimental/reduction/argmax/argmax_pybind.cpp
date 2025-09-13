@@ -43,14 +43,7 @@ void bind_argmax_operation(py::module& module) {
         module,
         ttnn::experimental::argmax,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int64_t dim,
-               bool all,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, all, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
             py::kw_only(),
@@ -83,14 +76,7 @@ void bind_argmin_operation(py::module& module) {
         module,
         ttnn::experimental::argmin,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int64_t dim,
-               bool all,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, all, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("dim"),
             py::kw_only(),

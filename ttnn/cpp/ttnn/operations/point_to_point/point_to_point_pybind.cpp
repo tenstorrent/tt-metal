@@ -52,20 +52,11 @@ void py_bind_point_to_point(py::module& module) {
                 >>> assert sent_tensor_torch[1,:,:,:] == input_tensor_torch[0,:,:,:]
             )doc";
 
-    using OperationType = decltype(ttnn::point_to_point);
     ttnn::bind_registered_operation(
         module,
         ttnn::point_to_point,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& receiver_coord,
-               const MeshCoordinate& sender_coord,
-               const ccl::Topology topology,
-               const std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, receiver_coord, sender_coord, topology, optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("receiver_coord"),
             py::arg("sender_coord"),

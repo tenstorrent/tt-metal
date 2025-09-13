@@ -38,23 +38,16 @@ void bind_permute(py::module& module) {
                 >>> print(output.shape)
                 [1, 1, 32, 64])doc";
 
-    using OperationType = decltype(ttnn::permute);
     ttnn::bind_registered_operation(
         module,
         ttnn::permute,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& dims,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("pad_value") = 0.0f,
-        });
+            py::arg("pad_value") = 0.0f});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
