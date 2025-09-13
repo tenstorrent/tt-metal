@@ -2,19 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "inspector_impl.hpp"
+#include "impl/debug/inspector/logger.hpp"
+#include "impl/debug/inspector/types.hpp"
+#include "impl/context/metal_context.hpp"
 #include <iomanip>
 #include <chrono>
-#include <ctime>
-#include <tt-logger/tt-logger.hpp>
-
-#include "mesh_device.hpp"
-#include "distributed/mesh_workload_impl.hpp"
 
 namespace tt::tt_metal::inspector {
 
 Logger::Logger(const std::filesystem::path& logging_path)
     : initialized(false)
+    , logging_path(logging_path)
 {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
@@ -351,10 +349,6 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
     }
-}
-
-Data::Data()
-    : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
 }
 
 }  // namespace tt::tt_metal::inspector
