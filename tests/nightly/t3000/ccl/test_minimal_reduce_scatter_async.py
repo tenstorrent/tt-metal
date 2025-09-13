@@ -250,7 +250,7 @@ def run_reduce_scatter_impl(
         ([1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         # Composite-RS tests
         ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([2, 32, 2048, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         ([1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
