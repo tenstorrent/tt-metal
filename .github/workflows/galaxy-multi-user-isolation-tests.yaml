@@ -57,7 +57,6 @@ jobs:
           rm -rf $MULTIUSER_TEST_DIR
           mkdir -p $MULTIUSER_TEST_DIR
           cat > $MULTIUSER_TEST_DIR/docker-compose.yaml <<EOF
-          version: "3.9"
           services:
             tray-1:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -139,9 +138,12 @@ jobs:
       - name: Run Docker Compose
         run: |
           docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
+          docker ps
 
       - name: Tear down containers
         if: always()
         run: |
+          ls -la $MULTIUSER_TEST_DIR/*
+
           docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml down
           echo rm -rf $MULTIUSER_TEST_DIR
