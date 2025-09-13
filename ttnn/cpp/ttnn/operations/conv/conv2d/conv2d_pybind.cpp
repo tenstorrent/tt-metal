@@ -302,6 +302,7 @@ void py_bind_conv2d(py::module& module) {
             std::optional<ttnn::operations::unary::UnaryWithParam>,
             bool,
             bool,
+            bool,
             uint32_t,
             uint32_t,
             bool,
@@ -322,6 +323,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("activation") = std::nullopt,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
+        py::arg("config_tensors_in_dram") = false,
         py::arg("act_block_h_override") = 0,
         py::arg("act_block_w_div") = 1,
         py::arg("reshard_if_not_optimal") = false,
@@ -360,7 +362,10 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.
         This is ideally used with deallocate_activation = true, when facing OOM issues in the conv micro-op.
-
+    )doc");
+    py_conv_config.def_readwrite("config_tensors_in_dram", &Conv2dConfig::config_tensors_in_dram, R"doc(
+        Boolean that determines where config tensors should be stored. Setting it to true stores them in DRAM. False stores them in L1_SMALL.
+        Config tensors are used by Conv2D, Pooling and other 2D ops to store how data should be loaded, instead of computing on device RISC-cores.
     )doc");
     py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override, R"doc(
             Controls the size of the activation block height.
