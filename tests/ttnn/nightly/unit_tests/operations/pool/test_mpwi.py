@@ -66,7 +66,22 @@ def test_max_pool2d_with_indices(device):
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
     if ttnn_dtype == ttnn.bfloat8_b:
         ttnn_layout = ttnn.TILE_LAYOUT
-    ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, device=device)
+    # ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, device=device)
+
+    # Memory configuration for ttnn_input
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
+            [1280, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+    ttnn_input = ttnn.from_torch(
+        torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, memory_config=memory_config, device=device
+    )
 
     ttnn_output, indices = ttnn.max_pool2d(
         input_tensor=ttnn_input,
@@ -78,7 +93,7 @@ def test_max_pool2d_with_indices(device):
         stride=stride,
         padding=padding,
         dilation=dilation,
-        applied_shard_scheme=shard_scheme,
+        # applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         in_place_halo=False,
         deallocate_input=False,
@@ -104,9 +119,9 @@ def test_max_pool2d_with_indices(device):
         stride=stride,
         padding=padding,
         dilation=dilation,
-        applied_shard_scheme=shard_scheme,
+        # applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place_halo=False,
+        in_place_halo=True,
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=False,

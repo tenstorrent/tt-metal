@@ -606,10 +606,11 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     IDevice* device,
+    uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size) {
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                            : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
@@ -804,12 +805,14 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool remote_read,
     bool is_in_tiled,
     IDevice* device,
+    uint32_t num_cores_x,
     uint32_t max_out_nsticks_per_core,
     uint32_t in_nsticks_per_core,
     bool in_place,
     uint32_t in_out_shard_size_delta) {
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    uint32_t num_cores_nhw = shard_boundaries.size();
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                            : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
@@ -817,8 +820,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
     const uint16_t pad_local = 0xFFFF;
     std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
-
-    uint32_t num_cores_nhw = shard_boundaries.size();
 
     uint32_t core_id = 0;
     for (auto [output_boundary, input_boundary] : shard_boundaries) {
