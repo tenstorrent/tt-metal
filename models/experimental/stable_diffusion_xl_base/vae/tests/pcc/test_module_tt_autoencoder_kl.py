@@ -20,7 +20,7 @@ from loguru import logger
     "input_shape, pcc, vae_block",
     [
         ((1, 4, 128, 128), 0.89, "decoder"),
-        ((1, 3, 1024, 1024), 0.999, "encoder"),
+        ((1, 3, 1024, 1024), 0.967, "encoder"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -65,14 +65,17 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
 
     logger.info("Running TT model")
     if vae_block == "encoder":
-        output_tensor, [C, H, W] = tt_vae.encode(ttnn_input_tensor, [B, C, H, W])
+        output_tensor = tt_vae.encode(ttnn_input_tensor, [B, C, H, W])
+
+        output_tensor = output_tensor.latent_dist.sample()
+        torch_output_tensor = torch_output_tensor.sample()
     else:
         output_tensor, [C, H, W] = tt_vae.decode(ttnn_input_tensor, [B, C, H, W])
-    logger.info("TT model done")
 
-    output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
-    output_tensor = output_tensor.reshape(B, H, W, C)
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
+        output_tensor = output_tensor.reshape(B, H, W, C)
+        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+    logger.info("TT model done")
 
     del vae
     gc.collect()

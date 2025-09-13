@@ -31,7 +31,7 @@ class TtEncoder(LightweightModule):
 
         num_up_blocks = 4
 
-        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config)
+        self.mid_block = TtUNetMidBlock2D(device, state_dict, "encoder.mid_block", model_config)
         self.down_blocks = []
         for block_id in range(num_up_blocks):
             self.down_blocks.append(

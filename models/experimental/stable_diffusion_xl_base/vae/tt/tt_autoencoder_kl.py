@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
+from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_decoder import TtDecoder
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_encoder import TtEncoder
@@ -60,9 +63,13 @@ class TtAutoencoderKL(LightweightModule):
             self.tt_quant_conv_weights,
             bias=self.tt_quant_conv_bias,
         )
-        assert NotImplementedError("GuassianDistribution is not implemented yet")
 
-        return hidden_states, [C, H, W]
+        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        h = h.reshape(B, H, W, C)
+        h = torch.permute(h, (0, 3, 1, 2))
+
+        posterior = DiagonalGaussianDistribution(h)
+        return AutoencoderKLOutput(latent_dist=posterior)
 
     def decode(self, hidden_states, input_shape):
         B, C, H, W = input_shape
