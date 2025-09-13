@@ -38,7 +38,6 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
-#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
