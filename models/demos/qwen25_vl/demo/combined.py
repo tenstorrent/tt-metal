@@ -26,6 +26,22 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "image_input, text_input, expected_output",
+    [
+        (
+            "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+            "Describe this image.",
+            "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful.",
+        ),
+        (
+            "https://gist.github.com/gwangTT/ae3ac698de56020bc459018c7c2bff08/raw/a91b2df96c61234d83a7f61c4495bfc826786c74/paper.png",
+            "Transcribe the text in the image.",
+            "Fractal Generative Models 4.4. Relation to Long-Sequence Modeling Most previous work on pixel-by-pixel generation formulates the problem as long-sequence modeling and leverages methods from language modeling to address it (Child et al., 2019; Roy et al., 2021; Ren et al., 2021; Hawthorne et al., 2022; Yu et al., 2023). However, the intrinsic structures of many data types, including but not limited to images, are beyond one-dimensional sequences. Different from these methods, we treat such",
+        ),
+    ],
+    ids=["240dpi", "300dpi"],
+)
+@pytest.mark.parametrize(
     "use_tt_vision",
     [False, True],
     ids=["hf_vision", "tt_vision"],
@@ -36,8 +52,17 @@ def test_qwen_vl_end_to_end(
     reset_seeds,
     ensure_gc,
     ensure_nltk,
+    image_input,
+    text_input,
+    expected_output,
     use_tt_vision,
+    is_ci_env,
+    request,
 ):
+    test_id = request.node.callspec.id
+    if is_ci_env and "300dpi" in test_id:
+        pytest.skip("CI only runs small image test for time limit")
+
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
     batch_size = 1  # use batch size 1 for now to run the test in reasonable amount of time in CI
     max_new_tokens = 128
@@ -56,9 +81,9 @@ def test_qwen_vl_end_to_end(
                 "content": [
                     {
                         "type": "image",
-                        "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+                        "image": image_input,
                     },
-                    {"type": "text", "text": "Describe this image."},
+                    {"type": "text", "text": text_input},
                 ],
             }
         ]
@@ -91,7 +116,6 @@ def test_qwen_vl_end_to_end(
 
     # Verify output
     # Token-level BLEU score (standard for text generation)
-    expected_output = "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful."
     for i, output_text in enumerate(output_texts):
         logger.info(f"Expected output: {expected_output}")
         logger.info(f"Generated output {i}: {output_text}")
