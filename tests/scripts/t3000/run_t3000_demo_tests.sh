@@ -78,15 +78,21 @@ run_t3000_qwen25_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_qwen25_tests"
-  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
-  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
-  qwen25_coder_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-Coder-32B
+  export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
-  HF_MODEL=$qwen25_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  echo "LOG_METAL: Running run_t3000_qwen25_tests"
+  qwen25_7b=Qwen/Qwen2.5-7B-Instruct
+  tt_cache_7b=$HF_HOME/tt_cache/Qwen--Qwen2.5-7B-Instruct
+  qwen25_72b=Qwen/Qwen2.5-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-72B-Instruct
+  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  tt_cache_coder_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-Coder-32B
+
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
+  HF_MODEL=$qwen25_72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
   pip install -r models/tt_transformers/requirements.txt
-  HF_MODEL=$qwen25_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  HF_MODEL=$qwen25_coder_32b TT_CACHE_PATH=$tt_cache_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -136,7 +142,7 @@ run_t3000_qwen3_tests() {
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
-  HF_MODEL=$qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
+  HF_MODEL=$qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -159,7 +165,7 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$n300" "$t3k"; do
+  for mesh_device in "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
     MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
@@ -291,9 +297,8 @@ run_t3000_sd35large_tests() {
 
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
-  # Run test_model (decode and prefill) for llama3 70B
-  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  NO_PROMPT=1 SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k"  --timeout 600 ; fail+=$?
+  #Cache path
+  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

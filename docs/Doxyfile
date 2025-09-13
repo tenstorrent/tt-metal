@@ -934,6 +934,7 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/recip.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/sqrt.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/rsqrt.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/elu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/relu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/i0.h \

@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 import pathlib
 import json
 import datetime as dt
+import hashlib
 import os
 from elasticsearch import Elasticsearch
 from framework.database import (
@@ -16,11 +17,13 @@ from framework.database import (
     update_run,
     generate_error_signature,
     map_test_status_to_run_status,
+    generate_error_hash,
 )
 from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
 from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
+from framework.upload_sftp import upload_run_sftp
 
 
 class ResultDestination(ABC):
@@ -113,6 +116,7 @@ class PostgresResultDestination(ResultDestination):
                     testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
                     exception_text = result.get("exception", None)
                     error_sig = generate_error_signature(exception_text)
+                    error_hash = generate_error_hash(exception_text)
 
                     testcase_values = (
                         test_id,
@@ -255,10 +259,14 @@ class FileResultDestination(ResultDestination):
         # Generate a simple deterministic run id based on host and start timestamp
         try:
             host = str(run_metadata.get("host", "unknown"))
+            # Use a short digest of run_contents to prevent overly long filenames
             run_contents = str(run_metadata.get("run_contents", "unknown"))
+            digest = hashlib.sha256(run_contents.encode("utf-8")).hexdigest()[:12]
             start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
             ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
-            self._run_id = f"{host}_{run_contents}_{ts_str}"
+            # Sanitize host to avoid path issues and keep the filename short
+            safe_host = host.replace("/", "_")[:32]
+            self._run_id = f"{safe_host}_{digest}_{ts_str}"
         except Exception:
             self._run_id = None
 
@@ -279,7 +287,10 @@ class FileResultDestination(ResultDestination):
         else:
             # Fallback to current time if run_start_time is not available
             timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_path = self.export_dir / f"{sweep_name}_{timestamp}.json"
+        # Keep filenames short and safe: use sweep short name + digest
+        short_sweep = str(sweep_name).split(".")[0] if sweep_name else "sweep"
+        name_digest = hashlib.sha256(str(sweep_name).encode("utf-8")).hexdigest()[:12] if sweep_name else "na"
+        export_path = self.export_dir / f"{short_sweep}_{name_digest}_{timestamp}.json"
 
         git_hash = run_context.get("git_hash", "unknown")
 
@@ -406,6 +417,7 @@ class FileResultDestination(ResultDestination):
                 success=is_success,
                 skipped=is_skipped,
                 error_message=raw.get("exception", None),
+                error_hash=generate_error_hash(raw.get("exception", None)),
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
@@ -470,9 +482,7 @@ class FileResultDestination(ResultDestination):
 
         # Build OpRun record
         try:
-            run_start_ts = (
-                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
-            )
+            run_start_ts = self._run_metadata.get("run_start_ts")
             run_end_ts = dt.datetime.now()
             card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
 
@@ -614,6 +624,40 @@ def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
     return flat
 
 
+class SupersetResultDestination(FileResultDestination):
+    """Superset destination: file export plus SFTP upload of oprun_*.json."""
+
+    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+        super().__init__(export_dir)
+
+    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+        # First perform the standard file-based finalize to write oprun_*.json
+        super().finalize_run(run_id, final_status)
+
+        # Compute the path of the just-written oprun file
+        try:
+            run_id_str = run_id or self._run_id
+            run_path = self.export_dir / f"oprun_{run_id_str}.json"
+        except Exception as e:
+            logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
+            return
+        print(f"Superset: run_path: {run_path}")
+        print(f"Superset: run_id: {run_id}")
+
+        # Upload via SFTP if environment/configuration is available
+        try:
+            success = upload_run_sftp(run_path)
+            if success:
+                logger.info(f"Superset: successfully uploaded '{run_path.name}' via SFTP")
+            else:
+                logger.warning(
+                    f"Superset: skipping SFTP upload for '{run_path.name}' (missing credentials or upload failed)"
+                )
+        except Exception as e:
+            logger.error(f"Superset: unexpected error during SFTP upload of '{run_path}': {e}")
+            # Do not raise; file export already succeeded
+
+
 class ResultDestinationFactory:
     """Factory to create appropriate result destination based on configuration"""
 
@@ -630,5 +674,8 @@ class ResultDestinationFactory:
         elif result_destination == "results_export":
             export_dir = kwargs.get("export_dir")
             return FileResultDestination(export_dir)
+        elif result_destination == "superset":
+            export_dir = kwargs.get("export_dir")
+            return SupersetResultDestination(export_dir)
         else:
             raise ValueError(f"Unknown result destination: {result_destination}")

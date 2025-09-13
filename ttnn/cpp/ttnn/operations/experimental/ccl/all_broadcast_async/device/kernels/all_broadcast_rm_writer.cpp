@@ -67,7 +67,8 @@ void kernel_main() {
         get_compile_time_arg_val(sharded_args_start_idx + 2),
         get_compile_time_arg_val(sharded_args_start_idx + 3),
         get_compile_time_arg_val(sharded_args_start_idx + 4),
-        get_compile_time_arg_val(sharded_args_start_idx + 5)>
+        get_compile_time_arg_val(sharded_args_start_idx + 5),
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =

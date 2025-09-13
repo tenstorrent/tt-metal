@@ -22,6 +22,11 @@ namespace tt::tt_metal::wormhole {
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace tensix_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_tensix_mem_map() {
     constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -48,6 +53,8 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = MEM_TENSIX_ROUTING_PATH_BASE_1D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = MEM_TENSIX_ROUTING_PATH_BASE_2D;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
@@ -69,6 +76,8 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = COMPRESSED_ROUTING_PATH_SIZE_1D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = COMPRESSED_ROUTING_PATH_SIZE_2D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
@@ -141,7 +150,8 @@ HalCoreInfoType create_tensix_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         true /*supports_cbs*/,
-        true /*supports_receiving_multicast_cmds*/};
+        true /*supports_receiving_multicast_cmds*/,
+        tensix_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

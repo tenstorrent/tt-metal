@@ -34,6 +34,9 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
+// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 using std::vector;
@@ -299,15 +302,11 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
         vector<uint32_t> cb_config_vector;
 
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device,
-            core_coord,
-            program_.get_cb_base_addr(device, core_coord, CoreType::WORKER),
-            cb_config_buffer_size,
-            cb_config_vector);
+        auto address = program_.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER);
+        tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
         // ETH core doesn't have CB
-        EXPECT_TRUE(program_.get_cb_size(device, core_coord, CoreType::ETH) == 0);
+        EXPECT_TRUE(program_.impl().get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
         uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
