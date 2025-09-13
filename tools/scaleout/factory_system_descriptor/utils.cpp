@@ -14,7 +14,7 @@
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <yaml-cpp/yaml.h>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <board/board.hpp>
 #include <cabling_generator/cabling_generator.hpp>

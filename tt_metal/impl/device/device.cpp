@@ -75,14 +75,12 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/coordinate_manager.h>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
-enum class ARCH;
 
 namespace tt_metal {
 

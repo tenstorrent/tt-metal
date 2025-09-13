@@ -15,7 +15,7 @@
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
 #include <fmt/ranges.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #endif

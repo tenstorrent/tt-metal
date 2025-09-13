@@ -8,7 +8,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_fabric {

@@ -18,10 +18,10 @@
 #include <fmt/base.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 #include "control_plane.hpp"
 #include "core_descriptor.hpp"
