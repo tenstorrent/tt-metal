@@ -1464,4 +1464,232 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
+
+static inline int next_index_u32(std::vector<uint32_t>& idx, ttnn::Shape& dims, uint32_t ndims) {
+    // increment least-significant dim first
+    for (uint32_t d = ndims; d-- > 0;) {
+        uint32_t v = idx[d] + 1;
+        if (v < dims[d]) {
+            idx[d] = v;
+            return 1;
+        }
+        idx[d] = 0;  // wrap and carry
+    }
+    return 0;  // overflowed most-significant dim
+}
+
+operation::ProgramWithCallbacks pad_tile_multicore(
+    const Tensor& a,
+    Tensor& output,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
+    const float pad_value) {
+    Program program{};
+
+    const auto& a_shape = a.logical_shape();
+    uint32_t num_pages = get_num_pages(output);
+
+    IDevice* device = a.device();
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t page_size = output.buffer()->page_size();
+    uint32_t input_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig input_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size * 2, {{input_cb_index, cb_data_format}})
+            .set_page_size(input_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, input_cb_config);
+
+    uint32_t output_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig output_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size * 2, {{output_cb_index, cb_data_format}})
+            .set_page_size(output_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, output_cb_config);
+
+    uint32_t pad_val_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig pad_val_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size, {{pad_val_cb_index, cb_data_format}})
+            .set_page_size(pad_val_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, pad_val_cb_config);
+
+    Buffer* input_buffer = a.buffer();
+    Buffer* output_buffer = output.buffer();
+    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    bfloat16 bfloat_pad_value = bfloat16(pad_value);
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
+
+    std::vector<uint32_t> reader_ct_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)page_size,
+        (std::uint32_t)output_padded_shape.rank(),
+    };
+    TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)output_cb_index,
+        (std::uint32_t)pad_val_cb_index,
+        (std::uint32_t)page_size,
+        (std::uint32_t)output_padded_shape.rank(),
+        (std::uint32_t)packed_pad_value,
+        (std::uint32_t)output.element_size(),
+    };
+    TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
+        total_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
+        total_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+
+    std::vector<uint32_t> input_odo, output_odo;  // input and output odometers
+    // initialize odos to vectors of length num_dims filled with 0
+    input_odo.resize(a_shape.rank(), 0);
+    output_odo.resize(output_padded_shape.rank(), 0);
+    // instantiate the input and output tensor padded shapes
+    auto input_page_shape = a.padded_shape();
+    auto output_page_shape = output_padded_shape;
+    input_page_shape[-1] /= 32;
+    input_page_shape[-2] /= 32;
+    output_page_shape[-1] /= 32;
+    output_page_shape[-2] /= 32;
+    bool within_input_region;
+    uint32_t input_page_offset = 0;
+    uint32_t output_page_offset = 0;
+
+    std::vector<uint32_t> all_runtime_args;
+
+    std::cout << "num_pages_per_core_group_1: " << num_pages_per_core_group_1 << std::endl;
+    std::cout << "num_pages_per_core_group_2: " << num_pages_per_core_group_2 << std::endl;
+
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_pages_per_core;
+        if (core_group_1.contains(core)) {
+            num_pages_per_core = num_pages_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_pages_per_core = num_pages_per_core_group_2;
+        } else {
+            num_pages_per_core = 0;  // no-op
+        }
+
+        all_runtime_args = {
+            a.buffer()->address(),
+            num_pages_per_core,
+            input_page_offset,
+        };
+        all_runtime_args.insert(all_runtime_args.end(), input_page_shape.cbegin(), input_page_shape.cend());
+        all_runtime_args.insert(all_runtime_args.end(), output_page_shape.cbegin(), output_page_shape.cend());
+        all_runtime_args.insert(all_runtime_args.end(), input_odo.begin(), input_odo.end());
+        all_runtime_args.insert(all_runtime_args.end(), output_odo.begin(), output_odo.end());
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args);
+        all_runtime_args[0] = output.buffer()->address();  // change input addr to output addr before setting writer
+                                                           // args
+        all_runtime_args[2] =
+            output_page_offset;  // change input page offset to output page offset before setting writer args
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args);
+
+        for (uint32_t p = 0; p < num_pages_per_core; p++) {
+            within_input_region = true;
+            for (uint32_t d = 0; d < input_odo.size(); d++) {
+                if (input_odo[d] < output_odo[d]) {
+                    within_input_region = false;
+                }
+            }
+            if (within_input_region) {
+                next_index_u32(input_odo, input_page_shape, input_odo.size());
+                input_page_offset++;
+            }
+            next_index_u32(output_odo, output_page_shape, output_odo.size());
+            output_page_offset++;
+        }
+        std::cout << "input_odo: ";
+        for (auto v : input_odo) {
+            std::cout << v << ", ";
+        }
+        std::cout << std::endl;
+        std::cout << "output_odo: ";
+        for (auto v : output_odo) {
+            std::cout << v << ", ";
+        }
+        std::cout << std::endl;
+    }
+
+    auto override_runtime_args_callback =
+        [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start](
+            const void* operation,
+            const Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            const auto& src_tensor = input_tensors.at(0);
+
+            // auto dst_tensor = output_tensors.at(0);
+
+            // uint32_t num_cores_x = compute_with_storage_grid_size.x;
+            // uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+            // uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+            // auto output_tensor_shape = dst_tensor.logical_shape();
+            // uint32_t H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1],
+            //          N_padded = output_tensor_shape[0];
+            // uint32_t NCH_padded = H_padded * C_padded * N_padded;
+
+            // auto
+            //     [num_cores,
+            //      all_cores,
+            //      core_group_1,
+            //      core_group_2,
+            //      num_pages_per_core_group_1,
+            //      num_pages_per_core_group_2] =
+            //         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+            // auto all_runtime_args = get_runtime_args_rm(
+            //     src_tensor,
+            //     dst_tensor,
+            //     input_tensor_start,
+            //     num_cores_total,
+            //     num_cores,
+            //     num_cores_y,
+            //     core_group_1,
+            //     num_pages_per_core_group_1,
+            //     core_group_2,
+            //     num_pages_per_core_group_2);
+
+            // for (uint32_t i = 0; i < num_cores_total; i++) {
+            //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            //     {
+            //         SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+            //     }
+
+            //     {
+            //         SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+            //     }
+            // }
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+}
 }  // namespace ttnn::operations::data_movement::detail
