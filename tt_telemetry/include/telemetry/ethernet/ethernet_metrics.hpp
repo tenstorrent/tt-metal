@@ -15,7 +15,7 @@
  #include <string>
  #include <vector>
 
-#include <third_party/umd/device/api/umd/device/cluster.h>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
 
 #include <telemetry/metric.hpp>

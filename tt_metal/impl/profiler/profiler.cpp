@@ -42,7 +42,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <umd/device/wormhole_implementation.h>
+#include <umd/device/arch/wormhole_implementation.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
 

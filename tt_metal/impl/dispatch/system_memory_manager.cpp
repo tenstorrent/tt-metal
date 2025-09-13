@@ -20,8 +20,6 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-// #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
-// guards
 #include <umd/device/tt_io.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
