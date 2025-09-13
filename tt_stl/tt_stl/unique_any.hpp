@@ -40,12 +40,12 @@ struct unique_any final {
     unique_any(const unique_any& other) = delete;
     unique_any& operator=(const unique_any& other) = delete;
 
-    unique_any(unique_any&& other) :
+    unique_any(unique_any&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         move_storage{other.move_storage} {}
 
-    unique_any& operator=(unique_any&& other) {
+    unique_any& operator=(unique_any&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;

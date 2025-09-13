@@ -146,7 +146,7 @@ public:
 
     CoreRangeSet() = default;
 
-    friend void swap(CoreRangeSet& first, CoreRangeSet& second);
+    friend void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept;
 
     CoreRangeSet(const CoreRangeSet& other);
 
