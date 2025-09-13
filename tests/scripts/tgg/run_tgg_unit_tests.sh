@@ -1,4 +1,5 @@
 #!/bin/bash
+#28447 - TGG tests should be killed
 set -eo pipefail
 
 run_tgg_tests() {
