@@ -63,7 +63,7 @@ int main() {
                                         // as the tile size for efficiency.
         .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
     distributed::ReplicatedBufferConfig buffer_config{
-        .size = single_tile_size,       // Size of the buffer in bytes
+        .size = single_tile_size  // Size of the buffer in bytes
     };
     // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
     auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
