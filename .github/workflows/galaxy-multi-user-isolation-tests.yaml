@@ -157,7 +157,7 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up
 
       - name: Tear down containers
         if: always()
