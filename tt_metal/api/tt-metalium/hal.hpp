@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <string>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::hal {
 

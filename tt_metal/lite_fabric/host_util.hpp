@@ -8,7 +8,7 @@
 
 #include "tt_cluster.hpp"
 #include "core_coord.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/control_plane.hpp>
 
 namespace lite_fabric {

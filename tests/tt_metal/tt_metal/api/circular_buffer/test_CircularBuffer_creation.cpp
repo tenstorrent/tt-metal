@@ -24,7 +24,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"

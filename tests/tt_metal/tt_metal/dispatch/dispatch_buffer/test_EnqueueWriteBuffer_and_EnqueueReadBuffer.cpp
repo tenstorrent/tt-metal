@@ -45,9 +45,10 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;

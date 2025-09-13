@@ -4,9 +4,8 @@
 
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.h>
-
-enum class CoreType;
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

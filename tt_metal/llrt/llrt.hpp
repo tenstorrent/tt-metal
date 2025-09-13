@@ -18,9 +18,8 @@
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 
 struct go_msg_t;

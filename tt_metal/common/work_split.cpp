@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
