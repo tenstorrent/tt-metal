@@ -28,6 +28,7 @@ jobs:
       - arch-wormhole_b0
       - bare-metal
       - in-service
+      - g15glx04
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
