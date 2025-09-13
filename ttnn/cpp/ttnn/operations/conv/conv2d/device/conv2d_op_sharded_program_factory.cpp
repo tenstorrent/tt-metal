@@ -4,11 +4,11 @@
 #include <umd/device/types/xy_pair.h>
 #include <cstdint>
 #include <string>
-
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -176,7 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool enable_split_reader,
     bool full_inner_dim,
     bool enable_activation_reuse) {
     distributed::MeshDevice* device = a.device();
@@ -293,10 +292,30 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);
-    if ((block_sharded || is_conv_1d_depthwise_conv) && enable_split_reader) {
-        enable_split_reader = false;
-        log_warning(tt::LogOp, "Split reader is not supported for block sharded or 1d depthwise conv");
-    }
+
+    const bool enable_split_reader =
+        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
+        is_split_reader_viable(
+            act_block_h_ntiles,
+            input_channels_padded,
+            filter_w,
+            tt::tt_metal::hal::get_arch(),
+            a.dtype(),
+            parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
+            dilation_w,
+            per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
+            act_block_w_ntiles,
+            fp32_dest_acc_en,
+            output.dtype(),
+            enable_activation_reuse);
+    log_debug(
+        tt::LogOp,
+        "enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, act_block_h_ntiles: {}",
+        enable_split_reader,
+        per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
+        per_core_out_matrix_height_ntiles,
+        block_config.act_block_h_ntiles);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -617,7 +636,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
-        .enable_split_reader = enable_split_reader,
         .enable_activation_reuse = enable_activation_reuse};
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
@@ -625,6 +643,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         parallelization_config,
         b.padded_shape(),
         {filter_h, filter_w},
+        {dilation_h, dilation_w},
         conv_config,
         a.dtype(),
         output.dtype(),
@@ -632,7 +651,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output_image_width,
         has_bias,
         is_conv_1d_depthwise_conv,
-        skip_activation_mcast);
+        skip_activation_mcast,
+        input_channels_padded);
 
     access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
 
@@ -702,7 +722,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             enable_split_reader,
             input_cores);
     }
-
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dilation_h,

@@ -23,7 +23,6 @@ class TtMobileNetV2Conv2D:
         width_shard=False,
         act_blocks=32,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
         reshard_if_not_optimal=True,
         activation_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -42,7 +41,6 @@ class TtMobileNetV2Conv2D:
         self.width_shard = width_shard
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
-        self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.shard_layout = shard_layout
@@ -64,9 +62,6 @@ class TtMobileNetV2Conv2D:
             act_block_w_div=1,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=self.enable_act_double_buffer,
-            enable_split_reader=True
-            if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            else self.enable_split_reader,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
