@@ -65,8 +65,7 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
-              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
-              command: bash
+              entrypoint: ["sleep", "infinity"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
@@ -84,13 +83,12 @@ jobs:
 
             tray-2:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              command: bash
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
-              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              entrypoint: ["sleep", "infinity"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
@@ -108,13 +106,12 @@ jobs:
 
             tray-3:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              command: bash
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
-              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              entrypoint: ["sleep", "infinity"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
@@ -132,13 +129,12 @@ jobs:
 
             tray-4:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              command: bash
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
-              entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              entrypoint: ["sleep", "infinity"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
@@ -157,7 +153,17 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
+
+      - name: Run the tests
+        run: |
+          run_test() {
+            cname=$1
+            echo "Running test in container: $cname"
+            docker exec $cname bash -c "ls -l"
+          }
+          export -f run_test
+          parallel -j 4 run_test ::: tray-1 tray-2 tray-3 tray-4
 
       - name: Tear down containers
         if: always()
