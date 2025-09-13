@@ -178,7 +178,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool full_inner_dim,
-    bool enable_activation_reuse) {
+    bool enable_activation_reuse,
+    bool config_tensors_in_dram) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -522,10 +523,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     };
 
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, input_parallel_config);
+        conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device());
+        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
+
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
@@ -613,6 +616,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
+        .config_tensors_in_dram = config_tensors_in_dram,
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
@@ -625,6 +629,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         parallelization_config,
         b.padded_shape(),
         {filter_h, filter_w},
+        {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
         conv_config,
         a.dtype(),
         output.dtype(),
@@ -634,8 +639,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_conv_1d_depthwise_conv,
         skip_activation_mcast);
 
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
-
+    if (config_tensors_in_dram) {
+        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
+        // maximum possible size.
+        TT_FATAL(
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
+                conv_reader_indices_storage.get_buffer()->page_size(),
+            "CB page size {} should be greater than the config tensor page size {}",
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
+            conv_reader_indices_storage.get_buffer()->page_size());
+    } else {
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
+            conv_reader_indices_storage.get_buffer()->page_size();
+    }
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
 
@@ -734,6 +750,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index};
 
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> writer_mcast_sender_defines;
+    std::map<std::string, std::string> compute_defines;
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
+        writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+    } else {
+        // Put enough 0s so that the offsets of activation reuse args are the same
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
+    }
+
     if (enable_activation_reuse) {
         std::vector<uint32_t> activation_reuse_args = {
             activation_reuse_config.act_cb_num_tiles_split,
@@ -748,10 +783,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
     }
 
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
-    std::map<std::string, std::string> writer_mcast_sender_defines;
-    std::map<std::string, std::string> compute_defines;
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
@@ -797,7 +828,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
-        log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+        log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1012,23 +1043,29 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 }
                 reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
                 reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
+                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
             }
         }
-    } else if (enable_activation_reuse) {
+    } else {
+        uint32_t core_index = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                uint32_t reader_remaining_tiles_to_push = 0;
-                if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
-                    reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
-                } else if (
-                    activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                    activation_reuse_config.cores_with_non_meaningful_work.end()) {
-                    reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
+                std::vector<uint32_t> reader_rt_args{core_index};
+                if (enable_activation_reuse) {
+                    uint32_t reader_remaining_tiles_to_push = 0;
+                    if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
+                        reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
+                    } else if (
+                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
+                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                        reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
+                    }
+                    reader_rt_args.push_back(reader_remaining_tiles_to_push);
                 }
-                std::vector<uint32_t> reader_rt_args{reader_remaining_tiles_to_push};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
+                core_index++;
             }
         }
     }
@@ -1047,7 +1084,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             "bias_tile_offset {} should be less than bias_ntiles {}",
             bias_tile_offset,
             bias_ntiles);
-
         std::vector<uint32_t> sender_rt_args = {
             weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
         if (block_sharded) {
