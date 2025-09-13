@@ -6,9 +6,6 @@ TRAY_PODS_DIR="/app/multihosttest"
 REQUIRED_PODS=4
 TIMEOUT=300
 
-rm -rf "$TRAY_PODS_DIR"
-mkdir -p "$TRAY_PODS_DIR"
-
 EPOCH_START=$(date +%s)
 echo "start epoch: $EPOCH_START"
 
@@ -36,7 +33,7 @@ done
 
 echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
 
-# install the wheel 
+# install the wheel
 echo "Installing the wheel"
 #pip install /app/dist/*.whl
 
