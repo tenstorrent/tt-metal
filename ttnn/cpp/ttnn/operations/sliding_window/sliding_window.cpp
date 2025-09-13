@@ -1251,15 +1251,16 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
 }
 
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config) {
+    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram) {
     // We need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
+
     ttnn::Shape config_shape(
         {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
 
-    const auto factor = get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
+    const uint32_t factor = store_in_dram ? 1 : get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
     auto repeat_config = replicate_config(config_vector, factor);
 
     auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
@@ -1271,7 +1272,11 @@ Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,
     const ParallelConfig& p_config,
     bool is_block_sharded,
-    distributed::MeshDevice* device) {
+    distributed::MeshDevice* device,
+    bool store_in_dram) {
+    if (store_in_dram) {
+        return config_tensor.to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    }
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =

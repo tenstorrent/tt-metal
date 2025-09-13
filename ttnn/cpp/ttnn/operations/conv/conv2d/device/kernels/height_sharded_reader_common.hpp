@@ -302,3 +302,19 @@ FORCE_INLINE void read_sticks_activation_reuse(
     }
 }
 #endif
+template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
+void load_config_tensor_if_in_dram(uint32_t core_index) {
+#ifdef CONFIG_TENSOR_IN_DRAM
+    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
+    // cores in the row.
+    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(dram_addr_index);
+    constexpr uint32_t config_page_size = get_compile_time_arg_val(page_size_index);
+    const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
+    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
+    uint64_t src_noc_addr = get_noc_addr(core_index, config_accessor);
+
+    noc_async_read(src_noc_addr, get_write_ptr(cb_reader_index), config_page_size);
+    noc_async_read_barrier();
+    cb_push_back(cb_reader_index, 1);
+#endif
+}
