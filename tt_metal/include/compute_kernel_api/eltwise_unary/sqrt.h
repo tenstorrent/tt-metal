@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_sqrt.h"
+#include "ckernel_sfpu_sqrt.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -20,7 +21,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true>
 ALWI void sqrt_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_sqrt_init<APPROX, legacy_compat>()));
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(sqrt, sfpu::sqrt_init, APPROX, legacy_compat));
 }
 
 // clang-format off
@@ -37,9 +38,9 @@ ALWI void sqrt_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool legacy_compat = true>
+template <bool legacy_compat, bool fp32_dest_acc_en>
 ALWI void sqrt_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sqrt<APPROX, DST_ACCUM_MODE, legacy_compat>(idst)));
+    MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST(sqrt, APPROX, 8, fp32_dest_acc_en, legacy_compat, idst, RC));
 }
 
 }  // namespace ckernel
