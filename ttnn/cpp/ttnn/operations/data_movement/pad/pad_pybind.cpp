@@ -61,16 +61,8 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = true,
             py::arg("memory_config") = std::nullopt},
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array4D& output_padded_shape,
-               const tt::tt_metal::Array4D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config);
-            },
+
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("output_padded_shape"),
             py::arg("input_tensor_start"),

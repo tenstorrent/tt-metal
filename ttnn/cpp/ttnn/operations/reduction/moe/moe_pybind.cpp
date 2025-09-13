@@ -79,17 +79,7 @@ void bind_reduction_moe_operation(py::module& module) {
         module,
         ttnn::moe,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_mask_tensor,
-               const ttnn::Tensor& topk_mask_tensor,
-               const uint16_t k,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("expert_mask_tensor").noconvert(),
             py::arg("topk_mask_tensor").noconvert(),

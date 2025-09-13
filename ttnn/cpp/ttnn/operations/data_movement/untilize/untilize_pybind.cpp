@@ -37,20 +37,11 @@ void bind_untilize(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::untilize);
     ttnn::bind_registered_operation(
         module,
         ttnn::untilize,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                return self(input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

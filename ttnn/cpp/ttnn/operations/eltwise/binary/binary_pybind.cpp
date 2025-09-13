@@ -940,13 +940,7 @@ void bind_binary_composite(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
@@ -1007,23 +1001,13 @@ void bind_binary_composite_with_rtol_atol(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               float rtol,
-               float atol,
-               const bool equal_nan,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("rtol") = 1e-05f,
-            py::arg("atol") = 1e-08f,
-            py::arg("equal_nan") = false,
-            py::arg("memory_config") = std::nullopt});
+        py::arg("input_tensor_a"),
+        py::arg("input_tensor_b"),
+        py::kw_only(),
+        py::arg("rtol") = 1e-05f,
+        py::arg("atol") = 1e-08f,
+        py::arg("equal_nan") = false,
+        py::arg("memory_config") = std::nullopt);
 }
 
 template <typename binary_operation_t>
@@ -1402,17 +1386,10 @@ void bind_polyval(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const std::vector<float>& coeffs,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, coeffs, memory_config);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("coeffs"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        py::arg("input_tensor_a"),
+        py::arg("coeffs"),
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt);
 }
 
 template <typename binary_operation_t>
@@ -1658,29 +1635,12 @@ void bind_logical_inplace_operation(
         operation,
         doc,
 
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
-            py::arg("input_a"),
-            py::arg("input_b"),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-        });
+        py::arg("input_a"),
+        py::arg("input_b"),
+        py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+        py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+        py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+        py::arg("use_legacy") = std::nullopt);
 }
 
 template <typename binary_operation_t>

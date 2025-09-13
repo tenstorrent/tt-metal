@@ -35,20 +35,11 @@ void bind_untilize_with_unpadding(py::module& module) {
                 List of ttnn.Tensor: the output tensor.
         )doc";
 
-    using OperationType = decltype(ttnn::untilize_with_unpadding);
     ttnn::bind_registered_operation(
         module,
         ttnn::untilize_with_unpadding,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& output_tensor_end,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize) {
-                return self(input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("output_tensor_end"),
             py::kw_only(),

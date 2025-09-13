@@ -77,25 +77,11 @@ void bind_fill_rm_op(py::module& module) {
         )doc",
         ttnn::fill_rm.base_name());
 
-    using OperationType = decltype(ttnn::fill_rm);
     ttnn::bind_registered_operation(
         module,
         ttnn::fill_rm,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const float val_hi,
-               const float val_lo,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("N"),
             py::arg("C"),
             py::arg("H"),
@@ -150,23 +136,11 @@ void bind_fill_ones_rm_op(py::module& module) {
         )doc",
         ttnn::fill_ones_rm.base_name());
 
-    using OperationType = decltype(ttnn::fill_ones_rm);
     ttnn::bind_registered_operation(
         module,
         ttnn::fill_ones_rm,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(N, C, H, W, hOnes, wOnes, any, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("N"),
             py::arg("C"),
             py::arg("H"),

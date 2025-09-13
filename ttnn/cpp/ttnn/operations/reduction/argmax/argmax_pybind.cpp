@@ -78,18 +78,7 @@ void bind_reduction_argmax_operation(py::module& module) {
         module,
         ttnn::argmax,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<int> dim,
-               const bool keepdim,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = std::nullopt,
             py::arg("keepdim") = false,

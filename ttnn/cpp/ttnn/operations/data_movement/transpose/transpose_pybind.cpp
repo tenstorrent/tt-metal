@@ -37,26 +37,16 @@ void bind_transpose(py::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    using OperationType = decltype(ttnn::transpose);
     ttnn::bind_registered_operation(
         module,
         ttnn::transpose,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int64_t& dim1,
-               const int64_t& dim2,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) {
-                return self(input_tensor, dim1, dim2, memory_config, pad_value);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("dim1"),
             py::arg("dim2"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("pad_value") = 0.0f,
-        });
+            py::arg("pad_value") = 0.0f});
 }
 }  // namespace ttnn::operations::data_movement::detail

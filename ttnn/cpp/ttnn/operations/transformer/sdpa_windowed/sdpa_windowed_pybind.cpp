@@ -50,26 +50,7 @@ void py_bind_sdpa_windowed(py::module& module) {
         module,
         ttnn::transformer::windowed_scaled_dot_product_attention,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const ttnn::Tensor& input_tensor_v,
-               const ttnn::Tensor& cu_window_seqlens,
-               std::optional<float> scale,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    cu_window_seqlens,
-                    scale,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
             py::arg("input_tensor_v").noconvert(),

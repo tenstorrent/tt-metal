@@ -132,31 +132,11 @@ void bind_reduction_sampling_operation(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::sampling);
     bind_registered_operation(
         module,
         ttnn::sampling,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_values_tensor,
-               const ttnn::Tensor& input_indices_tensor,
-               const ttnn::Tensor& k,
-               const ttnn::Tensor& p,
-               const ttnn::Tensor& temp,
-               const std::optional<uint32_t>& seed,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_values_tensor,
-                    input_indices_tensor,
-                    k,
-                    p,
-                    temp,
-                    seed,
-                    sub_core_grids,
-                    optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
             py::arg("k").noconvert(),

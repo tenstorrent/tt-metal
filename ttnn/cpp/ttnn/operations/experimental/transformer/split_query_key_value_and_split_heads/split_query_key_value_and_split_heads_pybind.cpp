@@ -33,16 +33,7 @@ void bind_split_qkv(py::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
                 * :attr:`output_tensors`: preallocated output tensors
         )doc",
-        ttnn::pybind_overload_t{
-            [](const SplitOperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const CoreCoord& compute_with_storage_grid_size,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const uint32_t num_heads,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
-                return self(
-                    input_tensor, compute_with_storage_grid_size, memory_config, num_heads, optional_output_tensors);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("compute_with_storage_grid_size").noconvert(),
             py::kw_only(),

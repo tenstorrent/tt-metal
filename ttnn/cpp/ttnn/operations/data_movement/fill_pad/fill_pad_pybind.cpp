@@ -45,17 +45,8 @@ void bind_fill_pad_op(py::module& module) {
         module,
         ttnn::fill_implicit_tile_padding,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_tensor,
-               const float fill_value,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, fill_value, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("fill_value"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"), py::arg("fill_value"), py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

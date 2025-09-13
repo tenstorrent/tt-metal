@@ -53,37 +53,11 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                                 num_links=num_links,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::llama_reduce_scatter,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& intermediate_packet_buffer,
-               uint32_t dim,
-               const GlobalSemaphore& cross_device_semaphore,
-               const tt::tt_metal::SubDeviceId& subdevice_id,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               tt::tt_fabric::Topology topology,
-               bool use_noc1_only) {
-                return self(
-                    input_tensor,
-                    intermediate_packet_buffer,
-                    dim,
-                    cross_device_semaphore,
-                    subdevice_id,
-                    cluster_axis,
-                    mesh_device,
-                    num_links,
-                    memory_config,
-                    topology,
-                    use_noc1_only);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
             py::arg("dim"),

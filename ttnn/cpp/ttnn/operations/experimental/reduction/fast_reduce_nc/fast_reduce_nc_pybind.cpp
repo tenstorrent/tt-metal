@@ -17,15 +17,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
         R"doc(
               Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.
         )doc",
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const ttnn::SmallVector<int32_t>& dims,
-               const std::optional<const Tensor>& output,
-               const ttnn::MemoryConfig& memory_config,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(input, dims, output, memory_config, compute_kernel_config);
-            },
+        ttnn::pybind_arguments_t{
             pybind11::arg("input").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),

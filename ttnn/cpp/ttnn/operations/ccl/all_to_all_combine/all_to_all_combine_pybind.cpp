@@ -62,35 +62,11 @@ void py_bind_all_to_all_combine(py::module& module) {
                                         axis=axis)
             )doc";
 
-    using OperationType = decltype(ttnn::all_to_all_combine);
     ttnn::bind_registered_operation(
         module,
         ttnn::all_to_all_combine,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const ttnn::Tensor& expert_metadata_tensor,
-               const bool local_reduce,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t>& axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(
-                    input_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    local_reduce,
-                    num_links,
-                    topology,
-                    memory_config,
-                    axis,
-                    subdevice_id,
-                    optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
             py::arg("expert_mapping_tensor").noconvert(),

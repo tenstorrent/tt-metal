@@ -35,17 +35,11 @@ void bind_tilize(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::tilize);
     ttnn::bind_registered_operation(
         module,
         ttnn::tilize,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore) { return self(input_tensor, memory_config, output_dtype, use_multicore); },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

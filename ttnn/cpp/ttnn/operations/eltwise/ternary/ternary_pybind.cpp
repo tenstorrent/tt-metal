@@ -73,15 +73,7 @@ void bind_ternary_composite_float(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const Tensor& input_tensor_c,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("input_tensor_c"),

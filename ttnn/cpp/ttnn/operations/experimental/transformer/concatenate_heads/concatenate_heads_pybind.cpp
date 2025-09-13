@@ -34,14 +34,7 @@ void bind_concatenate_heads(py::module& module) {
         module,
         ttnn::experimental::concatenate_heads,
         concatenate_heads_doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const CoreCoord& compute_with_storage_grid_size,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("compute_with_storage_grid_size").noconvert(),
             py::kw_only(),
