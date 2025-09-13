@@ -95,12 +95,7 @@ public:
                 num_hops,
                 true);
 #else
-            tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
-                my_dev_id,
-                to_dev_id,
-                to_mesh_id,
-                ew_dim);
+            tt::tt_fabric::get_routing_info(to_dev_id, (LowLatencyMeshPacketHeader*)packet_header_addr);
 #endif
 #endif
         } else {

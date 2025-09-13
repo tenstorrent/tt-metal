@@ -1761,7 +1761,13 @@ void run_receiver_channel_step_impl(
                 packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
 #elif defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
+            // Packed format: 2 hops per byte, low nibble first.
+            {
+                uint16_t hop_index = cached_routing_fields.hop_index;
+                uint8_t packed = packet_header->route_buffer[hop_index >> 1];
+                bool high = (hop_index & 1) != 0;
+                hop_cmd = high ? ((packed >> 4) & 0x0F) : (packed & 0x0F);
+            }
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif

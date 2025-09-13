@@ -76,6 +76,8 @@ void fabric_set_route(
     uint32_t local_val;
     uint32_t forward_val;
     uint32_t end_hop = start_hop + num_hops;
+
+    // Pack two 4-bit hop commands per byte: even hop -> low nibble, odd hop -> high nibble
     for (uint32_t i = start_hop; i < end_hop; i++) {
         if constexpr (mcast) {
             // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
@@ -91,7 +93,13 @@ void fabric_set_route(
             forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
             local_val = terminate ? (i == end_hop - 1 ? local_packet : 0) : 0;
         }
-        route_vector[i] = local_val | forward_val;
+        uint8_t cmd = static_cast<uint8_t>((local_val | forward_val) & 0x0F);
+        uint32_t byte_index = i >> 1;             // i / 2
+        bool use_high_nibble = (i & 1) != 0;      // odd hop -> high nibble
+        uint8_t prev = route_vector[byte_index];  // previous packed byte
+        uint8_t packed = use_high_nibble ? static_cast<uint8_t>((prev & 0x0F) | (cmd << 4))
+                                         : static_cast<uint8_t>((prev & 0xF0) | cmd);
+        route_vector[byte_index] = packed;
     }
     packet_header->routing_fields.hop_index = 0;
 }
@@ -231,16 +239,40 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-template <uint8_t dim, bool compressed = true>
-bool get_routing_info(uint16_t dst_dev_id, volatile uint8_t* out_route_buffer) {
-    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
-    tt_l1_ptr routing_path_t<dim, compressed>* routing_info;
-    if constexpr (dim == 1) {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-    } else {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+// Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+template <bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
+    tt_l1_ptr routing_path_t<2, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+
+    packet_header->routing_fields.hop_index = 0;
+    packet_header->routing_fields.branch_east_offset = 0;
+    packet_header->routing_fields.branch_west_offset = 0;
+
+    const auto& compressed_route = routing_info->paths[dst_dev_id];
+    uint8_t ns_hops = compressed_route.get_ns_hops();
+    uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t ew_direction = compressed_route.get_ew_direction();
+    uint8_t turn_point = compressed_route.get_turn_point();
+
+    if (ns_hops > 0 && ew_hops > 0) {
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
+        } else {
+            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
+        }
     }
-    return routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
+
+    return ok;
+}
+
+// Overload: For 1D LowLatencyPacketHeader
+template <bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
+    tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+    return routing_info->decode_route_to_buffer(dst_dev_id, (uint8_t*)&packet_header->routing_fields.value);
 }
 
 }  // namespace tt::tt_fabric
