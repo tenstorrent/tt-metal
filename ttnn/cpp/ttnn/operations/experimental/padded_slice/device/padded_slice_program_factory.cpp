@@ -70,9 +70,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
+    [[maybe_unused]] uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
-    uint32_t input_row_size_bytes = tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
+    [[maybe_unused]] uint32_t input_row_size_bytes =
+        tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];

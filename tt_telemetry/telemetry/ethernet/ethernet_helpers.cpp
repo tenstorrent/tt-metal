@@ -36,8 +36,6 @@ bool is_ethernet_endpoint_up(
     const EthernetEndpoint& endpoint,
     uint32_t link_up_addr,
     bool force_refresh_link_status) {
-    tt::umd::TTDevice* device = cluster->get_tt_device(endpoint.chip.id);
-
     uint32_t link_up_value = 0;
     tt::umd::CoreCoord ethernet_core = tt::umd::CoreCoord(
         endpoint.ethernet_core.x, endpoint.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
