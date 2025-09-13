@@ -21,27 +21,22 @@ FORCE_INLINE void recordRoutingFields2D(
     routing_fields_2d.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_2D;
 
     // dimension order routing: first we have N/S forwarding with possible branching/local writes for mcast
-    // Packed format: 2 hops per byte. Iterate nibble by nibble.
     uint8_t total_hops = 0;
-    auto get_nibble = [&](uint16_t hop_index) -> uint8_t {
-        uint8_t packed = route_buffer[hop_index >> 1];
-        return (hop_index & 1) ? ((packed >> 4) & 0x0F) : (packed & 0x0F);
-    };
-    while (get_nibble(total_hops) & tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) {
+    while (route_buffer[total_hops] & tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) {
         total_hops++;
     }
 
     routing_fields_2d.ns_hops = total_hops;
 
     // compute e/w hops and check for e/w line mcast
-    while (get_nibble(total_hops) != tt::tt_fabric::LowLatencyMeshRoutingFields::NOOP) {
+    while (route_buffer[total_hops] != tt::tt_fabric::LowLatencyMeshRoutingFields::NOOP) {
         total_hops++;
     }
 
     // Look at last entry in buffer to check if west branch exists
     // If west branch exists, compute west hops and east hops as remaining
     // Otherwise, we only have east hops (which is trivially to 0 if we have no e/w hops at all)
-    if (get_nibble(total_hops - 1) == tt::tt_fabric::LowLatencyMeshRoutingFields::FORWARD_EAST) {
+    if (route_buffer[total_hops - 1] == tt::tt_fabric::LowLatencyMeshRoutingFields::FORWARD_EAST) {
         routing_fields_2d.w_hops = total_hops - routing_fields.branch_west_offset;
         routing_fields_2d.e_hops = routing_fields.branch_west_offset - routing_fields_2d.ns_hops;
     } else {
@@ -53,9 +48,9 @@ FORCE_INLINE void recordRoutingFields2D(
     if (routing_fields_2d.ns_hops > 0 &&
             (route_buffer[0] & tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) ==
                 tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS ||
-        routing_fields_2d.e_hops > 0 && get_nibble(routing_fields.branch_east_offset) ==
+        routing_fields_2d.e_hops > 0 && route_buffer[routing_fields.branch_east_offset] ==
                                             tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
-        routing_fields_2d.w_hops > 0 && get_nibble(routing_fields.branch_west_offset) ==
+        routing_fields_2d.w_hops > 0 && route_buffer[routing_fields.branch_west_offset] ==
                                             tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
         routing_fields_2d.e_hops > 0 && routing_fields_2d.w_hops > 0) {
         routing_fields_2d.is_mcast = true;

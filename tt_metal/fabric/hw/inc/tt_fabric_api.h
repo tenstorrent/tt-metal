@@ -77,7 +77,6 @@ void fabric_set_route(
     uint32_t forward_val;
     uint32_t end_hop = start_hop + num_hops;
 
-    // Pack two 4-bit hop commands per byte: even hop -> low nibble, odd hop -> high nibble
     for (uint32_t i = start_hop; i < end_hop; i++) {
         if constexpr (mcast) {
             // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
@@ -93,13 +92,7 @@ void fabric_set_route(
             forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
             local_val = terminate ? (i == end_hop - 1 ? local_packet : 0) : 0;
         }
-        uint8_t cmd = static_cast<uint8_t>((local_val | forward_val) & 0x0F);
-        uint32_t byte_index = i >> 1;             // i / 2
-        bool use_high_nibble = (i & 1) != 0;      // odd hop -> high nibble
-        uint8_t prev = route_vector[byte_index];  // previous packed byte
-        uint8_t packed = use_high_nibble ? static_cast<uint8_t>((prev & 0x0F) | (cmd << 4))
-                                         : static_cast<uint8_t>((prev & 0xF0) | cmd);
-        route_vector[byte_index] = packed;
+        route_vector[i] = local_val | forward_val;
     }
     packet_header->routing_fields.hop_index = 0;
 }
