@@ -158,15 +158,32 @@ jobs:
       - name: Run the tests
         run: |
           run_test() {
-            cname=$1
-            echo "Running test in container: $cname"
-            docker exec $cname bash -c "ls -l"
+            command=$1
+            pids=()
+            for tray in tray-1 tray-2 tray-3 tray-4; do
+              cname="multihosttest-$tray-1"
+              echo ">>> Running tests in $cname"
+              docker exec "$cname" bash -c "$command" &
+              pids+=($!)
+            done
+
+            status=0
+            for pid in "${pids[@]}"; do
+              if ! wait "$pid"; then
+                status=1
+              fi
+            done
+
+            if [ $status -ne 0 ]; then
+              exit 1
+            fi
           }
+
           export -f run_test
-          parallel -j 4 run_test ::: tray-1 tray-2 tray-3 tray-4
+          run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
 
       - name: Tear down containers
         if: always()
         run: |
-          docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml down
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml down
           echo rm -rf $MULTIUSER_TEST_DIR
