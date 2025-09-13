@@ -264,9 +264,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
-            op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("add_unary_tile_int32({}, {}u);", idst, (uint)param0)};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {
