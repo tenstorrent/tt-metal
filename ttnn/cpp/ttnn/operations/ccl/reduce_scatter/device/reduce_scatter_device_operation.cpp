@@ -19,8 +19,6 @@ ReduceScatterDeviceOperation::program_factory_t ReduceScatterDeviceOperation::se
 void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
-    TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 }
 
 void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
@@ -29,7 +27,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto mem_config = operation_attributes.output_mem_config;
+    auto mem_config = operation_attributes.memory_config;
     auto output_spec = TensorSpec(
         Shape(input_tensor.tensor_spec().logical_shape()),
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
@@ -50,22 +48,40 @@ ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation
     return output_tensor;
 }
 
+ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto input_tensor = tensor_args.input_tensor;
+    auto subdevice_id = operation_attributes.subdevice_id;
+    auto mesh_device = input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
+        operation_attributes.dim,
+        operation_attributes.num_links,
+        operation_attributes.cluster_axis,
+        operation_attributes.memory_config,
+        subdevice_core_range_set,
+        input_tensor);
+}
+
 std::tuple<ReduceScatterDeviceOperation::operation_attributes_t, ReduceScatterDeviceOperation::tensor_args_t>
 ReduceScatterDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    int32_t dim,
-    std::optional<uint32_t> axis,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    tt::tt_fabric::Topology topology,
+    uint32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology) {
     return {
         operation_attributes_t{
-            .worker_core_range_set = worker_core_range_set,
-            .output_mem_config = memory_config,
-            .axis = axis,
+            .memory_config = memory_config,
             .dim = dim,
-            .topology = topology},
+            .cluster_axis = cluster_axis,
+            .subdevice_id = subdevice_id,
+            .topology = topology,
+            .num_links = num_links},
         tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
 }
 

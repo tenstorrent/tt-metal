@@ -46,24 +46,31 @@ void py_bind_reduce_scatter(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                int32_t dim,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<uint32_t> axis,
-               const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<uint32_t> cluster_axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               QueueId queue_id) {
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<uint32_t> num_links,
+               const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
-                    queue_id, input_tensor, dim, axis, optional_output_tensor, topology, memory_config, subdevice_id);
+                    input_tensor,
+                    dim,
+                    cluster_axis,
+                    subdevice_id,
+                    memory_config,
+                    optional_output_tensor,
+                    num_links,
+                    topology);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
             py::kw_only(),
-            py::arg("output_tensor") = std::nullopt,
             py::arg("cluster_axis") = std::nullopt,
-            py::arg("topology") = tt::tt_fabric::Topology::Linear,
-            py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("num_links") = std::nullopt,
+            py::arg("topology") = tt::tt_fabric::Topology::Linear,
         });
 }
 

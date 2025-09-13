@@ -13,27 +13,36 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteReduceScatter::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int32_t dim,
-    std::optional<uint32_t> axis,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology) {
     auto mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
+    uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
-
+    // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
+    // when not all devices are mmio capable Manually doing it requires the use if "is_mmio_capable" counting, but as
+    // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
+    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     return ttnn::prim::reduce_scatter(
-        input_tensor, dim, axis, optional_output_tensor, topology_, memory_config_, subdevice_core_range_set);
+        input_tensor,
+        normalized_dim,
+        cluster_axis,
+        subdevice_id,
+        memory_config_,
+        optional_output_tensor,
+        num_links_,
+        topology_);
 }
 
 }  // namespace ttnn::operations::ccl

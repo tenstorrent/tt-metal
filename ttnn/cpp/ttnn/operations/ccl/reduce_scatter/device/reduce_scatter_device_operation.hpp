@@ -20,16 +20,17 @@ namespace ttnn::operations::ccl {
 
 struct ReduceScatterDeviceOperation {
     struct operation_attributes_t {
-        const CoreRangeSet worker_core_range_set;
-        const MemoryConfig output_mem_config;
-        const std::optional<uint32_t> axis;
-        const int32_t dim;
+        const MemoryConfig memory_config;
+        uint32_t dim;
+        const std::optional<uint32_t> cluster_axis;
+        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
+        const uint32_t num_links;
     };
 
     struct tensor_args_t {
         const Tensor input_tensor;
-        const std::optional<Tensor> optional_output_tensor;
+        std::optional<Tensor> optional_output_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -68,15 +69,17 @@ struct ReduceScatterDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        std::optional<uint32_t> axis,
-        const std::optional<ttnn::Tensor>& optional_output_tensor,
-        tt::tt_fabric::Topology topology,
+        uint32_t dim,
+        std::optional<uint32_t> cluster_axis,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
         const ttnn::MemoryConfig& memory_config,
-        const CoreRangeSet& worker_core_range_set);
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        uint32_t num_links,
+        tt::tt_fabric::Topology topology);
 };
 }  // namespace ttnn::operations::ccl
 

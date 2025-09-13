@@ -13,14 +13,14 @@ namespace operations::ccl {
 
 struct ExecuteReduceScatter {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int32_t dim,
-        std::optional<uint32_t> axis = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        std::optional<uint32_t> num_links = std::nullopt,
+        std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
 };
 
 }  // namespace operations::ccl
