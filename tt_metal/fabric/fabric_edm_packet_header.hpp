@@ -504,6 +504,11 @@ private:
         // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
         // the 3rd chip, we will write only. Together this means the final encoding is 0b011010
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        WAYPOINT("LLPH");
+        WATCHER_RING_BUFFER_PUSH(distance_in_hops);
+        WATCHER_RING_BUFFER_PUSH(distance_in_hops);
+        WATCHER_RING_BUFFER_PUSH(distance_in_hops);
+        WATCHER_RING_BUFFER_PUSH(distance_in_hops);
         ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &

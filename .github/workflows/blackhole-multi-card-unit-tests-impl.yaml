@@ -45,6 +45,12 @@ jobs:
               ./build/test/tt_metal/unit_tests_tunneling
             timeout: 25
           - name: ccl nightly tests
+            env:
+              TT_METAL_WATCHER: 1
+              TT_METAL_WATCHER_NOINLINE: 1
+              TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS: 1
+              TT_METAL_WATCHER_DISABLE_PAUSE: 1
+              TT_METAL_WATCHER_DISABLE_STACK_USAGE: 1
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
             timeout: 45
           # - name: t3000 fast fabric tests
