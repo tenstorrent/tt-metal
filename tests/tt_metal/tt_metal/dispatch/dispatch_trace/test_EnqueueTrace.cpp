@@ -35,7 +35,7 @@
 #include "random_program_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include "distributed/mesh_trace.hpp"
 
 // Access to internal API: ProgramImpl::get_id

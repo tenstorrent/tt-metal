@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/fabric.hpp>
 

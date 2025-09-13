@@ -30,7 +30,7 @@
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

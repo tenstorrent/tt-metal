@@ -8,9 +8,9 @@
 
 #include "assert.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/pci_device.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_simulation_device.h>
+#include <umd/device/pcie/pci_device.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
 
 namespace tt::tt_metal {
 

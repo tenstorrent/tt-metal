@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
 #include <string>
 

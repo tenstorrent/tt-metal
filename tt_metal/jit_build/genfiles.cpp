@@ -30,9 +30,6 @@
 #include "impl/context/metal_context.hpp"
 
 enum class UnpackToDestMode : uint8_t;
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace fs = std::filesystem;
 

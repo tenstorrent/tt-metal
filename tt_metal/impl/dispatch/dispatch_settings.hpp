@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-enum class CoreType;
 
 namespace tt {
 class Cluster;

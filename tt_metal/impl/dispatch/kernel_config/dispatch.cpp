@@ -24,7 +24,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"

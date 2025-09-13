@@ -16,7 +16,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

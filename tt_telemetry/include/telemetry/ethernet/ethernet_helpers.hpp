@@ -13,7 +13,7 @@
 #include <map>
 #include <unordered_map>
 
-#include <third_party/umd/device/api/umd/device/cluster.h>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 

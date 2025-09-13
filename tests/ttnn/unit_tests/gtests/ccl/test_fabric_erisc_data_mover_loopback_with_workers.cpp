@@ -56,8 +56,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "umd/device/types/arch.h"
-
+#include <umd/device/types/arch.hpp>
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
