@@ -50,7 +50,7 @@ jobs:
         run: |
           for i in [1..4]; do
             mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
-            chmod $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
+            chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
           done
           cat > multi-user-dc.yaml <<EOF
           services:
