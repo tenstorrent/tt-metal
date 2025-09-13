@@ -82,6 +82,9 @@ void kernel_main() {
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
 
 #ifdef SPLIT_READER
+#ifdef CONFIG_TENSOR_IN_DRAM
+        cb_wait_front(cb_reader_indices, 1);
+#endif
 #ifdef ACTIVATION_REUSE
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
 #endif

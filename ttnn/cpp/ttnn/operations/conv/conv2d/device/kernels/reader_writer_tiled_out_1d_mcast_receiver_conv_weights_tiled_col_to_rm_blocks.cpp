@@ -70,6 +70,9 @@ void kernel_main() {
         get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
 
 #ifdef SPLIT_READER
+#ifdef CONFIG_TENSOR_IN_DRAM
+        cb_wait_front(cb_reader_indices, 1);
+#endif
 #ifdef ACTIVATION_REUSE
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
 #endif
