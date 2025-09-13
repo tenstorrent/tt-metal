@@ -1,4 +1,4 @@
-name: Galaxy Multi-user Isolation Tests (Physical)
+name: Galaxy Multi-user Isolation Tests
 on:
   push:
     branches:
@@ -67,6 +67,8 @@ jobs:
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               command: bash
+              user: "${USER_ID}:${GROUP_ID}"
+              working_dir: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -86,6 +88,8 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              user: "${USER_ID}:${GROUP_ID}"
+              working_dir: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -105,6 +109,8 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              user: "${USER_ID}:${GROUP_ID}"
+              working_dir: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -124,6 +130,8 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
+              user: "${USER_ID}:${GROUP_ID}"
+              working_dir: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
                 - "/dev/tenstorrent/25:/dev/tenstorrent/25"
@@ -137,13 +145,10 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
-          docker ps
+          UID=$(id -u) GID=$(id -g) docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
 
       - name: Tear down containers
         if: always()
         run: |
-          ls -la $MULTIUSER_TEST_DIR/*
-
           docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml down
           echo rm -rf $MULTIUSER_TEST_DIR
