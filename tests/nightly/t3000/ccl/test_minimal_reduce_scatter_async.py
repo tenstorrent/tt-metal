@@ -252,7 +252,7 @@ def run_reduce_scatter_impl(
         ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([2, 32, 2048, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        ([1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 29, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
