@@ -14,32 +14,34 @@ To build and execute, you may use the following commands:
 ## Set up device and program/collaboration mechanisms
 
 ``` cpp
-Device *device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-We follow the standard procedure for the initial steps in setting up the host program. The device that the program will execute on is identified, and the corresponding command queue is accessed. The program is initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance with the logical mesh layout.
+We follow the standard procedure for the initial steps in setting up the host workload. The device that the workload will execute on is identified, and the corresponding command queue is accessed. The program is initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance with the logical mesh layout.
 
 ## Configure and initialize DRAM buffer
 
 ``` cpp
-constexpr uint32_t single_tile_size = 2 * 1024;
-tt_metal::InterleavedBufferConfig dram_config{
-            .device= device,
-            .size = single_tile_size,
-            .page_size = single_tile_size,
-            .buffer_type = tt_metal::BufferType::DRAM
-};
+constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
+constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
+distributed::DeviceLocalBufferConfig dram_config{
+    .page_size = single_tile_size,
+    .buffer_type = tt_metal::BufferType::DRAM};
+distributed::ReplicatedBufferConfig buffer_config{
+    .size = single_tile_size};
 ```
 
 We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the device to create the buffers on as well as the size of the buffers. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
 
 ``` cpp
-std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 ```
 
 Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
