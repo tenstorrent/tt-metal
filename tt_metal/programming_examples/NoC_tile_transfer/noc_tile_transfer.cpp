@@ -19,7 +19,6 @@ using namespace tt::tt_metal;
 int main() {
     // Device setup
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Device command queue and program setup
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -30,8 +29,8 @@ int main() {
     // Core range setup
     constexpr CoreCoord core0 = {0, 0};
     constexpr CoreCoord core1 = {0, 1};
-    const auto core0_physical_coord = device->worker_core_from_logical_core(core0);
-    const auto core1_physical_coord = device->worker_core_from_logical_core(core1);
+    const auto core0_physical_coord = mesh_device->worker_core_from_logical_core(core0);
+    const auto core1_physical_coord = mesh_device->worker_core_from_logical_core(core1);
 
     CoreRange sem_core_range = CoreRange(core0, core1);
 
