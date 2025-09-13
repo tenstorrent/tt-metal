@@ -44,8 +44,19 @@ class LMHead(LightweightModule):
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        # Optional bias
+        self.has_bias = f"{state_dict_prefix}output.bias" in state_dict
+        if self.has_bias:
+            torch_output_bias = state_dict[f"{state_dict_prefix}output.bias"]  # [vocab]
 
         self.output_weights = []
+        self.output_biases = [] if self.has_bias else None
+        # Prefer higher precision weights if configured for improved accuracy
+        weight_dtype = (
+            self.args.lm_head_dtype
+            if hasattr(self.args, "lm_head_dtype") and self.args.lm_head_dtype is not None
+            else dtype
+        )
         if args.is_galaxy:
             cache_file_name = (
                 None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
@@ -64,7 +75,7 @@ class LMHead(LightweightModule):
                     device=mesh_device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=dtype,
+                    dtype=weight_dtype,
                     memory_config=memory_config,
                     cache_file_name=cache_file_name,
                 )
@@ -95,11 +106,30 @@ class LMHead(LightweightModule):
                         device=mesh_device,
                         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=dtype,
+                        dtype=weight_dtype,
                         memory_config=memory_config,
                         cache_file_name=cache_file_name,
                     )
                 )
+                if self.has_bias:
+                    # Build bias combined in the exact same order as combined_split (device 0 chunk i, device 1 chunk i, ...)
+                    bias_splits = []
+                    for device in range(self.num_devices):
+                        b_start = device * size_per_device + sum(split_sizes[:i])
+                        b_end = b_start + split_size
+                        bias_splits.append(torch_output_bias[b_start:b_end])
+                    bias_combined = torch.cat(bias_splits, dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                    self.output_biases.append(
+                        ttnn.as_tensor(
+                            bias_combined,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            memory_config=memory_config,
+                            cache_file_name=None,
+                        )
+                    )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -134,7 +164,7 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor):
         outputs = []
-        for weight, pc in zip(self.output_weights, self.program_configs):
+        for idx, (weight, pc) in enumerate(zip(self.output_weights, self.program_configs)):
             output = ttnn.linear(
                 x,
                 weight,
@@ -143,11 +173,20 @@ class LMHead(LightweightModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
             )
-            outputs.append(
-                ttnn.sharded_to_interleaved(
-                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-                )
+
+            output = ttnn.reallocate(output)
+            if self.has_bias:
+                # Add bias slice to output (both are width-sharded with same shard spec)
+                bias = self.output_biases[idx]
+                output = ttnn.add(output, bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+            output = ttnn.sharded_to_interleaved(
+                # output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
+                output,
+                memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG),
             )
+            output = ttnn.reallocate(output)
+            outputs.append(output)
 
         # Concatenate the outputs
         output = ttnn.concat(
@@ -167,5 +206,10 @@ class LMHead(LightweightModule):
             sharded=False,
             use_composite=True,
         )
+
+        # Apply optional logits multiplier to match HF if present
+        lm_mult = getattr(self.args, "lm_head_multiplier", 1.0)
+        if lm_mult != 1.0:
+            output = ttnn.multiply(output, lm_mult, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output

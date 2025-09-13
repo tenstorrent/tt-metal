@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -69,6 +70,8 @@ class TransformerBlock(LightweightModule):
             dtype=dtype,
             model_config=self.model_config,
         )
+        # Mamba branch removed along with Falcon-H1-0.5B support
+        self.mamba = None
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -90,6 +93,35 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
+
+        # Resolve FFN norm key dynamically for broader model compatibility (Falcon, etc.)
+        def _resolve_ffn_norm_key(sd, ln):
+            base = f"layers.{ln}."
+            # Preferred aliases in order
+            preferred = [
+                "ffn_norm",
+                "post_attention_layernorm",
+                "post_feedforward_layernorm",
+                "ln_mlp",
+                "mlp_layernorm",
+                "mlp_ln",
+            ]
+            for key in preferred:
+                if f"{base}{key}.weight" in sd:
+                    return key
+            # Fallback: scan for any layer norm that is not the attention norm
+            suffixes = []
+            for k in sd.keys():
+                if k.startswith(base) and k.endswith(".weight") and ("norm" in k or "layernorm" in k):
+                    suffix = k[len(base) : -len(".weight")]
+                    if suffix != "attention_norm" and not suffix.startswith("pre_feedforward"):
+                        suffixes.append(suffix)
+            if suffixes:
+                return suffixes[0]
+            return "ffn_norm"
+
+        ffn_norm_key = _resolve_ffn_norm_key(state_dict, layer_num)
+
         self.ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -99,7 +131,7 @@ class TransformerBlock(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
+                weight_key=ffn_norm_key,
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
@@ -191,6 +223,12 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+        # Apply attention input multiplier if provided by config (Falcon-H1)
+        if hasattr(self.args, "attention_in_multiplier"):
+            attn_in = ttnn.multiply(attn_in, self.args.attention_in_multiplier)
+        # Compute Mamba branch BEFORE attention (attention may deallocate its input)
+        # No Mamba branch
+
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -203,25 +241,32 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # Apply attention out multiplier if provided by config (Falcon-H1)
+        if hasattr(self.args, "attention_out_multiplier"):
+            attn_out = ttnn.multiply(attn_out, self.args.attention_out_multiplier)
 
         if self.pre_ff_norm is None:
+            # Residual connection after attention (no mamba path implemented yet)
             hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+                residual,
+                attn_out,
+                memory_config=skip_mem_cfg,
+                dtype=ttnn.bfloat16 if TG else None,
             )
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
+            # Apply FFN norm only in architectures without pre-FF norm
+            hidden_states = self.ff_norm(hidden_states, mode)
         else:
+            # Add residual first, then apply pre-FF norm
             hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode)
-        if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices
+            # The attention output is replicated; residual is fractured. Gather before add if multi-device
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
-                    tt_ccl=self.tt_ccl,
+                    self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -230,7 +275,6 @@ class TransformerBlock(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )
-
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
