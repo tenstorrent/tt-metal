@@ -83,7 +83,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
 class InterleavedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
                                        public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
-TEST_P(InterleavedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
@@ -186,7 +186,7 @@ class ShardedMeshBufferTestSuite
     : public LargeMeshBufferTestSuiteBase,
       public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
-TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // shard_shape: shape on device (elements)
     // page_size: (bytes)
     auto [tensor_and_grid, page_size] = GetParam();
