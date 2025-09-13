@@ -48,6 +48,9 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
         run: |
+          for i in [1..4]; do
+            mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
+          done
           cat > multi-user-dc.yaml <<EOF
           services:
             tray-1:
@@ -56,14 +59,16 @@ jobs:
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-              entrypoint: ["sleep", "infinity"]
+                  - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
+              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
+                HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -73,21 +78,22 @@ jobs:
                 - "/dev/tenstorrent/5:/dev/tenstorrent/5"
                 - "/dev/tenstorrent/6:/dev/tenstorrent/6"
                 - "/dev/tenstorrent/7:/dev/tenstorrent/7"
-
             tray-2:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-              entrypoint: ["sleep", "infinity"]
+                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
+                HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -97,21 +103,22 @@ jobs:
                 - "/dev/tenstorrent/13:/dev/tenstorrent/13"
                 - "/dev/tenstorrent/14:/dev/tenstorrent/14"
                 - "/dev/tenstorrent/15:/dev/tenstorrent/15"
-
             tray-3:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-              entrypoint: ["sleep", "infinity"]
+                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
+                HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -121,21 +128,22 @@ jobs:
                 - "/dev/tenstorrent/21:/dev/tenstorrent/21"
                 - "/dev/tenstorrent/22:/dev/tenstorrent/22"
                 - "/dev/tenstorrent/23:/dev/tenstorrent/23"
-
             tray-4:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-              entrypoint: ["sleep", "infinity"]
+                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
+                HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/t3k_mesh_graph_descriptor.json
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
                 - "/dev/tenstorrent/25:/dev/tenstorrent/25"
