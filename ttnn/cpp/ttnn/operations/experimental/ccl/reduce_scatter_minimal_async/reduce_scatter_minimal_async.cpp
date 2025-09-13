@@ -15,7 +15,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-// Composite always runs in row-major
 ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     const int32_t dim,
