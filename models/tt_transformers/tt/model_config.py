@@ -545,8 +545,8 @@ class ModelArgs:
             self.checkpoint_type = CheckpointType.HuggingFace
             if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
                 self.trust_remote_code_hf = True
-            # Some HF repos (e.g., Falcon-H1/Falcon3) may require remote code for config/model classes
-            if ("falcon-h1" in HF_MODEL.lower()) or ("falcon3" in HF_MODEL.lower()):
+            # Some HF repos (e.g., Falcon3) may require remote code for config/model classes
+            if "falcon3" in HF_MODEL.lower():
                 self.trust_remote_code_hf = True
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
@@ -596,7 +596,7 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 # Removed Falcon-H1-0.5B support
                 "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Falcon-H1-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 64},
+                # Removed Falcon-H1-7B support
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1481,22 +1481,18 @@ class ModelArgs:
         self.attention_out_multiplier = float(text_config.get("attention_out_multiplier", 1.0) or 1.0)
         self.ssm_in_multiplier = float(text_config.get("ssm_in_multiplier", 1.0) or 1.0)
         self.ssm_out_multiplier = float(text_config.get("ssm_out_multiplier", 1.0) or 1.0)
-        # Falcon-H1 Mamba (SSM) params
-        self.mamba_d_conv = int(text_config.get("mamba_d_conv", 4) or 4)
-        self.mamba_d_state = int(text_config.get("mamba_d_state", 128) or 128)
-        self.mamba_n_groups = int(text_config.get("mamba_n_groups", 1) or 1)
-        default_heads = int(text_config.get("mamba_n_heads", 0) or 1)
-        default_head_dim = max(1, self.dim // max(1, default_heads))
-        self.mamba_d_head = int(text_config.get("mamba_d_head", default_head_dim))
-        # Number of SSM heads may be implicit via dt_bias; leave None if absent
-        self.mamba_n_heads = text_config.get("mamba_n_heads", None)
-        try:
-            self.mamba_n_heads = int(self.mamba_n_heads) if self.mamba_n_heads is not None else None
-        except Exception:
-            self.mamba_n_heads = None
-        self.mamba_d_ssm = int(text_config.get("mamba_d_ssm", self.dim * 2) or (self.dim * 2))
-        self.mamba_rms_norm = bool(text_config.get("mamba_rms_norm", False))
-        self.mamba_norm_before_gate = bool(text_config.get("mamba_norm_before_gate", False))
+        # Falcon-H1 Mamba (SSM) params - neutralized after removing 0.5B support
+        self.mamba_d_conv = None
+        self.mamba_d_state = None
+        self.mamba_n_groups = None
+        default_heads = None
+        default_head_dim = max(1, self.dim // max(1, 1))
+        self.mamba_d_head = None
+        # Number of SSM heads may be implicit via dt_bias; leave None
+        self.mamba_n_heads = None
+        self.mamba_d_ssm = None
+        self.mamba_rms_norm = False
+        self.mamba_norm_before_gate = False
         # Optional embedding input scale (Falcon-H1 family)
         emb_mult = text_config.get("embedding_multiplier", None)
         if emb_mult is not None:
@@ -1505,18 +1501,10 @@ class ModelArgs:
             except Exception:
                 self.embed_scale = None
         else:
-            # Heuristic: Falcon-H1 variants scale inputs by sqrt(dim)
-            if "falcon-h1" in str(self.base_model_name).lower():
-                try:
-                    import math
-
-                    self.embed_scale = math.sqrt(float(self.dim))
-                except Exception:
-                    self.embed_scale = None
-        # Improve accuracy for Falcon-H1 LM head by avoiding bfloat8 quant on logits matmul
-        # Applies when model name suggests Falcon-H1 or Falcon3 variants
+            self.embed_scale = None
+        # LM head dtype preference for Falcon3
         model_name_lower = str(self.model_name).lower()
-        if any(tag in model_name_lower for tag in ["falcon-h1", "falcon3-"]):
+        if any(tag in model_name_lower for tag in ["falcon3-"]):
             import ttnn
 
             self.lm_head_dtype = ttnn.bfloat16

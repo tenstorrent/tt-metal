@@ -988,7 +988,6 @@ def test_demo_text(
         "Llama-3.1-70B",
         "Mistral-7B",
         "Falcon3-1B",
-        "Falcon-H1-7B",
     ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
@@ -1038,11 +1037,6 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
-            # Add initial Falcon-H1 entry (targets optional)
-            # "N150_Falcon-H1-0.5B": <value>,
-            # "N300_Falcon-H1-0.5B": <value>,
-            # "T3K_Falcon-H1-0.5B": <value>,
-            # "TG_Falcon-H1-0.5B": <value>,
         }
         if model_device_key in dict_target_decode_tok_s_u:
             target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -9,7 +8,6 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mamba_falcon import FalconH1Mamba
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -72,22 +70,8 @@ class TransformerBlock(LightweightModule):
             dtype=dtype,
             model_config=self.model_config,
         )
-        # Optional Mamba branch (Falcon-H1 hybrid). Instantiate only if weights exist and not disabled.
-        has_mamba = any(k.startswith(f"layers.{layer_num}.mamba.") for k in state_dict.keys())
-        disable_mamba_env = os.environ.get("TT_DISABLE_MAMBA", "0").lower() in ("1", "true")
-        disable_mamba_arg = getattr(args, "disable_mamba", False)
-        enable_mamba = has_mamba and not (disable_mamba_env or disable_mamba_arg)
-        self.mamba = (
-            FalconH1Mamba(
-                mesh_device=mesh_device,
-                args=args,
-                state_dict=state_dict,
-                layer_num=layer_num,
-                weight_cache_path=weight_cache_path,
-            )
-            if enable_mamba
-            else None
-        )
+        # Mamba branch removed along with Falcon-H1-0.5B support
+        self.mamba = None
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -243,9 +227,7 @@ class TransformerBlock(LightweightModule):
         if hasattr(self.args, "attention_in_multiplier"):
             attn_in = ttnn.multiply(attn_in, self.args.attention_in_multiplier)
         # Compute Mamba branch BEFORE attention (attention may deallocate its input)
-        mamba_out = None
-        if mode == "prefill" and self.mamba is not None:
-            mamba_out = self.mamba.forward(attn_in, mode)
+        # No Mamba branch
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
@@ -263,27 +245,11 @@ class TransformerBlock(LightweightModule):
         if hasattr(self.args, "attention_out_multiplier"):
             attn_out = ttnn.multiply(attn_out, self.args.attention_out_multiplier)
 
-        # mamba_out computed above
-        # Ensure mamba_out matches attn_out layout/memory_config before add (avoid broadcast errors)
-        if mamba_out is not None:
-            try:
-                # Force both tensors to DRAM + ROW_MAJOR + 4D shape [1,1,S,H]
-                attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                mamba_out = ttnn.to_memory_config(mamba_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                if attn_out.layout != ttnn.ROW_MAJOR_LAYOUT:
-                    attn_out = ttnn.to_layout(attn_out, ttnn.ROW_MAJOR_LAYOUT)
-                if mamba_out.layout != ttnn.ROW_MAJOR_LAYOUT:
-                    mamba_out = ttnn.to_layout(mamba_out, ttnn.ROW_MAJOR_LAYOUT)
-                attn_out = ttnn.unsqueeze_to_4D(attn_out)
-                mamba_out = ttnn.unsqueeze_to_4D(mamba_out)
-            except Exception:
-                pass
-
         if self.pre_ff_norm is None:
             # Residual connection after attention (no mamba path implemented yet)
             hidden_states = ttnn.add(
                 residual,
-                attn_out if mamba_out is None else ttnn.add(attn_out, mamba_out),
+                attn_out,
                 memory_config=skip_mem_cfg,
                 dtype=ttnn.bfloat16 if TG else None,
             )
@@ -293,8 +259,8 @@ class TransformerBlock(LightweightModule):
             # Apply FFN norm only in architectures without pre-FF norm
             hidden_states = self.ff_norm(hidden_states, mode)
         else:
-            # Falcon-H1 style: add residual first, then apply pre-FF norm; no extra FFN norm here
-            hidden_states = attn_out if mamba_out is None else ttnn.add(attn_out, mamba_out)
+            # Add residual first, then apply pre-FF norm
+            hidden_states = attn_out
             # The attention output is replicated; residual is fractured. Gather before add if multi-device
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(

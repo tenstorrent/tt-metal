@@ -8,7 +8,7 @@ This document summarizes the changes and usage to run the following Hugging Face
 ### What changed in this repo
 
 - Model config updates (`models/tt_transformers/tt/model_config.py`):
-  - Enable `trust_remote_code` automatically for `falcon-h1` and `falcon3` HF repos.
+  - Enable `trust_remote_code` automatically for `falcon3` HF repos.
   - Add tokenizer fallback mappings for `Falcon3-1B`, `Falcon3-7B`.
   - Provide conservative per-device prefill chunk sizes for Falcon variants.
 - HF weight loading (`models/tt_transformers/tt/load_checkpoints.py`):
@@ -22,7 +22,7 @@ This document summarizes the changes and usage to run the following Hugging Face
 - Norm key resolution
   - Dynamically resolve `ffn_norm`/`final_layernorm` aliases in `tt/decoder.py` and `tt/model.py`.
 - Demo support (`models/tt_transformers/demo/simple_text_demo.py`):
-  - Add `Falcon3-1B`, and `Falcon-H1-7B` to `supported_models` list.
+  - Add `Falcon3-1B` to `supported_models` list.
 
 ### How to run
 
@@ -42,12 +42,6 @@ Run batch-1 (latency) and batch-32 (throughput) demos:
 ```bash
 # Falcon3-1B
 export HF_MODEL=tiiuae/Falcon3-1B-Instruct
-pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
-pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
-
-# Falcon-H1-7B
-export HF_MODEL=tiiuae/Falcon-H1-7B-Instruct
-# If your local pytest config/plugins interfere, try a minimal runner:
 pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
 pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 ```
