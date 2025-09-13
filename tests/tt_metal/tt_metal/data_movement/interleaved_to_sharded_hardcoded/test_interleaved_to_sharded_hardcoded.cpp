@@ -34,13 +34,20 @@ namespace test1_writer_sharded_dram_row_major {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "writer_unary_sharded_stick_layout_start_id.cpp",
         master_core_set,
@@ -50,11 +57,11 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, writer_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, writer_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
@@ -67,9 +74,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -83,13 +90,20 @@ namespace test2_writer_sharded_dram_tile {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "writer_unary_sharded_blocks_start_id.cpp",
         master_core_set,
@@ -99,11 +113,11 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, writer_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, writer_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
@@ -116,9 +130,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -132,13 +146,20 @@ namespace test3_interleaved_reader_tile_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "reader_unary_sharded_blocks_interleaved_start_id.cpp",
         master_core_set,
@@ -148,11 +169,11 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, reader_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, reader_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -164,9 +185,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, all_cores, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -180,13 +201,20 @@ namespace test4_interleaved_reader_tile_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "reader_unary_sharded_blocks_interleaved_start_id.cpp",
         master_core_set,
@@ -196,11 +224,11 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, reader_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, reader_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -213,9 +241,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, all_cores, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -229,13 +257,20 @@ namespace test5_interleaved_reader_row_major_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
         master_core_set,
@@ -245,12 +280,12 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, reader_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, reader_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
 
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -262,9 +297,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -278,13 +313,20 @@ namespace test6_interleaved_reader_row_major_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/data_movement/interleaved_to_sharded_hardcoded/kernels/"
         "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
         master_core_set,
@@ -294,12 +336,12 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .compile_args = test_config.compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program, reader_kernel, master_core_set, test_config.runtime_args);
+    SetRuntimeArgs(program_, reader_kernel, master_core_set, test_config.runtime_args);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
 
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -311,9 +353,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program_, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -326,7 +368,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
 //=================================================================
 
 // Test 1: Writer Sharded DRAM Row Major
-TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -372,7 +414,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
 }
 
 // Test 2: Writer Sharded DRAM Tile
-TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -419,7 +461,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
 }
 
 // Test 3: Interleaved Reader Tile (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -460,7 +502,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
 }
 
 // Test 4: Interleaved Reader Tile (L1)
-TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -501,7 +543,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
 }
 
 // Test 5: Interleaved Reader Row Major (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -544,7 +586,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
 }
 
 // Test 6: Interleaved Reader Row Major (L1)
-TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
