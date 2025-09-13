@@ -10,7 +10,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 class Cluster;
