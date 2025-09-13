@@ -22,13 +22,15 @@ jobs:
       version: 22.04
       build-wheel: true
   galaxy-multi-user-isolation-tests:
+    needs: build-artifact
     runs-on:
       # A physical, multi-host WH 6U that's in service
       - topology-6u
       - arch-wormhole_b0
       - bare-metal
       - g15glx04
-    needs: build-artifact
+    env:
+      MULTIUSER_TEST_DIR: ${{ github.workspace }}/multihosttest
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -52,9 +54,9 @@ jobs:
           echo "${{ toJson(needs.build-artifact.outputs) }}"
       - name: Create Docker Compose file
         run: |
-          rm -rf ./multihosttest
-          mkdir -p ./multihosttest
-          cat > docker-compose.yaml <<EOF
+          rm -rf $MULTIUSER_TEST_DIR
+          mkdir -p $MULTIUSER_TEST_DIR
+          cat > $MULTIUSER_TEST_DIR/docker-compose.yaml <<EOF
           version: "3.9"
           services:
             tray-1:
@@ -62,8 +64,8 @@ jobs:
               stdin_open: true
               tty: true
               volumes:
-                  - ./tt-metal:/app/tt-metal
-                  - ./multihosttest:/app/multihosttest
+                  - ${{ github.workspace }}:/app/tt-metal
+                  - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               command: bash
               devices:
@@ -82,8 +84,8 @@ jobs:
               stdin_open: true
               tty: true
               volumes:
-                  - ./tt-metal:/app/tt-metal
-                  - ./multihosttest:/app/multihosttest
+                  - ${{ github.workspace }}:/app/tt-metal
+                  - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
@@ -101,8 +103,8 @@ jobs:
               stdin_open: true
               tty: true
               volumes:
-                  - ./tt-metal:/app/tt-metal
-                  - ./multihosttest:/app/multihosttest
+                  - ${{ github.workspace }}:/app/tt-metal
+                  - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
@@ -120,8 +122,8 @@ jobs:
               stdin_open: true
               tty: true
               volumes:
-                  - ./tt-metal:/app/tt-metal
-                  - ./multihosttest:/app/multihosttest
+                  - ${{ github.workspace }}:/app/tt-metal
+                  - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
@@ -136,9 +138,10 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          ls -la
-          docker compose -f docker-compose.yaml up -d
+          docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml up -d
 
       - name: Tear down containers
         if: always()
-        run: docker compose -f docker-compose.yaml down
+        run: |
+          docker compose -f $MULTIUSER_TEST_DIR/docker-compose.yaml down
+          echo rm -rf $MULTIUSER_TEST_DIR
