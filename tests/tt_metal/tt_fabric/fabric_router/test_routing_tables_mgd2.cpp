@@ -20,13 +20,13 @@
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
-constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
-    control_plane->initialize_fabric_context(k_FabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     return control_plane;
 }
@@ -37,8 +37,8 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
 
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
-    control_plane->initialize_fabric_context(k_FabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     return control_plane;
 }
@@ -284,7 +284,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_FALSE(path.empty());
     }
 }
 
