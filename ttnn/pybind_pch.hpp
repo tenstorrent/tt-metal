@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
-#import <pybind11/cast.h>
-#import <pybind11/numpy.h>
-#import <pybind11/operators.h>
-#import <pybind11/pybind11.h>
-#import <pybind11/pytypes.h>
-#import <pybind11/stl.h>
-#import <pybind11/stl_bind.h>
+#include <pybind11/cast.h>
+#include <pybind11/numpy.h>
+#include <pybind11/operators.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
