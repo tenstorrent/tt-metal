@@ -29,8 +29,8 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
 #include "kernel_impl.hpp"
 
 namespace tt {

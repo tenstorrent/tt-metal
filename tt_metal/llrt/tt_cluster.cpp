@@ -31,15 +31,13 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/hugepage.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_simulation_device.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/cluster_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;

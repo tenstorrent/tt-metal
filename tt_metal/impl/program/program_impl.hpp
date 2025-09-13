@@ -22,8 +22,8 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
-#include <umd/device/tt_core_coordinates.h>             // CoreType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
 #include <atomic>
 #include <bitset>

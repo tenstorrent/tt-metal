@@ -34,7 +34,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt;
 

@@ -15,13 +15,9 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
-
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace tt::tt_fabric {
 FabricType operator|(FabricType lhs, FabricType rhs) {

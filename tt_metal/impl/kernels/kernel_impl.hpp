@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <string>
 #include <unordered_map>
 

@@ -25,7 +25,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 

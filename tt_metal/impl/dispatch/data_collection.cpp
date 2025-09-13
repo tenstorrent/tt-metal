@@ -18,7 +18,7 @@
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
 #include <kernel.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include "assert.hpp"
 #include "hal_types.hpp"

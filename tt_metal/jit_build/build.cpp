@@ -32,7 +32,7 @@
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace fs = std::filesystem;
 
