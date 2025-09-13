@@ -265,9 +265,10 @@ std::vector<CBInfo> get_cb_info(
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
         .page_size = is_1d_conv && conv_config.config_tensors_in_dram
-                         ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 6
-                         : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per indexß
-        .is_globally_allocated = conv_config.config_tensors_in_dram == false,
+                         ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
+                               6  // 3 indices per output, 2B per index
+                         : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
     // L1 scratchpad CB
