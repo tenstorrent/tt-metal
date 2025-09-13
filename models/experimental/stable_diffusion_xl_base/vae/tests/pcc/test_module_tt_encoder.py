@@ -19,7 +19,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, pcc",
     [
-        ((1, 3, 1024, 1024), 0.83),
+        ((1, 3, 1024, 1024), 0.97),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
