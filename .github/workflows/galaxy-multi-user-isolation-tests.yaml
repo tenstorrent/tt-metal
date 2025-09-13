@@ -34,10 +34,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Print all outputs
-        run: |
-          echo "All outputs from build-artifact:"
-          echo "${{ toJson(needs.build-artifact.outputs) }}"
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -50,6 +46,10 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Print all outputs
+        run: |
+          echo "All outputs from build-artifact:"
+          echo "${{ toJson(needs.build-artifact.outputs) }}"
       - name: Create Docker Compose file
         run: |
           rm -rf ./multihosttest
@@ -58,7 +58,7 @@ jobs:
           version: "3.9"
           services:
             tray-1:
-              image: "${{ needs.build-artifact.outputs.docker-image }}"
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
@@ -77,7 +77,7 @@ jobs:
                 - "/dev/tenstorrent/7:/dev/tenstorrent/7"
 
             tray-2:
-              image: "${{ needs.build-artifact.outputs.docker-image }}"
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               command: bash
               stdin_open: true
               tty: true
@@ -96,7 +96,7 @@ jobs:
                 - "/dev/tenstorrent/15:/dev/tenstorrent/15"
 
             tray-3:
-              image: "${{ needs.build-artifact.outputs.docker-image }}"
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               command: bash
               stdin_open: true
               tty: true
@@ -115,7 +115,7 @@ jobs:
                 - "/dev/tenstorrent/23:/dev/tenstorrent/23"
 
             tray-4:
-              image: "${{ needs.build-artifact.outputs.docker-image }}"
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               command: bash
               stdin_open: true
               tty: true
