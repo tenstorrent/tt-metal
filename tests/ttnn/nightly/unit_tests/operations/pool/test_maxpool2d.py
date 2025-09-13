@@ -650,3 +650,48 @@ def test_max_pool2d_output_formats_and_layouts(
         output_layout=output_layout,
         nightly_skips=False,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    (([1, 256, 56, 56],)),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((3, 3),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize("stride", ((2, 2),))
+@pytest.mark.parametrize(
+    "dilation",
+    ((1, 1),),
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ceil_mode", [True])
+def test_run_max_pool_vovnet_model(
+    input_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    tensor_map,
+    dtype,
+    ceil_mode,
+):
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        dtype,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+    )
