@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;

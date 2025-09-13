@@ -20,16 +20,12 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-// #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
-// guards
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <utils.hpp>
-
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

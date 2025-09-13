@@ -25,7 +25,7 @@
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include "dispatch/system_memory_manager.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

@@ -14,8 +14,8 @@
 #include <ostream>
 #include <fmt/format.h>
 
-#include <third_party/umd/device/api/umd/device/cluster.h>
-#include <third_party/umd/device/api/umd/device/types/cluster_descriptor_types.h>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
+#include <third_party/umd/device/api/umd/device/types/cluster_descriptor_types.hpp>
 
 struct GalaxyUbbIdentifier {
     uint32_t tray_id;

@@ -31,8 +31,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "system_memory_manager.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

@@ -10,7 +10,7 @@
 #include <vector>
 #include <stdexcept>
 #include <tt_stl/caseless_comparison.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace tt::scaleout_tools {

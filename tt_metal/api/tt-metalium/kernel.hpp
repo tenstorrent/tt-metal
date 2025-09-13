@@ -26,9 +26,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace ll_api {

@@ -10,7 +10,7 @@
 #include "hal_types.hpp"
 #include "program/program_impl.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

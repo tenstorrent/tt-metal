@@ -8,7 +8,7 @@
 #include <variant>
 #include <tuple>
 #include <optional>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
