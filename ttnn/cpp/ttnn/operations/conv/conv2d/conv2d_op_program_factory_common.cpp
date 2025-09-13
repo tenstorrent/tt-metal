@@ -46,6 +46,7 @@ std::vector<CBInfo> get_cb_info(
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> input_shape,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
@@ -151,6 +152,8 @@ std::vector<CBInfo> get_cb_info(
         packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
+
+    const bool is_1d_conv = input_shape[0] != 1 && input_shape[1] == 1;
 
     {
         // Weights CB
@@ -261,8 +264,11 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per indexß
-        .is_globally_allocated = true,
+        .page_size = is_1d_conv && conv_config.config_tensors_in_dram
+                         ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
+                               6  // 3 indices per output, 2B per index
+                         : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
     // L1 scratchpad CB
@@ -316,7 +322,7 @@ void allocate_cbs(
 
         std::tie(cb.index, cb.handle) =
             tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
             enchantum::to_string(cb.name),

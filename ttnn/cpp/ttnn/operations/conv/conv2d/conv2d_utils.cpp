@@ -940,13 +940,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // act_block_w_div == 1 is currently the default value.
             conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
         }
-
+        SlidingWindowConfig sliding_window_config{
+            .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             compute_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
             weights_shape,
-            kernel_size,
+            sliding_window_config,
             conv_config,
             input_datatype,
             output_datatype,
@@ -1202,12 +1203,15 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.kernel_size,
             params.compute_grid);
 
+        SlidingWindowConfig sliding_window_config{
+            .input_hw = {params.input_height, params.input_width},
+            .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
             folded_weights_shape,
-            params.kernel_size,
+            sliding_window_config,
             conv_config,
             params.input_datatype,
             params.output_datatype,
@@ -1366,7 +1370,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    std::array<uint32_t, 2> kernel_size,
+    SlidingWindowConfig sliding_window_config,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
     const DataType output_datatype,
@@ -1381,7 +1385,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         block_config,
         pconfig,
         weights_shape,
-        kernel_size,
+        {sliding_window_config.window_hw.first, sliding_window_config.window_hw.second},
+        {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
         conv_config,
         input_datatype,
         output_datatype,
