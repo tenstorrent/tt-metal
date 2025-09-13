@@ -1492,7 +1492,7 @@ void prepare_inputs(
     }
 }
 
-float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
+float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
 
 bool validation_single_core(
     tt_metal::distributed::MeshDevice* device,

@@ -166,13 +166,13 @@ std::vector<uint16_t> gold_reduce_h(
                 for (int h = 0; h < shape[2]; h++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, 0, w);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+                reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
             }
         }
     }
@@ -199,13 +199,13 @@ std::vector<uint16_t> gold_reduce_w(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, h, 0);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+                reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
             }
         }
     }
@@ -236,14 +236,14 @@ std::vector<uint16_t> gold_reduce_hw(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
             }
             auto dest_offs = addr_dst.offs(n, c, 0, 0);
-            reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+            reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
         }
     }
 
@@ -263,7 +263,7 @@ std::vector<uint32_t> gold_standard_tilize_w_elwadd(
         unpacked_tilize_src0_vec.end(),
         unpacked_src1_vec.begin(),
         result_vec.begin(),
-        [&](const bfloat16& lhs, const bfloat16& rhs) { return (lhs.to_float() + rhs.to_float()); });
+        [&](const bfloat16& lhs, const bfloat16& rhs) { return (static_cast<float>(lhs) + static_cast<float>(rhs)); });
 
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
 }

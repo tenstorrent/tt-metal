@@ -270,13 +270,13 @@ int main() {
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
     for (int i = 0; i < add_dst_vec.size(); i++) {
-        pass &= (add_dst_vec[i].to_float() == workload_0_src0_val + workload_0_src1_val);
+        pass &= (static_cast<float>(add_dst_vec[i]) == workload_0_src0_val + workload_0_src1_val);
     }
     for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
         if (i < mul_sub_dst_vec.size() / 2) {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val * workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val * workload_1_src1_val);
         } else {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val - workload_1_src1_val);
         }
     }
     ReleaseTrace(mesh_device.get(), trace_id);

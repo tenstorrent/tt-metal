@@ -91,7 +91,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 scalars.back().end = i;
             }
             // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
+            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
