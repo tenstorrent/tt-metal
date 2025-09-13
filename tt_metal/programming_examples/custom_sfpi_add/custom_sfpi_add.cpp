@@ -116,19 +116,19 @@ int main(int argc, char** argv) {
         TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "custom_sfpu_kernel_add/kernels/dataflow/read_tiles.cpp",
+            OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
         TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
         auto writer = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "custom_sfpu_kernel_add/kernels/dataflow/write_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/write_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
         auto compute = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "custom_sfpu_kernel_add/kernels/compute/tiles_add.cpp",
+            OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/compute/tiles_add.cpp",
             core,
             ComputeConfig{
                 .fp32_dest_acc_en = false, // We don't need the destination accumulator to be FP32 as input and output are BFP16
