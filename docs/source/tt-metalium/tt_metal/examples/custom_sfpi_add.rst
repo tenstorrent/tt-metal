@@ -1,29 +1,29 @@
-.. _Custom_SFPU_Add:
+.. _Custom_SFPI_Add:
 
-Vector addition using custom SFPU
-=================================
+Vector addition using SFPI
+==========================
 
-This example demonstrates how to program the vector engine to perform the simplest operation - vector addition. This example serves as a starting point for users looking to implement custom SFPU operations. We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpu_kernel_add`` directory.
+This example demonstrates how to program the vector engine to perform the simplest operation - vector addition. This example serves as a starting point for users looking to implement custom operations using SFPI. We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpi_add`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_custom_sfpu_kernel_add`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_custom_sfpi_add`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/metal_example_custom_sfpu_kernel_add
+    ./build/programming_examples/metal_example_custom_sfpi_add
 
 .. warning::
 
-    Tenstorrent does not guarantee backward compatibility for user-implemented SFPU functions. Keep your implementations up to date with the latest Metalium releases. APIs that call low-level SFPU functions may change without notice, and SFPU specifications may also change in future hardware versions.
+    Tenstorrent does not guarantee backward compatibility for user-implemented SFPI functions. Keep your implementations up to date with the latest Metalium releases. APIs that call low-level SFPI functions may change without notice, and SFPI specifications may also change in future hardware versions.
 
 Program setup
 -------------
 
-This example assumes familiarity with basic Metalium concepts like device initialization, buffer creation, circular buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to SFPU programming.
+This example assumes familiarity with basic Metalium concepts like device initialization, buffer creation, circular buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to programming Metalium kernels.
 
-The host-side setup for this custom SFPU example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
@@ -57,7 +57,7 @@ The reader kernel reads tiles from two source DRAM buffers and pushes them into 
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/kernels/dataflow/read_tiles.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
         // ...
         for (uint32_t i = 0; i < num_tiles; i++) {
@@ -78,7 +78,7 @@ The writer kernel is straightforward: it reads result tiles from the output circ
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/kernels/dataflow/write_tile.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/write_tile.cpp
     void kernel_main() {
         // ...
         for (uint32_t i = 0; i < n_tiles; i++) {
@@ -90,17 +90,17 @@ The writer kernel is straightforward: it reads result tiles from the output circ
         }
     }
 
-SFPU Compute Kernel
+SFPI Compute Kernel
 ~~~~~~~~~~~~~~~~~~~
 
-The compute kernel is where the custom SFPU logic resides. It waits for tiles from the input CBs, performs the addition using the SFPU, and pushes the result to the output CB.
+The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CBs, performs the addition using the SFPI, and pushes the result to the output CB.
 
 The overall flow follows the same pattern as other compute kernels:
 
 1. Wait for input tiles to be available in ``cb_in0`` and ``cb_in1``.
 2. Acquire destination registers. These registers will be used as a scratchpad for the computation.
 3. Copy tiles from CBs to the destination registers.
-4. Execute the custom SFPU addition function on the data in the destination registers.
+4. Execute the custom SFPI addition function on the data in the destination registers.
 5. Transfer the ownership of the destination registers to the packer
 6. Reserve space in the output CB, pack the result tile, and push it.
 7. Pop the input tiles from the input CBs.
@@ -108,7 +108,7 @@ The overall flow follows the same pattern as other compute kernels:
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/kernels/compute/tiles_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
     namespace NAMESPACE {
     void MAIN {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
@@ -127,7 +127,7 @@ The overall flow follows the same pattern as other compute kernels:
             copy_tile(cb_in0, 0, 0);
             copy_tile(cb_in1, 0, 1);
 
-            my_add_tiles(0, 1, 0); // <-- Call to custom SFPU addition function
+            my_add_tiles(0, 1, 0); // <-- Call to custom SFPI addition function
 
             tile_regs_commit();
 
@@ -142,14 +142,14 @@ The overall flow follows the same pattern as other compute kernels:
     }
     } // namespace NAMESPACE
 
-Custom SFPU Implementation
+Custom SFPI Implementation
 --------------------------
 
-The core of this example is the custom SFPU function ``my_add_tiles``. It's implemented in a layered way, which is a common pattern for SFPU programming to enable easy consumption and maintainability.
+The core of this example is the custom SFPI function ``my_add_tiles``. It's implemented in a layered way, which is a common pattern for SFPI programming to enable easy consumption and maintainability.
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/kernels/compute/tiles_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
@@ -197,7 +197,7 @@ Here's a breakdown of the layers. The functions ``add_tile_face`` and ``my_add_t
 
     Within each face, the function loads SIMD vectors (``vFloat``) from the input registers, adds them, and writes the result back to the output registers.
 
-    Each time the SFPU function is called, the helper automatically offsets ``dst_reg`` to point to the start of the current face. So, on the first call, ``dst_reg`` has an offset of 0; on the second, the offset is 8, and so on. The programmer does not need to manage this offset manually.
+    Each time the SFPI function is called, the helper automatically offsets ``dst_reg`` to point to the start of the current face. So, on the first call, ``dst_reg`` has an offset of 0; on the second, the offset is 8, and so on. The programmer does not need to manage this offset manually.
 
     For a deeper understanding of tile structure, refer to :ref:`Internal structure of a Tile<internal_structure_of_a_tile>`. And the number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
@@ -209,7 +209,7 @@ This layered structure keeps high-level logic separate from hardware-specific de
 
 .. note::
 
-    There are 3 internal APIs to invoke custom SFPU functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
+    There are 3 internal APIs to invoke custom SFPI functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
 
     *  ``_llk_math_eltwise_unary_sfpu_params_``: For functions with one input tile (e.g., ``sin``, ``exp``).
     *  ``_llk_math_eltwise_binary_sfpu_params_``: For functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
@@ -226,7 +226,7 @@ Back on the host, we set the runtime arguments for the kernels. The reader and w
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/custom_sfpu_kernel_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
     SetRuntimeArgs(program, reader, core, {
         src0_dram_buffer->address(),
         src1_dram_buffer->address(),
@@ -246,7 +246,7 @@ Finally, we enqueue the program for execution and read back the results from the
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpu_kernel_add/custom_sfpu_kernel_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
@@ -258,11 +258,11 @@ Finally, we enqueue the program for execution and read back the results from the
 Conclusion
 ----------
 
-This example demonstrated how to create a custom SFPU kernel for vector addition. Key takeaways include:
+This example demonstrated how to create a custom SFPI kernel for vector addition. Key takeaways include:
 
-*   The layered approach to SFPU kernel development (high-level API, LLK wrapper, low-level face function).
+*   The layered approach to SFPI kernel development (high-level API, LLK wrapper, low-level face function).
 *   The use of destination registers (``dst_reg``) for SFPU computations.
-*   The role of the LLK API (e.g., ``_llk_math_eltwise_binary_sfpu_params_``) in simplifying SFPU programming by handling tile face iteration.
+*   The role of the LLK API (e.g., ``_llk_math_eltwise_binary_sfpu_params_``) in simplifying SFPI programming by handling tile face iteration.
 *   The standard pipeline of reader, compute, and writer kernels for processing data on Tensix cores.
 
 By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads.
