@@ -14,6 +14,18 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/welford.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -223,8 +235,10 @@ void MAIN {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(dst0);
+        sqrt_tile_init();
+        sqrt_tile(dst0);
+        recip_tile_init();
+        recip_tile(dst0);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();

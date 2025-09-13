@@ -93,7 +93,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    const bool use_welford) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const uint32_t no_weights_max_size = 120;
     const uint32_t with_weights_max_size = 60;
@@ -274,6 +275,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
+    const auto fuse_pre_add = b.has_value();
+
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -293,11 +296,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
+    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
+
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
-    if (b) {
+
+    if (fuse_pre_add) {
         reader_defines["FUSE_PRE_ADD"] = "1";
-        compute_defines["FUSE_PRE_ADD"] = "1";
+        if (!use_welford) {
+            compute_defines["FUSE_PRE_ADD"] = "1";
+        }
     }
 
     if (gamma.has_value()) {
@@ -307,7 +315,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    if (rms_norm) {
+    if (rms_norm && !use_welford) {
         compute_defines["RMSNORM"] = "1";
     }
 
@@ -316,10 +324,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
-    reader_kernel_path = large_tensor_needed
-                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                               "reader_unary_interleaved_ln_large_tensor.cpp"
-                             : reader_kernel_path;
+    reader_kernel_path =
+        large_tensor_needed ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "reader_unary_interleaved_ln_large_tensor.cpp")
+                            : reader_kernel_path;
+
     auto reader_kernels_id = CreateKernel(
         program,
         reader_kernel_path,
@@ -334,12 +345,23 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    if (use_welford) {
+        compute_args.push_back(W);
+        compute_args.push_back(ttnn::types::TILE_SIZE);
+        compute_args.push_back(static_cast<uint32_t>(rms_norm));
+        compute_args.push_back(static_cast<uint32_t>(fuse_pre_add));
+    }
 
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel and !rms_norm
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+            ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                             "layernorm_large_tensor_welford.cpp"
+                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                             "layernorm_large_tensor.cpp")
+            : (use_welford
+                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
+                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"),
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -370,6 +392,17 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     CircularBufferConfig cb_in3_config =
         CircularBufferConfig(in3_t * bfloat16_tile_size, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
             .set_page_size(tt::CBIndex::c_3, bfloat16_tile_size);
+    if (use_welford && large_tensor_needed && !rms_norm) {
+        // The two ping-pong buffers for Welford's mean/var
+        CircularBufferConfig cb_welford_ping_config =
+            CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_4, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_4, single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_welford_ping_config);
+        CircularBufferConfig cb_welford_pong_config =
+            CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_7, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_7, single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_welford_pong_config);
+    }
     CreateCircularBuffer(program, all_cores, cb_in3_config);
     CircularBufferConfig cb_intermed2_config =
         CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
@@ -381,10 +414,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                 .set_page_size(tt::CBIndex::c_24, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed0_config);
     }
-    CircularBufferConfig c_intermed3_config =
-        CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_20, single_tile_size);
-    CreateCircularBuffer(program, all_cores, c_intermed3_config);
+    if (!use_welford || (use_welford && rms_norm && !large_tensor_needed)) {
+        CircularBufferConfig c_intermed3_config =
+            CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_20, single_tile_size);
+        CreateCircularBuffer(program, all_cores, c_intermed3_config);
+    }
     CircularBufferConfig c_intermed4_config =
         CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
@@ -1427,7 +1462,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;                                                               // bcast-w scaler
+    float winv = 1.0f / block_w;
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / num_blocks);  // bcast-cores scaler
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);
