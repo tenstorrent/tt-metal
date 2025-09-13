@@ -141,7 +141,7 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f multi-user-dc.yaml up -d
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
 
       - name: Run the tests
         run: |
@@ -149,7 +149,7 @@ jobs:
             command=$1
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
-              cname="multihosttest-$tray-1"
+              cname="multi-user-$tray-1"
               echo ">>> Running tests in $cname"
               docker exec "$cname" bash -c "$command" &
               pids+=($!)
@@ -173,4 +173,4 @@ jobs:
       - name: Tear down containers
         if: always()
         run: |
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -f multi-user-dc.yaml down
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml down
