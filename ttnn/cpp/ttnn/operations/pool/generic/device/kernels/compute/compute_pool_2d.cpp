@@ -55,7 +55,7 @@ void MAIN {
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(19);
     constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
-
+    constexpr bool is_output_bfp4_b = (bool)get_compile_time_arg_val(22);
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -228,11 +228,17 @@ void MAIN {
                         unary_op_init_common(pre_tilize_cb_id, out_cb_id);
                         tensix_sync();
 
-                        tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-
+                        // Skip fast_tilize path for bfp4_b output until #28380 is closed
+                        if constexpr (is_output_bfp4_b) {
+                            tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        } else {
+                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        }
                         cb_push_back(out_cb_id, in_ntiles_c);
-                        tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         if constexpr (is_output_block_format) {
                             tensix_sync();

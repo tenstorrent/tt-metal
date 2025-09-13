@@ -155,6 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     const bool is_output_tiled = false;
     const bool is_output_block_format = false;
+    const bool is_output_bfp4_b = false;
     const uint32_t pre_tilize_cb_id =
         32;  // Unused CB for pool compute kernel for grid sample, we don't have tiled output in gridsample
 
@@ -182,7 +183,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             false,                                               // 18: Return Indices (unused)
             pre_tilize_cb_id,                                    // 19: Pre-tilize CB (unused)
             is_output_tiled,                                     // 20: is_output_tiled (unused)
-            is_output_block_format                               // 21: is_output_block_format (unused)
+            is_output_block_format,                              // 21: is_output_block_format (unused)
+            is_output_bfp4_b                                     // 22: is_output_bfp4_b (unused)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -221,7 +223,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             false,                                               // 18: Return Indices (unused)
             pre_tilize_cb_id,                                    // 19: Pre-tilize CB (unused)
             is_output_tiled,                                     // 20: is_output_tiled (unused)
-            is_output_block_format                               // 21: is_output_block_format (unused)
+            is_output_block_format,                              // 21: is_output_block_format (unused)
+            is_output_bfp4_b                                     // 22: is_output_bfp4_b (unused)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
