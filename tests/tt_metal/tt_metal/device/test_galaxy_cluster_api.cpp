@@ -15,8 +15,8 @@
 #include <tt-metalium/device.hpp>
 #include "galaxy_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {

@@ -20,7 +20,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace ttnn::types {
 
 void py_module_types(py::module& module) {
