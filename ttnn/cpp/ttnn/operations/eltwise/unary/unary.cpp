@@ -285,6 +285,18 @@ Tensor Unary_chain::invoke(
     return detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
 }
 
+Tensor Selu::invoke(
+    const Tensor& input_tensor,
+    float scale,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::SELU;
+
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, {scale, alpha}}}, memory_config, optional_output_tensor);
+}
+
 Tensor Softplus::invoke(
     const Tensor& input,
     const float beta,
