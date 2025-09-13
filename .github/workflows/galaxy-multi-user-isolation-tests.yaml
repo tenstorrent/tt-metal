@@ -67,8 +67,11 @@ jobs:
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
               command: bash
-              user: "${USER_ID}:${GROUP_ID}"
+              user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
+              environment:
+                LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                TT_METAL_HOME: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -88,8 +91,11 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
-              user: "${USER_ID}:${GROUP_ID}"
+              user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
+              environment:
+                LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                TT_METAL_HOME: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -109,8 +115,11 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
-              user: "${USER_ID}:${GROUP_ID}"
+              user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
+              environment:
+                LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                TT_METAL_HOME: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -130,8 +139,11 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - $MULTIUSER_TEST_DIR:/app/multihosttest
               entrypoint: ["/app/tt-metal/tests/scripts/galaxy-multi-user-isolation-tests.sh"]
-              user: "${USER_ID}:${GROUP_ID}"
+              user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
+              environment:
+                LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                TT_METAL_HOME: /app/tt-metal
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
                 - "/dev/tenstorrent/25:/dev/tenstorrent/25"
