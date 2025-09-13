@@ -34,3 +34,13 @@ target_link_libraries(
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(
+        llrt
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/private_pch.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/public_pch.hpp
+    )
+else()
+    target_precompile_headers(llrt REUSE_FROM TT::CommonPCH)
+endif()

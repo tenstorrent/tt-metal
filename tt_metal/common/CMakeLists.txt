@@ -45,3 +45,14 @@ target_link_libraries(
         Boost::asio
         tt-logger::tt-logger
 )
+
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(
+        common
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/private_pch.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/public_pch.hpp
+    )
+else()
+    target_precompile_headers(common REUSE_FROM TT::CommonPCH)
+endif()

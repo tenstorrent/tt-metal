@@ -1,7 +1,11 @@
 add_library(ttnn_op_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
-target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_matmul REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 set_target_properties(
     ttnn_op_matmul

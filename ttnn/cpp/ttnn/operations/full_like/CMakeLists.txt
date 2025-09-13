@@ -1,7 +1,11 @@
 add_library(ttnn_op_full_like ${LIB_TYPE})
 add_library(TTNN::Ops::FullLike ALIAS ttnn_op_full_like)
 
-target_precompile_headers(ttnn_op_full_like REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_full_like REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_full_like REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_full_like)
 
 target_sources(

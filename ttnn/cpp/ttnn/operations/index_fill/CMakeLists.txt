@@ -1,7 +1,11 @@
 add_library(ttnn_op_index_fill ${LIB_TYPE})
 add_library(TTNN::Ops::IndexFill ALIAS ttnn_op_index_fill)
 
-target_precompile_headers(ttnn_op_index_fill REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_index_fill REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_index_fill REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_index_fill)
 
 target_sources(

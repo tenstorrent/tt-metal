@@ -1,7 +1,11 @@
 add_library(ttnn_op_sliding_window ${LIB_TYPE})
 add_library(TTNN::Ops::SlidingWindow ALIAS ttnn_op_sliding_window)
 
-target_precompile_headers(ttnn_op_sliding_window REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_sliding_window REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_sliding_window REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 set_target_properties(
     ttnn_op_sliding_window

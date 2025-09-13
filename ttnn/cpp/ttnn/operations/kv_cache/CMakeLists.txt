@@ -1,7 +1,11 @@
 add_library(ttnn_op_kv_cache ${LIB_TYPE})
 add_library(TTNN::Ops::KvCache ALIAS ttnn_op_kv_cache)
 
-target_precompile_headers(ttnn_op_kv_cache REUSE_FROM TT::CommonPCH)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_op_kv_cache REUSE_FROM ttnn_core)
+else()
+    target_precompile_headers(ttnn_op_kv_cache REUSE_FROM TT::CommonPCH)
+endif()
 TT_ENABLE_UNITY_BUILD(ttnn_op_kv_cache)
 set_target_properties(
     ttnn_op_kv_cache
