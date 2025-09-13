@@ -1342,7 +1342,9 @@ ttnn::Tensor prepare_conv_weights(
             "conv_weights_dtype is set to the same dtype before calling prepare_bias.");
         conv_config.weights_dtype = weight_tensor.dtype();
     }
-
+    if (input_memory_config.is_dram()) {
+        input_layout = tt::tt_metal::Layout::TILE;
+    }
     // Use common setup function to get configuration parameters
     auto params = setup_conv_prep_config(
         input_memory_config,
@@ -1393,7 +1395,9 @@ ttnn::Tensor prepare_conv_bias(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
-
+    if (input_memory_config.is_dram()) {
+        input_layout = tt::tt_metal::Layout::TILE;
+    }
     // Use common setup function to get configuration parameters
     auto params = setup_conv_prep_config(
         input_memory_config,
