@@ -125,6 +125,7 @@ def run_conv(
     sharded_cfg=None,
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     enable_activation_reuse=False,
+    config_tensors_in_dram=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -254,6 +255,7 @@ def run_conv(
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
         enable_activation_reuse=enable_activation_reuse,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -4574,6 +4576,7 @@ def test_conv_bs_grid(
 # fmt: off
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
 @pytest.mark.parametrize("enable_split_reader", [False, True])
+@pytest.mark.parametrize("config_in_dram", [False, True])
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
     (
@@ -4614,6 +4617,7 @@ def test_conv2d_activation_reuse(
     input_layout,
     enable_split_reader,
     enable_activation_reuse,
+    config_in_dram
 ):
     if batch == 16 and is_wormhole_b0():
         # not enough memory on WH for this case
@@ -4658,7 +4662,8 @@ def test_conv2d_activation_reuse(
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
-        enable_activation_reuse=enable_activation_reuse
+        enable_activation_reuse=enable_activation_reuse,
+        config_tensors_in_dram=config_in_dram
     )
 
 
