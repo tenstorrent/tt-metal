@@ -22,6 +22,7 @@ from loguru import logger
         ((1, 4, 128, 128), 0.89, "decoder"),
         ((1, 3, 1024, 1024), 0.967, "encoder"),
     ],
+    ids=("test_decode", "test_encode"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_v2_env, model_location_generator):
