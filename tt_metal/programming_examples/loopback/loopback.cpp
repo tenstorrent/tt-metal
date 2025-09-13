@@ -57,9 +57,9 @@ int main() {
         distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
 
         // Allocate the buffers
-        auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
-        auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-        auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
+        auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+        auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
