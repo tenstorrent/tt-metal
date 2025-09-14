@@ -167,7 +167,7 @@ int main() {
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
 
             // Run the ERISC kernel
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
