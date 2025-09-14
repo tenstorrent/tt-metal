@@ -140,11 +140,11 @@ def run_perf_e2e_yolov4(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat16),),
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 130), ((640, 640), 65)],
+    [((320, 320), 125), ((640, 640), 65)],
 )
 def test_e2e_performant(
     device,
@@ -155,7 +155,6 @@ def test_e2e_performant(
     resolution,
     expected_inference_throughput,
 ):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28113")
     run_perf_e2e_yolov4(
         device,
         batch_size_per_device,
@@ -180,7 +179,7 @@ def test_e2e_performant(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 235), ((640, 640), 120)],
+    [((320, 320), 223), ((640, 640), 113)],
 )
 def test_e2e_performant_dp(
     mesh_device,
@@ -191,7 +190,6 @@ def test_e2e_performant_dp(
     resolution,
     expected_inference_throughput,
 ):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28113")
     run_perf_e2e_yolov4(
         mesh_device,
         batch_size_per_device,

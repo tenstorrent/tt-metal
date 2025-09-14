@@ -37,7 +37,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
