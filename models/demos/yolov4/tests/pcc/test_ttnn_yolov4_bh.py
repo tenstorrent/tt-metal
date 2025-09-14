@@ -4,10 +4,11 @@
 
 import pytest
 
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.tests.pcc.test_ttnn_yolov4 import run_yolov4
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV4_L1_SMALL_SIZE}], indirect=True)
 def test_yolov4(device, reset_seeds, model_location_generator):
     run_yolov4(
         device,

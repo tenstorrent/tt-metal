@@ -11,17 +11,15 @@ from models.demos.yolov4.reference import yolov4
 from models.demos.yolov4.reference.resblock import ResBlock
 
 
-def custom_preprocessor(model, name, mesh_mapper=None):
+def custom_preprocessor(model, name):
     parameters = {}
 
     # Helper function to process Conv2d + BatchNorm2d pairs
     def process_conv_bn_pair(conv_layer, bn_layer, base_name):
         parameters[base_name] = {}
         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper)
-        parameters[base_name]["bias"] = ttnn.from_torch(
-            torch.reshape(conv_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
-        )
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
+        parameters[base_name]["bias"] = ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
 
     def process_conv_param(conv_layer, base_name):
         parameters[base_name] = {}
@@ -33,8 +31,8 @@ def custom_preprocessor(model, name, mesh_mapper=None):
         if conv_bias.shape[-1] == 255:
             conv_bias = torch.nn.functional.pad(conv_bias, (0, 1, 0, 0, 0, 0, 0, 0))
 
-        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, mesh_mapper=mesh_mapper)
-        parameters[base_name]["bias"] = ttnn.from_torch(conv_bias, mesh_mapper=mesh_mapper)
+        parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
+        parameters[base_name]["bias"] = ttnn.from_torch(conv_bias)
 
     # Recursive function to process all layers
     def process_layers(layers, prefix=""):
@@ -73,11 +71,9 @@ def custom_preprocessor(model, name, mesh_mapper=None):
                 base_name = f"{inner_idx}"
                 parameters[prefix][str(outer_idx)][base_name] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-                parameters[prefix][str(outer_idx)][base_name]["weight"] = ttnn.from_torch(
-                    conv_weight, mesh_mapper=mesh_mapper
-                )
+                parameters[prefix][str(outer_idx)][base_name]["weight"] = ttnn.from_torch(conv_weight)
                 parameters[prefix][str(outer_idx)][base_name]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper
+                    torch.reshape(conv_bias, (1, 1, 1, -1))
                 )
 
     # Process the model
@@ -275,7 +271,7 @@ def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
-    _create_ds2_model_parameters(parameters.conv_args)
+    _create_ds2_model_parameters(parameters.conv_args, resolution)
 
     return parameters
 
@@ -348,7 +344,7 @@ def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
-    _create_ds3_model_parameters(parameters.conv_args)
+    _create_ds3_model_parameters(parameters.conv_args, resolution)
 
     return parameters
 
@@ -359,7 +355,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     if resolution == (320, 320):
-        conv_args.c1["dtype"] = ttnn.bfloat8_b
+        conv_args.c1["dtype"] = ttnn.bfloat16
     elif resolution == (640, 640):
         conv_args.c1["dtype"] = ttnn.bfloat16
     conv_args.c1["num_cores_nhw"] = None
@@ -369,7 +365,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     if resolution == (320, 320):
-        conv_args.c2["dtype"] = ttnn.bfloat8_b
+        conv_args.c2["dtype"] = ttnn.bfloat16
     conv_args.c2["num_cores_nhw"] = None
 
     conv_args.c3["act_block_h"] = None
@@ -383,7 +379,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     if resolution == (320, 320):
-        conv_args.c4["dtype"] = ttnn.bfloat8_b
+        conv_args.c4["dtype"] = ttnn.bfloat16
     elif resolution == (640, 640):
         conv_args.c4["dtype"] = ttnn.bfloat16
     conv_args.c4["num_cores_nhw"] = None
@@ -393,7 +389,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     if resolution == (320, 320):
-        conv_args.c5["dtype"] = ttnn.bfloat8_b
+        conv_args.c5["dtype"] = ttnn.bfloat16
     elif resolution == (640, 640):
         conv_args.c5["dtype"] = ttnn.bfloat16
     conv_args.c5["num_cores_nhw"] = None
@@ -403,7 +399,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.res["0"]["reshard_if_not_optimal"] = False
     conv_args.res["0"]["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     if resolution == (320, 320):
-        conv_args.res["0"]["dtype"] = ttnn.bfloat8_b
+        conv_args.res["0"]["dtype"] = ttnn.bfloat16
     conv_args.res["0"]["num_cores_nhw"] = None
 
     conv_args.res["3"]["act_block_h"] = None
@@ -411,7 +407,7 @@ def _create_ds4_model_parameters(conv_args, resolution):
     conv_args.res["3"]["reshard_if_not_optimal"] = False
     conv_args.res["3"]["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     if resolution == (320, 320):
-        conv_args.res["3"]["dtype"] = ttnn.bfloat8_b
+        conv_args.res["3"]["dtype"] = ttnn.bfloat16
     conv_args.res["3"]["num_cores_nhw"] = None
 
 
@@ -425,7 +421,7 @@ def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
-    _create_ds4_model_parameters(parameters.conv_args)
+    _create_ds4_model_parameters(parameters.conv_args, resolution)
 
     return parameters
 
@@ -504,7 +500,7 @@ def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
-    _create_ds5_model_parameters(parameters.conv_args)
+    _create_ds5_model_parameters(parameters.conv_args, resolution)
 
     return parameters
 
@@ -683,7 +679,7 @@ def create_neck_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tenso
         model=model, run_model=lambda model: model(input_tensor[0], input_tensor[1], input_tensor[2]), device=None
     )
 
-    _create_neck_model_parameters(parameters.conv_args)
+    _create_neck_model_parameters(parameters.conv_args, resolution)
 
     return parameters
 
@@ -833,6 +829,7 @@ def create_head_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tenso
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
+    parameters["resolution"] = resolution
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model, run_model=lambda model: model(input_tensor[0], input_tensor[1], input_tensor[2]), device=None
@@ -876,6 +873,6 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):
     def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
-        return custom_preprocessor(model, name, mesh_mapper)
+        return custom_preprocessor(model, name)
 
     return custom_mesh_preprocessor

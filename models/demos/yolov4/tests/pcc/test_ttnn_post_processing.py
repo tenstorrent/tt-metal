@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 from models.demos.yolov4.tt.genboxes import TtGenBoxes
 from models.utility_functions import skip_for_grayskull
@@ -13,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV4_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [

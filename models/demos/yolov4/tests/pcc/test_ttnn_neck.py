@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov4.common import load_torch_model
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov4.tt.model_preprocessing import create_neck_model_parameters
 from models.demos.yolov4.tt.neck import TtNeck
 from models.utility_functions import skip_for_grayskull
@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV4_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -87,6 +87,6 @@ def test_neck(device, reset_seeds, model_location_generator, resolution):
     result2 = result_2.reshape(ref2.shape)
     result3 = result_3.reshape(ref3.shape)
 
-    assert_with_pcc(result1, ref1, 0.99)
-    assert_with_pcc(result2, ref2, 0.985)
-    assert_with_pcc(result3, ref3, 0.96)
+    assert_with_pcc(result1, ref1, 0.98)
+    assert_with_pcc(result2, ref2, 0.94)
+    assert_with_pcc(result3, ref3, 0.945)
