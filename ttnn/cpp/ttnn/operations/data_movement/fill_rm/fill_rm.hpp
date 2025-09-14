@@ -12,6 +12,7 @@ namespace data_movement {
 
 struct FillRMOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         uint32_t N,
         uint32_t C,
         uint32_t H,
@@ -26,6 +27,7 @@ struct FillRMOperation {
 
 struct FillOnesRMOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         uint32_t N,
         uint32_t C,
         uint32_t H,

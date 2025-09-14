@@ -10,4 +10,4 @@
 #include <hostdevcommon/fabric_common.h>
 
 #include <tt-metalium/buffer.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>

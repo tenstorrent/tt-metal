@@ -6,6 +6,7 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -13,6 +14,7 @@
 namespace ttnn::operations::embedding {
 
 ttnn::Tensor EmbeddingOperation::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,

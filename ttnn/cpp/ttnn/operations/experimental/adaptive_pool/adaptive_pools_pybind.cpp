@@ -80,8 +80,10 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                bool deallocate_input,
-               bool reallocate_output) -> ttnn::Tensor {
+               bool reallocate_output,
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
+                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -105,7 +107,8 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
-            py::arg("reallocate_output") = true});
+            py::arg("reallocate_output") = true,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void bind_adaptive_max_pool2d_operation(py::module& module) {
@@ -171,8 +174,10 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                bool deallocate_input,
-               bool reallocate_output) -> ttnn::Tensor {
+               bool reallocate_output,
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
+                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -196,7 +201,8 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
-            py::arg("reallocate_output") = true});
+            py::arg("reallocate_output") = true,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::adaptive_pool

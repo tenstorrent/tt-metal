@@ -28,8 +28,8 @@ namespace operations::pool {
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
-
 static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     Pool2DType pool_type,
     uint32_t batch_size,
@@ -167,7 +167,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
 
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
+            input_tensor_padded = ttnn::pad(ttnn::DefaultQueueId, input_tensor, pad_spec, 0.0f);
         } else {
             input_tensor_padded = input_tensor;
         }
@@ -274,6 +274,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
     // call the halo uop
     Tensor haloed_tensor = ttnn::halo(
+        queue_id,
         input_tensor_sharded,
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
@@ -296,6 +297,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
     if (return_indices) {
         Tensor haloed_index = ttnn::halo(
+            queue_id,
             index_tensor_sharded,
             sliding_window_config,
             0,  // pad_val - should never be used as padding should never be the max index
@@ -322,6 +324,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
+        queue_id,
         haloed_tensors,
         sliding_window_config,
         pool_type,
@@ -353,6 +356,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 }
 
 std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -372,6 +376,7 @@ std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout) {
     return pool2d_invoke(
+        queue_id,
         input_tensor,
         Pool2DType::MAX_POOL2D,
         batch_size,
@@ -396,6 +401,7 @@ std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
 }
 
 Tensor AvgPool2DOp::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -415,6 +421,7 @@ Tensor AvgPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout) {
     auto result = pool2d_invoke(
+        queue_id,
         input_tensor,
         Pool2DType::AVG_POOL2D,
         batch_size,
