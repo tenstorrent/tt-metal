@@ -20,7 +20,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
+        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -36,6 +36,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
                ttnn.Tensor: the output tensor.
@@ -70,8 +71,10 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                tt::tt_fabric::Topology topology,
-               bool use_noc1_only) {
+               bool use_noc1_only,
+               QueueId queue_id) {
                 return self(
+                    queue_id,
                     input_tensor,
                     intermediate_packet_buffer,
                     dim,
@@ -95,7 +98,8 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
-            py::arg("use_noc1_only") = false});
+            py::arg("use_noc1_only") = false,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

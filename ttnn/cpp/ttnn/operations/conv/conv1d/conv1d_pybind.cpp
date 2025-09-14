@@ -74,8 +74,10 @@ void py_bind_conv1d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool return_output_dim,
-               bool return_weights_and_bias) -> Result {
+               bool return_weights_and_bias,
+               QueueId queue_id) -> Result {
                 return self(
+                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -115,6 +117,7 @@ void py_bind_conv1d(py::module& module) {
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false});
+            py::arg("return_weights_and_bias") = false,
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::conv::conv1d

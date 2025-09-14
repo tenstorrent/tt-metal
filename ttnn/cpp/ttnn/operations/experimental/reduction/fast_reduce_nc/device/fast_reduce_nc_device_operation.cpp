@@ -13,6 +13,7 @@
 namespace ttnn::operations::experimental::reduction::detail {
 
 Tensor _fast_reduce_nc(
+    QueueId queue_id,
     const ttnn::Tensor& input,
     const int32_t& dim,
     const std::optional<const ttnn::Tensor>& output,
@@ -27,7 +28,8 @@ Tensor _fast_reduce_nc(
                    .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = kernel_config_val},
                {input},
                {},
-               {output})
+               {output},
+               queue_id)
         .at(0);
 }
 
@@ -83,6 +85,7 @@ operation::ProgramWithCallbacks FastReduceNCDeviceOperation::create_program(
 }
 
 Tensor fast_reduce_nc(
+    QueueId queue_id,
     const ttnn::Tensor& input,
     tt::stl::Span<const int32_t> dims,
     const std::optional<const ttnn::Tensor>& output,
@@ -93,11 +96,11 @@ Tensor fast_reduce_nc(
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        auto temp_output =
-            _fast_reduce_nc(temp_input, sorted_dims[i], std::nullopt, output_mem_config, compute_kernel_config);
+        auto temp_output = _fast_reduce_nc(
+            queue_id, temp_input, sorted_dims[i], std::nullopt, output_mem_config, compute_kernel_config);
         temp_input = temp_output;
     }
-    return _fast_reduce_nc(temp_input, sorted_dims.front(), output, output_mem_config, compute_kernel_config);
+    return _fast_reduce_nc(queue_id, temp_input, sorted_dims.front(), output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

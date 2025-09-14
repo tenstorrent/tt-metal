@@ -233,7 +233,7 @@ Tensor _variance_impl(
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
@@ -268,7 +268,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>& output_
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
-    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
@@ -364,6 +364,35 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         output_memory_config);
 }
 
+// Theano defines this differently...
+/**
+ *
+ *   alpha = 1.6732632423543772848170429916717
+ *    scale = 1.0507009873554804934193349852946
+ *    return scale * elu(x, alpha)
+ *
+ */
+// Function Selu - scaled exponential linear
+// use transformation y = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
+Tensor _selu(
+    const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    // term 2
+    Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
+    Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
+    x_Exp_minus_1.deallocate();
+    Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
+    result_t2_.deallocate();
+
+    // term 1
+    Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
+    Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
+    x_max.deallocate();
+    Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
+
+    return result_selu;
+}
+
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
@@ -376,8 +405,8 @@ std::vector<Tensor> split_tensor_for_glu(
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
-    Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
+    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
+    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);
@@ -496,6 +525,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 
 // rdiv
 Tensor ExecuteRdiv::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     float value,
     const std::optional<std::string>& round_mode,
@@ -505,8 +535,8 @@ Tensor ExecuteRdiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
-    Tensor recip_result = ttnn::reciprocal(input_tensor, memory_config, optional_output_tensor);
-    Tensor result = ttnn::multiply(recip_result, value, std::nullopt, memory_config, optional_output_tensor);
+    Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
+    Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
     if (round_mode == "trunc") {
         result = ttnn::trunc(result);
@@ -514,7 +544,7 @@ Tensor ExecuteRdiv::invoke(
         result = ttnn::floor(result);
     }
     return ttnn::where(
-        ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
+        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
 // logit(input, eps)=log(input / 1 - input)

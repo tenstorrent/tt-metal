@@ -11,6 +11,7 @@ namespace ttnn::operations::experimental {
 
 struct GeluBackwardOperation {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& grad_output_tensor,
         const Tensor& input_tensor,
         const std::string& approximate,

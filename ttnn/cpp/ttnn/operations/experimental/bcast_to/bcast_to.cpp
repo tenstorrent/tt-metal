@@ -54,6 +54,7 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 
 namespace ttnn::operations::experimental {
 Tensor BcastTo::invoke(
+    QueueId queue_id,
     const Tensor& input,
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
@@ -72,6 +73,6 @@ Tensor BcastTo::invoke(
             output.value().dtype());
     }
 
-    return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
+    return ttnn::prim::bcast_to(queue_id, input, output_shape, memory_config, output);
 }
 }  // namespace ttnn::operations::experimental

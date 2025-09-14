@@ -26,6 +26,7 @@ void bind_where(pybind11::module& pymodule) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
 
         Note:
@@ -61,8 +62,16 @@ void bind_where(pybind11::module& pymodule) {
                const Tensor& false_value,
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    condition,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("condition"),
             py::arg("true_value"),
@@ -70,7 +79,8 @@ void bind_where(pybind11::module& pymodule) {
             py::kw_only(),
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt},
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const Tensor& condition,
@@ -78,8 +88,16 @@ void bind_where(pybind11::module& pymodule) {
                const Tensor& false_value,
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    condition,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("condition"),
             py::arg("true_value"),
@@ -87,7 +105,8 @@ void bind_where(pybind11::module& pymodule) {
             py::kw_only(),
             pybind11::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt},
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const Tensor& condition,
@@ -95,8 +114,16 @@ void bind_where(pybind11::module& pymodule) {
                const float false_value,
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    condition,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("condition"),
             py::arg("true_value"),
@@ -104,7 +131,8 @@ void bind_where(pybind11::module& pymodule) {
             py::kw_only(),
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt},
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const Tensor& condition,
@@ -112,8 +140,16 @@ void bind_where(pybind11::module& pymodule) {
                const float false_value,
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+               std::optional<Tensor> output_tensor,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    condition,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("condition"),
             py::arg("true_value"),
@@ -121,7 +157,8 @@ void bind_where(pybind11::module& pymodule) {
             py::kw_only(),
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt});
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::ternary::detail

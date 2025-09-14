@@ -9,6 +9,7 @@
 
 #include "loss_types.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 
@@ -16,6 +17,7 @@ namespace operations::loss {
 
 struct MseLossOperation {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
         LossReductionMode mode = LossReductionMode::NONE,
@@ -25,6 +27,7 @@ struct MseLossOperation {
 
 struct MaeLossOperation {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
         LossReductionMode mode = LossReductionMode::NONE,

@@ -13,6 +13,7 @@ namespace operations::reduction {
 
 struct SamplingOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
         const Tensor& k,
