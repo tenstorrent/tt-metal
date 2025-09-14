@@ -231,9 +231,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0))};
             break;
         case UnaryOpType::EXP:
+            std::cout << "Inside ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp : "
+                         "get_op_init_and_func_parameterized"
+                      << std::endl;
             op_init_and_name = {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
+                fmt::format("exp_tile<{0}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::SIGMOID: {
             uint32_t param1 = (uint32_t)params[1];
@@ -555,7 +558,12 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
         case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
-        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
+        case UnaryOpType::EXP:
+            std::cout << "Inside ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp : "
+                         "get_op_init_and_func_default"
+                      << std::endl;
+            op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
+            break;
         case UnaryOpType::SIGMOID:
             op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
             break;
@@ -767,6 +775,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "rsqrt") {
         return UnaryWithParam(UnaryOpType::RSQRT);
     } else if (name == "exp") {
+        std::cout
+            << "Inside ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp : string_to_unary_with_param"
+            << std::endl;
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
     } else if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
@@ -816,7 +827,11 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
             }
             return "sigmoid";
         case UnaryOpType::SQRT: return "sqrt";
-        case UnaryOpType::EXP: return "exp";
+        case UnaryOpType::EXP:
+            std::cout << "Inside ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp : "
+                         "unary_with_param_to_string"
+                      << std::endl;
+            return "exp";
         case UnaryOpType::RECIP: return "recip";
         case UnaryOpType::LOG: return "log";
         case UnaryOpType::LOG1P: return "log1p";
