@@ -858,11 +858,15 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
                             const auto& rt_args = kernel->runtime_args(logical_core);
-                            auto dispatch_class = kernel->dispatch_class();
 
+                            // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.
+                            uint32_t processor_index = hal.get_processor_index(
+                                kernel->get_kernel_programmable_core_type(),
+                                kernel->get_kernel_processor_class(),
+                                kernel->get_kernel_processor_type(0));
+                            const auto& rta_offset = kg->launch_msg.kernel_config.rta_offset[processor_index];
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base +
-                                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -879,9 +883,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
-                                auto common_rt_args_addr =
-                                    kernel_config_base +
-                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
