@@ -102,13 +102,9 @@ endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 
+target_auto_pch(distributed PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
 if(TT_METAL_BUILD_AGGRESSIVE_PCH)
-    target_precompile_headers(
-        distributed
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/private_pch.hpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/public_pch.hpp
-    )
+    target_precompile_headers(distributed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
 else()
     target_precompile_headers(distributed REUSE_FROM TT::CommonPCH)
 endif()

@@ -60,3 +60,10 @@ target_link_libraries(
         httplib::httplib # Link httplib only to the server executable
         cxxopts::cxxopts
 )
+
+target_auto_pch(tt_telemetry_server PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(tt_telemetry_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
+else()
+    target_precompile_headers(tt_telemetry_server REUSE_FROM TT::CommonPCH)
+endif()

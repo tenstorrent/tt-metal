@@ -23,11 +23,6 @@ add_library(ttnn_core ${LIB_TYPE})
 add_library(TTNN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-if(TT_METAL_BUILD_AGGRESSIVE_PCH)
-    target_precompile_headers(ttnn_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
-else()
-    target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
-endif()
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -118,6 +113,13 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         Boost::algorithm
 )
+
+target_auto_pch(ttnn_core PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_core_pch.hpp)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnn_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_core_pch.hpp)
+else()
+    target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
+endif()
 
 install(
     TARGETS
@@ -408,11 +410,6 @@ add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-if(TT_METAL_BUILD_AGGRESSIVE_PCH)
-    target_precompile_headers(ttnncpp REUSE_FROM ttnn_core)
-else()
-    target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
-endif()
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(
@@ -554,6 +551,12 @@ target_link_libraries(
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
+target_auto_pch(ttnncpp PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ttnncpp_pch.hpp)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(ttnncpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ttnncpp_pch.hpp)
+else()
+    target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
+endif()
 if(TT_INSTALL)
     install(
         TARGETS
@@ -629,13 +632,9 @@ if(WITH_PYTHON_BINDINGS)
             TT::Metalium
             FlatBuffers::FlatBuffers
     )
+    target_auto_pch(ttnn PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_pch.hpp)
     if(TT_METAL_BUILD_AGGRESSIVE_PCH)
-        target_precompile_headers(
-            ttnn
-            PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp
-                ${CMAKE_CURRENT_SOURCE_DIR}/pybind_pch.hpp
-        )
+        target_precompile_headers(ttnn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_pch.hpp)
     else()
         target_precompile_headers(ttnn REUSE_FROM TT::CommonPCH)
     endif()

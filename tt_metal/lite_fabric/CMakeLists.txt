@@ -47,7 +47,12 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
 )
 
-target_precompile_headers(lite_fabric REUSE_FROM TT::CommonPCH)
+target_auto_pch(lite_fabric PCH_FILE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
+if(TT_METAL_BUILD_AGGRESSIVE_PCH)
+    target_precompile_headers(lite_fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pch.hpp)
+else()
+    target_precompile_headers(lite_fabric REUSE_FROM TT::CommonPCH)
+endif()
 
 target_compile_options(lite_fabric PRIVATE -Wno-int-to-pointer-cast)
 

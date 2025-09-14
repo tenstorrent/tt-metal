@@ -144,6 +144,11 @@ else()
 endif()
 
 ############################################################################################################################
+# Precompiled Header (PCH) Support
+############################################################################################################################
+include(auto-pch)
+
+############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propagate to the rest of tt_metal, tt_eager, etc.
