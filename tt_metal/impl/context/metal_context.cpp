@@ -1094,7 +1094,7 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     TT_ASSERT(
         harvested_axis_coord.size() <= core_info.harvested_coords().size(),
         "Detected more harvested rows than fit in mailbox.");
-    for (size_t idx = 0; idx < harvested_axis_coord.size(); idx++) {
+    for (size_t idx = 0; idx < core_info.harvested_coords().size(); idx++) {
         core_info.harvested_coords()[idx] =
             (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : dev_msgs::CORE_COORD_INVALID;
         // Populate harvested rows/cols in virtual coordinate space if virtualization is supported by HW.
