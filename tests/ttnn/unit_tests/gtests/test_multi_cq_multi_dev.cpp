@@ -35,7 +35,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace ttnn {
 namespace operations {

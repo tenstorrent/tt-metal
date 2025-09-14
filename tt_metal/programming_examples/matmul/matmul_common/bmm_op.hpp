@@ -12,7 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 #include <tt-metalium/work_split.hpp>
 

@@ -13,7 +13,6 @@ namespace operations::experimental::transformer {
 
 struct ConcatenateHeadsOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -23,8 +22,7 @@ struct ConcatenateHeadsOperation {
                        compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
                    {input_tensor},
                    {},
-                   {optional_output_tensor},
-                   queue_id)
+                   {optional_output_tensor})
             .at(0);
     }
 };

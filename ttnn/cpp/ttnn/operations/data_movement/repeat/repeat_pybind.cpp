@@ -23,14 +23,13 @@ void bind_repeat(py::module& module, const data_movement_operation_t& operation,
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<uint32_t>& repetition_vector,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) { return self(input_tensor, repetition_vector, memory_config, queue_id); },
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(input_tensor, repetition_vector, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("repeat_dims"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

@@ -93,7 +93,6 @@ struct ExecuteUnaryCompositeOpWithInt {
 
 struct ExecuteRdiv {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         float value,
         const std::optional<std::string>& round_mode = std::nullopt,
@@ -180,9 +179,6 @@ constexpr auto normalize_hw = ttnn::register_operation<
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
-constexpr auto selu = ttnn::register_operation<
-    "ttnn::selu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
