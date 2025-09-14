@@ -60,6 +60,7 @@ ResultWithOptions result_to_result_with_options(
 }
 
 ResultWithOptions conv2d(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -84,6 +85,7 @@ ResultWithOptions conv2d(
     if (dram_slice_config_.has_value()) {
         return result_to_result_with_options(
             conv2d_DRAM(
+                queue_id,
                 input_tensor,
                 weight_tensor,
                 device,
@@ -108,6 +110,7 @@ ResultWithOptions conv2d(
     } else {
         return result_to_result_with_options(
             conv2d_L1(
+                queue_id,
                 input_tensor,
                 weight_tensor,
                 device,
@@ -141,6 +144,7 @@ ResultWithOptions conv2d(
 // number of such slices.
 // Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
 Result conv2d_DRAM(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -424,6 +428,7 @@ Result conv2d_DRAM(
             Layout::TILE));
 
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
+            queue_id,
             input_tensor_on_device,
             ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
@@ -440,6 +445,7 @@ Result conv2d_DRAM(
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
+                queue_id,
                 sliced_input_tensor,
                 // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
                 // re-use the weights tensor.
@@ -482,6 +488,7 @@ Result conv2d_DRAM(
                     {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
         }
         ttnn::experimental::slice_write(
+            queue_id,
             sliced_output_tensor,
             dram_output_tensor,
             ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
@@ -504,6 +511,7 @@ Result conv2d_DRAM(
 }
 
 Result conv2d_L1(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
     MeshDevice* device,
@@ -729,6 +737,7 @@ Result conv2d_L1(
             }
         } else {
             Tensor halo_output = ttnn::halo(
+                queue_id,
                 input_tensor_post_tm,
                 sliding_window_config,
                 0,
@@ -841,6 +850,7 @@ Result conv2d_L1(
 }
 
 ResultWithOptions Conv2dOperation::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -863,6 +873,7 @@ ResultWithOptions Conv2dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv2d(
+        queue_id,
         input_tensor,
         weight_tensor,
         device,

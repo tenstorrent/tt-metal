@@ -11,6 +11,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteAllGatherConcat::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const int32_t dim,

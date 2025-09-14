@@ -1200,16 +1200,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     log_debug(LogDevice, "Firmware init complete");
 }
 
-// Command queue id stack for thread
-thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
     auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;

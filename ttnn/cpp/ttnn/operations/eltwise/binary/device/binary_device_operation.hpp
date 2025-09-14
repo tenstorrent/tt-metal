@@ -9,6 +9,7 @@
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"

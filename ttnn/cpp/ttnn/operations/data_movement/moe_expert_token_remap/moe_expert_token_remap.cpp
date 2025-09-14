@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "moe_expert_token_remap.hpp"
@@ -11,6 +12,7 @@
 namespace ttnn::operations::data_movement {
 
 std::vector<ttnn::Tensor> ExecuteMoeExpertTokenRemap::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& topk_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,

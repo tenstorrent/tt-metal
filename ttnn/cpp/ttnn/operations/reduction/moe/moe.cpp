@@ -16,6 +16,7 @@
 namespace ttnn::operations::reduction {
 
 ttnn::Tensor MoeOperation::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
     const Tensor& topk_mask_tensor,
@@ -26,7 +27,8 @@ ttnn::Tensor MoeOperation::invoke(
                MoeDeviceOperation{k, memory_config.value_or(input_tensor.memory_config())},
                {input_tensor, expert_mask_tensor, topk_mask_tensor},
                {},
-               {std::move(optional_output_tensor)})
+               {std::move(optional_output_tensor)},
+               queue_id)
         .at(0);
 }
 

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -29,9 +28,9 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    QueueId queue_id = DefaultQueueId);
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, QueueId queue_id = DefaultQueueId);
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 void deallocate(Tensor& tensor, bool force = true);
 
