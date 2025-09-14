@@ -36,8 +36,7 @@ Tensor BatchNorm::invoke(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    QueueId queue_id) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",
