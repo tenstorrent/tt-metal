@@ -52,6 +52,7 @@ def get_expected_times(squeezebert):
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_performance(device, model_name, sequence_size, squeezebert):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28328")
     disable_persistent_kernel_cache()
 
     num_iterations = 2
