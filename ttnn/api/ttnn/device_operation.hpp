@@ -188,6 +188,7 @@ inline void log_operation(
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -199,7 +200,7 @@ void enqueue_mesh_workload(
     }
     {
         ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
     }
 
     TracyOpMeshWorkload(
@@ -225,6 +226,7 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -248,13 +250,19 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
+                cq_id,
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                cached_mesh_workload.workload);
         });
 }
 
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -295,10 +303,15 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+                    cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+                    cq_id,
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    cached_workload.workload);
             }
         });
 }
@@ -306,6 +319,7 @@ void create_and_cache_mesh_workload(
 // Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -342,15 +356,16 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
+            cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
+            cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }
 }
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
+    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Device Operation");
@@ -364,12 +379,13 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device);
+        cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;
 }
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
+    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");
@@ -388,7 +404,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     tensor_return_value_t tensor_return_value;
 
     TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(storage), "Unsupported storage type");
-    tensor_return_value = detail::launch_on_device<device_operation_t>(operation_attributes, tensor_args);
+    tensor_return_value = detail::launch_on_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
 
     // Should every output tensor be tracked?
     /*
