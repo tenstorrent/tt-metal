@@ -15,6 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -37,7 +38,11 @@ struct ReduceScatterDeviceOperation {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct ReduceScatterProgram {
-        struct shared_variables_t {};
+        struct shared_variables_t {
+            std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
+            tt::tt_metal::GlobalSemaphore barrier_semaphore;
+            ttnn::ReduceScatterProgramArtifacts program_artifacts;
+        };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static cached_mesh_workload_t create_mesh_workload(
@@ -51,7 +56,9 @@ struct ReduceScatterDeviceOperation {
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
+            const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,

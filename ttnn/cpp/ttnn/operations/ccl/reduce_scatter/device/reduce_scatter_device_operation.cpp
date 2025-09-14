@@ -76,6 +76,11 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
             output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
             "Error, Output tensor page config should be same as input tensor page config but has {}",
             output_tensor.tensor_spec().page_config());
+        TT_FATAL(
+            output_tensor.memory_config() == operation_attributes.memory_config,
+            "Error, Output tensor memory config {} should be same as output_mem_config {}",
+            output_tensor.memory_config(),
+            operation_attributes.memory_config);
 
         // check the output tensor size
         auto output_shape = output_tensor.padded_shape();
