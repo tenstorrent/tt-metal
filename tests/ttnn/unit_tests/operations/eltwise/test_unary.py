@@ -1579,8 +1579,8 @@ def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype,
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol",
     [
-        (torch.float32, ttnn.float32, 0.016),
-        (torch.bfloat16, ttnn.bfloat16, 0.016),
+        (torch.float32, ttnn.float32, 0.002),
+        (torch.bfloat16, ttnn.bfloat16, 0.008),
     ],
 )
 def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
