@@ -150,9 +150,6 @@ constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::
 constexpr auto cbrt = ttnn::register_operation<
     "ttnn::cbrt",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
-constexpr auto cosh = ttnn::register_operation<
-    "ttnn::cosh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
