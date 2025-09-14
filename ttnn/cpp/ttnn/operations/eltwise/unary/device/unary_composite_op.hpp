@@ -14,7 +14,6 @@ namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
     CBRT,
-    COSH,
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,
@@ -38,7 +37,6 @@ enum class UnaryCompositeOpType {
     FRAC,
 };
 Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
@@ -71,11 +69,6 @@ struct OpHandler;
 template <>
 struct OpHandler<UnaryCompositeOpType::CBRT> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cbrt(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::COSH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cosh(t1, mem_cfg); }
 };
 
 template <>
