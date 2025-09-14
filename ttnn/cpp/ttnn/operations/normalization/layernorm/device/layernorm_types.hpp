@@ -15,7 +15,7 @@ enum class LayerNormType { LAYERNORM, RMSNORM };
 enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
 
 struct LayerNormDefaultProgramConfig {
-    bool use_welford;
+    bool use_welford = false;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
