@@ -12,6 +12,7 @@ namespace operations::experimental::transformer {
 
 struct NLPCreateHeadsDecodeOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t num_heads,
         std::optional<const uint32_t> num_kv_heads,

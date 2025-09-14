@@ -4,6 +4,7 @@
 
 #include "hc_sum_reduce_program_factory.hpp"
 
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 

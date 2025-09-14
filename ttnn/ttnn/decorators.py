@@ -52,14 +52,14 @@ def compare_tensors_using_pcc(
         else:
             torch_output = output
         matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
-        comparison_record = ttnn.database.TensorComparisonRecord(
+        commparison_record = ttnn.database.TensorComparisonRecord(
             tensor_id=output.tensor_id,
             golden_tensor_id=golden_output.tensor_id,
             matches=matches,
             desired_pcc=desired_pcc,
             actual_pcc=actual_pcc,
         )
-        comparison_records.append(comparison_record)
+        comparison_records.append(commparison_record)
 
         if not matches:
             error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
@@ -72,11 +72,6 @@ def compare_tensors_using_pcc(
 
 
 PRE_OPERATION_HOOKS = []
-POST_OPERATION_HOOKS = []
-
-push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_queue_id_for_thread
-pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
-get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
 
 @contextmanager
@@ -101,39 +96,7 @@ def register_pre_operation_hook(hook):
     PRE_OPERATION_HOOKS.pop()
 
 
-@contextmanager
-def command_queue(cq_id: int):
-    """Context manager to set a default command queue for all TTNN operations within this context.
-
-    Operations within this context will use the specified cq_id unless they explicitly
-    provide their own cq_id parameter, which takes precedence.
-
-    Args:
-        cq_id: The command queue ID to use for operations in this context
-
-    Example:
-        with ttnn.command_queue(1):
-            result = ttnn.some_operation(tensor)  # Will use cq_id 1
-            result2 = ttnn.other_operation(tensor, queue_id=0)  # Will use cq_id 0 (overrides context)
-    """
-    if cq_id is None:
-        raise ValueError("cq_id cannot be None in command_queue context")
-
-    push_current_command_queue_id_for_thread(cq_id)
-    logger.info(f"Pushed command queue id {cq_id} for thread")
-    try:
-        yield
-    finally:
-        # Check if command queue is in expected state when exiting context
-        current_cq_id = get_current_command_queue_id_for_thread()
-        if current_cq_id != cq_id:
-            logger.warning(
-                f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
-                f"This might indicate an operation didn't properly restore the command queue state. "
-                f"Restoring to original value {cq_id}."
-            )
-        logger.info(f"Popping command queue id {cq_id} for thread")
-        pop_current_command_queue_id_for_thread()
+POST_OPERATION_HOOKS = []
 
 
 @contextmanager
@@ -322,7 +285,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
         return None
 
 
-def postprocess_global_golden_function_outputs(outputs, golden_outputs):
+def posprocess_global_golden_function_outputs(outputs, golden_outputs):
     import torch
 
     if isinstance(outputs, ttnn.Tensor):
@@ -368,19 +331,7 @@ class FastOperation:
         return hash(self.python_fully_qualified_name)
 
     def __call__(self, *function_args, **function_kwargs):
-        cq_id = None
-        if "queue_id" in function_kwargs:
-            cq_id = function_kwargs.pop("queue_id")
-        elif "cq_id" in function_kwargs:
-            cq_id = function_kwargs.pop("cq_id")
-
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
-                result = self.function(*function_args, **function_kwargs)
-
-        return result
+        return self.function(*function_args, **function_kwargs)
 
     def __post_init__(self):
         if self.function.__doc__ is None:
@@ -512,7 +463,7 @@ class Operation:
 
                 if global_golden_function_output is not None:
                     set_tensor_id(global_golden_function_output)
-                    postprocess_global_golden_function_outputs(output, global_golden_function_output)
+                    posprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
                         global_golden_function_output,
@@ -558,12 +509,6 @@ class Operation:
 
                 if not is_top_level_operation:
                     return decorated_function(*function_args, **function_kwargs)
-
-                cq_id = None
-                if "queue_id" in function_kwargs:
-                    cq_id = function_kwargs.pop("queue_id")
-                elif "cq_id" in function_kwargs:
-                    cq_id = function_kwargs.pop("cq_id")
 
                 for hook in PRE_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs)
@@ -612,13 +557,7 @@ class Operation:
                     decorated_function = comparison_decorator(decorated_function)
 
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-                if cq_id is None:
-                    output = decorated_function(*function_args, **function_kwargs)
-                else:
-                    with command_queue(cq_id):
-                        output = decorated_function(*function_args, **function_kwargs)
-
+                output = decorated_function(*function_args, **function_kwargs)
                 captured_graph = ttnn.graph.end_graph_capture()
 
                 local_tensor_comparison_records = []

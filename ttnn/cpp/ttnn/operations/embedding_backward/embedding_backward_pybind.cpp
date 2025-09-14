@@ -16,6 +16,7 @@ namespace py = pybind11;
 void py_bind_embedding_backward(py::module& module) {
     const auto doc =
         R"doc(
+
         Returns the input gradients of the output gradients tensor with respect to the input indices.
 
 
@@ -28,6 +29,7 @@ void py_bind_embedding_backward(py::module& module) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
 
 
@@ -68,9 +70,16 @@ void py_bind_embedding_backward(py::module& module) {
                const ttnn::Tensor& output_gradient_tensor,
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               QueueId queue_id) {
                 return self(
-                    input_tensor, weight_tensor, output_gradient_tensor, dtype, memory_config, optional_output_tensor);
+                    queue_id,
+                    input_tensor,
+                    weight_tensor,
+                    output_gradient_tensor,
+                    dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight_tensor").noconvert(),
@@ -78,7 +87,8 @@ void py_bind_embedding_backward(py::module& module) {
             py::kw_only(),
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::embedding_backward
