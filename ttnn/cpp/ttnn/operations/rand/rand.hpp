@@ -8,6 +8,7 @@
 namespace ttnn::operations::rand {
 struct Rand {
     static Tensor invoke(
+        QueueId queue_id,
         const ttnn::Shape& size,
         MeshDevice& device,
         DataType dtype = DataType::BFLOAT16,
