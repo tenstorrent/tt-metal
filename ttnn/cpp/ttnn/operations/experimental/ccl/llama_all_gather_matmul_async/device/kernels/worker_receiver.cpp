@@ -50,25 +50,27 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr_next_core_right =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[next_core_id_to_right]);
 
-    DPRINT << "CCL WRC bbox_start_x: " << bbox_start_x << ENDL();
-    DPRINT << "CCL WRC bbox_start_y: " << bbox_start_x << ENDL();
-    DPRINT << "CCL WRC bbox_end_x: " << bbox_end_x << ENDL();
-    DPRINT << "CCL WRC bbox_end_y: " << bbox_end_y << ENDL();
-    DPRINT << "CCL WRC intermediate_tensor_shard_num_pages: " << intermediate_tensor_shard_num_pages << ENDL();
-    DPRINT << "CCL WRC tensor0_page_size: " << tensor0_page_size << ENDL();
-    DPRINT << "CCL WRC core_id: " << core_id << ENDL();
-    DPRINT << "CCL WRC mm_core_offset: " << mm_core_offset << ENDL();
-    DPRINT << "CCL WRC next_core_id_to_left: " << next_core_id_to_left << ENDL();
-    DPRINT << "CCL WRC next_core_id_to_right: " << next_core_id_to_right << ENDL();
-    DPRINT << "CCL WRC ring index: " << ring_index << ENDL();
-    DPRINT << "CCL WRC sem_wait_val: " << sem_wait_val << ENDL();
+    // DPRINT << "CCL WRC bbox_start_x: " << bbox_start_x << ENDL();
+    // DPRINT << "CCL WRC bbox_start_y: " << bbox_start_x << ENDL();
+    // DPRINT << "CCL WRC bbox_end_x: " << bbox_end_x << ENDL();
+    // DPRINT << "CCL WRC bbox_end_y: " << bbox_end_y << ENDL();
+    // DPRINT << "CCL WRC intermediate_tensor_shard_num_pages: " << intermediate_tensor_shard_num_pages << ENDL();
+    // DPRINT << "CCL WRC tensor0_page_size: " << tensor0_page_size << ENDL();
+    // DPRINT << "CCL WRC core_id: " << core_id << ENDL();
+    // DPRINT << "CCL WRC mm_core_offset: " << mm_core_offset << ENDL();
+    // DPRINT << "CCL WRC next_core_id_to_left: " << next_core_id_to_left << ENDL();
+    // DPRINT << "CCL WRC next_core_id_to_right: " << next_core_id_to_right << ENDL();
+    // DPRINT << "CCL WRC ring index: " << ring_index << ENDL();
+    // DPRINT << "CCL WRC sem_wait_val: " << sem_wait_val << ENDL();
 
     // 1. Wait for global signal
     {
-        DeviceZoneScopedN("CCL WRC waiting");
+        // DPRINT << "CCL WRC waiting for sem incr ..." << ENDL();
+        // DeviceZoneScopedN("CCL WRC waiting");
         noc_semaphore_wait_min(signal_semaphore_addr_ptr, sem_wait_val);
         noc_semaphore_set(signal_semaphore_addr_ptr, 0);
     }
+    // DPRINT << "CCL WRC done waiting for sem incr ..." << ENDL();
 
     // 2. multicast data to mm cores
     // 2.1. Wait for local signal, if it's not the first core
@@ -76,23 +78,28 @@ void kernel_main() {
         noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 1);
         noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 0);
     }
+    // DPRINT << "CCL WRC done waiting for local sem set ..." << ENDL();
 
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
     const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_end_x, bbox_end_y, 0);
     uint64_t aggregated_tensor_addr_this_core =
         (uint64_t)aggregated_tensor_addr + mm_core_offset * intermediate_tensor_shard_num_pages * tensor0_page_size;
     const uint64_t multicast_addr = multicast_addr_noc | aggregated_tensor_addr_this_core;
+    // DPRINT << "CCL WRC mcasting data now ..." << ENDL();
 
     {
-        DeviceZoneScopedN("CCL WRC mcast 1");
+        // DeviceZoneScopedN("CCL WRC mcast 1");
         noc_async_write_multicast_loopback_src(
             l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
     }
+    // DPRINT << "CCL WRC done mcasting data now ..." << ENDL();
+
     uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
     {
-        DeviceZoneScopedN("CCL WRC mcast 2");
+        // DeviceZoneScopedN("CCL WRC mcast 2");
         noc_semaphore_set_multicast_loopback_src(
             fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size, false);
         noc_async_write_barrier();
     }
+    // DPRINT << "CCL WRC done mcasting sem now ..." << ENDL();
 }

@@ -36,6 +36,9 @@ namespace ttnn {
 
 using namespace ccl;
 
+// NOTE: Using fabric_mux_connection_ct_args and fabric_mux_connection_rt_args from
+// all_gather_async_program_minimal_variants.cpp
+
 tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,
     const Tensor& input1,
@@ -90,6 +93,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
 
     const bool enable_async_intermediate_tensor = false;
 
+    uint32_t num_workers_per_direction = 1;
+    uint32_t num_buffers_full_size_channels = 1;
+
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -105,13 +111,17 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+
     if (topology == ccl::Topology::Ring) {
         num_targets_forward = ring_size - 1;
         num_targets_backward = 0;
     }
 
-    // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
+    auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+
+    // Get worker cores per link
+    uint32_t num_workers_per_link = 2;
 
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
@@ -129,13 +139,18 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
     available_cores = available_cores.subtract(output_tensor_cores);
 
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
+    // 8 worker cores for AG (2 workers per link for 4 links)
+    CoreRangeSet sender_worker_core_range;
+    CoreRangeSet mux_core_range;
+    sender_worker_core_range = CoreRangeSet(std::vector{
+        CoreRange(CoreCoord(1, 1), CoreCoord(2, 2)),
+        CoreRange(CoreCoord(1, 3), CoreCoord(2, 3)),
+        CoreRange(CoreCoord(1, 6), CoreCoord(2, 6))});
+    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
 
-    // CoreRangeSet sender_worker_core_range;
-    // sender_worker_core_range = CoreRangeSet(CoreRange(CoreCoord(3,0), CoreCoord(3,3)));
-
-    // auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
+    // 4 cores for mux
+    mux_core_range = CoreRangeSet(std::vector{CoreRange(CoreCoord(1, 7), CoreCoord(2, 8))});
+    auto mux_cores = corerange_to_cores(mux_core_range, std::nullopt, true);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -159,8 +174,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    // each worker core gets a chunk of the input tensor
     uint32_t cb_num_pages =
-        input_tensor_num_pages / num_links +
+        input_tensor_num_pages / (num_links * num_workers_per_link) +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -189,51 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    // KERNEL CREATION
-    // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    // auto reader_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    reader_kernel_config.compile_args = {
-        ring_index,                 // my_chip_id
-        src0_cb_index,              // cb0_id
-        op_config.get_page_size(),  // tensor0_page_size
-    };
-    log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
-        "worker_reader.cpp",
-        sender_worker_core_range,
-        reader_kernel_config);
-
-    // Writer
-    auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    // auto writer_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    writer_kernel_config.compile_args = {
-        ring_index,                       // my_chip_id
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-        dynamic_alternate                 // dynamic_alternate
-    };
-    log_trace(tt::LogOp, "Writer Compile Args:");
-    for (const auto& arg : writer_kernel_config.compile_args) {
-        log_trace(tt::LogOp, "\t{}", arg);
-    }
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
-        "worker_writer.cpp",
-        sender_worker_core_range,
-        writer_kernel_config);
-
+    // KERNEL CREATION (We moved kernel creation for reader and writer into core loop)
     // Receiver
 
     // uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
@@ -241,7 +213,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     // set noc to 1 for now
 
     receiver_kernel_config.compile_args = {
-        num_links,                                                         // sem_wait_val
+        num_links * num_workers_per_link,                                  // sem_wait_val
         inter_cb_index,                                                    // intermediate cb index
         op_config.get_page_size(),                                         // tensor0_page_size
         ring_size,                                                         // ring_size
@@ -307,6 +279,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 
+    // Kernel Handles
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+
     // Since each intermediate tensor core maps to a device in the ring,
     // each device only sem incs the intermediate tensor cores that are assigned to it.
     CoreCoord drain_sync_core = mesh_device->worker_core_from_logical_core(intermediate_cores_vec[ring_index]);
@@ -321,117 +297,216 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         intermediate_cores_vec.begin() + start_core_index_for_device,
         intermediate_cores_vec.begin() + end_core_index_for_device);
     log_trace(tt::LogOp, "intermediate_cores_this_device: {}", intermediate_cores_this_device);
+    const uint32_t l1_unreserved_base_address =
+        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+
+    // Iterate through all 4 links on 6u
     for (uint32_t link = 0; link < num_links; link++) {
-        CoreCoord core = sender_worker_cores[link];
+        // We need a mux core per link (placement doesnt matter)
+        CoreCoord mux_logical_core = mux_cores[link];
+        CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+        auto num_full_size_channels = num_workers_per_link;  // num_workers_per_direction
+        auto num_header_only_channels = 0;
+        size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            num_full_size_channels,
+            num_header_only_channels,
+            num_buffers_full_size_channels,
+            0,
+            buffer_size_bytes_full_size_channel,
+            mux_base_l1_address);
 
-        // construct input and intermediate core x and y
-        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-        uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        // ===================== Mux Kernel =====================
+        auto mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            {mux_logical_core},
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        std::vector<uint32_t> mux_rt_args = {};
+        const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
 
-        uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
-        uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
-        uint32_t intermediate_first_core_tile_start_offset =
-            (input_tensor_num_pages * ring_index + input_tile_id_start) % intermediate_tensor_shard_num_pages;
+        // Forward direction only (for now refactor later)
+        const auto dst_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        mux_rt_args =
+            mux_kernel_config.get_fabric_mux_run_time_args(src_node_id, dst_node_id, link, program, {mux_logical_core});
 
-        std::vector<uint32_t> input_tensor_cores_x;
-        std::vector<uint32_t> input_tensor_cores_y;
-        std::vector<uint32_t> intermediate_tensor_cores_x;
-        std::vector<uint32_t> intermediate_tensor_cores_y;
-        for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
-             i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
-             i++) {
-            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
-            input_tensor_cores_x.push_back(this_core.x);
-            input_tensor_cores_y.push_back(this_core.y);
+        tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+
+        // Iterate through all 2 workers per link
+        for (uint32_t worker = 0; worker < num_workers_per_link; worker++) {
+            CoreCoord core = sender_worker_cores[link * num_workers_per_link + worker];
+
+            // construct input and intermediate core x and y
+            uint32_t global_worker_id = link * num_workers_per_link + worker;
+            uint32_t global_worker_count = num_links * num_workers_per_link;
+            uint32_t base_pages_per_worker = input_tensor_num_pages / global_worker_count;
+            uint32_t remainder = input_tensor_num_pages % global_worker_count;
+            uint32_t input_tile_id_start =
+                global_worker_id * base_pages_per_worker + std::min(global_worker_id, remainder);
+            uint32_t input_tile_id_end =
+                (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
+            // How much work each worker does
+            uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
+            uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
+            uint32_t intermediate_first_core_tile_start_offset =
+                (input_tensor_num_pages * ring_index + input_tile_id_start) % intermediate_tensor_shard_num_pages;
+
+            std::vector<uint32_t> input_tensor_cores_x;
+            std::vector<uint32_t> input_tensor_cores_y;
+            std::vector<uint32_t> intermediate_tensor_cores_x;
+            std::vector<uint32_t> intermediate_tensor_cores_y;
+            for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
+                 i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
+                 i++) {
+                auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
+                input_tensor_cores_x.push_back(this_core.x);
+                input_tensor_cores_y.push_back(this_core.y);
+            }
+            for (uint32_t i = input_tile_id_start / intermediate_tensor_shard_num_pages;
+                 i <
+                 (input_tile_id_end + intermediate_tensor_shard_num_pages - 1) / intermediate_tensor_shard_num_pages;
+                 i++) {
+                auto this_core = mesh_device->worker_core_from_logical_core(intermediate_cores_this_device[i]);
+                intermediate_tensor_cores_x.push_back(this_core.x);
+                intermediate_tensor_cores_y.push_back(this_core.y);
+            }
+
+            log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
+            log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
+            log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
+            log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
+            log_debug(
+                tt::LogOp, "intermediate_first_core_tile_start_offset: {}", intermediate_first_core_tile_start_offset);
+            log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
+            log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
+            log_debug(tt::LogOp, "intermediate_tensor_cores_x: {}", intermediate_tensor_cores_x);
+            log_debug(tt::LogOp, "intermediate_tensor_cores_y: {}", intermediate_tensor_cores_y);
+
+            // ===================== Reader =====================
+
+            // Set Reader CT args
+            auto reader_kernel_config =
+                tt::tt_metal::ReaderDataMovementConfig{};  // tt::tt_metal::WriterDataMovementConfig{};
+            reader_kernel_config.compile_args = {
+                ring_index,                 // my_chip_id
+                src0_cb_index,              // cb0_id
+                op_config.get_page_size(),  // tensor0_page_size
+            };
+            log_trace(tt::LogOp, "Reader Compile Args:");
+            for (const auto& arg : reader_kernel_config.compile_args) {
+                log_trace(tt::LogOp, "\t{}", arg);
+            }
+            auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
+                "worker_reader.cpp",
+                {core},
+                reader_kernel_config);
+            reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
+
+            // Set Reader RT args
+            std::vector<uint32_t> reader_rt_args = {
+                input_tensor.buffer()->address(),           // input tensor_address0
+                intermediate_tensor.buffer()->address(),    // output tensor_address0
+                input_tensor_shard_num_pages,               // num_tiles_per_core
+                worker_num_tiles_to_read,                   // num_tiles_to_read
+                input_first_core_tile_start_offset,         // first_core_tile_start_offset
+                intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
+                input_tensor_cores_x.size(),                // num_cores it reads from
+                ring_index,                                 // ring_index
+                semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+                drain_sync_core.x,                          // out_ready_sem_noc0_x
+                drain_sync_core.y,                          // out_ready_sem_noc0_y
+            };
+            reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
+            reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+            reader_rt_args.push_back(intermediate_tensor_cores_x.size());
+            reader_rt_args.insert(
+                reader_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
+            reader_rt_args.insert(
+                reader_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
+            log_trace(tt::LogOp, "Reader Runtime Args:");
+            for (const auto& arg : reader_rt_args) {
+                log_trace(tt::LogOp, "\t{}", arg);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+
+            // ===================== Writer =====================
+            auto writer_kernel_config =
+                tt::tt_metal::WriterDataMovementConfig{};  // tt::tt_metal::ReaderDataMovementConfig{};
+            // Set up writer CT args
+            writer_kernel_config.compile_args = {
+                ring_index,                       // my_chip_id
+                reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+                num_packet_headers_storable,      // num_packet_headers_storable
+                src0_cb_index,                    // cb0_id
+                num_pages_per_packet,             // packet_size_in_pages
+                op_config.get_page_size(),        // tensor0_page_size
+                num_targets_forward,              // num_targets_forward_direction
+                num_targets_backward,             // num_targets_backward_direction
+                dynamic_alternate                 // dynamic_alternate
+            };
+            fabric_mux_connection_ct_args(
+                worker == 0,
+                mux_virtual_core,
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                worker,
+                mux_kernel_config,
+                writer_kernel_config.compile_args);
+            // Foward only for now
+            writer_kernel_config.compile_args.insert(
+                writer_kernel_config.compile_args.end(), backward_args.begin(), backward_args.end());
+            log_trace(tt::LogOp, "Writer Compile Args:");
+            for (const auto& arg : writer_kernel_config.compile_args) {
+                log_trace(tt::LogOp, "\t{}", arg);
+            }
+            auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
+                "worker_writer.cpp",
+                {core},
+                writer_kernel_config);
+            writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+
+            // 1 core for the termination master logical core (1st worker core)
+            CoreCoord termination_master_logical_core = sender_worker_cores[link * num_workers_per_link + 0];
+            CoreCoord termination_master_virtual_core =
+                mesh_device->worker_core_from_logical_core(termination_master_logical_core);
+
+            // Set Writer RT args
+            std::vector<uint32_t> writer_rt_args = {
+                intermediate_tensor.buffer()->address(),    // tensor_address0
+                semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+                intermediate_tensor_shard_num_pages,        // num_tiles_per_core
+                worker_num_tiles_to_read,                   // num_tiles_to_read
+                intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
+                intermediate_tensor_cores_x.size(),         // num_cores it writes to
+                drain_sync_core.x,                          // out_ready_sem_noc0_x
+                drain_sync_core.y,                          // out_ready_sem_noc0_y
+            };
+            writer_rt_args.insert(
+                writer_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
+            writer_rt_args.insert(
+                writer_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
+            log_trace(tt::LogOp, "Writer Runtime Args:");
+            for (const auto& arg : writer_rt_args) {
+                log_trace(tt::LogOp, "\t{}", arg);
+            }
+            writer_rt_args.push_back(forward_device.has_value());
+            fabric_mux_connection_rt_args(
+                1,  // mux_connection_valid
+                core,
+                program,
+                termination_master_virtual_core,
+                num_workers_per_link,  // num_mux_clients or num_workers_per_direction
+                writer_rt_args);
+            tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
         }
-        for (uint32_t i = input_tile_id_start / intermediate_tensor_shard_num_pages;
-             i < (input_tile_id_end + intermediate_tensor_shard_num_pages - 1) / intermediate_tensor_shard_num_pages;
-             i++) {
-            auto this_core = mesh_device->worker_core_from_logical_core(intermediate_cores_this_device[i]);
-            intermediate_tensor_cores_x.push_back(this_core.x);
-            intermediate_tensor_cores_y.push_back(this_core.y);
-        }
-
-        log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
-        log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
-        log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
-        log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
-        log_debug(
-            tt::LogOp, "intermediate_first_core_tile_start_offset: {}", intermediate_first_core_tile_start_offset);
-        log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
-        log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
-        log_debug(tt::LogOp, "intermediate_tensor_cores_x: {}", intermediate_tensor_cores_x);
-        log_debug(tt::LogOp, "intermediate_tensor_cores_y: {}", intermediate_tensor_cores_y);
-
-        // Set reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),           // input tensor_address0
-            intermediate_tensor.buffer()->address(),    // output tensor_address0
-            input_tensor_shard_num_pages,               // num_tiles_per_core
-            worker_num_tiles_to_read,                   // num_tiles_to_read
-            input_first_core_tile_start_offset,         // first_core_tile_start_offset
-            intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
-            input_tensor_cores_x.size(),                // num_cores it reads from
-            ring_index,                                 // ring_index
-            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
-            drain_sync_core.x,                          // out_ready_sem_noc0_x
-            drain_sync_core.y,                          // out_ready_sem_noc0_y
-        };
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
-        reader_rt_args.push_back(intermediate_tensor_cores_x.size());
-        reader_rt_args.insert(
-            reader_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
-        reader_rt_args.insert(
-            reader_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
-
-        // Set writer runtime args
-        std::vector<uint32_t> writer_rt_args = {
-            intermediate_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
-            intermediate_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,                   // num_tiles_to_read
-            intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
-            intermediate_tensor_cores_x.size(),         // num_cores it writes to
-            drain_sync_core.x,                          // out_ready_sem_noc0_x
-            drain_sync_core.y,                          // out_ready_sem_noc0_y
-        };
-        writer_rt_args.insert(
-            writer_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
-        writer_rt_args.insert(
-            writer_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
-
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
-        }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
-        }
-
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
     // Call MM program factory with matmul_fused_op_signaler
@@ -454,8 +529,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id,
-         worker_sender_writer_kernel_id,
+        [reader_kernel_ids,
+         writer_kernel_ids,
          worker_receiver_kernel_id,
          sender_worker_cores,
          intermediate_cores_vec,
@@ -478,10 +553,11 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 
+            uint32_t core_idx = 0;
             // update senders
-            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
-            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
             for (const auto& core : sender_worker_cores) {
+                auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
                 // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
@@ -491,6 +567,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermediate.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
+                core_idx++;
             }
 
             // update worker receiver

@@ -42,7 +42,7 @@ MAX_TYPE = "max"
     [
         (  # 10 layers for devive perf measurements
             "instruct",
-            2,
+            10,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -396,7 +396,7 @@ def test_llama_TG_perf_device(
     batch_size = 32
     subdir = "tg-llama-demo-device-perf-default"
     num_iterations = 1
-    num_layers = 2
+    num_layers = 10
 
     command = f"pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

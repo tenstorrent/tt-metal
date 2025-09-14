@@ -343,7 +343,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                // uint32_t mux_core_offset =
+                // link * num_cores_per_link + /// dir * (num_mux_cores_per_direction_per_link +
+                // num_workers_per_direction);
+
+                //    uint32_t num_cores_per_link =
+                //    num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+
+                //    0
+                //
+
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
                 CoreCoord supplemental_core = all_cores
                     [link * num_cores_per_link +

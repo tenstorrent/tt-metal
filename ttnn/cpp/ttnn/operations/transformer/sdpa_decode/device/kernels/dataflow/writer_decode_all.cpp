@@ -9,8 +9,11 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("SDPA Writer");
+
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles

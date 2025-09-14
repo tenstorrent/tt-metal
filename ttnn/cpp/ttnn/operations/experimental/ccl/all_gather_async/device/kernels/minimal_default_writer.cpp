@@ -154,6 +154,7 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
+
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);

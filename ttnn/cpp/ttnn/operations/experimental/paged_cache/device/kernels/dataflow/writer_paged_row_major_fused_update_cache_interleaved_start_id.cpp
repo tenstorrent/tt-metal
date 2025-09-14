@@ -7,13 +7,12 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("PCU Writer");
     uint32_t rt_args_idx = 0;
     const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
     if (!has_work) {
         return;
     }
-
-    DeviceZoneScopedN("Writer PCU");
 
     const uint32_t cache_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -67,6 +66,7 @@ void kernel_main() {
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
+        DeviceZoneScopedN("Get index");
         cb_wait_front(cb_index_id, 1);
         uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
@@ -102,6 +102,8 @@ void kernel_main() {
     uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id));
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+        DeviceZoneScopedN("Write cache");
+
         // Wait on compute to untilize a block. Update that block in L1.
         cb_wait_front(untilized_cache_cb_id, Wt);
         cb_reserve_back(untilized_cache2_cb_id, Wt);

@@ -526,7 +526,7 @@ class TtTransformer(LightweightModule):
                     24,
                     24,
                     24,
-                    20,
+                    40,
                 ],  # set to 28 once padding is removed because 28 is divisible by 4
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])

@@ -73,6 +73,7 @@ void kernel_main() {
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
+        DeviceZoneScopedN("Read index");
         const InterleavedAddrGen<index_is_dram> addrg = {
             .bank_base_address = index_tensor_addr, .page_size = index_stick_size_B};
 
@@ -91,6 +92,7 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
+                DeviceZoneScopedN("Read page table");
                 const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
                     .bank_base_address = page_table_tensor_addr, .page_size = page_table_stick_size};
                 cb_reserve_back(page_table_cb_id, 1);
@@ -118,6 +120,7 @@ void kernel_main() {
     }
 
     if (wait_to_start_signal) {
+        DeviceZoneScopedN("Wait receiver semaphore");
         // wait for signal to start pushing tensor
         volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
@@ -126,6 +129,7 @@ void kernel_main() {
     }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+        DeviceZoneScopedN("Read cache");
         cb_reserve_back(cache_cb_id, Wt);
         if (!skip_update) {
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
