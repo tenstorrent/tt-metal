@@ -157,10 +157,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     auto dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
+        input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        trans_mat_cb_index,
         (std::uint32_t)n_heads,
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
@@ -171,7 +171,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
+        output_cb_index,
         (std::uint32_t)n_heads,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)seq_len_t,
@@ -193,14 +193,14 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
+        input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        trans_mat_cb_index,
+        rotated_input_interm_cb_index,
+        cos_interm_cb_index,
+        sin_interm_cb_index,
+        output_cb_index,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)n_heads,
     };
@@ -446,14 +446,14 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
 
     // Set up the kernel
     std::vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
+        input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        trans_mat_cb_index,
+        rotated_input_interm_cb_index,
+        cos_interm_cb_index,
+        sin_interm_cb_index,
+        output_cb_index,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)n_heads_t,
     };

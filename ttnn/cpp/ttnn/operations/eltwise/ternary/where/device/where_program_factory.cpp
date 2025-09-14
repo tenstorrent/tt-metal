@@ -620,25 +620,21 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     if (variant == WhereVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
+        std::vector<uint32_t> reader_compile_time_args = {predicate_tensor_cb, value_true_tensor_cb};
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
 
     } else if (variant == WhereVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
+        std::vector<uint32_t> reader_compile_time_args = {predicate_tensor_cb, value_false_tensor_cb};
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
     } else if (variant == WhereVariant::TTT) {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)predicate_tensor_cb,
-            (std::uint32_t)value_true_tensor_cb,
-            (std::uint32_t)value_false_tensor_cb};
+            predicate_tensor_cb, value_true_tensor_cb, value_false_tensor_cb};
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
@@ -649,7 +645,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
 
     // Use unary writer config for all cases (consistent with other writer variants)
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
+    std::vector<uint32_t> writer_compile_time_args = {output_tensor_cb};
     tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     tt_metal::WriterDataMovementConfig writer_config = tt_metal::WriterDataMovementConfig(writer_compile_time_args);
 

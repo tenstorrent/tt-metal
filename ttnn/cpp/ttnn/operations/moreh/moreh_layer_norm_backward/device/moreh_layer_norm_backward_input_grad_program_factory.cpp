@@ -66,7 +66,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         normalized_numel *= size;
     }
 
-    auto n = static_cast<float>(normalized_numel);
+    auto n = normalized_numel;
     auto recip_n = 1.0f / n;
 
     auto num_inner = compute_inner(output_grad_shape, normalized_dims);

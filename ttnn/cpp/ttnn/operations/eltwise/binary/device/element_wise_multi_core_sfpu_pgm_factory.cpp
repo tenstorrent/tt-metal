@@ -150,7 +150,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
         writer_defines["OUT_SHARDED"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(

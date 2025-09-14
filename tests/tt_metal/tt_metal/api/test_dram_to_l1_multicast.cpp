@@ -92,11 +92,11 @@ bool dram_to_l1_multicast(
         num_dests = (grid_size.x * grid_size.y) - num_x * num_y - cfg.target_grid_offset;
     }
     std::vector<uint32_t> mcast_reader_args = {
-        (std::uint32_t)dram_buffer_addr,
+        dram_buffer_addr,
         0,
-        (std::uint32_t)dram_buffer_size,
-        (std::uint32_t)local_buffer_addr,
-        (std::uint32_t)dest_buffer_addr,
+        dram_buffer_size,
+        local_buffer_addr,
+        dest_buffer_addr,
         (std::uint32_t)core_end_physical.x,
         (std::uint32_t)core_end_physical.y,
         (std::uint32_t)core_start_physical.x,
@@ -141,7 +141,7 @@ bool dram_to_l1_multicast(
                     tt::LogTest, "Skipping core {},{}", j, i);  // debug print to verify we don't skip unnecessary cores
                 continue;
             }
-            CoreCoord dest_core = {(std::size_t)core_start.x + j, (std::size_t)core_start.y + i};
+            CoreCoord dest_core = {core_start.x + j, core_start.y + i};
             std::vector<uint32_t> dest_core_data;
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
             auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);

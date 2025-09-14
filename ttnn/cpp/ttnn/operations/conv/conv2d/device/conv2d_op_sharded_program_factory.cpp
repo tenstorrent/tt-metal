@@ -273,7 +273,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
     const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
     const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
+    uint32_t pad_w = sliding_window_config.get_pad_w();
     const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
     const uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
@@ -719,27 +719,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             input_cores);
     }
 
-
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
         (uint32_t)stride_w,
-        (uint32_t)conv_act_c_read_bytes,
+        conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader ? act_block_num_tiles_split / conv_act_c_blocks
-                                       : act_block_num_tiles / conv_act_c_blocks),
+        (enable_split_reader ? act_block_num_tiles_split / conv_act_c_blocks : act_block_num_tiles / conv_act_c_blocks),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
-        (uint32_t)conv_act_size_w + (pad_w),
-        (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
-        (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
-        (uint32_t)act_block_num_tiles,                                    // act_block_num_tiles
-        (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
-        (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
-        (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_cores
-        (uint32_t)act_mcast_sender_semaphore_id,
-        (uint32_t)act_mcast_receiver_semaphore_id,
+        conv_act_size_w + (pad_w),
+        act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
+        num_blocks_act_h_per_core,                              // act_num_blocks_h
+        (uint32_t)act_block_num_tiles,                          // act_block_num_tiles
+        conv_act_c_blocks,                                      // act_w_num_outer
+        (transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
+        (transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_cores
+        act_mcast_sender_semaphore_id,
+        act_mcast_receiver_semaphore_id,
         (uint32_t)act_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
         (uint32_t)needs_act_block_zero_out,  // zero_out_act_cb
@@ -857,11 +855,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (height_sharded) {
         if (enable_split_reader) {
             std::vector<uint32_t> split_reader_args = {
-                (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
-                (uint32_t)conv_act_c_read_bytes,
-                (uint32_t)filter_w,                       // weight_size_w
-                (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
-                (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+                act_block_num_tiles_split_last / conv_act_c_blocks,
+                conv_act_c_read_bytes,
+                (uint32_t)filter_w,             // weight_size_w
+                (conv_act_size_w + pad_w),      // conv_act_size_w_padded
+                act_block_w_extra_align_bytes,  // only used for 1d systolic variant
                 (uint32_t)needs_act_block_zero_out,
                 (uint32_t)dilation_h,
                 (uint32_t)dilation_w,

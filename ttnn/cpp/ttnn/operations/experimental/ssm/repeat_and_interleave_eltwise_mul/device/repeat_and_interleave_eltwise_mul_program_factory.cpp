@@ -107,25 +107,25 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     // Compile time args
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)cb_intermed1_index,
-        (std::uint32_t)cb_intermed2_index,
+        src0_cb_index,
+        src1_cb_index,
+        cb_intermed1_index,
+        cb_intermed2_index,
     };
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
+        output_cb_index,
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)cb_intermed0_index,
-        (std::uint32_t)cb_intermed1_index,
-        (std::uint32_t)cb_intermed2_index,
-        (std::uint32_t)cb_intermed3_index,
+        src0_cb_index,
+        src1_cb_index,
+        output_cb_index,
+        cb_intermed0_index,
+        cb_intermed1_index,
+        cb_intermed2_index,
+        cb_intermed3_index,
     };
 
     std::map<std::string, std::string> ssm_eltwise_defines;

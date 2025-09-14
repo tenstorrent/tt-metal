@@ -90,11 +90,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)num_tiles_per_core,
-        (std::uint32_t)num_unpadded_tiles_head_dim,
-        (std::uint32_t)num_unpadded_tiles_seqlen_dim,
-        (std::uint32_t)num_padded_tiles_seqlen_dim,
-        (std::uint32_t)num_cores_total};
+        num_tiles_per_core,
+        num_unpadded_tiles_head_dim,
+        num_unpadded_tiles_seqlen_dim,
+        num_padded_tiles_seqlen_dim,
+        num_cores_total};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -104,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",

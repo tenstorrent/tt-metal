@@ -261,7 +261,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
     AllocatorConfig config(
-        {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
+        {.num_dram_channels = soc_desc.get_num_dram_views(),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED),

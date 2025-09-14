@@ -92,7 +92,7 @@ bool reader_only(
         reader_kernel,
         reader_core,
         {
-            (uint32_t)dram_byte_address,
+            dram_byte_address,
             0,
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
@@ -162,7 +162,7 @@ bool writer_only(
         writer_kernel,
         writer_core,
         {
-            (uint32_t)dram_byte_address,
+            dram_byte_address,
             0,
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
@@ -253,7 +253,7 @@ bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const R
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            input_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
         });
@@ -262,7 +262,7 @@ bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const R
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            output_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
         });
@@ -363,7 +363,7 @@ bool reader_datacopy_writer(
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            input_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
         });
@@ -372,7 +372,7 @@ bool reader_datacopy_writer(
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            output_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
         });

@@ -286,7 +286,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         std::vector<uint32_t> result_per_core;
         // src.data() is sufficient since src is already a vector of uint8_t, but this is safer if src creation is
         // changed to another dtype
-        const auto* src_ptr = static_cast<const uint8_t*>(src.data());
+        const auto* src_ptr = src.data();
 
         auto buffer_page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
         const auto& cores = buffer_page_mapping.all_cores;

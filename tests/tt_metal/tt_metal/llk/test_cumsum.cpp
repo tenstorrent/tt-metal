@@ -161,7 +161,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
         reader_kernel,
         core,
         {
-            (uint32_t)dram_buffer_src_addr,
+            dram_buffer_src_addr,
             (uint32_t)0,                                                // dram bank id
             (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
             (uint32_t)0,                                                // Unused
@@ -176,7 +176,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
         writer_kernel,
         core,
         {
-            (uint32_t)dram_buffer_dst_addr,
+            dram_buffer_dst_addr,
             (uint32_t)0,                                                // dram bank id
             (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
             (uint32_t)0,                                                // Unused

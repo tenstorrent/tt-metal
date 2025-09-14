@@ -119,17 +119,17 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         (std::uint32_t)head_dim / TILE_WIDTH * single_tile_size,  // size of a v head
 
         (std::uint32_t)tiles_per_group *
-            single_tile_size,             // group size, used to skip past group to the rest of the three tensors
-        (std::uint32_t)block_ht,          // how many tiles to read along sequence dimension
-        (std::uint32_t)groups_per_block,  // groups per shard (kv heads per core)
+            single_tile_size,  // group size, used to skip past group to the rest of the three tensors
+        block_ht,              // how many tiles to read along sequence dimension
+        groups_per_block,      // groups per shard (kv heads per core)
 
-        (std::uint32_t)block_ht * num_tiles_per_group[0] * groups_per_block,  // number of pages in q output tensor
-        (std::uint32_t)block_ht * num_tiles_per_group[1] * groups_per_block,  // number of pages in k output tensor
-        (std::uint32_t)block_ht * num_tiles_per_group[2] * groups_per_block,  // number of pages in v output tensor
+        block_ht * num_tiles_per_group[0] * groups_per_block,  // number of pages in q output tensor
+        block_ht * num_tiles_per_group[1] * groups_per_block,  // number of pages in k output tensor
+        block_ht * num_tiles_per_group[2] * groups_per_block,  // number of pages in v output tensor
 
-        (std::uint32_t)num_tiles_per_group[0] * single_tile_size,  // size of n*Q tiles in each group, in bytes
-        (std::uint32_t)num_tiles_per_group[1] * single_tile_size,  // size of K tiles in each group, in bytes
-        (std::uint32_t)num_tiles_per_group[2] * single_tile_size,  // size of V tiles in each group, in bytes
+        num_tiles_per_group[0] * single_tile_size,  // size of n*Q tiles in each group, in bytes
+        num_tiles_per_group[1] * single_tile_size,  // size of K tiles in each group, in bytes
+        num_tiles_per_group[2] * single_tile_size,  // size of V tiles in each group, in bytes
     };
 
     std::map<std::string, std::string> reader_defines;
@@ -145,7 +145,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
 
     if (transpose_k) {
         std::vector<uint32_t> compute_args = {
-            (std::uint32_t)block_ht * num_tiles_per_group[1] * groups_per_block,  // number of K tiles
+            block_ht * num_tiles_per_group[1] * groups_per_block,  // number of K tiles
         };
         tt_metal::CreateKernel(
             program,

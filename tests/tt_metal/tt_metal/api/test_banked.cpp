@@ -125,7 +125,7 @@ bool reader_cb_writer(
     std::map<std::string, std::string> writer_defines = {
         {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not output_is_dram))}};
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_id, uint32_t(input_buffer->page_size())};
+    std::vector<uint32_t> reader_compile_time_args = {cb_id, input_buffer->page_size()};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     auto reader_kernel = CreateKernel(
         program_,
@@ -136,7 +136,7 @@ bool reader_cb_writer(
             .noc = NOC::NOC_0,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
-    std::vector<uint32_t> writer_compile_time_args = {cb_id, uint32_t(output_buffer->page_size())};
+    std::vector<uint32_t> writer_compile_time_args = {cb_id, output_buffer->page_size()};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     auto writer_kernel = CreateKernel(
         program_,
@@ -229,7 +229,7 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
             .set_page_size(output_cb_index, cfg.page_size_bytes);
     CreateCircularBuffer(program_, cfg.logical_core, l1_output_cb_config);
 
-    std::vector<uint32_t> reader_compile_time_args_dc = {input0_cb_index, uint32_t(input_buffer->page_size())};
+    std::vector<uint32_t> reader_compile_time_args_dc = {input0_cb_index, input_buffer->page_size()};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args_dc);
     auto reader_kernel = CreateKernel(
         program_,
@@ -240,7 +240,7 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args_dc});
 
-    std::vector<uint32_t> writer_compile_time_args_dc = {output_cb_index, uint32_t(output_buffer->page_size())};
+    std::vector<uint32_t> writer_compile_time_args_dc = {output_cb_index, output_buffer->page_size()};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args_dc);
     auto writer_kernel = CreateKernel(
         program_,

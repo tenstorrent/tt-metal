@@ -305,12 +305,12 @@ bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, 
         reader_kernel,
         core,
         {
-            (uint32_t)input0_dram_byte_address,
+            input0_dram_byte_address,
             k_input0_dram_bank_id,  // dram bank id
-            (uint32_t)input1_dram_byte_address,
+            input1_dram_byte_address,
             k_input1_dram_bank_id,
             (uint32_t)test_config.num_tiles,
-            (uint32_t)input2_dram_byte_address,
+            input2_dram_byte_address,
             k_input2_dram_bank_id,
         });
     tt_metal::SetRuntimeArgs(
@@ -318,12 +318,12 @@ bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, 
         writer_kernel,
         core,
         {
-            (uint32_t)output0_dram_byte_address,
+            output0_dram_byte_address,
             k_output0_dram_bank_id,
-            (uint32_t)out0_id,
-            (uint32_t)output1_dram_byte_address,
+            out0_id,
+            output1_dram_byte_address,
             k_output1_dram_bank_id,
-            (uint32_t)out1_id,
+            out1_id,
             (uint32_t)test_config.num_tiles,
             (uint32_t)test_config.ublock_size_tiles,
         });

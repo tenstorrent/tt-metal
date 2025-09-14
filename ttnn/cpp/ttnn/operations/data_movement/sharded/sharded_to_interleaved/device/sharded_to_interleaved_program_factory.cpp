@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     auto dst_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index};
+        std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(

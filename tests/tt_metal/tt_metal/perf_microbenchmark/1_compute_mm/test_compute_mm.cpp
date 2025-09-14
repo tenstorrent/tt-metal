@@ -765,14 +765,11 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     double clock = static_cast<double>(tt_npu_clock) / 1000;
     uint32_t num_compute_core = grid_size.x * grid_size.y;
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        rpeak_tflops =
-            WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+        rpeak_tflops = WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * clock;
     } else if (arch == tt::ARCH::GRAYSKULL) {
-        rpeak_tflops =
-            GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+        rpeak_tflops = GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * clock;
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        rpeak_tflops =
-            BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+        rpeak_tflops = BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * clock;
     }
 
     log_debug(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
@@ -999,8 +996,7 @@ tt_metal::Program create_program_single_core(
         log_debug(tt::LogTest, "no packer_l1");
     }
 
-    CoreRange all_cores(
-        {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
+    CoreRange all_cores({(std::size_t)0, (std::size_t)0}, {core_range.x - 1, core_range.y - 1});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1183,8 +1179,7 @@ tt_metal::Program create_program(
         1,                       // batch
         per_core_Mt * per_core_Nt};
 
-    CoreRange all_cores(
-        {(std::size_t)0, (std::size_t)0}, {(std::size_t)core_range.x - 1, (std::size_t)core_range.y - 1});
+    CoreRange all_cores({(std::size_t)0, (std::size_t)0}, {core_range.x - 1, core_range.y - 1});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1287,18 +1282,18 @@ tt_metal::Program create_program(
 
             // Write runtime args to device
             std::array<uint32_t, 12> mm_in0_reader_args = {
-                (std::uint32_t)in0_addr,     // in0_buffer->address(), // in0_tensor_addr
-                (std::uint32_t)0,            // K * per_core_Mt * output_idx_y, //
-                                             // in0_tensor_start_tile_id
-                (std::uint32_t)1,            // in0_tensor_stride_w
-                (std::uint32_t)in0_block_w,  // K, // in0_tensor_stride_h
-                (std::uint32_t)in0_block_w,  // in0_tensor_next_block_stride
+                in0_addr,          // in0_buffer->address(), // in0_tensor_addr
+                (std::uint32_t)0,  // K * per_core_Mt * output_idx_y, //
+                                   // in0_tensor_start_tile_id
+                (std::uint32_t)1,  // in0_tensor_stride_w
+                in0_block_w,       // K, // in0_tensor_stride_h
+                in0_block_w,       // in0_tensor_next_block_stride
 
-                (std::uint32_t)in0_block_w,                // in0_block_w
-                (std::uint32_t)per_core_Mt,                // in0_block_h
-                (std::uint32_t)in0_block_w * per_core_Mt,  // in0_block_num_tiles
+                in0_block_w,                // in0_block_w
+                per_core_Mt,                // in0_block_h
+                in0_block_w * per_core_Mt,  // in0_block_num_tiles
 
-                (std::uint32_t)num_blocks,  // num_blocks
+                num_blocks,  // num_blocks
                 (std::uint32_t)phy_core.x,
                 (std::uint32_t)phy_core.y,
             };
@@ -1311,36 +1306,36 @@ tt_metal::Program create_program(
             }
 
             std::array<uint32_t, 31> mm_in1_reader_writer_args = {
-                (std::uint32_t)in1_addr,                   // in1_buffer->address(), // in1_tensor_addr
-                (std::uint32_t)0,                          // per_core_Nt * output_idx_x,
-                                                           // //in1_tensor_start_tile_id
-                (std::uint32_t)1,                          // in1_tensor_stride_w
-                (std::uint32_t)in1_tensor_stride_h,        // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * per_core_Nt,  // in1_tensor_next_block_stride
+                in1_addr,                   // in1_buffer->address(), // in1_tensor_addr
+                (std::uint32_t)0,           // per_core_Nt * output_idx_x,
+                                            // //in1_tensor_start_tile_id
+                (std::uint32_t)1,           // in1_tensor_stride_w
+                in1_tensor_stride_h,        // in1_tensor_stride_h
+                in0_block_w * per_core_Nt,  // in1_tensor_next_block_stride
 
-                (std::uint32_t)per_core_Nt,                // in1_block_w
-                (std::uint32_t)in0_block_w,                // in1_block_h
-                (std::uint32_t)per_core_Nt * in0_block_w,  // in1_block_num_tiles
+                per_core_Nt,                // in1_block_w
+                in0_block_w,                // in1_block_h
+                per_core_Nt * in0_block_w,  // in1_block_num_tiles
 
-                (std::uint32_t)num_blocks,  // num_blocks
+                num_blocks,  // num_blocks
 
-                (std::uint32_t)in2_cb_addr,
+                in2_cb_addr,
                 (std::uint32_t)phy_core.x,
                 (std::uint32_t)phy_core.y,
 
-                (std::uint32_t)out_addr,                              // out_buffer->address(), // out_tensor_addr
-                (std::uint32_t)0,                                     // output_idx_x * per_core_Nt + output_idx_y *
-                                                                      // per_core_Mt * N, // out_tensor_start_tile_id
-                (std::uint32_t)1,                                     // out_tensor_stride_w
-                (std::uint32_t)out_tensor_stride_h,                   // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,                        // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * out_tensor_stride_h,  // out_tensor_next_subblock_stride_h
+                out_addr,                              // out_buffer->address(), // out_tensor_addr
+                (std::uint32_t)0,                      // output_idx_x * per_core_Nt + output_idx_y *
+                                                       // per_core_Mt * N, // out_tensor_start_tile_id
+                (std::uint32_t)1,                      // out_tensor_stride_w
+                out_tensor_stride_h,                   // out_tensor_stride_h
+                out_subblock_w,                        // out_tensor_next_subblock_stride_w
+                out_subblock_h * out_tensor_stride_h,  // out_tensor_next_subblock_stride_h
 
-                (std::uint32_t)out_subblock_w,                     // out_subblock_w
-                (std::uint32_t)out_subblock_h,                     // out_subblock_h
-                (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-                (std::uint32_t)(per_core_Nt / out_subblock_w),     // out_num_subblocks_w
-                (std::uint32_t)(per_core_Mt / out_subblock_h),     // out_num_subblocks_h
+                out_subblock_w,                     // out_subblock_w
+                out_subblock_h,                     // out_subblock_h
+                (out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+                (per_core_Nt / out_subblock_w),     // out_num_subblocks_w
+                (per_core_Mt / out_subblock_h),     // out_num_subblocks_h
             };
 
             if (core_idx_y == core_range.y - 1) {
@@ -1401,7 +1396,7 @@ std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val
     unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_val), std::mt19937(seed));
     for (uint32_t i = 0; i < num_elems; ++i) {
-        vec.at(i) = static_cast<float>(rand_float());
+        vec.at(i) = rand_float();
     }
     return vec;
 }

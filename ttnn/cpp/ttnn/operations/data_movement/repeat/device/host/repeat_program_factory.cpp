@@ -74,8 +74,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index, src1_cb_index};
+    std::vector<uint32_t> compile_time_args = {source_page_size_bytes, num_repeats, src0_cb_index, src1_cb_index};
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
@@ -179,7 +178,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)page_size_bytes, src0_cb_index, src1_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
+        page_size_bytes, src0_cb_index, src1_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 

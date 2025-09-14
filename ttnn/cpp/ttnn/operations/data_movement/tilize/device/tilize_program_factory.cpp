@@ -639,9 +639,9 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         output_cb_data_format,
         output.buffer());
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -655,8 +655,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {
-        uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+    std::vector<uint32_t> compute_args = {(num_tiles_per_shard / num_tiles_per_row), num_tiles_per_row};
 
     tt::tt_metal::CreateKernel(
         program,

@@ -320,39 +320,39 @@ process_agmm_fusion_program_and_create_override_variables(
 
     /* Compile time args for multicast receiver */
     std::vector<uint32_t> in0_multicast_receiver_compile_time_args = {
-        static_cast<std::uint32_t>(multicast_chunk_width_in_tiles),  // 1/4 of K per step
-        static_cast<std::uint32_t>(per_core_M),                      // in0_shard_height_in_tiles
-        static_cast<std::uint32_t>(batch),                           // batch
-        static_cast<std::uint32_t>(num_multicast_steps),             // 4 steps instead of ring_size
-        static_cast<std::uint32_t>(in0_signal_semaphore_id),
-        static_cast<std::uint32_t>(src0_cb_index),
-        static_cast<std::uint32_t>(src2_cb_index),  // Keep for compatibility, though not used
-        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[0]),  // Step 0
-        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[1]),  // Step 1
-        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[2]),  // Step 2
-        static_cast<std::uint32_t>(fused_op_signaler->fused_op_receiver_signal_semaphores[3]),  // Step 3
-        static_cast<std::uint32_t>(ring_index),                                                 // first chunk index
-        static_cast<std::uint32_t>((ring_index - 1 + ring_size) % ring_size),                   // second chunk index
-        static_cast<std::uint32_t>((ring_index - 2 + ring_size) % ring_size),                   // third chunk index
-        static_cast<std::uint32_t>((ring_index - 3 + ring_size) % ring_size),                   // fourth chunk index
+        multicast_chunk_width_in_tiles,                   // 1/4 of K per step
+        per_core_M,                                       // in0_shard_height_in_tiles
+        static_cast<std::uint32_t>(batch),                // batch
+        static_cast<std::uint32_t>(num_multicast_steps),  // 4 steps instead of ring_size
+        in0_signal_semaphore_id,
+        src0_cb_index,
+        src2_cb_index,                                              // Keep for compatibility, though not used
+        fused_op_signaler->fused_op_receiver_signal_semaphores[0],  // Step 0
+        fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // Step 1
+        fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // Step 2
+        fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // Step 3
+        static_cast<std::uint32_t>(ring_index),                     // first chunk index
+        static_cast<std::uint32_t>((ring_index - 1 + ring_size) % ring_size),  // second chunk index
+        static_cast<std::uint32_t>((ring_index - 2 + ring_size) % ring_size),  // third chunk index
+        static_cast<std::uint32_t>((ring_index - 3 + ring_size) % ring_size),  // fourth chunk index
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        static_cast<std::uint32_t>(in1_is_dram_interleaved),    // in1_is_dram_interleaved
-        static_cast<std::uint32_t>(in1_is_dram_sharded),        // in1_is_dram_sharded
-        static_cast<std::uint32_t>(in1_block_height_in_tiles),  // in1_block_height_in_tiles
-        static_cast<std::uint32_t>(per_core_N),                 // in1_block_width_in_tiles
-        static_cast<std::uint32_t>(in1_tensor_width_in_tiles),  // in1_tensor_width_in_tiles
-        static_cast<std::uint32_t>(num_blocks),                 // num_blocks
-        static_cast<std::uint32_t>(batch),                      // batch
-        static_cast<std::uint32_t>(in1_block_page_size),
-        static_cast<std::uint32_t>(in1_block_page_size_last),
-        static_cast<std::uint32_t>(in1_block_width_num_pages),
-        static_cast<std::uint32_t>(in1_shard_width_in_dram),
-        static_cast<std::uint32_t>(src1_cb_index),
-        static_cast<std::uint32_t>(sync_cb_index),
-        static_cast<std::uint32_t>(sync_cb2_index),
-        static_cast<std::uint32_t>(remote_cb_index),
+        static_cast<std::uint32_t>(in1_is_dram_interleaved),  // in1_is_dram_interleaved
+        static_cast<std::uint32_t>(in1_is_dram_sharded),      // in1_is_dram_sharded
+        in1_block_height_in_tiles,                            // in1_block_height_in_tiles
+        per_core_N,                                           // in1_block_width_in_tiles
+        in1_tensor_width_in_tiles,                            // in1_tensor_width_in_tiles
+        num_blocks,                                           // num_blocks
+        static_cast<std::uint32_t>(batch),                    // batch
+        in1_block_page_size,
+        in1_block_page_size_last,
+        in1_block_width_num_pages,
+        in1_shard_width_in_dram,
+        src1_cb_index,
+        sync_cb_index,
+        sync_cb2_index,
+        remote_cb_index,
         static_cast<std::uint32_t>(0),  // no need to signaler for the fused op
     };
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -589,9 +589,9 @@ process_agmm_fusion_program_and_create_override_variables(
                     vc = (vc + 1) & 0x3;
                 }
             }
-            mm_in1_args.push_back(static_cast<std::uint32_t>(bank_id));
-            mm_in1_args.push_back(static_cast<std::uint32_t>(vc));
-            mm_in1_args.push_back(static_cast<std::uint32_t>(dram_read_offset));
+            mm_in1_args.push_back(bank_id);
+            mm_in1_args.push_back(vc);
+            mm_in1_args.push_back(dram_read_offset);
         }
         if (fused_op_signaler.has_value() &&
             fused_op_signaler.value().fused_op_type ==
@@ -619,7 +619,7 @@ process_agmm_fusion_program_and_create_override_variables(
         /* in0 - hop cores not needed for multicast, but keeping for compatibility */
         std::vector<uint32_t> mm_in0_args = {
             static_cast<std::uint32_t>(core_type),
-            static_cast<std::uint32_t>(i),  // Core index
+            i,  // Core index
             // Hop cores may not be needed for multicast approach
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);

@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     std::vector<uint32_t> reader_compile_time_args = {alignment};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
@@ -76,10 +76,10 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         core,
         {src0_buffer->address(),
          a.padded_shape()[3] / tt::constants::TILE_WIDTH,
-         (uint32_t)output_shape[0],
-         (uint32_t)output_shape[1],
-         (uint32_t)output_shape[2] / tt::constants::TILE_HEIGHT,
-         (uint32_t)output_shape[3] / tt::constants::TILE_WIDTH});
+         output_shape[0],
+         output_shape[1],
+         output_shape[2] / tt::constants::TILE_HEIGHT,
+         output_shape[3] / tt::constants::TILE_WIDTH});
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 

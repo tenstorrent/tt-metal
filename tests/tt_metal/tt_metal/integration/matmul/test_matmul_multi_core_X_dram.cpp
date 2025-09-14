@@ -303,9 +303,9 @@ bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh
                 device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
             const std::array mm_reader_args = {
-                (std::uint32_t)dram_buffer_src0_addr,
+                dram_buffer_src0_addr,
                 (std::uint32_t)0,
-                (std::uint32_t)dram_buffer_src1_addr,
+                dram_buffer_src1_addr,
                 (std::uint32_t)0,
                 (std::uint32_t)(K / in0_block_w),                            // num_blocks
                 (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
@@ -314,7 +314,7 @@ bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh
                 (std::uint32_t)per_core_N * in0_block_w * single_tile_size};
 
             const std::array writer_args = {
-                (std::uint32_t)dram_buffer_dst_addr,
+                dram_buffer_dst_addr,
                 (std::uint32_t)0,
                 (std::uint32_t)out_subblock_h,               // num tiles per sub block m
                 (std::uint32_t)out_subblock_w,               // num tiles per sub block n
@@ -419,7 +419,7 @@ bool assign_runtime_args_to_program(
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             const std::array mm_reader_args = {
-                (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
+                in0_dram_addr,                               // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                            // in0_tensor_stride_w
                 (std::uint32_t)K,                            // in0_tensor_stride_h
@@ -429,7 +429,7 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)in1_dram_addr,            // in1_tensor_addr
+                in1_dram_addr,                           // in1_tensor_addr
                 (std::uint32_t)per_core_N * core_idx_x,  // in1_tensor_start_tile_id
                 (std::uint32_t)1,                        // in1_tensor_stride_w
                 (std::uint32_t)N,                        // in1_tensor_stride_h
@@ -443,7 +443,7 @@ bool assign_runtime_args_to_program(
             };
 
             const std::array writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
+                out_dram_addr,                                                         // out_tensor_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
                 (std::uint32_t)N,                                                      // out_tensor_stride_h

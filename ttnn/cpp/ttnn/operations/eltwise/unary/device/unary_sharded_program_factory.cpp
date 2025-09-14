@@ -172,7 +172,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         unary_reader_kernel_id,
         all_cores,
         {
-            (uint32_t)(num_tile_per_core),
+            num_tile_per_core,
         });
 
     tt::tt_metal::SetRuntimeArgs(program, eltwise_unary_kernel_group_1_id, all_cores, {packed_scalar1, packed_scalar2});

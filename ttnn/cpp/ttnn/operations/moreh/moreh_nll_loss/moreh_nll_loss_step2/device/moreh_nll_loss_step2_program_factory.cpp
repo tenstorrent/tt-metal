@@ -422,16 +422,16 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         all_cores,
         data_format,
         {
-            {CBIndex::c_0, 1},                                                              // input
-            {CBIndex::c_1, 1, tt::DataFormat::Int32},                                       // target
-            {CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
-            {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
-            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight to reduce
-            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                               // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                               // tmp3
-            {CBIndex::c_16, 1},                                                             // output
+            {CBIndex::c_0, 1},                                                 // input
+            {CBIndex::c_1, 1, tt::DataFormat::Int32},                          // target
+            {CBIndex::c_2, (weight_has_value ? weight_num_tile : 0)},          // weight
+            {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},  // divisor
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                  // tmp_weight to reduce
+            {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                  // tmp_input to reduce
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // tmp1
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // tmp2
+            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                  // tmp3
+            {CBIndex::c_16, 1},                                                // output
         });
 
     // create read/wrtie kernel

@@ -26,7 +26,7 @@ namespace ttnn::operations::ccl {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return tensor.buffer()->num_pages(); }
 
 uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 
@@ -144,7 +144,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    uint32_t src_chip_id = src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
@@ -307,7 +307,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
+        dest_chip_id.push_back(dest_fabric_node_id.chip_id);
     }
     log_debug(tt::LogOp, "dest_chip_id: {}", common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
@@ -346,7 +346,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)topology,
 
         src_mesh_id,
-        (uint32_t)src_chip_id,
+        src_chip_id,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
 

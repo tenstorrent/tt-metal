@@ -554,10 +554,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {UnaryWithParam(unary_op_type, param)}, memory_config, optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
@@ -567,10 +564,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam(unary_op_rev_type, static_cast<float>(param))},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {UnaryWithParam(unary_op_rev_type, param)}, memory_config, optional_output_tensor);
 }
 
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;

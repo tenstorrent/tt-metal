@@ -60,14 +60,14 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        reader_compile_time_args = {(uint32_t)src_cb_id};
+        reader_compile_time_args = {src_cb_id};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        writer_compile_time_args = {(uint32_t)dst_cb_id};
+        writer_compile_time_args = {dst_cb_id};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     } else {
-        reader_compile_time_args = {(uint32_t)src_cb_id, (uint32_t)input_unit_size};
+        reader_compile_time_args = {src_cb_id, input_unit_size};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        writer_compile_time_args = {(uint32_t)dst_cb_id, (uint32_t)output_unit_size};
+        writer_compile_time_args = {dst_cb_id, output_unit_size};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     }
 
@@ -91,9 +91,9 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
             if (!core_group.ranges().empty()) {
                 std::vector<uint32_t> compute_kernel_args = {
-                    (uint32_t)src_cb_id,
-                    (uint32_t)dst_cb_id,
-                    (uint32_t)num_units_per_core,
+                    src_cb_id,
+                    dst_cb_id,
+                    num_units_per_core,
                 };
                 CreateKernel(
                     program,
@@ -125,18 +125,18 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 read_kernel_id,
                 core,
                 {
-                    (uint32_t)input_buffer->address(),
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
+                    input_buffer->address(),
+                    num_units_per_core,
+                    start_id,
                 });
             SetRuntimeArgs(
                 program,
                 write_kernel_id,
                 core,
                 {
-                    (uint32_t)output_buffer->address(),
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
+                    output_buffer->address(),
+                    num_units_per_core,
+                    start_id,
                 });
         } else {
             SetRuntimeArgs(
@@ -144,20 +144,20 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 read_kernel_id,
                 core,
                 {
-                    (uint32_t)input_buffer->address(),
-                    (uint32_t)input_unit_size,
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
+                    input_buffer->address(),
+                    input_unit_size,
+                    num_units_per_core,
+                    start_id,
                 });
             SetRuntimeArgs(
                 program,
                 write_kernel_id,
                 core,
                 {
-                    (uint32_t)output_buffer->address(),
-                    (uint32_t)output_unit_size,
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
+                    output_buffer->address(),
+                    output_unit_size,
+                    num_units_per_core,
+                    start_id,
                 });
         }
         start_id += num_units_per_core;

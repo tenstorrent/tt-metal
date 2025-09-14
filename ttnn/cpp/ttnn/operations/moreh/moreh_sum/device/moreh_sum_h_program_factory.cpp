@@ -138,7 +138,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     tt::tt_metal::KernelHandle writer_kernel_id;
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     writer_kernel_id = tt::tt_metal::CreateKernel(

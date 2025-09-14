@@ -63,11 +63,11 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     TT_ASSERT(
         this->initialized_all_gather && this->initialized_fused_op, "RingSDPAFusedOpSignaler not initialized fully.");
 
-    out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
-    out_rt_args.push_back(static_cast<uint32_t>(this->ring_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->forward_writes_expected));
-    out_rt_args.push_back(static_cast<uint32_t>(this->backward_writes_expected));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    out_rt_args.push_back(this->ring_size);
+    out_rt_args.push_back(this->ring_index);
+    out_rt_args.push_back(this->forward_writes_expected);
+    out_rt_args.push_back(this->backward_writes_expected);
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[0]);
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[1]);
 }
 }  // namespace ttnn::operations::transformer::detail

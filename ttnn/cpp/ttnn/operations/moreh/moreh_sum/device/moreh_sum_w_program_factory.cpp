@@ -123,7 +123,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(packed_scaler_value);
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};

@@ -115,7 +115,7 @@ uint32_t get_effective_l1_cores(
     float max_bw = index == WormholeIndex ? 32.0f : 50.0f;
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
-    uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
+    uint32_t effective_cores = std::ceil(aggregate_bw / achieved_l1_bw);
     if (effective_cores > num_cores) {
         effective_cores = num_cores;  // Limit to available cores
     }
@@ -130,7 +130,7 @@ uint32_t get_effective_dram_cores(
     uint32_t num_cores) {
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
     float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
-    uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
+    uint32_t effective_cores = std::ceil((float)aggregate_bw / achieved_dram_bw);
     if (effective_cores > num_cores) {
         effective_cores = num_cores;  // Limit to available cores
     }

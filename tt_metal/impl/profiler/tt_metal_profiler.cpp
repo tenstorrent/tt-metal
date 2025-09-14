@@ -529,8 +529,8 @@ void syncAllDevices(chip_id_t host_connected_device) {
             double freqScale = (senderReceiverProductSum * accumulateSampleCount - senderSum * receiverSum) /
                                (receiverSquareSum * accumulateSampleCount - receiverSum * receiverSum);
 
-            uint64_t shift = (double)(senderSum - freqScale * (double)receiverSum) / accumulateSampleCount +
-                             (senderBase - freqScale * receiverBase);
+            uint64_t shift =
+                (senderSum - freqScale * receiverSum) / accumulateSampleCount + (senderBase - freqScale * receiverBase);
             deviceDeviceSyncInfo.emplace(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(sender.first)
                 .emplace(receiver.first, (std::pair<double, int64_t>){freqScale, shift});

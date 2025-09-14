@@ -112,7 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
-        (std::uint32_t)aligned_input_unit_size,
+        aligned_input_unit_size,
     };
 
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
@@ -129,12 +129,12 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const int32_t writer_unit_size = output.padded_shape()[-1] * output.element_size();
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
+        output_cb_index,
         (std::uint32_t)writer_unit_size,
         (std::uint32_t)scale_factor_h,
         (std::uint32_t)scale_factor_w,
-        (std::uint32_t)output_shape[1],
-        (std::uint32_t)output_shape[2]};
+        output_shape[1],
+        output_shape[2]};
 
     if (is_tiled_layout) {
         const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
@@ -176,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)work_per_core_group_1,   // per_core_block_cnt (compile-time)
                 (uint32_t)num_input_tiles_in_row,  // per_block_ntiles
                 (uint32_t)src0_cb_index,           // src_cb_id
-                (uint32_t)output_cb_index          // out_cb_id
+                output_cb_index                    // out_cb_id
             };
 
             compute_kernel_group1_id = tt::tt_metal::CreateKernel(
@@ -192,7 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)work_per_core_group_2,   // per_core_block_cnt (compile-time)
                 (uint32_t)num_input_tiles_in_row,  // per_block_ntiles
                 (uint32_t)src0_cb_index,           // src_cb_id
-                (uint32_t)output_cb_index          // out_cb_id
+                output_cb_index                    // out_cb_id
             };
 
             compute_kernel_group2_id = tt::tt_metal::CreateKernel(

@@ -137,13 +137,13 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
 
     // Sender Kernel
     vector<uint32_t> sender_compile_args = {
-        (uint32_t)mst_l1_base_address,
-        (uint32_t)sub_l1_base_address,
+        mst_l1_base_address,
+        sub_l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.pages_per_transaction,
         (uint32_t)test_config.bytes_per_page,
         (uint32_t)test_config.test_id,
-        (uint32_t)num_subordinates};
+        num_subordinates};
     string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/";
 
     if (test_config.is_multicast) {  // Multicast Sender Kernel

@@ -244,7 +244,7 @@ void run_single_core_tilize_program(
                 (uint32_t)0,  // dram bank id
                 dram_buffer_src1_addr,
                 (uint32_t)0,  // dram bank id
-                (uint32_t)num_tiles,
+                num_tiles,
             });
 
         src1_vec = create_constant_vector_of_bfloat16(input_dram_buffer_size, 1.0f);

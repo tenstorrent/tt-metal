@@ -301,7 +301,7 @@ int main(int argc, char** argv) {
         tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
         // compute kernel setup
-        vector<uint32_t> compute_kernel_args = {uint(per_core_Mt), uint(Kt), uint(per_core_Nt)};
+        vector<uint32_t> compute_kernel_args = {per_core_Mt, Kt, per_core_Nt};
 
         tt_metal::CreateKernel(
             program,

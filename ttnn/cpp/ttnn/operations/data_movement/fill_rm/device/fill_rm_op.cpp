@@ -63,11 +63,11 @@ operation::ProgramWithCallbacks fill_rm_single_core(
         binary_reader_kernel_id,
         core,
         {dst_buffer->address(),
-         uint32_t(N * C),
-         uint32_t(H),
-         uint32_t(W),
-         uint32_t(hFill),
-         uint32_t(wFill),
+         (N * C),
+         H,
+         W,
+         hFill,
+         wFill,
          uint32_t(bfloat16(val_hi).to_uint16()),
          uint32_t(bfloat16(val_lo).to_uint16())});
 

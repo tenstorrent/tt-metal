@@ -72,15 +72,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     tt_metal::Program program = tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_num_tiles,
-        (std::uint32_t)kv_num_tiles,
+        q_num_tiles,
+        kv_num_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)q_out_h_tiles,
-        (std::uint32_t)q_out_w_tiles,
-        (std::uint32_t)q_out_HtWt,
+        q_out_h_tiles,
+        q_out_w_tiles,
+        q_out_HtWt,
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
     };
@@ -167,8 +167,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
         }
 
         std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)in1_buffer_addr,
+            in0_buffer->address(),
+            in1_buffer_addr,
             num_blocks_per_core,
             num_blocks_written * per_tensor_tiles,
             0,
@@ -181,10 +181,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
             transpose_k_heads ? num_blocks_written / q_out_h_tiles * kv_out_CHtWt + q_out_h_dim : v_out_tensor_tile_id;
 
         std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-            (std::uint32_t)k_buffer->address(),  // k_tensor_addr
-            (std::uint32_t)v_buffer->address(),  // v_tensor_addr
-            num_blocks_per_core,                 // num_blocks
+            q_buffer->address(),  // q_tensor_addr
+            k_buffer->address(),  // k_tensor_addr
+            v_buffer->address(),  // v_tensor_addr
+            num_blocks_per_core,  // num_blocks
             q_out_h_dim,
             q_out_tensor_tile_id,
             k_out_tensor_tile_id,

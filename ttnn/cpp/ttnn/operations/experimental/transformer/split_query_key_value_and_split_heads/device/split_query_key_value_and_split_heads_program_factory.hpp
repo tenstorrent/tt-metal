@@ -86,20 +86,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     std::vector<uint32_t> reader_compile_time_args = {
         // READER COMPILE TIME ARGS
-        (std::uint32_t)block_size,             // block_size
-        (std::uint32_t)num_blocks_per_tensor,  // out_num_blocks_per_tensor
+        block_size,             // block_size
+        num_blocks_per_tensor,  // out_num_blocks_per_tensor
     };
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         // WRITER COMPILE TIME ARGS
         (std::uint32_t)block_size_is_one,
-        (std::uint32_t)block_size,                    // block_size
-        (std::uint32_t)writer_num_blocks_per_tensor,  // out_num_blocks_per_tensor
-        (std::uint32_t)num_c_per_block,               // out_num_c_per_block
-        (std::uint32_t)out_w_tiles,                   // out_w_tiles
-        (std::uint32_t)out_h_tiles,                   // out_h_tiles
-        (std::uint32_t)out_HtWt,                      // out_HtWt
+        block_size,                    // block_size
+        writer_num_blocks_per_tensor,  // out_num_blocks_per_tensor
+        num_c_per_block,               // out_num_c_per_block
+        out_w_tiles,                   // out_w_tiles
+        out_h_tiles,                   // out_h_tiles
+        out_HtWt,                      // out_HtWt
     };
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
@@ -155,13 +155,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
             std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t)in0_buffer->address(),                      // in0_tensor_addr,
+                in0_buffer->address(),                                     // in0_tensor_addr,
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)q_buffer->address(),                 // q_tensor_addr
-                (std::uint32_t)k_buffer->address(),                 // k_tensor_addr
-                (std::uint32_t)v_buffer->address(),                 // v_tensor_addr
+                q_buffer->address(),                                // q_tensor_addr
+                k_buffer->address(),                                // k_tensor_addr
+                v_buffer->address(),                                // v_tensor_addr
                 core_idx_x * out_w_tiles + core_idx_y * out_CHtWt,  // out_tensor_tile_id
                 core_idx_x + core_idx_y * out_CHtWt,                // out_tensor_tile_id_with_transpose
             };
@@ -262,14 +262,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     Program program = CreateProgram();
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)num_heads_per_tensor,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)block_wt,
-        (std::uint32_t)out_block_wt,
-        (std::uint32_t)block_wt * single_tile_size,
-        (std::uint32_t)out_block_wt * single_tile_size,
-        (std::uint32_t)num_tiles_per_tensor,
-        (std::uint32_t)block_wt * single_tile_size / num_tensors};
+        num_heads_per_tensor,
+        block_ht,
+        block_wt,
+        out_block_wt,
+        block_wt * single_tile_size,
+        out_block_wt * single_tile_size,
+        num_tiles_per_tensor,
+        block_wt * single_tile_size / num_tensors};
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
@@ -278,14 +278,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     // writer
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)num_heads_per_tensor,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)block_wt,
-        (std::uint32_t)out_block_wt,
-        (std::uint32_t)block_wt * single_tile_size,
-        (std::uint32_t)out_block_wt * single_tile_size,
-        (std::uint32_t)num_tiles_per_tensor,
-        (std::uint32_t)block_wt * single_tile_size / num_tensors};
+        num_heads_per_tensor,
+        block_ht,
+        block_wt,
+        out_block_wt,
+        block_wt * single_tile_size,
+        out_block_wt * single_tile_size,
+        num_tiles_per_tensor,
+        block_wt * single_tile_size / num_tensors};
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"

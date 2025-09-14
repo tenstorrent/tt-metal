@@ -227,7 +227,7 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
-                    static_cast<uint32_t>(num_tiles_per_page)}});
+                    num_tiles_per_page}});
         CreateKernel(
             send_recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_cb_writer.cpp",
@@ -241,7 +241,7 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
-                    static_cast<uint32_t>(num_tiles_per_page)}});
+                    num_tiles_per_page}});
     } else {
         CreateKernel(
             send_recv_program,
@@ -457,8 +457,8 @@ void test_single_device_socket_with_workers(
                     .compile_args = {
                         static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                         static_cast<uint32_t>(config_cb_index),
-                        static_cast<uint32_t>(config_sem),
-                        static_cast<uint32_t>(credits0_sem),
+                        config_sem,
+                        credits0_sem,
                         static_cast<uint32_t>(page_size),
                         static_cast<uint32_t>(data_size),
                         static_cast<uint32_t>(worker_virtual_coords.begin()->x),
@@ -476,8 +476,8 @@ void test_single_device_socket_with_workers(
                     .noc = NOC::RISCV_0_default,
                     .compile_args = {
                         static_cast<uint32_t>(config_cb_index),
-                        static_cast<uint32_t>(config_sem),
-                        static_cast<uint32_t>(credits0_sem),
+                        config_sem,
+                        credits0_sem,
                         static_cast<uint32_t>(data_cb_index),
                         static_cast<uint32_t>(page_size),
                         static_cast<uint32_t>(data_size),
@@ -506,9 +506,9 @@ void test_single_device_socket_with_workers(
                     .compile_args = {
                         static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                         static_cast<uint32_t>(config_cb_index),
-                        static_cast<uint32_t>(config_sem),
-                        static_cast<uint32_t>(credits0_sem),
-                        static_cast<uint32_t>(credits1_sem),
+                        config_sem,
+                        credits0_sem,
+                        credits1_sem,
                         static_cast<uint32_t>(page_size),
                         static_cast<uint32_t>(data_size),
                         static_cast<uint32_t>(worker_virtual_coords.begin()->x),
@@ -527,9 +527,9 @@ void test_single_device_socket_with_workers(
                     .noc = NOC::RISCV_0_default,
                     .compile_args = {
                         static_cast<uint32_t>(config_cb_index),
-                        static_cast<uint32_t>(config_sem),
-                        static_cast<uint32_t>(credits0_sem),
-                        static_cast<uint32_t>(credits1_sem),
+                        config_sem,
+                        credits0_sem,
+                        credits1_sem,
                         static_cast<uint32_t>(data_cb_index),
                         static_cast<uint32_t>(page_size),
                         static_cast<uint32_t>(data_size),
@@ -709,7 +709,7 @@ void test_single_connection_multi_device_socket(
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
-                    static_cast<uint32_t>(num_tiles_per_page)}});
+                    num_tiles_per_page}});
         recv_kernel = CreateKernel(
             recv_program,
             "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_cb_writer.cpp",
@@ -723,7 +723,7 @@ void test_single_connection_multi_device_socket(
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
-                    static_cast<uint32_t>(num_tiles_per_page)}});
+                    num_tiles_per_page}});
     } else {
         recv_kernel = CreateKernel(
             recv_program,
@@ -883,8 +883,8 @@ void test_single_connection_multi_device_socket_with_workers(
             .compile_args = {
                 static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                 static_cast<uint32_t>(config_cb_index),
-                static_cast<uint32_t>(config_sem),
-                static_cast<uint32_t>(credits_sem),
+                config_sem,
+                credits_sem,
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(worker_virtual_coord.x),
@@ -907,8 +907,8 @@ void test_single_connection_multi_device_socket_with_workers(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(config_cb_index),
-                static_cast<uint32_t>(config_sem),
-                static_cast<uint32_t>(credits_sem),
+                config_sem,
+                credits_sem,
                 static_cast<uint32_t>(data_cb_index),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
@@ -1058,8 +1058,8 @@ std::shared_ptr<Program> create_split_reduce_program(
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(config0_cb_index),
-                static_cast<uint32_t>(config0_sem),
-                static_cast<uint32_t>(credits0_sem),
+                config0_sem,
+                credits0_sem,
                 static_cast<uint32_t>(reduce_virtual_core.x),
                 static_cast<uint32_t>(reduce_virtual_core.y)}});
 
@@ -1075,8 +1075,8 @@ std::shared_ptr<Program> create_split_reduce_program(
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(config1_cb_index),
-                static_cast<uint32_t>(config1_sem),
-                static_cast<uint32_t>(credits1_sem),
+                config1_sem,
+                credits1_sem,
                 static_cast<uint32_t>(reduce_virtual_core.x),
                 static_cast<uint32_t>(reduce_virtual_core.y)}});
 
@@ -1089,11 +1089,11 @@ std::shared_ptr<Program> create_split_reduce_program(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(config0_cb_index),
-                static_cast<uint32_t>(config0_sem),
+                config0_sem,
                 static_cast<uint32_t>(config1_cb_index),
-                static_cast<uint32_t>(config1_sem),
-                static_cast<uint32_t>(credits0_sem),
-                static_cast<uint32_t>(credits1_sem),
+                config1_sem,
+                credits0_sem,
+                credits1_sem,
                 static_cast<uint32_t>(in0_cb_index),
                 static_cast<uint32_t>(in1_cb_index),
                 static_cast<uint32_t>(recv_virtual_coord_0.x),

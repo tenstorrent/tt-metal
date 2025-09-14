@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         void* host_pcie_base =
-            (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+            tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
         uint64_t dev_pcie_base =
             tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device_id);
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
                                 pcie_base[offset++] = 0;
                             }
                         } else {
-                            uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
+                            uint32_t* pcie_addr = (pcie_base) + offset;
                             nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
                         }
                         page++;

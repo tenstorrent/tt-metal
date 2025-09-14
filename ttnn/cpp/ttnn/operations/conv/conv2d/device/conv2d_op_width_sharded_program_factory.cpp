@@ -33,7 +33,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     uint32_t conv_output_w = output_shape[2];
 
     // pad height
-    uint32_t num_rows = (uint32_t)batch_size * conv_output_h * conv_output_w;
+    uint32_t num_rows = batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
     uint32_t num_rows_padded = tt::round_up(num_rows, num_cores_nhw * act_block_h_datums);
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
@@ -127,7 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
+    uint32_t pad_w = sliding_window_config.get_pad_w();
 
     uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
@@ -140,8 +140,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
     TT_FATAL(act_matrix_shape.size() == 3, "Error");
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
-    uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
-    uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
+    uint32_t act_matrix_height = act_matrix_shape[1];
+    uint32_t act_matrix_width = act_matrix_shape[2];
 
     // TODO: Move all these TT_FATALs/checks to validate?
 
@@ -460,26 +460,26 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         false};
 
     std::vector<uint32_t> activation_kernel_compile_args = {
-        (uint32_t)stride_w,
-        (uint32_t)dilation_h,
-        (uint32_t)dilation_w,
-        (uint32_t)input_size_w,
-        (uint32_t)conv_act_c_read_bytes,
-        (uint32_t)filter_h,  // Input filter window height
-        (uint32_t)filter_w,  // Input filter window width
-        (uint32_t)act_block_h_datums,
+        stride_w,
+        dilation_h,
+        dilation_w,
+        input_size_w,
+        conv_act_c_read_bytes,
+        filter_h,  // Input filter window height
+        filter_w,  // Input filter window width
+        act_block_h_datums,
         (uint32_t)act_block_num_tiles,
-        (uint32_t)input_num_cores,
-        (uint32_t)num_blocks_act_h_per_core,
-        (uint32_t)per_core_num_blocks_act_w,
-        (uint32_t)act_mcast_sender_semaphore,
-        (uint32_t)act_mcast_receiver_semaphore,
+        input_num_cores,
+        num_blocks_act_h_per_core,
+        per_core_num_blocks_act_w,
+        act_mcast_sender_semaphore,
+        act_mcast_receiver_semaphore,
         (uint32_t)act_mcast_start.x,
         (uint32_t)act_mcast_start.y,
         (uint32_t)act_mcast_end.x,
         (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles * tt::tt_metal::detail::TileSize(tilized_act_df),
-        (uint32_t)output_num_cores,
+        output_num_cores,
         (uint32_t)all_reader_cores.size(),
         get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,

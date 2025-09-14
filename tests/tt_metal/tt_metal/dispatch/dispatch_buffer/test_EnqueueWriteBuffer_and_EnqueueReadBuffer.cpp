@@ -662,7 +662,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, WriteOneTileToDramBank0) {
 TEST_F(UnitMeshCQSingleCardBufferFixture, WriteOneTileToAllDramBanks) {
     for (const auto& mesh_device : devices_) {
         TestBufferConfig config = {
-            .num_pages = uint32_t(mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = mesh_device->allocator()->get_num_banks(BufferType::DRAM),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
@@ -1322,7 +1322,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllDramBanks) {
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         TestBufferConfig config = {
-            .num_pages = uint32_t(mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = mesh_device->allocator()->get_num_banks(BufferType::DRAM),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
@@ -1428,7 +1428,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     auto mesh_device = this->device_;
     auto device = mesh_device->get_devices()[0];
     TestBufferConfig config = {
-        .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = device->allocator()->get_num_banks(BufferType::DRAM),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 

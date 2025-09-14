@@ -110,9 +110,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     // TODO: If this is not the case, then we should set reader_runtime_args to max possible size and update sender noc
     // coordinates based on input
     CoreCoord mcast_sender_grid =
-        ((CoreRangeSet)num_cores_to_corerangeset(TILE_HEIGHT, compute_with_storage_grid_size, row_major))
-            .bounding_box()
-            .grid_size();
+        (num_cores_to_corerangeset(TILE_HEIGHT, compute_with_storage_grid_size, row_major)).bounding_box().grid_size();
     std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
     std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
     for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
@@ -219,7 +217,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)output_cb_index,
+        output_cb_index,
         out_subblock_w,
         intermediate_num_tiles,
     };

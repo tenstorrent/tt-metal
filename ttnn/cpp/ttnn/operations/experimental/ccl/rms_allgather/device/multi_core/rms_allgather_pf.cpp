@@ -605,56 +605,56 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
+        num_cores_x_mcast,
+        num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)single_tile_size,
-        (std::uint32_t)ex_cb_partial2_index,
-        (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)ex_cb_external2_index,
-        (std::uint32_t)post_reduce_sender_semaphore_id,
-        (std::uint32_t)cb_stats_reduced_index,
-        (std::uint32_t)ex_global_cb_index};
+        num_blocks_first_stage,
+        num_blocks_second_stage,
+        reduce_second_stage_semaphore_id,
+        single_tile_size,
+        ex_cb_partial2_index,
+        ex2_cb_index,
+        ex_cb_external2_index,
+        post_reduce_sender_semaphore_id,
+        cb_stats_reduced_index,
+        ex_global_cb_index};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
         (std::uint32_t)1,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
+        num_cores_x_mcast,
+        num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)single_tile_size,
-        (std::uint32_t)ex_cb_partial2_index,
-        (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)ex_cb_external2_index,
-        (std::uint32_t)post_reduce_sender_semaphore_id,
-        (std::uint32_t)ex_global_cb_index};
+        num_blocks_first_stage,
+        num_blocks_second_stage,
+        reduce_second_stage_semaphore_id,
+        single_tile_size,
+        ex_cb_partial2_index,
+        ex2_cb_index,
+        ex_cb_external2_index,
+        post_reduce_sender_semaphore_id,
+        ex_global_cb_index};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
         (std::uint32_t)0,
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)single_tile_size,
-        (std::uint32_t)ex_cb_partial2_index,
-        (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)ex_cb_external2_index,
-        (std::uint32_t)post_reduce_sender_semaphore_id,
-        (std::uint32_t)ex_global_cb_index};
+        reduce_second_stage_semaphore_id,
+        single_tile_size,
+        ex_cb_partial2_index,
+        ex2_cb_index,
+        ex_cb_external2_index,
+        post_reduce_sender_semaphore_id,
+        ex_global_cb_index};
 
     std::vector<uint32_t> writer_compile_time_args = {
         1,  // Gets overwritten in not all to all workers
@@ -669,7 +669,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_targets_backward,             // num_targets_backward_direction
         num_links,
         (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)block_wt,
+        block_wt,
         output_reshard_cb_index,
         output_cb_index,
         in3_cb_index,
@@ -938,7 +938,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             }
             compute_args.push_back((uint32_t)is_second_stage_reader);
             compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
-            compute_args.push_back((uint32_t)num_distributed_devices);
+            compute_args.push_back(num_distributed_devices);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
@@ -946,9 +946,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
         if (width_index == 0) {
             CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            CoreCoord top_left_core = {start_core.x, start_core.y};
+            CoreCoord bottom_right_core = {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1};
             auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
             auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;
@@ -1116,9 +1115,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> writer_mcast_sender_args = {0};
             CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            CoreCoord top_left_core = {start_core.x, start_core.y};
+            CoreCoord bottom_right_core = {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1};
             auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
             auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;
@@ -1167,9 +1165,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args = {0};
             CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            CoreCoord top_left_core = {start_core.x, start_core.y};
+            CoreCoord bottom_right_core = {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1};
             auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
             auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;

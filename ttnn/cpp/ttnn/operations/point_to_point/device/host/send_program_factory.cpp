@@ -22,7 +22,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
+    auto mesh_device = tensor_args.input_tensor.device();
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
 

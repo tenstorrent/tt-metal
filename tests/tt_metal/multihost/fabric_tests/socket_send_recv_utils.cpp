@@ -149,8 +149,8 @@ bool test_socket_send_recv(
                         .compile_args =
                             {static_cast<uint32_t>(socket.get_config_buffer()->address()),
                              static_cast<uint32_t>(sender_data_buffer->address()),
-                             static_cast<uint32_t>(page_size),
-                             static_cast<uint32_t>(data_size)},
+                             page_size,
+                             data_size},
                         .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
                 tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
@@ -206,8 +206,8 @@ bool test_socket_send_recv(
                         .noc = NOC::RISCV_0_default,
                         .compile_args = {
                             static_cast<uint32_t>(socket.get_config_buffer()->address()),
-                            static_cast<uint32_t>(page_size),
-                            static_cast<uint32_t>(data_size),
+                            page_size,
+                            data_size,
                             static_cast<uint32_t>(recv_virtual_coord.x),
                             static_cast<uint32_t>(recv_virtual_coord.y),
                             static_cast<uint32_t>(recv_data_buffer->address())}});

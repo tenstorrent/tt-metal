@@ -81,14 +81,14 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
-        (std::uint32_t)packed_fill_value,
-        (std::uint32_t)input_element_size_bytes,
-        (std::uint32_t)height,
-        (std::uint32_t)width,
-        (std::uint32_t)padded_height,
-        (std::uint32_t)padded_width,
-        (std::uint32_t)tiles_per_2d_tensor,
-        (std::uint32_t)tiles_per_tile_row,
+        packed_fill_value,
+        input_element_size_bytes,
+        height,
+        width,
+        padded_height,
+        padded_width,
+        tiles_per_2d_tensor,
+        tiles_per_tile_row,
         (std::uint32_t)tt::constants::TILE_HEIGHT,
         (std::uint32_t)tt::constants::FACE_HEIGHT};
 
@@ -109,7 +109,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)tens_buffer->address(), (std::uint32_t)cb_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        tens_buffer->address(), cb_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t tile_offset = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {

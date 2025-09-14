@@ -18,7 +18,7 @@ void* get_hugepage(int device_id, uint32_t base_offset) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
     auto channel = cluster.get_assigned_channel_for_device(device_id);
-    return (void*)(cluster.host_dma_address(base_offset, mmio_device_id, channel));
+    return cluster.host_dma_address(base_offset, mmio_device_id, channel);
 }
 
 uint32_t get_hugepage_size(int device_id) {

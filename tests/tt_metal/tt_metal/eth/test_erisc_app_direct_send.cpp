@@ -126,8 +126,7 @@ bool eth_direct_sender_receiver_kernels(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
+            .noc = tt_metal::NOC::NOC_0, .compile_args = {num_bytes_per_send, uint32_t(num_bytes_per_send >> 4)}});
 
     tt_metal::SetRuntimeArgs(
         sender_program_,

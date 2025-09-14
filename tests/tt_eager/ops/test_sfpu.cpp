@@ -173,7 +173,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
                 .compile_args = writer_compile_time_args});
 
         std::vector<uint32_t> compute_kernel_args = {
-            (uint)num_tiles,
+            num_tiles,
             1,
             (uint)tile_factor,
         };

@@ -538,7 +538,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 continue;
             }
             const uint64_t src_offset =
-                (*cur_host_page * (uint64_t)buffer.page_size()) +
+                (*cur_host_page * buffer.page_size()) +
                 (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
                     dispatch_params.partial_page_size();
             command_sequence.update_cmd_sequence(
@@ -569,7 +569,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 dst_offset += dispatch_params.page_size_to_write;
                 continue;
             }
-            const uint64_t src_offset = *cur_host_page * (uint64_t)buffer.page_size();
+            const uint64_t src_offset = *cur_host_page * buffer.page_size();
             command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
             dst_offset += dispatch_params.page_size_to_write;
         }

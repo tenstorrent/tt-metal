@@ -25,7 +25,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto fill_value = operation_attributes.fill_value;
 
     auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
-    auto num_pages = (uint32_t)output.buffer()->num_pages();
+    auto num_pages = output.buffer()->num_pages();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_pages);
 

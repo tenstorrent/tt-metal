@@ -176,7 +176,7 @@ bool test_program_specified_with_core_range_set(
 
     // Each core range shares the same compute kernel args
     vector<uint32_t> compute_kernel_args = {
-        uint(num_tiles)  // per_core_tile_cnt
+        num_tiles  // per_core_tile_cnt
     };
 
     tt_metal::CreateKernel(

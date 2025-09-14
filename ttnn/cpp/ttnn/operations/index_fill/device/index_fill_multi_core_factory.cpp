@@ -102,8 +102,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
         (std::uint32_t)index.physical_volume(),
-        (std::uint32_t)rounded_input_unit_size,
-        (std::uint32_t)rounded_index_unit_size};
+        rounded_input_unit_size,
+        rounded_index_unit_size};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
@@ -113,7 +113,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)rounded_output_unit_size};
+    std::vector<uint32_t> writer_compile_time_args = {rounded_output_unit_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(

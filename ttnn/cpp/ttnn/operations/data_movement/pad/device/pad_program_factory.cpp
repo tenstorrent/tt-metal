@@ -853,30 +853,29 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     }
 
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)stick_size_padded_front,
-        (std::uint32_t)stick_size_padded_end,
-        (std::uint32_t)tt::div_up(stick_size_padded, 512),  // max zero size is 512B
-        (std::uint32_t)(stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
+        N + front_pad[-4],
+        H + front_pad[-2],
+        C + front_pad[-3],
+        stick_size,
+        N_padded,
+        H_padded,
+        C_padded,
+        stick_size_padded,
+        stick_size_padded_front,
+        stick_size_padded_end,
+        tt::div_up(stick_size_padded, 512),  // max zero size is 512B
+        (stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
         (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded_front / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes),
-        (std::uint32_t)stick_size_padded_aligned,
+        packed_pad_value,
+        row_major_min_bytes,
+        (stick_size_padded_front / row_major_min_bytes),
+        (stick_size_padded_end / row_major_min_bytes),
+        (stick_size_padded / row_major_min_bytes),
+        stick_size_padded_aligned,
         (std::uint32_t)unaligned};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index, (std::uint32_t)stick_size_padded, (std::uint32_t)stick_size_padded_aligned};
+    std::vector<uint32_t> writer_ct_args = {src0_cb_index, stick_size_padded, stick_size_padded_aligned};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -1123,11 +1122,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         for (const auto& core_stick_pair : core_stick_map) {
             auto xy_pair = core_stick_pair.first;
             if (row_major) {
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.second);  // noc x
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.first);   // noc y
+                reader_kernel_args.push_back(xy_pair.second);  // noc x
+                reader_kernel_args.push_back(xy_pair.first);   // noc y
             } else {
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.first);   // noc x
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.second);  // noc y
+                reader_kernel_args.push_back(xy_pair.first);   // noc x
+                reader_kernel_args.push_back(xy_pair.second);  // noc y
             }
         }
 
@@ -1261,22 +1260,22 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
     }
 
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
+    std::vector<uint32_t> reader_ct_args = {stick_size_padded, shard_height_padded};
 
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)num_zero_pad_sticks_read,
-        (std::uint32_t)zero_pad_stick_size,
+        N + front_pad[-4],
+        H + front_pad[-2],
+        C + front_pad[-3],
+        stick_size_padded,
+        N_padded,
+        H_padded,
+        C_padded,
+        num_zero_pad_sticks_read,
+        zero_pad_stick_size,
         (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes)};
+        packed_pad_value,
+        row_major_min_bytes,
+        (stick_size_padded / row_major_min_bytes)};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,

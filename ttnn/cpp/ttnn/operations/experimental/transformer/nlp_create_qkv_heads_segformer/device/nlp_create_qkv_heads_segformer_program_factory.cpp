@@ -68,14 +68,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     tt_metal::Program program = tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_num_tiles,
+        q_num_tiles,
     };
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)q_out_h_tiles,
-        (std::uint32_t)q_out_w_tiles,
-        (std::uint32_t)q_out_HtWt,
+        q_out_h_tiles,
+        q_out_w_tiles,
+        q_out_HtWt,
         (std::uint32_t)num_q_heads,  // q_out_c
     };
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
@@ -119,8 +119,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
         }
 
         std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)in1_buffer_addr,
+            in0_buffer->address(),
+            in1_buffer_addr,
             num_blocks_per_core,
             num_blocks_written * per_tensor_tiles,
             0,
@@ -130,8 +130,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
         uint32_t q_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * q_out_CHtWt + q_out_h_dim * q_out_w_tiles;
 
         std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)q_buffer->address(),  // q_tensor_addr
-            num_blocks_per_core,                 // num_blocks
+            q_buffer->address(),  // q_tensor_addr
+            num_blocks_per_core,  // num_blocks
             q_out_h_dim,
             q_out_tensor_tile_id,
         };

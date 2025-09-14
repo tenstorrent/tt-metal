@@ -1402,7 +1402,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     }
     reader_compile_time_args.push_back(
         (std::uint32_t)(mask_cb_data_format == tt::DataFormat::Float32));  // mask float32
-    reader_compile_time_args.push_back((std::uint32_t)mask_Ht);
+    reader_compile_time_args.push_back(mask_Ht);
 
     if (tensor_args.mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";

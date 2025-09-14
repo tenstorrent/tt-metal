@@ -89,11 +89,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToOneConfi
 
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
-        (uint32_t)l1_base_address,
+        l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
-        (uint32_t)packed_subordinate_core_coordinates,
+        packed_subordinate_core_coordinates,
         (uint32_t)test_config.num_virtual_channels};
 
     // Kernels

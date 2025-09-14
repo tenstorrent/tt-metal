@@ -306,9 +306,9 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         reader_kernel,
         core,
         {
-            (uint32_t)dram_buffer_src_a_addr,
+            dram_buffer_src_a_addr,
             (uint32_t)0,  // dram bank id
-            (uint32_t)dram_buffer_src_b_addr,
+            dram_buffer_src_b_addr,
             (uint32_t)0,  // dram bank id
             (uint32_t)1,  // num tiles
         });
@@ -318,7 +318,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         writer_kernel,
         core,
         {
-            (uint32_t)dram_buffer_dst_addr,
+            dram_buffer_dst_addr,
             (uint32_t)0,  // dram bank id
             (uint32_t)1,  // num tiles
         });

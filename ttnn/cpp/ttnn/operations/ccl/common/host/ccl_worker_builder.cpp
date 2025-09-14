@@ -125,8 +125,9 @@ void generate_ccl_slice_sequence_commands_impl(
         if (i == 0) {
             const std::size_t args_index_old = args_out.size();
             // push back Command Header
-            args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
-                ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
+            args_out.push_back(
+                ttnn::ccl::cmd::CclCommandHeader::to_uint32(
+                    ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1}));
 
             // push back arg 0 header
             args_out.push_back(
@@ -158,8 +159,9 @@ void generate_ccl_slice_sequence_commands_impl(
             auto const& last_slice = slices[i - 1];
             const std::size_t args_index_old = args_out.size();
             auto header_index = args_out.size();
-            args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
-                ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
+            args_out.push_back(
+                ttnn::ccl::cmd::CclCommandHeader::to_uint32(
+                    ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1}));
 
             // tensor shape
             if (last_slice.tensor_shape != slice.tensor_shape) {
@@ -237,8 +239,8 @@ void generate_ccl_slice_sequence_commands_impl(
                 }
             }
 
-            args_out[header_index] = static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
-                ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1}));
+            args_out[header_index] = ttnn::ccl::cmd::CclCommandHeader::to_uint32(
+                ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1});
 
             std::size_t args_index_new = args_out.size();
             std::stringstream ss;
@@ -729,12 +731,12 @@ void generate_ccl_command_stream_to_kernel_args(
             command.command_code,
             command.fabric_transfer_type);
         TT_FATAL(command.command_code != ttnn::ccl::cmd::CclCommandCode::INVALID, "Invalid command code");
-        rt_args_out[command_header_rt_arg_index] =
-            static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(ttnn::ccl::cmd::CclCommandHeader{
+        rt_args_out[command_header_rt_arg_index] = ttnn::ccl::cmd::CclCommandHeader::to_uint32(
+            ttnn::ccl::cmd::CclCommandHeader{
                 command.command_code,
                 command.fabric_transfer_args,
                 num_ccl_command_args_added,
-            }));
+            });
         TT_FATAL(
             ttnn::ccl::cmd::CclCommandHeader::from_uint32(rt_args_out[command_header_rt_arg_index]).code !=
                 ttnn::ccl::cmd::CclCommandCode::INVALID,
@@ -1204,7 +1206,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
         input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.buffer()->address()),
+        input_tensor.buffer()->address(),
         static_cast<uint32_t>(slices.size()),
         num_pages_per_packet,
         this->op_config.get_page_size()};

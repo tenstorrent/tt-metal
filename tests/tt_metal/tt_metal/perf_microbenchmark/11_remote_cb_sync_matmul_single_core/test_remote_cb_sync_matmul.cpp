@@ -245,10 +245,7 @@ create_programs(
 
     // in1 reader
     std::vector<uint32_t> in1_reader_compile_time_args = {
-        (std::uint32_t)in1_buffer->address(),
-        (std::uint32_t)start_tile_id,
-        (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)num_layers};
+        (std::uint32_t)in1_buffer->address(), start_tile_id, (std::uint32_t)tt_metal::NOC::RISCV_0_default, num_layers};
 
     auto in1_reader_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -262,10 +259,7 @@ create_programs(
 
     // in1 writer
     std::vector<uint32_t> in1_writer_compile_time_args = {
-        (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)num_receivers,
-        (std::uint32_t)num_layers,
-        (std::uint32_t)in1_writer_cb_index};
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default, num_receivers, num_layers, in1_writer_cb_index};
 
     auto in1_writer_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -278,7 +272,7 @@ create_programs(
             .compile_args = in1_writer_compile_time_args});
 
     // in0 reader
-    vector<uint32_t> in0_reader_compile_time_args = {(std::uint32_t)num_layers};
+    vector<uint32_t> in0_reader_compile_time_args = {num_layers};
 
     auto in0_reader_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -290,8 +284,7 @@ create_programs(
             .compile_args = in0_reader_compile_time_args});
 
     // in1 receiver
-    std::vector<uint32_t> in1_receiver_compile_time_args = {
-        (std::uint32_t)num_layers, (std::uint32_t)in1_receiver_cb_index};
+    std::vector<uint32_t> in1_receiver_compile_time_args = {num_layers, in1_receiver_cb_index};
 
     auto in1_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -334,7 +327,7 @@ create_programs(
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
-    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+    std::vector<uint32_t> reader_rt_args = {bank_id, vc};
     for (uint32_t i = 0; i < num_layers; ++i) {
         reader_rt_args.push_back(in1_reader_page_size);
     }
@@ -386,10 +379,10 @@ create_programs(
     // in1 receiver rt
     for (uint32_t i = 0; i < num_receivers; ++i) {
         std::vector<uint32_t> receiver_rt_args = {
-            (std::uint32_t)vc & 0x3,
+            vc & 0x3,
             (std::uint32_t)dram_reader_core_coord_physical.x,
             (std::uint32_t)dram_reader_core_coord_physical.y,
-            (std::uint32_t)i};
+            i};
         vc++;
 
         for (uint32_t i = 0; i < num_layers; ++i) {

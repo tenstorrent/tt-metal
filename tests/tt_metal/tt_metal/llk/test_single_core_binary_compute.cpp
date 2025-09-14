@@ -291,12 +291,12 @@ bool single_core_binary(
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input0_dram_byte_address,
+            input0_dram_byte_address,
             (uint32_t)0,  // dram bank id
-            (uint32_t)input1_dram_byte_address,
+            input1_dram_byte_address,
             (uint32_t)0,  // dram bank id
             (uint32_t)test_config.num_tiles,
-            (uint32_t)input2_dram_byte_address,
+            input2_dram_byte_address,
             (uint32_t)0,  // dram bank id
         });
     tt_metal::SetRuntimeArgs(
@@ -304,7 +304,7 @@ bool single_core_binary(
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            output_dram_byte_address,
             (uint32_t)0,  // dram bank id
             (uint32_t)test_config.num_tiles,
         });

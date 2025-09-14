@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(

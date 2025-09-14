@@ -658,8 +658,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)stick_size_padded, (std::uint32_t)stick_size_unpadded, (std::uint32_t)shard_height_unpadded};
+    std::vector<uint32_t> reader_ct_args = {stick_size_padded, stick_size_unpadded, shard_height_unpadded};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

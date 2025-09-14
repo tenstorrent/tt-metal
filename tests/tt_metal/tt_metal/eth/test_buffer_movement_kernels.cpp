@@ -138,11 +138,11 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_sender_kernel,
         eth_sender_core,
         {
-            (uint32_t)input_dram_byte_address,
+            input_dram_byte_address,
             0,
-            (uint32_t)remaining_bytes,
-            (uint32_t)num_loops,
-            (uint32_t)MAX_BUFFER,
+            remaining_bytes,
+            num_loops,
+            MAX_BUFFER,
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -164,11 +164,11 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_receiver_kernel,
         eth_receiver_core,
         {
-            (uint32_t)output_dram_byte_address,
+            output_dram_byte_address,
             0,
-            (uint32_t)remaining_bytes,
-            (uint32_t)num_loops,
-            (uint32_t)MAX_BUFFER,
+            remaining_bytes,
+            num_loops,
+            MAX_BUFFER,
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -266,10 +266,10 @@ bool chip_to_chip_interleaved_buffer_transfer(
         {(uint32_t)input_buffer->address(),
          (uint32_t)cfg.page_size_bytes,
          (uint32_t)max_buffer,
-         (uint32_t)num_loops,
-         (uint32_t)pages_per_loop,
-         (uint32_t)remaining_bytes,
-         (uint32_t)remaining_pages});
+         num_loops,
+         pages_per_loop,
+         remaining_bytes,
+         remaining_pages});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
@@ -303,10 +303,10 @@ bool chip_to_chip_interleaved_buffer_transfer(
             (uint32_t)output_buffer->address(),
             (uint32_t)cfg.page_size_bytes,
             (uint32_t)max_buffer,
-            (uint32_t)num_loops,
-            (uint32_t)pages_per_loop,
-            (uint32_t)remaining_bytes,
-            (uint32_t)remaining_pages,
+            num_loops,
+            pages_per_loop,
+            remaining_bytes,
+            remaining_pages,
         });
 
     ////////////////////////////////////////////////////////////////////////////

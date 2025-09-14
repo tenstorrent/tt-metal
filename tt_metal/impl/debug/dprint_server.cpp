@@ -240,7 +240,7 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
                     break;
                 }
                 case tt::DataFormat::UInt8: {
-                    uint8_t* data_ptr = reinterpret_cast<uint8_t*>(data);
+                    uint8_t* data_ptr = data;
                     *stream << (unsigned int)data_ptr[i];
                     break;
                 }
@@ -251,12 +251,12 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
                 }
                 case tt::DataFormat::Int32: {
                     int32_t* data_ptr = reinterpret_cast<int32_t*>(data);
-                    *stream << (int)data_ptr[i];
+                    *stream << data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt32: {
                     uint32_t* data_ptr = reinterpret_cast<uint32_t*>(data);
-                    *stream << (unsigned int)data_ptr[i];
+                    *stream << data_ptr[i];
                     break;
                 }
                 default: break;
@@ -1061,7 +1061,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                     break;
                 case DPrintUINT8:
                     // iostream default uint8_t printing is as char, not an int
-                    *intermediate_stream << *reinterpret_cast<uint8_t*>(ptr);
+                    *intermediate_stream << *ptr;
                     AssertSize(sz, 1);
                     break;
                 case DPrintUINT16: {

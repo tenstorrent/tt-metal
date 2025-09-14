@@ -51,12 +51,12 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
 
     Program program = tt::tt_metal::CreateProgram();
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_shard_ht,
-        (std::uint32_t)q_shard_wt,
-        (std::uint32_t)k_shard_ht,
-        (std::uint32_t)k_shard_wt,  // shard width for k and v individually, times two for entire kv tensor
-        (std::uint32_t)q_heads_per_core,
-        (std::uint32_t)k_heads_per_core,
+        q_shard_ht,
+        q_shard_wt,
+        k_shard_ht,
+        k_shard_wt,  // shard width for k and v individually, times two for entire kv tensor
+        q_heads_per_core,
+        k_heads_per_core,
         (std::uint32_t)head_dim / TILE_WIDTH,  // tiles per head
     };
 
@@ -73,7 +73,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
 
     if (transpose_k) {
         std::vector<uint32_t> compute_args = {
-            (std::uint32_t)(per_core_k_tiles),  // number of K tiles
+            per_core_k_tiles,  // number of K tiles
         };
         tt_metal::CreateKernel(
             program,

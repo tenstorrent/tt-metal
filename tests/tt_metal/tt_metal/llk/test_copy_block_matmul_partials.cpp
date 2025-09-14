@@ -133,10 +133,10 @@ void run_single_core_copy_block_matmul_partials(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        uint(num_tiles),                   // total tiles to transfer
+        num_tiles,                         // total tiles to transfer
         uint(test_config.compute_ublock),  // tiles to transfer in a single iteration/copy_block call
-        uint(src0_cb_index),               // Input CB idx
-        uint(ouput_cb_index)               // Output CB idx
+        src0_cb_index,                     // Input CB idx
+        ouput_cb_index                     // Output CB idx
     };
 
     std::map<std::string, std::string> defines;

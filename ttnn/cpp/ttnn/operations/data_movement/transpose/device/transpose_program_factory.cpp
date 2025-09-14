@@ -141,9 +141,9 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -692,23 +692,23 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args;
     if (row_major) {
-        reader_compile_time_args.push_back((std::uint32_t)N);
-        reader_compile_time_args.push_back((std::uint32_t)H);
-        reader_compile_time_args.push_back((std::uint32_t)C);
-        reader_compile_time_args.push_back((std::uint32_t)W * a.element_size());
+        reader_compile_time_args.push_back(N);
+        reader_compile_time_args.push_back(H);
+        reader_compile_time_args.push_back(C);
+        reader_compile_time_args.push_back(W * a.element_size());
 
         auto stick_size = W * a.element_size();
         reader_compile_time_args.push_back(stick_size);
     } else {
-        reader_compile_time_args.push_back((std::uint32_t)sub_tile_line_bytes);
+        reader_compile_time_args.push_back(sub_tile_line_bytes);
         reader_compile_time_args.push_back((std::uint32_t)(cb_data_format == tt::DataFormat::Float32));
-        reader_compile_time_args.push_back((std::uint32_t)alignment);
+        reader_compile_time_args.push_back(alignment);
     }
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     if (row_major) {
-        writer_compile_time_args.push_back((std::uint32_t)W * a.element_size());
+        writer_compile_time_args.push_back(W * a.element_size());
 
         auto stick_size = W * a.element_size();
         writer_compile_time_args.push_back(stick_size);
@@ -1053,10 +1053,10 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
         std::vector<uint32_t> reader_runtime_args = {
             (std::uint32_t)read_single_h_block_per_core,
-            (std::uint32_t)num_C_blocks_per_core_reader,
-            (std::uint32_t)num_sticks_per_shard_core_reader,
-            (std::uint32_t)num_non_repeat_cores,
-            (std::uint32_t)read_stick_stride,
+            num_C_blocks_per_core_reader,
+            num_sticks_per_shard_core_reader,
+            num_non_repeat_cores,
+            read_stick_stride,
         };
 
         reader_runtime_args.insert(
@@ -1069,12 +1069,12 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         // writer rt args
         std::vector<uint32_t> writer_runtime_args = {
             (std::uint32_t)read_single_h_block_per_core,
-            (std::uint32_t)num_C_blocks_per_core_writer,
-            (std::uint32_t)num_sticks_per_shard_core_writer,
-            (std::uint32_t)num_non_repeat_cores,
-            (std::uint32_t)read_stick_stride,
-            (std::uint32_t)writer_read_stick_offset,
-            (std::uint32_t)writer_write_stick_offset,
+            num_C_blocks_per_core_writer,
+            num_sticks_per_shard_core_writer,
+            num_non_repeat_cores,
+            read_stick_stride,
+            writer_read_stick_offset,
+            writer_write_stick_offset,
 
         };
 
@@ -1141,19 +1141,18 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
     std::vector<uint32_t> reader_compile_time_args;
     if (is_special_case) {
-        reader_compile_time_args = {
-            (std::uint32_t)src0_cb_index, (std::uint32_t)output_cb_index, (std::uint32_t)stick_size_bytes};
+        reader_compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
     } else {
         reader_compile_time_args = {
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)output_cb_index,
-            (std::uint32_t)N,
-            (std::uint32_t)H,
-            (std::uint32_t)C,
-            (std::uint32_t)stick_size_bytes,
+            src0_cb_index,
+            output_cb_index,
+            N,
+            H,
+            C,
+            stick_size_bytes,
             (std::uint32_t)row_major,
-            (std::uint32_t)num_cores_x,
-            (std::uint32_t)num_cores_y};
+            num_cores_x,
+            num_cores_y};
     }
 
     // defines
@@ -1171,8 +1170,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
     tt::tt_metal::KernelHandle writer_kernel_id{};
     if (is_special_case) {
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)src0_cb_index, (std::uint32_t)output_cb_index, (std::uint32_t)stick_size_bytes};
+        std::vector<uint32_t> writer_compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -1528,7 +1526,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
     }
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     if (row_major) {
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
@@ -1714,16 +1712,16 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
+        src0_cb_index,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
+        output_cb_index,
     };
 
     std::vector<uint32_t> compute_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)output_cb_index,
+        src0_cb_index,
+        output_cb_index,
     };
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -1993,13 +1991,13 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)num_hw_blocks_per_core,
-        (std::uint32_t)ht,
-        (std::uint32_t)H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT,
-        (std::uint32_t)H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT,
-        (std::uint32_t)wt,
-        (std::uint32_t)stick_size_bytes,
-        (std::uint32_t)wt * a.element_size() * TILE_WIDTH,
+        num_hw_blocks_per_core,
+        ht,
+        H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT,
+        H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT,
+        wt,
+        stick_size_bytes,
+        wt * a.element_size() * TILE_WIDTH,
     };
     reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
     reader_compile_time_args.push_back(H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT);
@@ -2012,13 +2010,13 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)num_hw_blocks_per_core,
-        (std::uint32_t)ht,
-        (std::uint32_t)wt,
-        (std::uint32_t)W > TILE_WIDTH ? TILE_WIDTH : W % TILE_WIDTH,
-        (std::uint32_t)W % TILE_WIDTH == 0 ? TILE_WIDTH : W % TILE_WIDTH,
-        (std::uint32_t)H * output.element_size(),
-        (std::uint32_t)ht * output.element_size() * TILE_HEIGHT,
+        num_hw_blocks_per_core,
+        ht,
+        wt,
+        W > TILE_WIDTH ? TILE_WIDTH : W % TILE_WIDTH,
+        W % TILE_WIDTH == 0 ? TILE_WIDTH : W % TILE_WIDTH,
+        H * output.element_size(),
+        ht * output.element_size() * TILE_HEIGHT,
     };
 
     tt::tt_metal::CreateKernel(
@@ -2029,15 +2027,15 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_compile_time_args = {
-        (std::uint32_t)ht,
-        (std::uint32_t)wt,
-        (std::uint32_t)ht * wt,
-        (std::uint32_t)num_hw_blocks_per_core,
-        (std::uint32_t)H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT,  // last_output_row_num_datums
-        (std::uint32_t)pack_num_pages,
-        (std::uint32_t)pack_num_pages_last_col,
-        (std::uint32_t)pack_num_pages_last_row,
-        (std::uint32_t)pack_num_pages_last_row_col,
+        ht,
+        wt,
+        ht * wt,
+        num_hw_blocks_per_core,
+        H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT,  // last_output_row_num_datums
+        pack_num_pages,
+        pack_num_pages_last_col,
+        pack_num_pages_last_row,
+        pack_num_pages_last_row_col,
     };
 
     std::map<std::string, std::string> compute_defines;

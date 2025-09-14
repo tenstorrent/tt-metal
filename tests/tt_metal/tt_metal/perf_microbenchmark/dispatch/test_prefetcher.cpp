@@ -1829,8 +1829,7 @@ void write_prefetcher_cmds(
     for (uint32_t i = 0; i < iterations; i++) {
         uint32_t cmd_ptr = 0;
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
-            uint32_t cmd_size_words =
-                ((uint32_t)cmd_sizes[j] << DispatchSettings::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
+            uint32_t cmd_size_words = (cmd_sizes[j] << DispatchSettings::PREFETCH_Q_LOG_MINSIZE) / sizeof(uint32_t);
             if ((void*)(host_mem_ptr + cmd_size_words) >
                 (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g)) {
                 // Wrap huge page
@@ -1976,7 +1975,7 @@ void configure_for_single_chip(
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     host_hugepage_base =
-        (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+        tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
     host_hugepage_base = (void*)((uint8_t*)host_hugepage_base + dev_hugepage_base_g);
     host_hugepage_completion_buffer_base_g = (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g);
     uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base_g + hugepage_issue_buffer_size_g;

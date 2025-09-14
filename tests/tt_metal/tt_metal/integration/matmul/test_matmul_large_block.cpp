@@ -286,16 +286,16 @@ bool matmul_large_block(
     std::string writer_kernel;
     if (output_rm) {
         writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
-        writer_rt_args = {dst_dram_buffer->address(), 0, uint(M * N)};
+        writer_rt_args = {dst_dram_buffer->address(), 0, (M * N)};
     } else {
         writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";
         writer_rt_args = {
             dst_dram_buffer->address(),
             0,
-            (std::uint32_t)out_subblock_h,      // num tiles per sub block m
-            (std::uint32_t)out_subblock_w,      // num tiles per sub block n
-            (std::uint32_t)M / out_subblock_h,  // num sub blocks m
-            (std::uint32_t)N / out_subblock_w,  // num sub blocks n
+            (std::uint32_t)out_subblock_h,  // num tiles per sub block m
+            (std::uint32_t)out_subblock_w,  // num tiles per sub block n
+            M / out_subblock_h,             // num sub blocks m
+            N / out_subblock_w,             // num sub blocks n
             (std::uint32_t)out_subblock_w * single_tile_size *
                 (N / out_subblock_w),  // bytes offset to next row within sub-block
             (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size *

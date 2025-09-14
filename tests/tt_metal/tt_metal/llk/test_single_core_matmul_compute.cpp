@@ -446,8 +446,8 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
             (uint32_t)in1_dram_addr,
             (uint32_t)0,
             (uint32_t)1,              // num_blocks
-            (uint32_t)M * K,          // in0_block_tile_cnt
-            (uint32_t)K * N,          // in1_block_tile_cnt
+            M * K,                    // in0_block_tile_cnt
+            K * N,                    // in1_block_tile_cnt
             (uint32_t)in0_byte_size,  // in0_block_size_bytes
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
@@ -458,7 +458,7 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
         {
             (uint32_t)out_dram_addr,
             (uint32_t)0,
-            (uint32_t)M * N,
+            M * N,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -623,8 +623,8 @@ bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
             (uint32_t)in1_dram_addr,
             (uint32_t)0,
             (uint32_t)1,              // num_blocks
-            (uint32_t)M * K,          // in0_block_tile_cnt
-            (uint32_t)K * N,          // in1_block_tile_cnt
+            M * K,                    // in0_block_tile_cnt
+            K * N,                    // in1_block_tile_cnt
             (uint32_t)in0_byte_size,  // in0_block_size_bytes
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
@@ -635,7 +635,7 @@ bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
         {
             (uint32_t)out_dram_addr,
             (uint32_t)0,
-            (uint32_t)M * N,
+            M * N,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);

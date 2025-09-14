@@ -69,8 +69,8 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
 
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
-        (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
+        master_l1_byte_address,
+        subordinate_l1_byte_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,

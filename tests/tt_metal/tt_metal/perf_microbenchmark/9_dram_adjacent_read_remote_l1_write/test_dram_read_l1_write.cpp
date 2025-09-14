@@ -157,11 +157,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer_addr,
-        (std::uint32_t)start_tile_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)num_pages,
-        (std::uint32_t)block_num_tiles,
-        (std::uint32_t)page_size,
+        start_tile_id,
+        num_blocks,
+        num_pages,
+        block_num_tiles,
+        page_size,
         (std::uint32_t)tt_metal::NOC::RISCV_0_default};
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -175,11 +175,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)num_pages_w_per_receiver,
-        (std::uint32_t)block_h,
-        (std::uint32_t)block_num_tiles,
-        (std::uint32_t)page_size,
+        num_blocks,
+        num_pages_w_per_receiver,
+        block_h,
+        block_num_tiles,
+        page_size,
         (std::uint32_t)tt_metal::NOC::RISCV_0_default};
 
     auto writer_kernel = tt_metal::CreateKernel(
@@ -209,7 +209,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        const std::array reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+        const std::array reader_rt_args = {bank_id, vc};
 
         log_info(tt::LogTest, "core: {}, vc: {}", core, vc);
 
@@ -544,7 +544,7 @@ int main(int argc, char** argv) {
         log_debug(tt::LogTest, "device x : {}", num_cores_x);
         log_debug(tt::LogTest, "device y : {}", num_cores_y);
 
-        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        uint32_t num_tiles = ((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks
 
         CoreRangeSet all_dram_reader_cores;

@@ -205,11 +205,7 @@ void create_and_run_row_pipeline(
         auto l1_valid_value_id = sems[core].at(2);
 
         if (core_id == 0) {
-            SetRuntimeArgs(
-                program,
-                receiver_kernels.at(core_id),
-                core,
-                {src_address, 0, (uint32_t)num_tiles, (uint32_t)num_repetitions});
+            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {src_address, 0, num_tiles, num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
@@ -217,18 +213,14 @@ void create_and_run_row_pipeline(
                 core,
                 {(uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id - 1]).x,
                  (uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id - 1]).y,
-                 (uint32_t)num_tiles,
-                 (uint32_t)sender_semaphore_id,
-                 (uint32_t)receiver_semaphore_id,
-                 (uint32_t)num_repetitions});
+                 num_tiles,
+                 sender_semaphore_id,
+                 receiver_semaphore_id,
+                 num_repetitions});
         }
 
         if (core_id == num_cores - 1) {
-            SetRuntimeArgs(
-                program,
-                sender_kernels.at(core_id),
-                core,
-                {dst_address, 0, (uint32_t)num_tiles, (uint32_t)num_repetitions});
+            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {dst_address, 0, num_tiles, num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
@@ -236,11 +228,11 @@ void create_and_run_row_pipeline(
                 core,
                 {(uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id + 1]).x,
                  (uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id + 1]).y,
-                 (uint32_t)num_tiles,
-                 (uint32_t)sender_semaphore_id,
-                 (uint32_t)receiver_semaphore_id,
-                 (uint32_t)l1_valid_value_id,
-                 (uint32_t)num_repetitions});
+                 num_tiles,
+                 sender_semaphore_id,
+                 receiver_semaphore_id,
+                 l1_valid_value_id,
+                 num_repetitions});
         }
     }
     distributed::AddProgramToMeshWorkload(

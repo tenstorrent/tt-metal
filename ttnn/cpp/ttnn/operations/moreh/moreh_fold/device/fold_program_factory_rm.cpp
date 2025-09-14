@@ -100,13 +100,13 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(input_cb_index),
-        static_cast<uint32_t>(output_cb_index),
+        input_cb_index,
+        output_cb_index,
     };
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(output_cb_index),
+        output_cb_index,
     };
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 

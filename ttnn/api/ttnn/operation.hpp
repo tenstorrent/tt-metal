@@ -211,7 +211,7 @@ struct OpPerformanceModelGeneral {
         std::vector<float> input_bws(inputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
         std::transform(inputs_bytes.cbegin(), inputs_bytes.cend(), input_bws.begin(), [this](float c) {
-            return (float)c / this->ideal_ns;
+            return c / this->ideal_ns;
         });
         return input_bws;
     }
@@ -219,7 +219,7 @@ struct OpPerformanceModelGeneral {
         std::vector<float> output_bws(outputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
         std::transform(outputs_bytes.cbegin(), outputs_bytes.cend(), output_bws.begin(), [this](float c) {
-            return (float)c / this->ideal_ns;
+            return c / this->ideal_ns;
         });
         return output_bws;
     }

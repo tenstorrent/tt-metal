@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = writer_compile_time_args});
 
-        vector<uint32_t> compute_kernel_args = {uint(num_tensor_tiles)};
+        vector<uint32_t> compute_kernel_args = {num_tensor_tiles};
 
         tt_metal::CreateKernel(
             program,

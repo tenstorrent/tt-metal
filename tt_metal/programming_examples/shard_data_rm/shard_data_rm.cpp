@@ -110,7 +110,7 @@ int main() {
     CreateCircularBuffer(program, cores, input_cb_config);
 
     // create data movement kernel to shard data
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {input_cb_index};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     const uint32_t values_per_stick = input_unit_size / data_size;  // Number of bfloat16 values per stick
     auto reader_id = tt_metal::CreateKernel(

@@ -535,18 +535,18 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
             reader_kernel,
             core,
             {
-                (uint32_t)src_dram_buffer->address(),
+                src_dram_buffer->address(),
                 0,
-                (uint32_t)num_tiles,
+                num_tiles,
             });
         SetRuntimeArgs(
             program_,
             writer_kernel,
             core,
             {
-                (uint32_t)dst_dram_buffer->address(),
+                dst_dram_buffer->address(),
                 0,
-                (uint32_t)num_tiles,
+                num_tiles,
             });
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

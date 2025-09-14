@@ -168,13 +168,13 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
                              : shard_addr_gen_consts::ContiguityType::L1_PADDING_IN_RIGHTMOST_SHARD;
     }
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout()));  // Memory layout
-    args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
+    args.push_back(get_sharding_core_count(t));                                // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
     TT_FATAL(t.buffer()->aligned_page_size() > 0, "aligned page size is 0");
     TT_FATAL(buf_shard_spec.tensor2d_shape_in_pages[1] > 0, "the page is empty");
-    args.push_back(static_cast<uint32_t>(
+    args.push_back(
         buf_shard_spec
-            .tensor2d_shape_in_pages[1]));  // The number of pages in each sharding row not including padding pages
+            .tensor2d_shape_in_pages[1]);  // The number of pages in each sharding row not including padding pages
     args.push_back(static_cast<uint32_t>(contiguity));  // This defines times when contiguous pages can't be calculated
     args.push_back(pages_per_shard_x);
     args.push_back(pages_per_shard_y);

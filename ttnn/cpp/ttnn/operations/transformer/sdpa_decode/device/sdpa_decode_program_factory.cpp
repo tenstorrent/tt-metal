@@ -911,7 +911,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t core_num_in_output = i % num_cores_per_batch;
 
         uint32_t cur_pos =
-            (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
+            (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((cur_batch / q_heads_parallel_factor));
 
         log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
         log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);

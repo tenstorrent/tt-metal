@@ -124,13 +124,13 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
         //     0: Test ID
         (uint32_t)test_config.test_id,
         // 1 - 2: L1 Addresses
-        (uint32_t)mst_l1_base_address,
-        (uint32_t)sub_l1_base_address,
+        mst_l1_base_address,
+        sub_l1_base_address,
         // 3 - 4: Transaction parameters
         (uint32_t)test_config.num_of_transactions_per_master,  // num_of_transactions
         (uint32_t)bytes_per_transaction,                       // transaction_size_bytes
         //     5: Subordinate count
-        (uint32_t)num_subordinates,  // num_subordinates
+        num_subordinates,  // num_subordinates
         //     6: Virtual channels
         (uint32_t)test_config.num_virtual_channels,  // num_virtual_channels
     };

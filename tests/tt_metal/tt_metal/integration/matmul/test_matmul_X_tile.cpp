@@ -238,11 +238,11 @@ void matmul_tile(
             0,
             src1_dram_buffer->address(),
             0,
-            (std::uint32_t)K,
-            (std::uint32_t)M,
-            (std::uint32_t)N,
-            (std::uint32_t)(M * single_tile_size_bfp16b),
-            (std::uint32_t)(N * single_tile_size_bfp16b),
+            K,
+            M,
+            N,
+            (M * single_tile_size_bfp16b),
+            (N * single_tile_size_bfp16b),
             cfg.with_bias};
     } else {
         uint32_t num_output_tiles = 2;
@@ -305,8 +305,7 @@ void matmul_tile(
         vector<uint32_t> bias(N * 512, 0);
         fixture->WriteBuffer(mesh_device, src2_dram_buffer, bias);
 
-        vector<uint32_t> bias_args = {
-            src2_dram_buffer->address(), 0, (std::uint32_t)N, (std::uint32_t)(N * single_tile_size_bfp16b)};
+        vector<uint32_t> bias_args = {src2_dram_buffer->address(), 0, N, (N * single_tile_size_bfp16b)};
 
         for (uint32_t arg : bias_args) {
             reader_l1_args.push_back(arg);

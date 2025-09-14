@@ -190,8 +190,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args = {
-        uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), num_tiles_per_block};
 
     tt::tt_metal::CreateKernel(
         program,
@@ -755,9 +754,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
      */
     KernelHandle unary_reader_kernel_id;
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)src2_cb_index,
+        src0_cb_index,
+        src1_cb_index,
+        src2_cb_index,
     };
 
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -782,8 +781,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
+        nblocks_per_core,  // per_core_block_cnt
+        ntiles_per_block,  // per_block_ntiles
     };
 
     CreateKernel(

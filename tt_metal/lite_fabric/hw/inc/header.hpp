@@ -111,7 +111,7 @@ struct FabricLiteHeader {
         this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::NOC_UNICAST_WRITE, noc_index);
         this->payload_size_bytes = payload_size_bytes;
         this->command_fields.noc_unicast = noc_unicast_command_header;
-        return *static_cast<FabricLiteHeader*>(this);
+        return *this;
     }
 
     // Set the packet to be a NoC read at the target chip
@@ -120,13 +120,13 @@ struct FabricLiteHeader {
         this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::NOC_READ, noc_index);
         this->payload_size_bytes = payload_size_bytes;
         this->command_fields.noc_read = noc_read_command_header;
-        return *static_cast<FabricLiteHeader*>(this);
+        return *this;
     }
 
     inline FabricLiteHeader& to_write_reg(const WriteRegCommandHeader& write_reg_command_header) {
         this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::WRITE_REG, 0);
         this->command_fields.write_reg = write_reg_command_header;
-        return *static_cast<FabricLiteHeader*>(this);
+        return *this;
     }
 
     // Set the number of hops along the line for this packet to the target chip
@@ -137,7 +137,7 @@ struct FabricLiteHeader {
              ((1 << (distance_in_hops - 1) * LiteFabricRoutingFields::FIELD_WIDTH) - 1)) |
             (LiteFabricRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LiteFabricRoutingFields::FIELD_WIDTH);
         this->routing_fields.value = value;
-        return *static_cast<FabricLiteHeader*>(this);
+        return *this;
     }
 
     size_t get_payload_size_excluding_header() volatile const { return this->payload_size_bytes; }

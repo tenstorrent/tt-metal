@@ -78,12 +78,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {
         std::vector<uint32_t> compile_time_args = {
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)in0_h_tiles,
-            (std::uint32_t)in0_w_tiles * single_tile_size,
-            (std::uint32_t)num_blocks_per_core_group_1 * in0_w_tiles * single_tile_size,
-            (std::uint32_t)num_blocks_per_core_group_1 * in0_HtWt,
+            src0_cb_index,
+            out_cb_index,
+            in0_h_tiles,
+            in0_w_tiles * single_tile_size,
+            num_blocks_per_core_group_1 * in0_w_tiles * single_tile_size,
+            num_blocks_per_core_group_1 * in0_HtWt,
         };
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -99,13 +99,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)in0_h_tiles,
-            (std::uint32_t)in0_w_tiles,
-            (std::uint32_t)in0_c,
-            (std::uint32_t)in0_HtWt,
+            in0_h_tiles,
+            in0_w_tiles,
+            in0_c,
+            in0_HtWt,
         };
         tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
         tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -149,15 +149,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
         uint32_t nheads_first_risc = div_up(num_blocks_per_core_group_1, 2);
         uint32_t nheads_second_risc = num_blocks_per_core_group_1 - nheads_first_risc;
         std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)nheads_first_risc,
+            nheads_first_risc,
             0,
             0,
         };
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_runtime_args);
         std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)nheads_second_risc,
-            (std::uint32_t)nheads_first_risc * in0_HtWt * single_tile_size,
-            (std::uint32_t)nheads_first_risc * in0_w_tiles * single_tile_size,
+            nheads_second_risc,
+            nheads_first_risc * in0_HtWt * single_tile_size,
+            nheads_first_risc * in0_w_tiles * single_tile_size,
         };
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_runtime_args);
 
@@ -170,14 +170,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             uint32_t in0_tensor_tile_id = num_blocks_written / in0_h_tiles * in0_CHtWt + in0_h_dim * in0_w_tiles;
 
             std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t)in0_buffer->address(),
+                in0_buffer->address(),
                 num_blocks_per_core,  // num_blocks
                 in0_h_dim,            // in0_h_dim
                 in0_tensor_tile_id,   // in0_tensor_tile_id
             };
 
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                out_buffer->address(),  // out_tensor_addr
                 num_blocks_per_core * per_tensor_tiles,
                 num_blocks_written * per_tensor_tiles,
             };

@@ -67,9 +67,9 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.pages_per_transaction,
         (uint32_t)test_config.bytes_per_page,
-        (uint32_t)input_dram_address,
+        input_dram_address,
         (uint32_t)test_config.dram_channel,
-        (uint32_t)l1_address,
+        l1_address,
         (uint32_t)sem_id};
 
     vector<uint32_t> writer_compile_args = {
@@ -77,9 +77,9 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.pages_per_transaction,
         (uint32_t)test_config.bytes_per_page,
-        (uint32_t)output_dram_address,
+        output_dram_address,
         (uint32_t)test_config.dram_channel,
-        (uint32_t)l1_address,
+        l1_address,
         (uint32_t)sem_id,
         (uint32_t)test_config.virtual_channel};
 

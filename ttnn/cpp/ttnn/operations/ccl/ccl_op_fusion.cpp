@@ -51,9 +51,9 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     uint32_t all_gather_direction) {
     TT_FATAL(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
-    out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
-    out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
+    out_rt_args.push_back(num_workers_to_sync);
+    out_rt_args.push_back(curr_worker_index);
+    out_rt_args.push_back(this->all_gather_worker_sync_semaphore);
 
     // Push the worker core noc coords
     for (const auto& core : this->all_gather_worker_cores_noc) {
@@ -62,7 +62,7 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     }
 
     // Push the number of fused op cores to signal
-    out_rt_args.push_back(static_cast<uint32_t>(this->num_fused_op_cores_to_signal));
+    out_rt_args.push_back(this->num_fused_op_cores_to_signal);
 
     // Push the fused op receiver core noc coords
     for (const auto& core : this->fused_op_receiver_cores_noc) {
@@ -71,7 +71,7 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     }
 
     // Push the fused op signal semaphore addrs. Direction 0: clockwise, Direction 1: counter-clockwise
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[all_gather_direction]));
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[all_gather_direction]);
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_signaler_mode == FusedOpSignalerMode::SINGLE ? 0 : 1));
 }
 
@@ -121,7 +121,7 @@ void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
     TT_FATAL(initialized_reduce_scatter && initialized_fused_op, "ReduceScatterFusedOpSignaler not initialized fully.");
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[0]);
 }
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
@@ -261,8 +261,8 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
         }
     }
     TT_FATAL(core_found, "MatmulFusedOpSignaler did not find curr_worker_index.");
-    out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->matmul_worker_sync_semaphore));
+    out_rt_args.push_back(curr_worker_index);
+    out_rt_args.push_back(this->matmul_worker_sync_semaphore);
 
     // Push the worker core noc coords
     for (const auto& core : this->matmul_worker_cores_noc) {
@@ -271,7 +271,7 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     }
 
     // Push the number of fused op cores to signal
-    out_rt_args.push_back(static_cast<uint32_t>(this->num_fused_op_cores_to_signal));
+    out_rt_args.push_back(this->num_fused_op_cores_to_signal);
 
     // Push the fused op receiver core noc coords
     for (const auto& core : this->fused_op_receiver_cores_noc) {
@@ -280,27 +280,27 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     }
 
     // Push the fused op signal semaphore addrs.
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[0]);
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_signaler_mode == FusedOpSignalerMode::SINGLE ? 0 : 1));
 }
 
 void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset) {
     TT_FATAL(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
-    out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
-    out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
-    out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
+    out_rt_args.push_back(this->num_transfers);
+    out_rt_args.push_back(this->ring_size);
+    out_rt_args.push_back(this->start_ring_index);
+    out_rt_args.push_back(this->tensor_slice_shape_width);
     if (use_in1_offset) {
-        out_rt_args.push_back(static_cast<uint32_t>(this->weight_output_page_offset));
-        out_rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->weight_output_page_offset));
+        out_rt_args.push_back(this->weight_output_page_offset);
+        out_rt_args.push_back(((this->ring_size - 1) * this->weight_output_page_offset));
     } else {
-        out_rt_args.push_back(static_cast<uint32_t>(this->output_page_offset));
-        out_rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
+        out_rt_args.push_back(this->output_page_offset);
+        out_rt_args.push_back(((this->ring_size - 1) * this->output_page_offset));
     }
     out_rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[0]);
+    out_rt_args.push_back(this->fused_op_receiver_signal_semaphores[1]);
 }
 
 void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::Program& program) {

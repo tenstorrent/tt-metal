@@ -215,37 +215,37 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
         reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)rotated_input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)src_scalar_cb_index,
+            input_cb_index,
+            rotated_input_cb_index,
+            cos_cb_index,
+            sin_cb_index,
+            src_scalar_cb_index,
             (std::uint32_t)bfloat16_scalar,
-            (std::uint32_t)Ht,
-            (std::uint32_t)Wt,
-            (std::uint32_t)HtWt,
-            (std::uint32_t)half_Wt * input_single_tile_size,
+            Ht,
+            Wt,
+            HtWt,
+            half_Wt * input_single_tile_size,
         };
         tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     } else {
         reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)rotated_input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)src_scalar_cb_index,
+            input_cb_index,
+            rotated_input_cb_index,
+            cos_cb_index,
+            sin_cb_index,
+            src_scalar_cb_index,
             (std::uint32_t)bfloat16_scalar,
-            (std::uint32_t)Ht,
-            (std::uint32_t)Wt,
-            (std::uint32_t)HtWt,
-            (std::uint32_t)half_Wt,
+            Ht,
+            Wt,
+            HtWt,
+            half_Wt,
         };
         tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     }
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     if (token_idx.has_value()) {
@@ -278,27 +278,27 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)rotated_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)src_scalar_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core_group_1,
-        (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
+        input_cb_index,
+        rotated_input_cb_index,
+        cos_cb_index,
+        sin_cb_index,
+        src_scalar_cb_index,
+        rotated_input_interm_cb_index,
+        cos_interm_cb_index,
+        sin_interm_cb_index,
+        output_cb_index,
+        num_rows_per_core_group_1,
+        Wt,
+        half_Wt};
     if (token_idx.has_value()) {
         compute_kernel_args.insert(
             compute_kernel_args.end(),
-            {(std::uint32_t)untilized_cos_interm_cb_index,
-             (std::uint32_t)untilized_cos_sync_cb_index,
-             (std::uint32_t)untilized_sin_interm_cb_index,
-             (std::uint32_t)untilized_sin_sync_cb_index,
-             (std::uint32_t)retilized_cos_cb_index,
-             (std::uint32_t)retilized_sin_cb_index});
+            {untilized_cos_interm_cb_index,
+             untilized_cos_sync_cb_index,
+             untilized_sin_interm_cb_index,
+             untilized_sin_sync_cb_index,
+             retilized_cos_cb_index,
+             retilized_sin_cb_index});
     }
 
     tt_metal::CreateKernel(

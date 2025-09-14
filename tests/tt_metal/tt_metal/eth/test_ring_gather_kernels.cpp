@@ -266,7 +266,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {
-                    uint32_t(num_bytes_per_send),
+                    num_bytes_per_send,
                     uint32_t(num_bytes_per_send >> 4),
                     uint32_t(sender_receiver_core.x),
                     uint32_t(sender_receiver_core.y)}});
@@ -280,7 +280,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
              (uint32_t)byte_size_per_device,
              (uint32_t)sender_receivers.size() - 1,
              (uint32_t)(src_eth_l1_byte_address + i * byte_size_per_device),
-             (uint32_t)i,
+             i,
              (uint32_t)sem_l1_byte_address});
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -433,7 +433,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {
-                    uint32_t(num_bytes_per_send),
+                    num_bytes_per_send,
                     uint32_t(num_bytes_per_send >> 4),
                     uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).x),
                     uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).y),
@@ -449,8 +449,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.size_bytes + 32,  // + 32 for idx
              (uint32_t)sender_receivers.size() - 1,
              (uint32_t)(i * cfg.num_pages),
-             (uint32_t)input_buffer->address(),
-             (uint32_t)output_buffers[i]->address(),
+             input_buffer->address(),
+             output_buffers[i]->address(),
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
@@ -486,7 +486,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             {(uint32_t)dst_eth_l1_byte_address,
              (uint32_t)cfg.size_bytes + 32,  // + 32 for idx
              (uint32_t)sender_receivers.size() - 1,
-             (uint32_t)output_buffers[i]->address(),
+             output_buffers[i]->address(),
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});

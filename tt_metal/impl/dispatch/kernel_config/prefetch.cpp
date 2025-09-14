@@ -510,7 +510,7 @@ void PrefetchKernel::ConfigureCore() {
         uint32_t prefetch_q_base =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
-            (uint32_t)(prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
+            (prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
         uint32_t prefetch_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         uint32_t prefetch_q_pcie_rd_ptr =

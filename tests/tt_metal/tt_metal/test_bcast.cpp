@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
                     core,
                     tt_metal::ComputeConfig{.compile_args = {}, .defines = compute_defines});
 
-                tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel, core, {uint(NC), uint(Ht), uint(Wt)});
+                tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel, core, {NC, Ht, Wt});
 
                 ////////////////////////////////////////////////////////////////////////////
                 //                      Execute Application

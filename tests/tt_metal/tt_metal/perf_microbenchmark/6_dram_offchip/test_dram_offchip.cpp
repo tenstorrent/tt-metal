@@ -455,10 +455,7 @@ bool assign_runtime_args_to_program(
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
         const std::array kernel_args = {
-            (std::uint32_t)input_buffer_addr,
-            (std::uint32_t)(num_tiles_used),
-            (std::uint32_t)num_blocks,
-            (std::uint32_t)num_reqs_at_a_time};
+            (std::uint32_t)input_buffer_addr, num_tiles_used, num_blocks, (std::uint32_t)num_reqs_at_a_time};
 
         tt_metal::SetRuntimeArgs(program, kernel, core, kernel_args);
         num_tiles_used += num_tiles_per_core;

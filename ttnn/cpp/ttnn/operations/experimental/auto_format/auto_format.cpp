@@ -139,7 +139,7 @@ Tensor AutoFormat::format_input_tensor(
                 PadValue pad_value_variant;
                 if (formatted_input.dtype() == ttnn::DataType::BFLOAT16 or
                     formatted_input.dtype() == ttnn::DataType::FLOAT32) {
-                    pad_value_variant = (float)pad_value;
+                    pad_value_variant = pad_value;
                 } else {
                     pad_value_variant = (uint32_t)pad_value;
                 }

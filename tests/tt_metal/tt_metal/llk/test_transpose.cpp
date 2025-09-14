@@ -173,7 +173,7 @@ void run_single_core_transpose(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = writer_cta});
 
-    vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
+    vector<uint32_t> compute_kernel_args = {(Ht * Wt * NC)};
 
     std::map<std::string, std::string> defines = {};
 

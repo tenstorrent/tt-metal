@@ -55,8 +55,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     // Create Kernels
     // reader
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)cb_index, (std::uint32_t)batch_cb_index, page_size};
+    std::vector<uint32_t> reader_compile_time_args = {cb_index, batch_cb_index, page_size};
     TensorAccessorArgs(*input_a.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*input_b.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*batch_ids.buffer()).append_to(reader_compile_time_args);
@@ -67,7 +66,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_index, (std::uint32_t)page_size};
+    std::vector<uint32_t> writer_compile_time_args = {cb_index, page_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(

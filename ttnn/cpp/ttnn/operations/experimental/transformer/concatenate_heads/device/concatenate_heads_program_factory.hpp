@@ -68,15 +68,15 @@ tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args = {
         // READER COMPILE TIME ARGS
-        (std::uint32_t)in0_w_tiles,  // in0_w_tiles
-        (std::uint32_t)in0_c,        // in0_c
-        (std::uint32_t)in0_HtWt,     // in0_HtWt
+        in0_w_tiles,  // in0_w_tiles
+        in0_c,        // in0_c
+        in0_HtWt,     // in0_HtWt
     };
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         // WRITER COMPILE TIME ARGS
-        (std::uint32_t)in0_w_tiles,  // in0_w_tiles
-        (std::uint32_t)in0_c,        // in0_c
+        in0_w_tiles,  // in0_w_tiles
+        in0_c,        // in0_c
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
 
@@ -107,11 +107,11 @@ tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
             uint32_t in0_tensor_tile_id = core_idx_x * in0_w_tiles + core_idx_y * in0_CHtWt;
 
             std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
-                in0_tensor_tile_id,                    // in0_tensor_tile_id
+                in0_buffer->address(),  // in0_tensor_addr
+                in0_tensor_tile_id,     // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)out_buffer->address(),                      // out_tensor_addr
+                out_buffer->address(),                                     // out_tensor_addr
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // out_tensor_tile_id
             };
 

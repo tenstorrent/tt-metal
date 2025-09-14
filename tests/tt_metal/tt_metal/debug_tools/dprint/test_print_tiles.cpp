@@ -142,20 +142,20 @@ static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *(&float_vec[col * 32 + 0]),
+                *(&float_vec[col * 32 + 8]),
+                *(&float_vec[col * 32 + 16]),
+                *(&float_vec[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *(&float_vec[col * 32 + 0]),
+                *(&float_vec[col * 32 + 8]),
+                *(&float_vec[col * 32 + 16]),
+                *(&float_vec[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Int8) {
         int8_t* int8_ptr = reinterpret_cast<int8_t*>(input_tile.data());
@@ -198,7 +198,7 @@ static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
                 int32_ptr[col * 32 + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt32) {
-        uint32_t* uint32_ptr = reinterpret_cast<uint32_t*>(input_tile.data());
+        uint32_t* uint32_ptr = input_tile.data();
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",

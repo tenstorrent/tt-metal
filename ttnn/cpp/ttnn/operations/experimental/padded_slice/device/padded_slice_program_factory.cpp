@@ -281,7 +281,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_temp_pad_config);
     }
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {src0_cb_index};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {misalignment};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
@@ -294,7 +294,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id;
     if (pad_output_row) {
-        writer_compile_time_args_vec.push_back((std::uint32_t)temp_pad_cb_index);
+        writer_compile_time_args_vec.push_back(temp_pad_cb_index);
         writer_compile_time_args_vec.push_back(output.element_size());
 
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(

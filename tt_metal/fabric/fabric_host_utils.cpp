@@ -442,7 +442,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     auto dist_from_ne = compute_distances(ne_corner, topology_info.adjacency_map);
 
     // Step 3: compute (row, col) for every chip using the distance formulas
-    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
+    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), (-1));
 
     for (const auto& [chip, d_nw] : dist_from_nw) {
         TT_FATAL(dist_from_ne.count(chip), "Mesh disconnected: chip {} missing in NE BFS.", chip);

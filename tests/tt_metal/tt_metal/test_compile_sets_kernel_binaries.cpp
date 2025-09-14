@@ -119,7 +119,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        uint(num_tiles)  // per_core_tile_cnt
+        num_tiles  // per_core_tile_cnt
     };
 
     tt_metal::CreateKernel(

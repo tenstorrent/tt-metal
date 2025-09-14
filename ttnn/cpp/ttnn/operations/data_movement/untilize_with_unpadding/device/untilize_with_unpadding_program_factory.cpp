@@ -155,10 +155,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {
-        uint32_t(num_tiles / num_tiles_per_block),
-        uint32_t(num_tiles_per_block),
-        uint32_t(src0_cb_index),
-        uint32_t(output_cb_index)};
+        uint32_t(num_tiles / num_tiles_per_block), num_tiles_per_block, src0_cb_index, output_cb_index};
 
     std::map<std::string, std::string> compute_kernel_defines;
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
@@ -962,7 +959,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     /** reader
      */
     KernelHandle unary_reader_kernel_id;
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_ct_args = {src0_cb_index};
 
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -974,8 +971,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
+        std::vector<uint32_t> writer_ct_args = {output_cb_index, sharded_output_cb_index, aligned_page_size};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16
@@ -1001,10 +997,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index,
+        nblocks_per_core,  // per_core_block_cnt
+        ntiles_per_block,  // per_block_ntiles
+        src0_cb_index,
+        output_cb_index,
     };
 
     std::map<std::string, std::string> compute_kernel_defines;
@@ -1016,7 +1012,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
-        compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
+        compute_args[0] = num_input_tiles;  // per_core_tile_cnt
     } else if (
         !use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {

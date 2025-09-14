@@ -137,16 +137,9 @@ void write_same_runtime_args_to_device(
     tt_metal::Buffer &src_dram_buffer,
     tt_metal::Buffer &dst_dram_buffer)
 {
+    const std::array unary_reader_args{src_dram_buffer.address(), (std::uint32_t)0, (std::uint32_t)num_tiles};
 
-    const std::array unary_reader_args{
-    (std::uint32_t)src_dram_buffer.address(),
-    (std::uint32_t) 0,
-    (std::uint32_t)num_tiles};
-
-    const std::array unary_writer_args{
-    (std::uint32_t)dst_dram_buffer.address(),
-    (std::uint32_t) 0,
-    (std::uint32_t)num_tiles};
+    const std::array unary_writer_args{dst_dram_buffer.address(), (std::uint32_t)0, (std::uint32_t)num_tiles};
 
     set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);
     set_rt_args(program, writer_kernel_id, core_range, unary_writer_args);
@@ -167,10 +160,7 @@ void write_unique_writer_runtime_args_to_device(
 ) {
 
     // Same readers args because all kernels read from same src
-    const std::array unary_reader_args{
-        (std::uint32_t)src_dram_buffer.address(),
-        (std::uint32_t) 0,
-        (std::uint32_t)num_tiles};
+    const std::array unary_reader_args{src_dram_buffer.address(), (std::uint32_t)0, (std::uint32_t)num_tiles};
 
     const std::array unary_writer_args_1{
         dst_dram_buffer_1.address(),

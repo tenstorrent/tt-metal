@@ -213,9 +213,9 @@ create_mesh_workloads(
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer->address(),
-        (std::uint32_t)start_tile_id,
+        start_tile_id,
         (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)num_mixed_df_layers};
+        num_mixed_df_layers};
 
     auto reader_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -228,10 +228,7 @@ create_mesh_workloads(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)num_receivers,
-        (std::uint32_t)num_mixed_df_layers,
-        (std::uint32_t)writer_cb_index};
+        (std::uint32_t)tt_metal::NOC::RISCV_0_default, num_receivers, num_mixed_df_layers, writer_cb_index};
 
     auto writer_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -243,8 +240,7 @@ create_mesh_workloads(
             .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = writer_compile_time_args});
 
-    std::vector<uint32_t> receiver_compile_time_args = {
-        (std::uint32_t)num_mixed_df_layers, (std::uint32_t)receiver_cb_index};
+    std::vector<uint32_t> receiver_compile_time_args = {num_mixed_df_layers, receiver_cb_index};
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -261,7 +257,7 @@ create_mesh_workloads(
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
-    std::vector<uint32_t> reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+    std::vector<uint32_t> reader_rt_args = {bank_id, vc};
     for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
         reader_rt_args.push_back(i % 2 == 0 ? reader_page_size : next_layer_reader_page_size);
     }
@@ -313,10 +309,10 @@ create_mesh_workloads(
     // receiver rt
     for (uint32_t i = 0; i < num_receivers; ++i) {
         std::vector<uint32_t> receiver_rt_args = {
-            (std::uint32_t)vc & 0x3,
+            vc & 0x3,
             (std::uint32_t)dram_reader_core_coord_physical.x,
             (std::uint32_t)dram_reader_core_coord_physical.y,
-            (std::uint32_t)i};
+            i};
         vc++;
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {

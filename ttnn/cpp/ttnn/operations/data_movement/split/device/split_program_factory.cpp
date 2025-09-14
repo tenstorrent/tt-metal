@@ -56,9 +56,9 @@ void setup_runtime(
                     reader_core_id += id_r_reader;
 
                     const std::array reader_runtime_args = {
-                        (std::uint32_t)reader_core_id,
-                        (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
-                        (std::uint32_t)0                         // split on last dim
+                        reader_core_id,
+                        in0_buffer->address(),  // in0_tensor_addr
+                        (std::uint32_t)0        // split on last dim
                     };
                     bool out0_only = false;
                     bool out1_only = false;
@@ -71,8 +71,8 @@ void setup_runtime(
 
                     const std::array writer_runtime_args = {
                         writer_core_id,
-                        (std::uint32_t)out0_buffer->address(),  // first base addr
-                        (std::uint32_t)out1_buffer->address(),  // second base addr
+                        out0_buffer->address(),  // first base addr
+                        out1_buffer->address(),  // second base addr
                         (std::uint32_t)out0_only,
                         (std::uint32_t)out1_only};
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -148,22 +148,22 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t y_stride_read = per_core_tiles_y * num_cores_y;
 
     std::vector<uint32_t> reader_compile_time_args = {// READER COMPILE TIME ARGS
-                                                      (std::uint32_t)(z / num_cores_z),
-                                                      (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
-                                                      (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
-                                                      (std::uint32_t)z_stride_read,
-                                                      (std::uint32_t)y_stride_read};
+                                                      (z / num_cores_z),
+                                                      per_core_tiles_x,  // out_num_tiles_per_tensor
+                                                      per_core_tiles_y,  // out_num_tiles_per_tensor
+                                                      z_stride_read,
+                                                      y_stride_read};
     TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
 
     uint32_t z_stride_write = num_tiles_per_z / num_chunks;
     uint32_t y_stride_write = per_core_tiles_y * (num_cores_c / num_chunks);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
-        (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
+        per_core_tiles_x,  // out_num_tiles_per_tensor
+        per_core_tiles_y,  // out_num_tiles_per_tensor
 
-        (std::uint32_t)(z / num_cores_z),
-        (std::uint32_t)z_stride_write,
-        (std::uint32_t)y_stride_write
+        (z / num_cores_z),
+        z_stride_write,
+        y_stride_write
 
     };
     TensorAccessorArgs(*out0_buffer).append_to(writer_compile_time_args);

@@ -82,11 +82,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 
         vector<uint32_t> sender_and_requestor_compile_args = {
             (uint32_t)test_config.test_id,
-            (uint32_t)l1_base_write_address,
-            (uint32_t)l1_base_read_address,
+            l1_base_write_address,
+            l1_base_read_address,
             (uint32_t)test_config.num_of_transactions,
             (uint32_t)bytes_per_transaction,
-            (uint32_t)packed_subordinate_core_coordinates,
+            packed_subordinate_core_coordinates,
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
@@ -106,10 +106,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 
         vector<uint32_t> sender_compile_args = {
             (uint32_t)test_config.test_id,
-            (uint32_t)l1_base_write_address,
+            l1_base_write_address,
             (uint32_t)test_config.num_of_transactions,
             (uint32_t)bytes_per_transaction,
-            (uint32_t)packed_subordinate_core_coordinates,
+            packed_subordinate_core_coordinates,
             (uint32_t)test_config.write_vc};
 
         CreateKernel(
@@ -128,10 +128,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 
         vector<uint32_t> requestor_compile_args = {
             (uint32_t)test_config.test_id,
-            (uint32_t)l1_base_read_address,
+            l1_base_read_address,
             (uint32_t)test_config.num_of_transactions,
             (uint32_t)bytes_per_transaction,
-            (uint32_t)packed_subordinate_core_coordinates};
+            packed_subordinate_core_coordinates};
 
         CreateKernel(
             program,

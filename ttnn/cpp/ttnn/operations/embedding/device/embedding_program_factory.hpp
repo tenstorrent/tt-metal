@@ -217,11 +217,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_block_size,
-        (std::uint32_t)num_tiles_per_block,
-        (std::uint32_t)input_block_size_bytes};
+        input_page_size,
+        weight_page_size,
+        weight_block_size,
+        num_tiles_per_block,
+        input_block_size_bytes};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -237,10 +237,10 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
 
     if (num_blocks_per_core_group_1 > 0) {
         std::vector<uint32_t> compute_args_1 = {
-            uint32_t(src0_cb_index),                // input embeddings_cb_index
-            uint32_t(output_cb_index),              // output_cb_index
-            uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(src0_cb_index),      // input embeddings_cb_index
+            uint32_t(output_cb_index),    // output_cb_index
+            num_blocks_per_core_group_1,  // per_core_block_cnt
+            num_tiles_per_block           // per_core_block_tile_cnt
         };
         tt::tt_metal::CreateKernel(
             program,
@@ -251,10 +251,10 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
 
     if (num_blocks_per_core_group_2 > 0) {
         std::vector<uint32_t> compute_args_2 = {
-            uint32_t(src0_cb_index),                // input embeddings_cb_index
-            uint32_t(output_cb_index),              // output_cb_index
-            uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(src0_cb_index),      // input embeddings_cb_index
+            uint32_t(output_cb_index),    // output_cb_index
+            num_blocks_per_core_group_2,  // per_core_block_cnt
+            num_tiles_per_block           // per_core_block_tile_cnt
         };
         tt::tt_metal::CreateKernel(
             program,
@@ -279,8 +279,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        a.buffer()->address(),
+        weights.buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -290,8 +290,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         reader_runtime_args.push_back(pad_token.value());
     }
 
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
+    std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -485,10 +484,10 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)out_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)block_height,
-        (std::uint32_t)block_height * input_element_size_bytes};
+        input_page_size,
+        weight_page_size,
+        block_height,
+        block_height * input_element_size_bytes};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -512,7 +511,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     // Tilized writer
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, output_page_size};
         tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -526,8 +525,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        a.buffer()->address(),
+        weights.buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -537,7 +536,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         reader_runtime_args.push_back(pad_token.value());
     }
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        output.buffer()->address(), output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -697,9 +696,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
+        input_page_size,
+        weight_page_size,
+        a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
@@ -721,7 +720,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_page_size};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
@@ -736,8 +735,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        a.buffer()->address(),
+        weights.buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -748,7 +747,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         reader_runtime_args.push_back(pad_token.value());
     }
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        output.buffer()->address(), output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t row = 0;
     uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;

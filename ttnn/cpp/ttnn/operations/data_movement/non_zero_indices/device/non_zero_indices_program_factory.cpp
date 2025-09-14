@@ -63,21 +63,21 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
 
     // Create Kernel
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)output_cb_index_0,
-        (std::uint32_t)output_cb_index_1,
+        input_cb_index,
+        output_cb_index_0,
+        output_cb_index_1,
     };
     TensorAccessorArgs(*input.buffer()).append_to(compile_time_args);
     TensorAccessorArgs(*out_num_indices.buffer()).append_to(compile_time_args);
     TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
 
     const std::array run_time_args = {
-        (std::uint32_t)input.buffer()->address(),
-        (std::uint32_t)out_num_indices.buffer()->address(),
-        (std::uint32_t)out_indices.buffer()->address(),
-        (std::uint32_t)aligned_elements,
-        (std::uint32_t)actual_elements,
-        (std::uint32_t)input.element_size()};
+        input.buffer()->address(),
+        out_num_indices.buffer()->address(),
+        out_indices.buffer()->address(),
+        aligned_elements,
+        actual_elements,
+        input.element_size()};
 
     auto kernel_id = tt::tt_metal::CreateKernel(
         program,

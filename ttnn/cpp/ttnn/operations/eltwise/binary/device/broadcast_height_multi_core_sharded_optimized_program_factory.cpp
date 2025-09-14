@@ -139,7 +139,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
 
     auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;

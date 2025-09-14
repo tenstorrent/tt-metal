@@ -189,7 +189,6 @@ Checks: >
   -readability-named-parameter,
   -readability-non-const-parameter,
   -readability-qualified-auto,
-  -readability-redundant-casting,
   -readability-redundant-control-flow,
   -readability-redundant-inline-specifier,
   -readability-redundant-member-init,
@@ -204,6 +203,8 @@ Checks: >
 
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: true
+  - key: readability-redundant-casting.IgnoreTypeAliases
     value: true
   - key: portability-simd-intrinsics.Suggest
     value: true

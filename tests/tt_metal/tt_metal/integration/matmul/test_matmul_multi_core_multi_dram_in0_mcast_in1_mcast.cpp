@@ -335,12 +335,12 @@ bool write_runtime_args_to_device(
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             // log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
 
-            CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-            CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
-            CoreCoord right_core = {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)core.y};
-            CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-            CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
-            CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
+            CoreCoord left_core = {(std::size_t)start_core_x, core.y};
+            CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, core.y};
+            CoreCoord right_core = {(std::size_t)start_core_x + num_cores_c - 1, core.y};
+            CoreCoord top_core = {core.x, (std::size_t)start_core_y};
+            CoreCoord top_core_plus_one = {core.x, (std::size_t)start_core_y + 1};
+            CoreCoord bottom_core = {core.x, (std::size_t)start_core_y + num_cores_r - 1};
 
             auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);
             auto left_core_plus_one_physical = mesh_device->worker_core_from_logical_core(left_core_plus_one);
@@ -353,7 +353,7 @@ bool write_runtime_args_to_device(
             auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
             auto& program_ = workload.get_programs().at(device_range);
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
+                in0_dram_addr,                               // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                            // in0_tensor_stride_w
                 (std::uint32_t)K,                            // in0_tensor_stride_h
@@ -363,7 +363,7 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)in1_dram_addr,            // in1_tensor_addr
+                in1_dram_addr,                           // in1_tensor_addr
                 (std::uint32_t)per_core_N * core_idx_x,  // in1_tensor_start_tile_id
                 (std::uint32_t)1,                        // in1_tensor_stride_w
                 (std::uint32_t)N,                        // in1_tensor_stride_h
@@ -382,8 +382,8 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)(num_cores_c - 1),              // in0_mcast_num_dests
                 (std::uint32_t)left_core_physical.x,           // in0_mcast_sender_noc_x
                 (std::uint32_t)left_core_physical.y,           // in0_mcast_sender_noc_y
-                (std::uint32_t)in0_mcast_sender_semaphore_id,
-                (std::uint32_t)in0_mcast_receiver_semaphore_id,
+                in0_mcast_sender_semaphore_id,
+                in0_mcast_receiver_semaphore_id,
 
                 (std::uint32_t)bottom_core_physical.x,        // in0_mcast_dest_noc_start_x
                 (std::uint32_t)bottom_core_physical.y,        // in0_mcast_dest_noc_start_y
@@ -392,10 +392,10 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)(num_cores_r - 1),             // in0_mcast_num_dests
                 (std::uint32_t)top_core_physical.x,           // in0_mcast_sender_noc_x
                 (std::uint32_t)top_core_physical.y,           // in0_mcast_sender_noc_y
-                (std::uint32_t)in1_mcast_sender_semaphore_id,
-                (std::uint32_t)in1_mcast_receiver_semaphore_id};
+                in1_mcast_sender_semaphore_id,
+                in1_mcast_receiver_semaphore_id};
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
+                out_dram_addr,                                                         // out_tensor_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
                 (std::uint32_t)N,                                                      // out_tensor_stride_h

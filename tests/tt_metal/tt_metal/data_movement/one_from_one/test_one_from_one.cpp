@@ -71,7 +71,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
 
     // Compile-time arguments for kernels
     vector<uint32_t> requestor_compile_args = {
-        (uint32_t)l1_base_address,
+        l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)transaction_size_bytes,
         (uint32_t)test_config.test_id,

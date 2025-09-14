@@ -69,13 +69,9 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     auto dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_no_mul_cb_index,
-        (uint32_t)src_mul_cb_index,
-        (uint32_t)src_scalar_cb_index,
-        (uint32_t)bfloat16_scalar};
+        src_no_mul_cb_index, src_mul_cb_index, src_scalar_cb_index, (uint32_t)bfloat16_scalar};
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_no_mul_cb_index, output_mul_cb_index};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(

@@ -92,11 +92,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
+    std::vector<uint32_t> reader_compile_time_args = {last_ktile_w};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     auto reader_id = tt_metal::CreateKernel(

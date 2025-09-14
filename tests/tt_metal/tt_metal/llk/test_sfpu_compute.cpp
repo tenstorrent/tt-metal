@@ -183,13 +183,13 @@ bool run_sfpu_all_same_buffer(std::shared_ptr<distributed::MeshDevice> mesh_devi
 
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {
-        (uint32_t)input_dram_byte_address,
+        input_dram_byte_address,
         (uint32_t)0,
         (uint32_t)test_config.num_tiles,
     };
 
     vector<uint32_t> writer_rt_args = {
-        (uint32_t)output_dram_byte_address,
+        output_dram_byte_address,
         (uint32_t)0,
         (uint32_t)test_config.num_tiles,
     };

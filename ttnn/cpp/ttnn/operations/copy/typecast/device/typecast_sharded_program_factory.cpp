@@ -147,7 +147,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         unary_reader_kernel_id,
         all_cores,
         {
-            (uint32_t)(num_tile_per_core),
+            num_tile_per_core,
         });
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};

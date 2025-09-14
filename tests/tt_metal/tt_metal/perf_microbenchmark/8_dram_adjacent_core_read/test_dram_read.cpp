@@ -132,12 +132,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)input_buffer_addr,
-        (std::uint32_t)start_tile_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)num_pages,
-        (std::uint32_t)block_num_tiles,
-        (std::uint32_t)page_size};
+        (std::uint32_t)input_buffer_addr, start_tile_id, num_blocks, num_pages, block_num_tiles, page_size};
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -165,7 +160,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        const std::array rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
+        const std::array rt_args = {bank_id, vc};
 
         log_info(tt::LogTest, "core: {}, vc: {}", core, vc);
 
@@ -381,7 +376,7 @@ int main(int argc, char** argv) {
         TT_ASSERT(
             device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
 
-        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        uint32_t num_tiles = ((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks
         // uint32_t num_banks_all = 12;
 

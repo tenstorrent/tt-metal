@@ -283,50 +283,50 @@ void matmul_multicore_reuse(
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),     // in0_tensor_addr
-                (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
-                (std::uint32_t)1,                               // in0_tensor_stride_w
-                (std::uint32_t)Kt,                              // in0_tensor_stride_h
-                (std::uint32_t)in0_block_w,                     // in0_tensor_next_block_stride
+                src0_dram_buffer->address(),     // in0_tensor_addr
+                Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
+                (std::uint32_t)1,                // in0_tensor_stride_w
+                Kt,                              // in0_tensor_stride_h
+                in0_block_w,                     // in0_tensor_next_block_stride
 
-                (std::uint32_t)in0_block_w,               // in0_block_w
-                (std::uint32_t)per_core_M,                // in0_block_h
-                (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
+                in0_block_w,               // in0_block_w
+                per_core_M,                // in0_block_h
+                in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_tensor_addr
-                (std::uint32_t)per_core_N * output_idx_x,    // in1_tensor_start_tile_id
-                (std::uint32_t)1,                            // in1_tensor_stride_w
-                (std::uint32_t)Nt,                           // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_tensor_next_block_stride
+                src1_dram_buffer->address(),  // in1_tensor_addr
+                per_core_N * output_idx_x,    // in1_tensor_start_tile_id
+                (std::uint32_t)1,             // in1_tensor_stride_w
+                Nt,                           // in1_tensor_stride_h
+                in0_block_w * Nt,             // in1_tensor_next_block_stride
 
-                (std::uint32_t)per_core_N,                // in1_block_w
-                (std::uint32_t)in0_block_w,               // in1_block_h
-                (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
+                per_core_N,                // in1_block_w
+                in0_block_w,               // in1_block_h
+                per_core_N * in0_block_w,  // in1_block_num_tiles
 
-                (std::uint32_t)Kt / in0_block_w,  // num_blocks
+                Kt / in0_block_w,  // num_blocks
 
-                (std::uint32_t)Mt * Kt,     // MtKt
-                (std::uint32_t)Kt * Nt,     // KtNt
-                (std::uint32_t)B,           // batch
+                Mt * Kt,                    // MtKt
+                Kt * Nt,                    // KtNt
+                B,                          // batch
                 (std::uint32_t)bcast_batch  // bcast_B
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),                                  // out_buffer_addr
+                dst_dram_buffer->address(),                                                 // out_buffer_addr
                 (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * Nt,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                           // out_tensor_stride_w
-                (std::uint32_t)Nt,                                                          // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,       // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * Nt,  // out_tensor_next_subblock_stride_h
+                Nt,                                                                         // out_tensor_stride_h
+                out_subblock_w,       // out_tensor_next_subblock_stride_w
+                out_subblock_h * Nt,  // out_tensor_next_subblock_stride_h
 
-                (std::uint32_t)out_subblock_w,                     // out_subblock_w
-                (std::uint32_t)out_subblock_h,                     // out_subblock_h
-                (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-                (std::uint32_t)(per_core_N / out_subblock_w),      // out_num_subblocks_w
-                (std::uint32_t)(per_core_M / out_subblock_h),      // out_num_subblocks_h
+                out_subblock_w,                     // out_subblock_w
+                out_subblock_h,                     // out_subblock_h
+                (out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+                (per_core_N / out_subblock_w),      // out_num_subblocks_w
+                (per_core_M / out_subblock_h),      // out_num_subblocks_h
 
-                (std::uint32_t)Mt * Nt,  // MtNt
-                (std::uint32_t)B         // batch
+                Mt * Nt,  // MtNt
+                B         // batch
             };
 
             tt_metal::SetRuntimeArgs(program, reader_id, core, mm_reader_args);

@@ -829,8 +829,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     // Reader compile-time args
     // Data is 32 byte aligned
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)num_input_tensors,
+        src0_cb_index,
+        num_input_tensors,
     };
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
@@ -846,9 +846,9 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args;
     if (rm_layout) {
-        writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+        writer_compile_time_args = {src0_cb_index, dst_buffer->page_size()};
     } else {
-        writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        writer_compile_time_args = {src0_cb_index};
     }
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 

@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    std::vector<uint32_t> reader_compile_time_args = {block_size};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    std::vector<uint32_t> writer_compile_time_args = {block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
@@ -875,42 +875,36 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         num_cores_y_mcast = num_cores_y;
     } else {
         if (row_wise) {
-            sender_cores = {
-                {(std::size_t)start_core.x, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x, (std::size_t)start_core.y + num_cores_y - 1}};
+            sender_cores = {{start_core.x, start_core.y}, {start_core.x, start_core.y + num_cores_y - 1}};
             all_to_all_cores = CoreRangeSet(CoreRange(
-                {(std::size_t)start_core.x, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x + num_cores_all_to_all - 1, (std::size_t)start_core.y + num_cores_y - 1}));
+                {start_core.x, start_core.y},
+                {start_core.x + num_cores_all_to_all - 1, start_core.y + num_cores_y - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
                 all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
-                    {(std::size_t)start_core.x + 1, (std::size_t)start_core.y},
-                    {(std::size_t)start_core.x + num_cores_all_to_all - 1,
-                     (std::size_t)start_core.y + num_cores_y - 1}));
+                    {start_core.x + 1, start_core.y},
+                    {start_core.x + num_cores_all_to_all - 1, start_core.y + num_cores_y - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
                 not_all_to_all_workers = CoreRangeSet(CoreRange(
-                    {(std::size_t)start_core.x + num_cores_all_to_all, (std::size_t)start_core.y},
-                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
+                    {start_core.x + num_cores_all_to_all, start_core.y},
+                    {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
         } else {
-            sender_cores = {
-                {(std::size_t)start_core.x, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y}};
+            sender_cores = {{start_core.x, start_core.y}, {start_core.x + num_cores_x - 1, start_core.y}};
             all_to_all_cores = CoreRangeSet(CoreRange(
-                {(std::size_t)start_core.x, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_all_to_all - 1}));
+                {start_core.x, start_core.y},
+                {start_core.x + num_cores_x - 1, start_core.y + num_cores_all_to_all - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
                 all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
-                    {(std::size_t)start_core.x, (std::size_t)start_core.y + 1},
-                    {(std::size_t)start_core.x + num_cores_x - 1,
-                     (std::size_t)start_core.y + num_cores_all_to_all - 1}));
+                    {start_core.x, start_core.y + 1},
+                    {start_core.x + num_cores_x - 1, start_core.y + num_cores_all_to_all - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
                 not_all_to_all_workers = CoreRangeSet(CoreRange(
-                    {(std::size_t)start_core.x, (std::size_t)start_core.y + num_cores_all_to_all},
-                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
+                    {start_core.x, start_core.y + num_cores_all_to_all},
+                    {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;
@@ -966,55 +960,55 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)block_ht * single_tile_size,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker * single_tile_size,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last * single_tile_size,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
+        block_ht,
+        block_ht * single_tile_size,
+        num_cores_all_to_all_first_stage,
+        num_rows_per_all_to_all_worker,
+        num_rows_per_all_to_all_worker * single_tile_size,
+        num_rows_per_all_to_all_worker_last,
+        num_rows_per_all_to_all_worker_last * single_tile_size,
         (std::uint32_t)row_wise,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
+        num_cores_x_mcast,
+        num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        num_blocks_first_stage,
+        num_blocks_second_stage,
+        reduce_second_stage_semaphore_id};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)block_ht,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
+        block_ht,
         (std::uint32_t)1,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
+        num_cores_all_to_all_first_stage,
+        num_rows_per_all_to_all_worker,
+        num_rows_per_all_to_all_worker_last,
         (std::uint32_t)row_wise,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
+        num_cores_x_mcast,
+        num_cores_y_mcast,
         (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        num_blocks_first_stage,
+        num_blocks_second_stage,
+        reduce_second_stage_semaphore_id};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)block_ht,
+        reduce_receiver_semaphore_id,
+        reduce_sender_semaphore_id,
+        num_blocks,
+        block_ht,
         (std::uint32_t)0,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
+        num_cores_all_to_all_first_stage,
+        num_rows_per_all_to_all_worker,
+        num_rows_per_all_to_all_worker_last,
         (std::uint32_t)row_wise,
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        reduce_second_stage_semaphore_id};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1095,7 +1089,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        block_wt};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(writer_mcast_sender_compile_time_args);
@@ -1104,7 +1098,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        block_wt};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
@@ -1525,7 +1519,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             compute_args.push_back((uint32_t)is_second_stage_reader);
             if (is_post_all_gather) {
-                compute_args.push_back((uint32_t)num_distributed_devices);
+                compute_args.push_back(num_distributed_devices);
             }
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
@@ -1535,24 +1529,23 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         if (width_index == 0) {
             CoreCoord mcast_start, mcast_end;
             if (mcast_1d) {
-                CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-                CoreCoord bottom_right_core = {
-                    (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+                CoreCoord top_left_core = {start_core.x, start_core.y};
+                CoreCoord bottom_right_core = {start_core.x + num_cores_x - 1, start_core.y + num_cores_y - 1};
                 auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
                 auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
                 mcast_start = top_left_core_physical;
                 mcast_end = bottom_right_core_physical;
             } else {
                 if (row_wise) {
-                    CoreCoord left_core_plus_one = {(std::size_t)start_core.x + 1, (std::size_t)core.y};
-                    CoreCoord right_core = {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord left_core_plus_one = {start_core.x + 1, (std::size_t)core.y};
+                    CoreCoord right_core = {start_core.x + num_cores_x - 1, (std::size_t)core.y};
                     auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
                     auto right_core_physical = device->worker_core_from_logical_core(right_core);
                     mcast_start = left_core_plus_one_physical;
                     mcast_end = right_core_physical;
                 } else {
-                    CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core.y + 1};
-                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core.y + num_cores_y - 1};
+                    CoreCoord top_core_plus_one = {(std::size_t)core.x, start_core.y + 1};
+                    CoreCoord bottom_core = {(std::size_t)core.x, start_core.y + num_cores_y - 1};
                     auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
                     auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
                     mcast_start = top_core_plus_one_physical;

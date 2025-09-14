@@ -368,9 +368,9 @@ void run_single_core_reduce_program(
     add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
 
     vector<uint32_t> compute_kernel_args = {
-        uint(Ht),
-        uint(Wt),
-        uint(NC),
+        Ht,
+        Wt,
+        NC,
     };
 
     std::map<std::string, std::string> reduce_defines = {

@@ -156,7 +156,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     // Compile time args
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)in0_last_ktile_w,
+        in0_last_ktile_w,
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> reader_writer_compile_time_args = {};
@@ -342,52 +342,52 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     // Write runtime args to device
     std::vector<uint32_t> mm_reader_args = {
-        (std::uint32_t)num_blocks,  // num_blocks
+        num_blocks,  // num_blocks
 
         (std::uint32_t)0,            // batch placeholder
         (std::uint32_t)bcast_batch,  // bcast_B
-        (std::uint32_t)M * K,        // MtKt
+        M * K,                       // MtKt
 
-        (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
-        (std::uint32_t)0,                      // in0_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // in0_tensor_stride_w
-        (std::uint32_t)K,                      // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,            // in0_tensor_next_block_stride
+        in0_buffer->address(),  // in0_tensor_addr
+        (std::uint32_t)0,       // in0_tensor_start_tile_id placeholder
+        (std::uint32_t)1,       // in0_tensor_stride_w
+        K,                      // in0_tensor_stride_h
+        in0_block_w,            // in0_tensor_next_block_stride
 
-        (std::uint32_t)in0_block_w,           // in0_block_w
-        (std::uint32_t)per_core_M_per_batch,  // in0_block_h
-        (std::uint32_t)in0_block_num_tiles,   // in0_block_num_tiles
+        in0_block_w,           // in0_block_w
+        per_core_M_per_batch,  // in0_block_h
+        in0_block_num_tiles,   // in0_block_num_tiles
     };
 
     std::vector<uint32_t> mm_writer_args = {
-        (std::uint32_t)num_blocks,   // num_blocks
+        num_blocks,                  // num_blocks
         (std::uint32_t)0,            // batch placeholder
         (std::uint32_t)bcast_batch,  // bcast_B
-        (std::uint32_t)M * N,        // MtNt
-        (std::uint32_t)K * N,        // KtNt
+        M * N,                       // MtNt
+        K * N,                       // KtNt
 
-        (std::uint32_t)in1_buffer->address(),  // in1_tensor_addr
-        (std::uint32_t)0,                      // in1_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // in1_tensor_stride_w
-        (std::uint32_t)N,                      // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,        // in1_tensor_next_block_stride
+        in1_buffer->address(),  // in1_tensor_addr
+        (std::uint32_t)0,       // in1_tensor_start_tile_id placeholder
+        (std::uint32_t)1,       // in1_tensor_stride_w
+        N,                      // in1_tensor_stride_h
+        in0_block_w * N,        // in1_tensor_next_block_stride
 
-        (std::uint32_t)per_core_N,           // in1_block_w
-        (std::uint32_t)in0_block_w,          // in1_block_h
-        (std::uint32_t)in1_block_num_tiles,  // in1_block_num_tiles
+        per_core_N,           // in1_block_w
+        in0_block_w,          // in1_block_h
+        in1_block_num_tiles,  // in1_block_num_tiles
 
-        (std::uint32_t)out_buffer->address(),  // out_tensor_addr
-        (std::uint32_t)0,                      // out_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // out_tensor_stride_w
-        (std::uint32_t)N,                      // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,         // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,     // out_tensor_next_subblock_stride_h
+        out_buffer->address(),  // out_tensor_addr
+        (std::uint32_t)0,       // out_tensor_start_tile_id placeholder
+        (std::uint32_t)1,       // out_tensor_stride_w
+        N,                      // out_tensor_stride_h
+        out_subblock_w,         // out_tensor_next_subblock_stride_w
+        out_subblock_h * N,     // out_tensor_next_subblock_stride_h
 
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        (std::uint32_t)out_num_subblocks_w,                // out_num_subblocks_w
-        (std::uint32_t)out_num_subblocks_h,                // out_num_subblocks_h
+        out_subblock_w,                     // out_subblock_w
+        out_subblock_h,                     // out_subblock_h
+        (out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        out_num_subblocks_w,                // out_num_subblocks_w
+        out_num_subblocks_h,                // out_num_subblocks_h
     };
     bool row_major = false;
     if (shard_spec.has_value()) {

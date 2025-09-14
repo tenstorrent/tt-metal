@@ -23,8 +23,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const auto max_cores =
         (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
     uint32_t start_split_size =
-        static_cast<uint32_t>(width / tt::constants::TILE_WIDTH / largest_power_of_two(max_cores)) *
-        tt::constants::TILE_WIDTH;
+        (width / tt::constants::TILE_WIDTH / largest_power_of_two(max_cores)) * tt::constants::TILE_WIDTH;
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint32_t rem = width % split_size;
         uint32_t num_cores = width / split_size + (rem > 0);

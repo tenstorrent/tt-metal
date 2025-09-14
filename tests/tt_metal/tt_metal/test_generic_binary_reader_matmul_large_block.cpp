@@ -214,11 +214,11 @@ int main(int argc, char** argv) {
 
         const std::array generic_binary_reader_args{
             src0_dram_buffer->address(),
-            (uint32_t) 0,
+            (uint32_t)0,
             src1_dram_buffer->address(),
-            (uint32_t) 0,
+            (uint32_t)0,
             (uint32_t)source_addresses.size(),
-            (uint32_t)source_addresses_in_l1_addr,
+            source_addresses_in_l1_addr,
             (uint32_t)num_blocks,
             src0_num_reads_per_block,
             dram_read_size_bytes,
@@ -235,14 +235,16 @@ int main(int argc, char** argv) {
 
         const std::array writer_rt_args{
             dst_dram_buffer->address(),
-            (std::uint32_t) 0,
-            (std::uint32_t)out_subblock_h, // num tiles per sub block m
-            (std::uint32_t)out_subblock_w, // num tiles per sub block n
-            (std::uint32_t)M/out_subblock_h, // num sub blocks m
-            (std::uint32_t)N/out_subblock_w, // num sub blocks n
-            (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
-            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
-            (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
+            (std::uint32_t)0,
+            (std::uint32_t)out_subblock_h,  // num tiles per sub block m
+            (std::uint32_t)out_subblock_w,  // num tiles per sub block n
+            M / out_subblock_h,             // num sub blocks m
+            N / out_subblock_w,             // num sub blocks n
+            (std::uint32_t)out_subblock_w * single_tile_size *
+                (N / out_subblock_w),  // bytes offset to next row within sub-block
+            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size *
+                (N / out_subblock_w),                           // bytes offset to next row of sub-blocks
+            (std::uint32_t)out_subblock_w * single_tile_size};  // bytes offset to next sub-block
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,

@@ -515,8 +515,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         config_tensor = create_scalar_config_tensor(
             avg_pool_config, inputs[0].memory_config().memory_layout(), in_n, num_shards_c, ncores);
 
-        const std::array<uint32_t, 2> shard_shape =
-            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
+        const std::array<uint32_t, 2> shard_shape = std::array<uint32_t, 2>({1, config_tensor.logical_shape()[-1]});
         const tt::tt_metal::ShardOrientation config_tensor_shard_orientation =
             inputs[0].shard_spec().value().orientation;
         const tt::tt_metal::ShardSpec config_shard_spec(

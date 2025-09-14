@@ -119,10 +119,10 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        nblocks_per_core,  // per_core_block_cnt
+        ntiles_per_block,  // per_block_ntiles
+        src0_cb_index,
+        output_cb_index};
     std::map<std::string, std::string> compute_kernel_defines;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
@@ -298,15 +298,15 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        nblocks_per_core,  // per_core_block_cnt
+        ntiles_per_block,  // per_block_ntiles
+        src0_cb_index,
+        output_cb_index};
     std::vector<uint32_t> compute_args_cliff = {
-        (uint32_t)nblocks_per_core_cliff,
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        nblocks_per_core_cliff,
+        ntiles_per_block,  // per_block_ntiles
+        src0_cb_index,
+        output_cb_index};
 
     std::map<std::string, std::string> compute_kernel_defines;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
@@ -773,7 +773,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         dst_buffer);
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
 
     // Reader kernel
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -783,7 +783,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -794,10 +794,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
 
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_blocks_per_core,
-        (uint32_t)num_tiles_per_block,
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        num_blocks_per_core, num_tiles_per_block, src0_cb_index, output_cb_index};
 
     // Compute kernel
     std::map<std::string, std::string> compute_kernel_defines;
@@ -1004,7 +1001,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     KernelHandle unary_reader_kernel_id;
     if (input_is_sharded) {
         // Sharded input
-        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -1012,7 +1009,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
-        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         unary_reader_kernel_id = CreateKernel(
             program,
@@ -1040,14 +1037,14 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)output_cb_index,
-        (uint32_t)output_stick_size,
-        (uint32_t)tile_height,
-        (uint32_t)num_tiles_per_input_block,
-        (uint32_t)output_num_blocks_across_width,
-        (uint32_t)output_element_size,
-        (uint32_t)num_cols_per_input_block,
-        (uint32_t)num_cols_per_output_block,
+        output_cb_index,
+        output_stick_size,
+        tile_height,
+        num_tiles_per_input_block,
+        output_num_blocks_across_width,
+        output_element_size,
+        num_cols_per_input_block,
+        num_cols_per_output_block,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -1085,8 +1082,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     if (full_compute_core_range.ranges().size() > 0) {
-        std::vector<uint32_t> compute_compile_time_args = {
-            (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+        std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_input_block, src0_cb_index, output_cb_index};
         untilize_kernel_id = CreateKernel(
             program,
             compute_kernel,
@@ -1102,7 +1098,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     KernelHandle untilize_cliff_kernel_id = 0;
     if (cliff_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
-            (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+            num_tiles_per_input_block, src0_cb_index, output_cb_index};
         untilize_cliff_kernel_id = CreateKernel(
             program,
             compute_kernel,
@@ -1372,7 +1368,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
     } else {
@@ -1389,14 +1385,14 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)output_cb_index,
-        (uint32_t)output_stick_size,
-        (uint32_t)tile_height,
-        (uint32_t)num_blocks_across_height,
-        (uint32_t)num_columns_of_blocks,
-        (uint32_t)num_blocks_per_column_row,
-        (uint32_t)num_tiles_per_block,
-        (uint32_t)output_single_block_width_size,
+        output_cb_index,
+        output_stick_size,
+        tile_height,
+        num_blocks_across_height,
+        num_columns_of_blocks,
+        num_blocks_per_column_row,
+        num_tiles_per_block,
+        output_single_block_width_size,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -1430,8 +1426,7 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
-    std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_blocks, (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+    std::vector<uint32_t> compute_compile_time_args = {num_blocks, num_tiles_per_block, src0_cb_index, output_cb_index};
 
     // Compute kernel
     tt::tt_metal::CreateKernel(

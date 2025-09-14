@@ -276,7 +276,7 @@ bool write_runtime_args_to_device(
             auto core_end_physical = mesh_device->worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
+                in0_dram_addr,                               // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                            // in0_tensor_stride_w
                 (std::uint32_t)K,                            // in0_tensor_stride_h
@@ -286,7 +286,7 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)in1_dram_addr,            // in1_tensor_addr
+                in1_dram_addr,                           // in1_tensor_addr
                 (std::uint32_t)per_core_N * core_idx_x,  // in1_tensor_start_tile_id
                 (std::uint32_t)1,                        // in1_tensor_stride_w
                 (std::uint32_t)N,                        // in1_tensor_stride_h
@@ -305,10 +305,10 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)(in1_or_in0 ? num_cores_r - 1 : num_cores_c - 1),  // in1_mcast_num_dests
                 (std::uint32_t)mcast_sender_physical.x,                           // in1_mcast_sender_noc_x
                 (std::uint32_t)mcast_sender_physical.y,                           // in1_mcast_sender_noc_y
-                (std::uint32_t)in_mcast_sender_semaphore_id,
-                (std::uint32_t)in_mcast_receiver_semaphore_id};
+                in_mcast_sender_semaphore_id,
+                in_mcast_receiver_semaphore_id};
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
+                out_dram_addr,                                                         // out_tensor_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
                 (std::uint32_t)N,                                                      // out_tensor_stride_h

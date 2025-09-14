@@ -305,38 +305,38 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
-        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
+        in0_block_num_tiles,                         // in0_block_num_tiles
+        in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
+        in0_last_ktile_w,                            // in0_last_ktile_w
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
-        (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
+        in0_mcast_sender_semaphore_id,
+        in0_mcast_receiver_semaphore_id,
+        num_worker_cores,  // in0_mcast_num_dests
+        num_mcast_cores,   // in0_mcast_num_cores
         // block
-        (std::uint32_t)num_blocks,
+        num_blocks,
         // mcast noc coords
         (std::uint32_t)start_core_noc.x,
         (std::uint32_t)start_core_noc.y,
         (std::uint32_t)end_core_noc.x,
         (std::uint32_t)end_core_noc.y,
         // semahpre valid
-        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
+        in0_mcast_sender_valid_semaphore_id,
         //
-        (std::uint32_t)num_blocks_per_shard};
+        num_blocks_per_shard};
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        (std::uint32_t)in1_buffer_page_size,
-        (std::uint32_t)in1_buffer_num_pages,
+        in1_buffer_page_size,
+        in1_buffer_num_pages,
         // in1 block args
-        (std::uint32_t)per_core_N_in1_sender,                // in1_block_w
-        (std::uint32_t)per_core_N_in1_sender * in0_block_w,  // in1_block_num_tiles
+        per_core_N_in1_sender,                // in1_block_w
+        per_core_N_in1_sender * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
-        (std::uint32_t)num_blocks,                                    // num_blocks
-        (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
-        (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
-        (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
-        (std::uint32_t)per_core_M};
+        num_blocks,                                    // num_blocks
+        out_block_tiles,                               // out_block_num_tiles
+        per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
+        per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
+        per_core_M};
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back(bias_buffer_page_size);
         in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
@@ -604,8 +604,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             worker_core_type = 1;
         }
 
-        mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
-        mm_in0_sender_args.push_back((std::uint32_t)sender_id);
+        mm_in0_sender_args.push_back(worker_core_type);
+        mm_in0_sender_args.push_back(sender_id);
         mm_in0_sender_args.push_back(
             (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
         mm_in0_sender_args.insert(
@@ -627,7 +627,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         std::vector<uint32_t> mm_in0_receiver_args;
         // mcast receiver - 3
         uint32_t worker_core_type = 3;
-        mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
+        mm_in0_receiver_args.push_back(worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
         mm_in0_receiver_args.push_back((std::uint32_t)0);  // in0_last_ktile_w
         mm_in0_receiver_args.insert(
@@ -647,7 +647,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             std::vector<uint32_t> mm_in0_idle_args;
             // idle core - 0
             uint32_t worker_core_type = 0;
-            mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
+            mm_in0_idle_args.push_back(worker_core_type);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_idle_args);
         }
@@ -732,8 +732,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                 break;
             }
         }
-        mm_in1_sender_writer_args.push_back((std::uint32_t)bank_id);
-        mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
+        mm_in1_sender_writer_args.push_back(bank_id);
+        mm_in1_sender_writer_args.push_back(vc);
 
         bank_id = (bank_id + 1) % num_dram_banks;
 

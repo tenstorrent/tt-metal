@@ -101,11 +101,11 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     // reader
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)max_tiles_per_core,
-        (uint32_t)batch_size,
-        (uint32_t)seq_len_tiles,
-        (uint32_t)num_embeddings_tiles,
-        (uint32_t)index_page_size,
+        max_tiles_per_core,
+        batch_size,
+        seq_len_tiles,
+        num_embeddings_tiles,
+        index_page_size,
         (uint32_t)(index_tensor.dtype() == DataType::BFLOAT16),
         (uint32_t)(output.dtype() == DataType::BFLOAT16)};
     TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);

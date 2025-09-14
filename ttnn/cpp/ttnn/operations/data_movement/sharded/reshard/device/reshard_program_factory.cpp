@@ -166,7 +166,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                             if (!(next_input_page.has_value()) or
                                 (next_input_page.value().first != curr_input_page.value().first) or
                                 ((int)next_input_page.value().second !=
-                                 (int)(curr_input_page.value().second) + (int)increment)) {
+                                 (int)(curr_input_page.value().second) + increment)) {
                                 stride_not_complete = true;
                                 break;
                             }
@@ -590,11 +590,11 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
         if (num_strides > 0) {
             uint32_t core_start_stride =
                 (start_core_x << 24) | (start_core_y << 16) | (ps.stride.core.x << 8) | ps.stride.core.y;
-            runtime_args.push_back((uint32_t)core_start_stride);  // start_x
+            runtime_args.push_back(core_start_stride);  // start_x
             uint32_t stride_data_start = (ps.stride.data << 16) | (start_data);
-            runtime_args.push_back((uint32_t)stride_data_start);  // stride_data
+            runtime_args.push_back(stride_data_start);  // stride_data
             uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides << 8) | ((uint32_t)ps.skip);
-            runtime_args.push_back((uint32_t)stride_size_num_strides);  // stride_size
+            runtime_args.push_back(stride_size_num_strides);  // stride_size
             num_output_pages += ps.stride_size * num_strides;
         }
     }

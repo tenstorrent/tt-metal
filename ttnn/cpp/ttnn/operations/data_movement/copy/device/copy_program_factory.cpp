@@ -79,10 +79,10 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        writer_compile_time_args = {output_cb_index};
     } else {
-        reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)input_unit_size};
-        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_unit_size};
+        reader_compile_time_args = {src0_cb_index, input_unit_size};
+        writer_compile_time_args = {output_cb_index, output_unit_size};
     }
     std::map<std::string, std::string> kernel_defines;
     if (sharded) {

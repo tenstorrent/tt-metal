@@ -57,7 +57,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
     std::map<std::string, std::string> device_kernel_defines;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    const size_t num_dram_banks = static_cast<size_t>(soc_d.get_num_dram_views());
+    const size_t num_dram_banks = soc_d.get_num_dram_views();
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();

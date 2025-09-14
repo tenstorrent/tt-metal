@@ -410,14 +410,14 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     CoreCoord local_cores_physical_start = device->worker_core_from_logical_core(local_cores.at(0));
     CoreCoord local_cores_physical_end = device->worker_core_from_logical_core(local_cores.at(num_cores - 2u));
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)receiver_semaphore_id,
-        (std::uint32_t)sender_semaphore_id,
+        receiver_semaphore_id,
+        sender_semaphore_id,
         (std::uint32_t)local_cores_physical_start.x,
         (std::uint32_t)local_cores_physical_start.y,
         (std::uint32_t)local_cores_physical_end.x,
         (std::uint32_t)local_cores_physical_end.y,
-        (std::uint32_t)Ht,
-        (std::uint32_t)Wt_final,
+        Ht,
+        Wt_final,
         (std::uint32_t)num_cores - 1,
     };
 
@@ -429,8 +429,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     CoreCoord final_cores_physical = device->worker_core_from_logical_core(final_core);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)receiver_semaphore_id,
-        (std::uint32_t)sender_semaphore_id,
+        receiver_semaphore_id,
+        sender_semaphore_id,
         (std::uint32_t)final_cores_physical.x,
         (std::uint32_t)final_cores_physical.y,
         Ht,
