@@ -281,11 +281,12 @@ def run_all_to_all_impl(
         assert eq, f"{i} FAILED: {output}"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, num_links, logical_shape, in_dim, out_dim, layout",
+    "num_links, logical_shape, in_dim, out_dim, layout",
     [
-        (8, 1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
-        (8, 1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+        (1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
+        (1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
     ],
     ids=["pre-attn", "post-attn"],
 )
@@ -315,8 +316,7 @@ def run_all_to_all_impl(
     "device_params", [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
 def test_all_to_all(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
     logical_shape,
     in_dim,
     out_dim,
@@ -332,8 +332,8 @@ def test_all_to_all(
     is_ci_env,
 ):
     run_all_to_all_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         logical_shape,
         in_dim,
         out_dim,

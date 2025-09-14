@@ -29,7 +29,7 @@ class TtConvNormAct:
             device=device,
             path=base_address,
             conv_params=[stride, stride, padding, padding],
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             parameters=parameters,
             deallocate_activation=deallocate_activation,
         )

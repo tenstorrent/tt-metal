@@ -66,10 +66,12 @@ std::vector<CBInfo> get_cb_info(
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> input_shape,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
+    uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create);

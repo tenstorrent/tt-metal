@@ -43,7 +43,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case BITWISE_AND:
+            return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -504,7 +505,7 @@ BinaryNgDeviceOperation::invoke(
             subtile_broadcast_type,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, input_tensor_b, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, input_tensor_b, output_tensor}};
 }
 
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
@@ -537,7 +538,7 @@ BinaryNgDeviceOperation::invoke(
             SubtileBroadcastType::NONE,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, std::nullopt, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, std::nullopt, output_tensor}};
 }
 
 }  // namespace ttnn::operations::binary_ng

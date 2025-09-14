@@ -21,7 +21,7 @@ class Conv:
         conv_params,
         *,
         act_block_h=None,
-        activation="",
+        activation=None,
         split_conv=False,
         fused_op=True,
         debug=False,
@@ -62,8 +62,7 @@ class Conv:
         self.act_block_h = act_block_h
 
         if fused_op:
-            activation = ""
-
+            activation = None
         self.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         if (
             self.weights.shape[0] == 768
