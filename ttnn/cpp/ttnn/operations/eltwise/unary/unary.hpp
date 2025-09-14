@@ -121,6 +121,7 @@ struct Unary_chain {
 
 struct Selu {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float scale = 1.050700987,
         float alpha = 1.673263242,
