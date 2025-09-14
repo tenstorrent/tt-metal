@@ -10,8 +10,6 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 

@@ -7,6 +7,7 @@
 #include <utility>
 namespace ttnn::operations::experimental::transformer {
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperation::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor_q,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_q_heads,
@@ -30,6 +31,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperatio
     }
 
     return ttnn::prim::nlp_create_qkv_heads_boltz(
+        queue_id,
         input_tensor_q,
         input_tensor_kv,
         num_q_heads,

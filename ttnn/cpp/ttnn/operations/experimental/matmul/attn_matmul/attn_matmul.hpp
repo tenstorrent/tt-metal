@@ -14,6 +14,7 @@ namespace operations::experimental::matmul {
 // KV heads = 1) a special case of group_attn_matmul and run the same op
 struct AttnMatmulOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const CoreCoord& compute_with_storage_grid_size,
@@ -25,6 +26,7 @@ struct AttnMatmulOperation {
 
 struct AttnMatmulFromCacheOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         uint32_t num_tokens,

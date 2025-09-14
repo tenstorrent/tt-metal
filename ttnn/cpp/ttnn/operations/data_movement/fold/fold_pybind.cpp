@@ -38,8 +38,10 @@ void bind_fold_operation(py::module& module) {
                uint32_t pad_h,
                uint32_t pad_w,
                std::optional<CoreRangeSet> grid_size,
-               std::optional<MemoryConfig> override_memory_config) -> ttnn::Tensor {
+               std::optional<MemoryConfig> override_memory_config,
+               QueueId queue_id) -> ttnn::Tensor {
                 return op(
+                    queue_id,
                     input,
                     stride_h,
                     stride_w,
@@ -60,7 +62,9 @@ void bind_fold_operation(py::module& module) {
             py::arg("pad_h") = 0,
             py::arg("pad_w") = 0,
             py::arg("grid_size") = std::nullopt,
-            py::arg("override_memory_config") = std::nullopt});
+            py::arg("override_memory_config") = std::nullopt,
+            py::kw_only(),
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement

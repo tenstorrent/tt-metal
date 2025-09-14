@@ -12,11 +12,13 @@ namespace operations::data_movement {
 
 struct InterleavedToShardedOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& sharded_memory_config,
         const std::optional<DataType>& data_type_arg,
         const std::optional<bool>& keep_l1_aligned = std::nullopt);
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const std::variant<CoreCoord, CoreRangeSet>& grid,
         std::array<uint32_t, 2> shard_shape,

@@ -35,6 +35,7 @@ Tensor postprocess_output_tensor(
     const int32_t& original_rank);
 
 Tensor accumulation_invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,

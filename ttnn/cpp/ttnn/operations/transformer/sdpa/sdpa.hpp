@@ -14,6 +14,7 @@ namespace operations::transformer {
 
 struct ExecuteScaledDotProductAttention {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -27,6 +28,7 @@ struct ExecuteScaledDotProductAttention {
 
 struct ExecuteChunkedScaledDotProductAttention {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -40,6 +42,7 @@ struct ExecuteChunkedScaledDotProductAttention {
 
 struct ExecuteJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -54,6 +57,7 @@ struct ExecuteJointAttention {
 
 struct ExecuteRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -79,6 +83,7 @@ struct ExecuteRingJointAttention {
 
 struct ExecuteFlashMLAPrefill {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         uint32_t head_dim_v,
@@ -92,6 +97,7 @@ struct ExecuteFlashMLAPrefill {
 
 struct ExecuteChunkedFlashMLAPrefill {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         uint32_t head_dim_v,

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/common/queue_id.hpp"
+
 #include <tt-metalium/constants.hpp>
 
 #include "mesh_partition.hpp"
@@ -13,6 +15,7 @@
 namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteMeshPartition::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,

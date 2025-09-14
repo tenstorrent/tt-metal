@@ -12,6 +12,7 @@
 namespace ttnn::operations::experimental::transformer {
 
 ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const uint32_t seq_len_start,
     const uint32_t seq_len_end,
