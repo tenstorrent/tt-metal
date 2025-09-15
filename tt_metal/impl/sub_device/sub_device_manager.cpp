@@ -28,8 +28,8 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;

@@ -22,8 +22,8 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
-#include <umd/device/tt_core_coordinates.h>             // CoreType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
 #include <atomic>
 #include <bitset>
@@ -53,6 +53,19 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
+enum dispatch_core_processor_classes {
+    // Tensix processor classes
+    DISPATCH_CLASS_TENSIX_DM0 = 0,
+    DISPATCH_CLASS_TENSIX_DM1 = 1,
+    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
+
+    // Ethernet processor classes
+    DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
+
+    DISPATCH_CLASS_MAX = 3,
+};
+
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -74,8 +87,8 @@ struct KernelGroup {
     std::vector<KernelHandle> kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
     uint32_t total_rta_size{};
-    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE]{};
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE]{};
+    // kernel_text_offsets is indexed by processor index within core.
+    std::vector<uint32_t> kernel_text_offsets;
     launch_msg_t launch_msg{};
     go_msg_t go_msg{};
 

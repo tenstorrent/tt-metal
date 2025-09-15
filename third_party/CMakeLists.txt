@@ -6,6 +6,8 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
@@ -65,7 +67,6 @@ CPMAddPackage(
         "BUILD_TESTING OFF"
         "protobuf_BUILD_EXAMPLES OFF"
         "BUILD_SHARED_LIBS OFF"
-        "protobuf_BUILD_SHARED_LIBS OFF"
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 

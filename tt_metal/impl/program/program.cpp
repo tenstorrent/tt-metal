@@ -73,8 +73,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "util.hpp"
 #include "utils.hpp"
 #include "host_api.hpp"
@@ -433,7 +433,6 @@ KernelGroup::KernelGroup(
             hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
@@ -474,8 +473,6 @@ KernelGroup::KernelGroup(
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 
     for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index++) {
-        this->kernel_bin_sizes[index] = 0;
-        this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
     }
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
@@ -519,7 +516,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
-        for (auto [id, kernel] : handle_to_kernel) {
+        for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 if (core.x > grid_extent_[programmable_core_type_index].x) {
                     grid_extent_[programmable_core_type_index].x = core.x;
@@ -542,7 +539,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         size_t grid_size = grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y;
         std::vector<bool> valid(grid_size, false);
         std::vector<std::set<KernelHandle>> grid(grid_size);
-        for (auto [id, kernel] : handle_to_kernel) {
+        for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 valid[core_index] = true;
@@ -947,7 +944,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
         auto& kernels = this->kernels_[programmable_core_type_index];
         cores_in_program.push_back({});
         unique_cores.push_back({});
-        for (auto [id, kernel] : kernels) {
+        for (const auto& [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
                 if (unique_cores[programmable_core_type_index].find(core) !=
                     unique_cores[programmable_core_type_index].end()) {

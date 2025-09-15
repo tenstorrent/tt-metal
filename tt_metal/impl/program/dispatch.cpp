@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
@@ -56,8 +57,8 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -127,11 +128,12 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
+    const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
     std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
     uint32_t max_unique_rta_size = 0;
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
         std::ranges::fill(max_rtas, 0);
@@ -153,9 +155,16 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             const auto& kernel = kernels.at(kernel_id);
             auto dispatch_class = kernel->dispatch_class();
             kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
-            kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
+            uint32_t rta_offset = base_offset + offset;
             offset += max_rtas[dispatch_class] * sizeof(uint32_t);
+            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
+            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    kernel->get_kernel_programmable_core_type(),
+                    kernel->get_kernel_processor_class(),
+                    kernel->get_kernel_processor_type(i));
+                kg->launch_msg.kernel_config.rta_offset[processor_index].rta_offset = rta_offset;
+            }
         }
         kg->total_rta_size = offset;
         offset = tt::align(offset, l1_alignment);
@@ -171,13 +180,11 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    uint32_t processor_classes =
-        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_crtas(processor_classes);
+    const auto& hal = MetalContext::instance().hal();
+    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
+    // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
+    std::vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX, 0);
 
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-        max_crtas[dispatch_class] = 0;
-    }
     // Find the max # common RTAs across all kernels for each dispatch class
     for (auto& kernel_info : kernels) {
         auto kernel = kernel_info.second;
@@ -187,8 +194,8 @@ uint32_t configure_crta_offsets_for_kernel_groups(
 
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
         crta_offsets[dispatch_class] = crta_base_offset + offset;
         crta_sizes[dispatch_class] = size;
@@ -205,8 +212,16 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     }
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : kernel_groups) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = crta_offsets[dispatch_class];
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            auto dispatch_class = kernel->dispatch_class();
+            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    kernel->get_kernel_programmable_core_type(),
+                    kernel->get_kernel_processor_class(),
+                    kernel->get_kernel_processor_type(i));
+                kg->launch_msg.kernel_config.rta_offset[processor_index].crta_offset = crta_offsets[dispatch_class];
+            }
         }
     }
     return total_crta_size;
@@ -297,9 +312,12 @@ uint32_t finalize_kernel_bins(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
+    uint32_t num_processors = hal.get_num_risc_processors(hal.get_programmable_core_type(programmable_core_type_index));
     for (auto& kg : kernel_groups) {
         uint32_t offset = base_offset;
 
+        kg->kernel_text_offsets.resize(num_processors);
+        std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
             const auto& kernel_impl = KernelImpl::from(*kernel);
@@ -314,14 +332,12 @@ uint32_t finalize_kernel_bins(
                     constexpr uint32_t k_MaxMathProcessorsCount = 3;
                     for (uint32_t proc_type_index = 0; proc_type_index < k_MaxMathProcessorsCount; proc_type_index++) {
                         uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                        kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
                         kg->kernel_text_offsets[2 + proc_type_index] = offset;
                         kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
                     }
                 } else {
-                    kg->kernel_bin_sizes[class_id] = binary_packed_size;
                     kg->kernel_text_offsets[class_id] = offset;
                     kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
                     offset += binary_packed_size;
@@ -337,8 +353,6 @@ uint32_t finalize_kernel_bins(
             } else {
                 // All other core types
                 const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-                kg->kernel_bin_sizes[class_id] = binary_packed_size;
-
                 if (hal.get_core_kernel_stored_in_config_buffer(
                         hal.get_programmable_core_type(programmable_core_type_index))) {
                     kg->kernel_text_offsets[class_id] = offset;

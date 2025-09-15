@@ -18,27 +18,16 @@
 #include <string>
 #include <vector>
 
+#include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
 namespace llrt {
-
-// TODO: This should come from the HAL
-enum DebugHartFlags : unsigned int {
-    RISCV_NC = 1,
-    RISCV_TR0 = 2,
-    RISCV_TR1 = 4,
-    RISCV_TR2 = 8,
-    RISCV_BR = 16,
-    RISCV_ER0 = 32,
-    RISCV_ER1 = 64
-};
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
@@ -72,7 +61,7 @@ struct TargetSelection {
     bool enabled{};
     std::vector<int> chip_ids;
     bool all_chips = false;
-    uint32_t riscv_mask = 0;
+    tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
     bool prepend_device_core_risc{};
@@ -322,9 +311,11 @@ public:
         feature_targets[feature].all_chips = all_chips;
     }
     bool get_feature_all_chips(RunTimeDebugFeatures feature) const { return feature_targets[feature].all_chips; }
-    uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) const { return feature_targets[feature].riscv_mask; }
-    void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
-        feature_targets[feature].riscv_mask = riscv_mask;
+    const tt_metal::HalProcessorSet& get_feature_processors(RunTimeDebugFeatures feature) const {
+        return feature_targets[feature].processors;
+    }
+    void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
+        feature_targets[feature].processors = processors;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
@@ -498,12 +489,20 @@ public:
     // TODO: This will be removed after MGD 1.0 is deprecated
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
+    // Parse all feature-specific environment variables, after hal is initialized.
+    // (Needed because syntax of some env vars is arch-dependent.)
+    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+        }
+    }
+
 private:
     // Helper functions to parse feature-specific environment vaiables.
-    void ParseFeatureEnv(RunTimeDebugFeatures feature);
+    void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
-    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);

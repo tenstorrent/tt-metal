@@ -456,28 +456,28 @@ TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
-    auto mesh_graph_single_host = std::make_unique<tt_fabric::MeshGraph>(t3k_mesh_graph_desc_path.string());
+    auto mesh_graph_single_host = tt_fabric::MeshGraph(t3k_mesh_graph_desc_path.string());
 
     // In single host configuration, all chips should belong to host rank 0
     for (chip_id_t chip_id = 0; chip_id < 8; chip_id++) {
-        EXPECT_EQ(mesh_graph_single_host->get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
+        EXPECT_EQ(mesh_graph_single_host.get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
     }
 
     // Test with 2x2 configuration (two separate meshes)
     const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
-    auto mesh_graph_2x2 = std::make_unique<tt_fabric::MeshGraph>(t3k_2x2_mesh_graph_desc_path.string());
+    auto mesh_graph_2x2 = tt_fabric::MeshGraph(t3k_2x2_mesh_graph_desc_path.string());
 
     // Each mesh has only one host rank (0)
     for (chip_id_t chip_id = 0; chip_id < 4; chip_id++) {
-        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
-        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, chip_id), MeshHostRankId(0));
+        EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
+        EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{1}, chip_id), MeshHostRankId(0));
     }
 
     // Test invalid chip IDs for 2x2 configuration
-    EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, 4), std::nullopt);
-    EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, 4), std::nullopt);
+    EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{0}, 4), std::nullopt);
+    EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{1}, 4), std::nullopt);
 }
 
 namespace single_galaxy_constants {
