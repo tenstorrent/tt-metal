@@ -14,6 +14,7 @@
 #include "ops/unary_ops.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
+#include <set>
 
 namespace {
 
@@ -244,12 +245,17 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
     for (auto &[k, v] : parameters) {
         fmt::print("parameter name: {}\n", k);
     }
-    auto get_parameter = [&parameters](const std::string &name) -> ttml::autograd::TensorPtr {
+    
+    // Track which parameters have been used
+    std::set<std::string> used_parameters;
+    
+    auto get_parameter = [&parameters, &used_parameters](const std::string &name) -> ttml::autograd::TensorPtr {
         auto it = parameters.find(name);
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
         fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
+        used_parameters.insert(name);
         return it->second;
     };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
@@ -279,7 +285,11 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
             }
             
             // Token embedding weights
-            if (info.name == "embed_tokens.weight" || info.name == "model.embed_tokens.weight") {
+            if (info.name == "embed_tokens.weight" || info.name == "model.embed_tokens.weight" ||
+                info.name == "transformer.wte.weight" || info.name == "wte.weight" ||
+                info.name == "model.wte.weight" || info.name == "embeddings.word_embeddings.weight") {
+                
+                fmt::print("Loading embedding weight from: {}\n", info.name);
                 auto out_tensor1 = get_parameter("llama/tok_emb/weight");
                 fmt::print("Original shape {}, {}\n", info.shape[0], info.shape[1]);
                 fmt::print(
@@ -294,8 +304,12 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                     out_tensor1->get_value().logical_shape()[-1]);
                 out_tensor1->set_value(core::from_vector(
                     resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                
+                if (config.weight_tying == WeightTyingType::Enabled) {
+                    fmt::print("Weight tying enabled - embedding weights will be shared with output layer\n");
+                }
             }
-
+            
             // Final layer norm
             if (info.name == "norm.weight" || info.name == "model.norm.weight") {
                 auto out_tensor1 = get_parameter("llama/ln_fc/gamma");
@@ -316,10 +330,37 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
             }
             
             // Output projection (lm_head)
-            if (info.name == "lm_head.weight" || info.name == "output.weight") {
-                auto out_tensor1 = get_parameter("llama/fc/weight");
-                out_tensor1->set_value(core::from_vector(
-                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+            if (info.name == "lm_head.weight" || info.name == "output.weight" || 
+                info.name == "model.lm_head.weight" || info.name == "lm_head.linear.weight" ||
+                info.name == "model.lm_head.linear.weight" || info.name == "transformer.lm_head.weight") {
+                fmt::print("Loading output projection weight from: {}\n", info.name);
+                
+                // Check if weight tying is enabled
+                if (config.weight_tying == WeightTyingType::Enabled) {
+                    // When weight tying is enabled, fc and tok_emb share the same weight
+                    // Load into the embedding weight since that's the shared parameter
+                    auto out_tensor1 = get_parameter("llama/tok_emb/weight");
+                    fmt::print("Weight tying enabled - loading into shared embedding weight\n");
+                    auto resized_weight = pad_and_resize_flat(
+                        float_vec, 
+                        info.shape[0], 
+                        info.shape[1], 
+                        out_tensor1->get_value().logical_shape()[-2],
+                        out_tensor1->get_value().logical_shape()[-1]);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                } else {
+                    // When weight tying is disabled, load into separate fc weight
+                    auto out_tensor1 = get_parameter("llama/fc/weight");
+                    auto resized_weight = pad_and_resize_flat(
+                        float_vec, 
+                        info.shape[0], 
+                        info.shape[1], 
+                        out_tensor1->get_value().logical_shape()[-2],
+                        out_tensor1->get_value().logical_shape()[-1]);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                }
             }
 
             // ---- Per-block mappings for Llama ----
@@ -489,6 +530,28 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
             return true;
         };
     serialization::SafetensorSerialization::visit_safetensors_file(path, loading_callback);
+    
+    // Check if all parameters were used
+    std::vector<std::string> unused_parameters;
+    for (const auto &[param_name, param_tensor] : parameters) {
+        if (used_parameters.find(param_name) == used_parameters.end()) {
+            unused_parameters.push_back(param_name);
+        }
+    }
+    
+    if (!unused_parameters.empty()) {
+        fmt::print("Warning: The following parameters were not used during loading:\n");
+        for (const auto &param_name : unused_parameters) {
+            fmt::print("  - {}\n", param_name);
+        }
+        fmt::print("Total unused parameters: {}\n", unused_parameters.size());
+        
+        // Optionally throw an error if strict checking is desired
+        // Uncomment the following line to make unused parameters an error:
+        // throw std::runtime_error(fmt::format("Found {} unused parameters in the model", unused_parameters.size()));
+    } else {
+        fmt::print("All {} parameters were successfully loaded and used.\n", parameters.size());
+    }
 
 }
 }  // namespace ttml::models::llama
