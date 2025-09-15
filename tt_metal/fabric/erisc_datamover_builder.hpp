@@ -9,7 +9,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>

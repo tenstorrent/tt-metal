@@ -301,6 +301,38 @@ void kernel_main() {
     const uint32_t untilize_temp_l1_addr = get_read_ptr(untilize_temp_cb_id);
 
     if constexpr (main_thread) {
+#ifdef CONFIG_TENSOR_IN_DRAM
+        constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(33);
+        constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(34);
+        constexpr uint32_t local_config_dram_addr = get_compile_time_arg_val(35);
+        constexpr uint32_t local_config_page_size = get_compile_time_arg_val(36);
+        constexpr uint32_t remote_config_dram_addr = get_compile_time_arg_val(37);
+        constexpr uint32_t remote_config_page_size = get_compile_time_arg_val(38);
+
+        constexpr auto padding_config_tensor_args = TensorAccessorArgs<39>();
+        constexpr auto local_config_tensor_args = TensorAccessorArgs<40>();
+        constexpr auto remote_config_tensor_args = TensorAccessorArgs<41>();
+
+        const auto padding_config_accessor =
+            TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);
+        const auto local_config_accessor =
+            TensorAccessor(local_config_tensor_args, local_config_dram_addr, local_config_page_size);
+        const auto remote_config_accessor =
+            TensorAccessor(remote_config_tensor_args, remote_config_dram_addr, remote_config_page_size);
+
+        uint32_t config_read_index = get_arg_val<uint32_t>(2);
+
+        uint64_t padding_src_noc_addr = get_noc_addr(config_read_index, padding_config_accessor);
+        noc_async_read(padding_src_noc_addr, get_write_ptr(padding_config_cb_id), padding_config_page_size);
+
+        uint64_t local_src_noc_addr = get_noc_addr(config_read_index, local_config_accessor);
+        noc_async_read(local_src_noc_addr, get_write_ptr(local_config_cb_id), local_config_page_size);
+
+        uint64_t remote_src_noc_addr = get_noc_addr(config_read_index, remote_config_accessor);
+        noc_async_read(remote_src_noc_addr, get_write_ptr(remote_config_cb_id), remote_config_page_size);
+
+        noc_async_read_barrier();
+#endif
         cb_reserve_back(src_cb_id, in_npages);
         cb_push_back(src_cb_id, in_npages);
     }

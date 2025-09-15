@@ -22,8 +22,8 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
-#include <umd/device/tt_core_coordinates.h>             // CoreType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
 #include <atomic>
 #include <bitset>
@@ -52,6 +52,19 @@ namespace distributed {
 class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
+
+enum dispatch_core_processor_classes {
+    // Tensix processor classes
+    DISPATCH_CLASS_TENSIX_DM0 = 0,
+    DISPATCH_CLASS_TENSIX_DM1 = 1,
+    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
+
+    // Ethernet processor classes
+    DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
+
+    DISPATCH_CLASS_MAX = 3,
+};
 
 namespace experimental {
 class GlobalCircularBuffer;

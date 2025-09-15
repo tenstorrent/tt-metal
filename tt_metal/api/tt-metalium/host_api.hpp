@@ -543,8 +543,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
  * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**

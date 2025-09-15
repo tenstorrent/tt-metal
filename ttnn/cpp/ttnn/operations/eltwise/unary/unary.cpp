@@ -83,6 +83,7 @@ template struct ExecuteUnary<UnaryOpType::ATAN>;
 template struct ExecuteUnary<UnaryOpType::ATANH>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ACOSH>;
+template struct ExecuteUnary<UnaryOpType::COSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
@@ -108,6 +109,7 @@ template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
+template struct ExecuteUnary<UnaryOpType::RSQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
@@ -140,7 +142,6 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
@@ -306,6 +307,19 @@ Tensor Unary_chain::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
     return detail::unary_impl(queue_id, input_tensor, ops_chain, memory_config, optional_output_tensor);
+}
+
+Tensor Selu::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    float scale,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::SELU;
+
+    return detail::unary_impl(
+        queue_id, input_tensor, {UnaryWithParam{op_type, {scale, alpha}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Softplus::invoke(
