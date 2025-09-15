@@ -14,6 +14,8 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+from setuptools_scm.version import guess_next_dev_version as _guess_next_dev
+
 
 readme = None
 
@@ -97,6 +99,11 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
+def _base_release_str(version):
+    # robust X.Y.Z from parsed version
+    return ".".join(str(x) for x in version.version.release)
+
+
 def get_metal_local_version_scheme(metal_build_config, version):
     print(f"Version info: {version}\nMetal build config: {metal_build_config}\n")
     if version.dirty:
@@ -106,26 +113,31 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    print(f"Version info: {version}\nMetal build config: {metal_build_config}\n")
-    is_release_version = version.distance is None or version.distance == 0
-    is_dirty = version.dirty
-    is_clean_prod_build = (not is_dirty) and is_release_version
-    tag = getattr(version, "tag", "") or ""
-    is_nightly = "-dev" in tag
+    # Avoid assertions that crash the backend
+    if version is None:
+        return "0.0.0.dev0"
 
-    if is_nightly:
-        base = ".".join(str(x) for x in version.version.release)
-        dev = tag.rsplit("-dev", 1)[-1]
-        return f"{base}.dev{dev}"
-    elif is_clean_prod_build:
-        return version.format_with("{tag}")
-    elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}")
-    elif is_dirty and is_release_version:
-        return version.format_with("{tag}")
-    else:
-        assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}")
+    if getattr(version, "exact", False):
+        base = _base_release_str(version)
+
+        # RC tags parsed as pre=('rc', N)
+        pre = getattr(version, "pre", None)
+        if pre and pre[0] == "rc":
+            return f"{base}-rc{pre[1]}"
+
+        # Nightly/dev tags: vX.Y.Z-devYYYYMMDD or vX.Y.Z-devN
+        tag = getattr(version, "tag", "") or ""
+        if "-dev" in tag:
+            dev = tag.rsplit("-dev", 1)[-1]
+            # Normalize to PEP 440: '.dev<digits>'
+            return f"{base}.dev{dev}"
+
+        # Plain release tag
+        return base
+
+    # Untagged commit -> let setuptools_scm produce '.devN'
+    # (Don't emit '.dev{distance}' yourself.)
+    return _guess_next_dev(version)
 
 
 def get_version(metal_build_config):
