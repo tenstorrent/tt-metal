@@ -67,7 +67,7 @@ void matmul_single_core(
     uint32_t N,
     uint32_t K,
     std::shared_ptr<distributed::MeshDevice> mesh_device) {
-    // Setup the device and command queue. This is a single cored example, so we will use the first core {0, 0}.
+    // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -83,7 +83,7 @@ void matmul_single_core(
     // Create DRAM buffers for the input and output data.
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    // We allocate DRAM buffers for the input and output data.
+    // We allocate DRAM buffers for the input and output data (replicated per device across the mesh).
     // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
     distributed::DeviceLocalBufferConfig dram_config{
