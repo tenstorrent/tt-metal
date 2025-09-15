@@ -44,7 +44,6 @@ def get_DRAM_GN_config(module_path, idx):
 
 
 def get_DRAM_conv_config(module_path, idx):
-    print(f"module_path: {module_path}, idx: {idx}")
     num_slices = 0
     is_encoder = True if module_path is not None and "encoder" == module_path else False
     if module_path is None:
