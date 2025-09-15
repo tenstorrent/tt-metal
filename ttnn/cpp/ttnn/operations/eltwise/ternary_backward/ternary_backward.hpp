@@ -35,6 +35,7 @@ struct AddcdivBackwardOperation {
 
 struct WhereBackwardOperation {
     static std::vector<OptionalTensor> invoke(
+        QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,

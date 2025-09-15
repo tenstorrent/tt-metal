@@ -40,6 +40,7 @@ static Tensor zero_volume_argmax(
 }
 
 ttnn::Tensor ArgMaxOperation::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<int> dim,
     const bool keepdim,
@@ -71,7 +72,8 @@ ttnn::Tensor ArgMaxOperation::invoke(
                ArgMax{tt::tt_metal::DataType::UINT32, dim, keepdim, sub_core_grids, use_muticore, output_memory_config},
                {input_tensor},
                {},
-               {std::move(optional_output_tensor)})
+               {std::move(optional_output_tensor)},
+               queue_id)
         .at(0);
 }
 

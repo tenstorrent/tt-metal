@@ -12,7 +12,9 @@ namespace operations::data_movement {
 
 struct MoveOperation {
     static ttnn::Tensor invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 }  // namespace operations::data_movement

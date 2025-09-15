@@ -36,6 +36,7 @@ using sliding_window::SlidingWindowConfig;
 namespace conv1d {
 
 Result conv1d(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -78,6 +79,7 @@ Result conv1d(
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
+            queue_id,
             input_tensor_4d,
             weight_tensor,
             device,
@@ -111,6 +113,7 @@ Result conv1d(
     };
 }
 Result Conv1dOperation::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -131,6 +134,7 @@ Result Conv1dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv1d(
+        queue_id,
         input_tensor,
         weight_tensor,
         device,

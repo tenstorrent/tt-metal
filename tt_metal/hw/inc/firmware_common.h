@@ -53,7 +53,7 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
 
 FORCE_INLINE
 uint32_t firmware_config_init(
-    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t processor_index) {
     extern uint32_t tt_l1_ptr* rta_l1_base;
     extern uint32_t tt_l1_ptr* crta_l1_base;
     extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
@@ -68,9 +68,9 @@ uint32_t firmware_config_init(
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                        launch_msg_address->kernel_config.rta_offset[dispatch_class].rta_offset);
+                                        launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                         launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
+                                         launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
 
     return kernel_config_base[core_type_index];
 }
