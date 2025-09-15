@@ -36,10 +36,14 @@ def check_noc_location(location: OnChipCoordinate, noc_id: int):
 
 
 def run(args, context: Context):
-    block_types = ["tensix", "eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
-    run_checks.run_per_block_check(lambda location: check_noc_location(location, noc_id=0), block_filter=block_types)
-    run_checks.run_per_block_check(lambda location: check_noc_location(location, noc_id=1), block_filter=block_types)
+    run_checks.run_per_block_check(
+        lambda location: check_noc_location(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK
+    )
+    run_checks.run_per_block_check(
+        lambda location: check_noc_location(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK
+    )
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from elftools.elf.segments import Segment as ELFSegment
 from elftools.elf.relocation import Relocation as ELFRelocation
 import os
 from ttexalens.context import Context
-from ttexalens.device import OnChipCoordinate
+from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
 from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict

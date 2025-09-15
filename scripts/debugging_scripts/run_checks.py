@@ -13,13 +13,13 @@ Options:
 Description:
      Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
     - Device selection and filtering
-    - Block location extraction and filtering
+    - Block location extraction by block type and filtering
     - Running checks per device
     - Running checks per block location
     - Running checks per RISC core
 
     This enables other scripts to easily run comprehensive checks across all devices and their
-    block locations and RISC coreswithout needing to depend on multiple separate scripts.
+    block locations and RISC cores without needing to depend on multiple separate scripts.
 """
 
 from collections.abc import Callable
@@ -63,25 +63,31 @@ BlockType: TypeAlias = Literal[BLOCK_TYPES]
 CoreType: TypeAlias = Literal[CORE_TYPES]
 
 
+# Classes for storing check results for devices, blocks and cores
+
+
 @dataclass
-class PerDeviceCheckResult:
-    device: Device = triage_field("Dev")
+class CheckResult:
     result: object = recurse_field()
 
-
-@dataclass
-class PerBlockLocationCheckResult:
-    device: Device = triage_field("Dev")
-    location: OnChipCoordinate = triage_field("Loc")
-    result: object = recurse_field()
+    # Hack to make result the last filed to perserve header order
+    def __post_init__(cls):
+        cls.__dataclass_fields__["result"] = cls.__dataclass_fields__.pop("result")
 
 
 @dataclass
-class PerCoreCheckResult:
+class PerDeviceCheckResult(CheckResult):
     device: Device = triage_field("Dev")
+
+
+@dataclass
+class PerBlockCheckResult(PerDeviceCheckResult):
     location: OnChipCoordinate = triage_field("Loc")
+
+
+@dataclass
+class PerCoreCheckResult(PerBlockCheckResult):
     risc_name: str = triage_field("Core")
-    result: object = recurse_field()
 
 
 def is_galaxy(device: Device) -> bool:
@@ -141,7 +147,7 @@ class RunChecks:
             for device in devices
         }
 
-    def _collect_results(self, check_result: object, result_factory) -> list:
+    def _collect_results(self, check_result: object, result_factory: CheckResult) -> list[CheckResult]:
         """Helper to collect and wrap check results consistently."""
         results = []
         if check_result is None:
@@ -166,22 +172,22 @@ class RunChecks:
 
     def run_per_block_check(
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
-    ) -> list[PerBlockLocationCheckResult] | None:
+    ) -> list[PerBlockCheckResult] | None:
         """Run a check function on each block location, collecting results."""
         block_types_to_check = (
             BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
         )
 
-        def per_device_blocks_check(device: Device) -> list[PerBlockLocationCheckResult] | None:
+        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
-            per_device_results: list[PerBlockLocationCheckResult] = []
+            per_device_results: list[PerBlockCheckResult] = []
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
                     check_result = check(location)
                     # Use the common result collection helper
                     results = self._collect_results(
                         check_result,
-                        lambda item: PerBlockLocationCheckResult(device=device, location=location, result=item),
+                        lambda item: PerBlockCheckResult(device=device, location=location, result=item),
                     )
                     per_device_results.extend(results)
             return per_device_results if len(per_device_results) > 0 else None
@@ -191,8 +197,8 @@ class RunChecks:
         if device_results is None:
             return None
 
-        # Flatten the results: extract PerBlockLocationCheckResult objects from PerDeviceCheckResult wrappers
-        block_location_results: list[PerBlockLocationCheckResult] = []
+        # Flatten the results: extract PerBlockCheckResult objects from PerDeviceCheckResult wrappers
+        block_location_results: list[PerBlockCheckResult] = []
         for device_result in device_results:
             if isinstance(device_result.result, list):
                 block_location_results.extend(device_result.result)
@@ -209,6 +215,7 @@ class RunChecks:
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
 
+        # Filtering cores to check
         cores_to_check = (
             CORE_TYPES
             if core_filter is None
@@ -247,7 +254,7 @@ class RunChecks:
         if block_results is None:
             return None
 
-        # Flatten the results: extract PerCoreCheckResult objects from PerBlockLocationCheckResult wrappers
+        # Flatten the results: extract PerCoreCheckResult objects from PerBlockCheckResult wrappers
         core_results: list[PerCoreCheckResult] = []
         for block_result in block_results:
             if isinstance(block_result.result, list):
