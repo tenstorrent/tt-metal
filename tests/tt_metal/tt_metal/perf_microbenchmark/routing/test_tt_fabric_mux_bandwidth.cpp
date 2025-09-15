@@ -148,7 +148,6 @@ void create_mux_kernel(
 
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
     // Point to the drainer's status address instead of the worker's status address
