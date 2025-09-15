@@ -360,9 +360,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         case ::tt::tt_metal::flatbuffer::CommandType::NONE:
             TT_THROW("LightMetalReplay execute encountered unsupported cmd type NONE");
             break;
-        default:
-            TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type());
-            break;
+        default: TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type()); break;
     }
 }
 
@@ -375,7 +373,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
     TT_THROW("Light Metal Trace is no longer supported.");
     // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
@@ -729,7 +726,7 @@ bool LightMetalReplayImpl::run() {
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
-        uint32_t idx = 1;
+        [[maybe_unused]] uint32_t idx = 1;
         for (const auto* cmd : *commands) {
             auto str_name = std::string(EnumNameCommandType(cmd->cmd_type()));
             log_trace(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", idx++, commands->size(), str_name);

@@ -179,7 +179,7 @@ int main() {
 
     // Compute kernel
     std::vector<uint32_t> compute_compile_time_args = {src_cb_index, ones_cb_index, result_cb_index};
-    KernelHandle compute_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/compute/compute.cpp",
         core,
