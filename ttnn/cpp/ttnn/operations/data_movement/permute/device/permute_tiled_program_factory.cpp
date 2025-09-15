@@ -131,7 +131,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         output_cb_index = src1_cb_index;
     }
 
-    std::vector<uint32_t> reader_compile_time_args = {};
+    std::vector<uint32_t> reader_compile_time_args = {rank, input_page_size, num_tiles};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"rank", rank},
         {"page_size", input_page_size},
@@ -379,7 +379,16 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         accumulated_outer_dims *= input_shape[i];
     }
 
-    std::vector<uint32_t> reader_compile_time_args = {};
+    std::vector<uint32_t> reader_compile_time_args = {
+        num_writes,
+        padding_val_packed,
+        (uint32_t)needs_padding,
+        (uint32_t)swap_hw,
+        input_shape[rank - 1],
+        input_shape[rank - 2],
+        accumulated_outer_dims,
+        tile_shape[1],
+        tile_shape[0]};
 
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"num_writes", num_writes},
@@ -417,7 +426,19 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             });
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {};
+    std::vector<uint32_t> writer_compile_time_args = {
+        element_size,
+        output_cb_index,
+        output_H,
+        input_shape[rank - 2],
+        input_shape[rank - 1],
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1],
+        (uint32_t)needs_padding,
+        rank,
+        h_in_dest};
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
         {"element_size", element_size},
@@ -713,7 +734,37 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     uint32_t non_x_rows = num_rows / x;
 
-    std::vector<uint32_t> reader_compile_time_args = {};
+    std::vector<uint32_t> reader_compile_time_args = {
+        rank,
+        input_page_size,
+        element_size,
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1],
+        x_dim_index_in_input,
+        x,
+        w,
+        input_shape[rank - 2],
+        X_p,
+        W_p,
+        H_p,
+        H_t,
+        W_t,
+        final_tile_real_w,
+        final_tile_real_faces_w,
+        xw_blocks,
+        x_blocks,
+        w_blocks,
+        num_writes,
+        padding_val_packed,
+        (uint32_t)needs_x_padding,
+        (uint32_t)needs_y_padding,
+        non_x_rows,
+        misalignment,
+        read_alignment,
+    };
+
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"rank", rank},
         {"page_size", input_page_size},
@@ -767,7 +818,31 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             .compile_args = compute_kernel_args,
         });
 
-    std::vector<uint32_t> writer_compile_time_args = {};
+    std::vector<uint32_t> writer_compile_time_args = {
+        rank,
+        input_page_size,
+        element_size,
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1],
+        x_dim_index_in_input,
+        x,
+        w,
+        output_shape[rank - 2],
+        X_p,
+        W_p,
+        non_x_rows,
+        H_t,
+        W_t,
+        final_tile_real_x,
+        final_tile_real_faces_x,
+        xw_blocks,
+        x_blocks,
+        w_blocks,
+        (uint32_t)needs_y_padding,
+        permuted_w_dim,
+    };
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
         {"rank", rank},
         {"page_size", input_page_size},
