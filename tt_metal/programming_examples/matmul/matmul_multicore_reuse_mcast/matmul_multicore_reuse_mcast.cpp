@@ -69,7 +69,6 @@ void matmul_multicore_reuse_mcast(
      * Core range is just single core
      */
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    IDevice* device = mesh_device->get_devices()[0];
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
@@ -79,7 +78,7 @@ void matmul_multicore_reuse_mcast(
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
