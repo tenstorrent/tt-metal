@@ -26,6 +26,7 @@ constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
 constexpr bool use_dynamic_routing = get_compile_time_arg_val(5);
 constexpr bool is_chip_multicast = get_compile_time_arg_val(6);
 constexpr bool additional_dir = get_compile_time_arg_val(7);
+constexpr bool is_2d_hybrid = get_compile_time_arg_val(8);
 
 inline void setup_header_routing_1d(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint32_t start_distance, uint32_t range) {
@@ -81,6 +82,15 @@ inline void setup_header_routing_2d(
                 dst_dev_id,
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
+        } else if constexpr (is_2d_hybrid) {
+            fabric_set_unicast_route(
+                (HybridMeshPacketHeader*)packet_header,
+                my_dev_id,
+                // my_mesh_id,
+                0,  // TODO: inter-mesh support
+                dst_dev_id,
+                dst_mesh_id,
+                ew_dim);
         } else {
             fabric_set_unicast_route(
                 (LowLatencyMeshPacketHeader*)packet_header,

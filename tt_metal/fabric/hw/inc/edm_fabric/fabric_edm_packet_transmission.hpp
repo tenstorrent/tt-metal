@@ -255,6 +255,14 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     // Intentionally empty - mesh routing updates the header on sender channel side
 }
 
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 cached_routing_fields) {
+    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        packet_header->routing_fields.value = cached_routing_fields.value + 1;
+    }
+}
+
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {

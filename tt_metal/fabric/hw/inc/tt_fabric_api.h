@@ -46,12 +46,20 @@ void fabric_set_route(
         case eth_chan_directions::EAST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
-            packet_header->routing_fields.branch_east_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_east_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_east_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::WEST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
-            packet_header->routing_fields.branch_west_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_west_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_west_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::NORTH:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
@@ -161,7 +169,8 @@ void fabric_set_unicast_route(
     uint16_t dst_mesh_id,
     uint16_t ew_dim) {
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->is_mcast_active = 0;
+    // Clear optional is_mcast_active flag in routing_fields (reserved bit)
+    packet_header->routing_fields.reserved = 0;
     if (my_mesh_id != dst_mesh_id) {
         // TODO: route to exit node
         return;
@@ -211,13 +220,12 @@ void fabric_set_unicast_route(
         // determine the east/west hops
         uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        fabric_set_route(
+            packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops - bool(ew_hops), ew_hops == 0);
         if (ew_hops) {
-            ns_hops--;
-            ew_hops++;
-        }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
-        if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
+            // +1 because this branch is now implementing the turn
+            fabric_set_route(
+                packet_header, (eth_chan_directions)turn_direction, 0, ns_hops - bool(ew_hops), ew_hops + 1, true);
         }
     }
 }
@@ -232,7 +240,8 @@ void fabric_set_mcast_route(
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->is_mcast_active = 0;
+    // Clear optional is_mcast_active flag in routing_fields (reserved bit)
+    packet_header->routing_fields.reserved = 0;
     if (my_mesh_id != dst_mesh_id) {
         // TODO: route to exit node
         return;
@@ -252,11 +261,11 @@ void fabric_set_mcast_route(
     }
 
     if (n_num_hops) {
-        // Is a 2D mcast if mcast_branch != 0
+        // Unicast trunk towards center in N direction; last hop performs local write + set up branch offsets
         fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
         spine_hops = n_num_hops;
     } else if (s_num_hops) {
-        // Is a 2D mcast if mcast_branch != 0
+        // Unicast trunk towards center in S direction; last hop performs local write + set up branch offsets
         fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
         spine_hops = s_num_hops;
     }

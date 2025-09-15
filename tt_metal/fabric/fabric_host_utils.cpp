@@ -186,7 +186,8 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
     }
 
     if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
-        mode |= ROUTING_MODE_DYNAMIC;
+        // mode |= ROUTING_MODE_DYNAMIC;
+        mode |= ROUTING_MODE_HYBRID;  // TODO: remove after testing
     } else {
         mode |= ROUTING_MODE_LOW_LATENCY;
     }
