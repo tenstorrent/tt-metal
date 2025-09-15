@@ -124,7 +124,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
     parameters.conv_args.s1["0"]["act_block_h"] = None
-    parameters.conv_args.s1["0"]["enable_split_reader"] = True
     parameters.conv_args.s1["0"]["enable_act_double_buffer"] = True
     parameters.conv_args.s1["0"]["deallocate_activation"] = True
     parameters.conv_args.s1["0"]["reshard_if_not_optimal"] = False
@@ -132,7 +131,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s1["0"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s1["2"]["act_block_h"] = 32 * 16
-    parameters.conv_args.s1["2"]["enable_split_reader"] = True
     parameters.conv_args.s1["2"]["enable_act_double_buffer"] = True
     parameters.conv_args.s1["2"]["deallocate_activation"] = True
     parameters.conv_args.s1["2"]["reshard_if_not_optimal"] = False
@@ -140,7 +138,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s1["2"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s2["5"]["act_block_h"] = None
-    parameters.conv_args.s2["5"]["enable_split_reader"] = True
     parameters.conv_args.s2["5"]["enable_act_double_buffer"] = True
     parameters.conv_args.s2["5"]["deallocate_activation"] = True
     parameters.conv_args.s2["5"]["reshard_if_not_optimal"] = False
@@ -148,7 +145,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s2["5"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s2["7"]["act_block_h"] = None
-    parameters.conv_args.s2["7"]["enable_split_reader"] = True
     parameters.conv_args.s2["7"]["enable_act_double_buffer"] = True
     parameters.conv_args.s2["7"]["deallocate_activation"] = True
     parameters.conv_args.s2["7"]["reshard_if_not_optimal"] = False
@@ -156,7 +152,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s2["7"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s3["10"]["act_block_h"] = None
-    parameters.conv_args.s3["10"]["enable_split_reader"] = True
     parameters.conv_args.s3["10"]["enable_act_double_buffer"] = True
     parameters.conv_args.s3["10"]["deallocate_activation"] = True
     parameters.conv_args.s3["10"]["reshard_if_not_optimal"] = False
@@ -164,7 +159,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["10"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s3["12"]["act_block_h"] = None
-    parameters.conv_args.s3["12"]["enable_split_reader"] = True
     parameters.conv_args.s3["12"]["enable_act_double_buffer"] = True
     parameters.conv_args.s3["12"]["deallocate_activation"] = True
     parameters.conv_args.s3["12"]["reshard_if_not_optimal"] = False
@@ -173,7 +167,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["12"]["tile_layout"] = True
 
     parameters.conv_args.s3["14"]["act_block_h"] = None
-    parameters.conv_args.s3["14"]["enable_split_reader"] = True
     parameters.conv_args.s3["14"]["enable_act_double_buffer"] = True
     parameters.conv_args.s3["14"]["deallocate_activation"] = True
     parameters.conv_args.s3["14"]["reshard_if_not_optimal"] = False
@@ -182,7 +175,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["14"]["tile_layout"] = True
 
     parameters.conv_args.s3["16"]["act_block_h"] = None
-    parameters.conv_args.s3["16"]["enable_split_reader"] = True
     parameters.conv_args.s3["16"]["enable_act_double_buffer"] = True
     parameters.conv_args.s3["16"]["deallocate_activation"] = True
     parameters.conv_args.s3["16"]["reshard_if_not_optimal"] = False
@@ -190,7 +182,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["16"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.s4["19"]["act_block_h"] = None
-    parameters.conv_args.s4["19"]["enable_split_reader"] = True
     parameters.conv_args.s4["19"]["enable_act_double_buffer"] = True
     parameters.conv_args.s4["19"]["deallocate_activation"] = True
     parameters.conv_args.s4["19"]["reshard_if_not_optimal"] = False
@@ -199,7 +190,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["19"]["tile_layout"] = True
 
     parameters.conv_args.s4["21"]["act_block_h"] = None
-    parameters.conv_args.s4["21"]["enable_split_reader"] = True
     parameters.conv_args.s4["21"]["enable_act_double_buffer"] = True
     parameters.conv_args.s4["21"]["deallocate_activation"] = True
     parameters.conv_args.s4["21"]["reshard_if_not_optimal"] = False
@@ -208,7 +198,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["21"]["tile_layout"] = True
 
     parameters.conv_args.s4["23"]["act_block_h"] = None
-    parameters.conv_args.s4["23"]["enable_split_reader"] = True
     parameters.conv_args.s4["23"]["enable_act_double_buffer"] = True
     parameters.conv_args.s4["23"]["deallocate_activation"] = True
     parameters.conv_args.s4["23"]["reshard_if_not_optimal"] = False
@@ -217,7 +206,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["23"]["tile_layout"] = True
 
     parameters.conv_args.s4["25"]["act_block_h"] = None
-    parameters.conv_args.s4["25"]["enable_split_reader"] = True
     parameters.conv_args.s4["25"]["enable_act_double_buffer"] = True
     parameters.conv_args.s4["25"]["deallocate_activation"] = True
     parameters.conv_args.s4["25"]["reshard_if_not_optimal"] = False
@@ -225,7 +213,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["25"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.b1["28"]["act_block_h"] = None
-    parameters.conv_args.b1["28"]["enable_split_reader"] = True
     parameters.conv_args.b1["28"]["enable_act_double_buffer"] = True
     parameters.conv_args.b1["28"]["deallocate_activation"] = True
     parameters.conv_args.b1["28"]["reshard_if_not_optimal"] = False
@@ -234,7 +221,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["28"]["tile_layout"] = True
 
     parameters.conv_args.b1["30"]["act_block_h"] = None
-    parameters.conv_args.b1["30"]["enable_split_reader"] = True
     parameters.conv_args.b1["30"]["enable_act_double_buffer"] = True
     parameters.conv_args.b1["30"]["deallocate_activation"] = True
     parameters.conv_args.b1["30"]["reshard_if_not_optimal"] = False
@@ -243,7 +229,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["30"]["tile_layout"] = True
 
     parameters.conv_args.b1["32"]["act_block_h"] = None
-    parameters.conv_args.b1["32"]["enable_split_reader"] = True
     parameters.conv_args.b1["32"]["enable_act_double_buffer"] = True
     parameters.conv_args.b1["32"]["deallocate_activation"] = True
     parameters.conv_args.b1["32"]["reshard_if_not_optimal"] = False
@@ -252,7 +237,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["32"]["tile_layout"] = True
 
     parameters.conv_args.b1["34"]["act_block_h"] = None
-    parameters.conv_args.b1["34"]["enable_split_reader"] = True
     parameters.conv_args.b1["34"]["enable_act_double_buffer"] = True
     parameters.conv_args.b1["34"]["deallocate_activation"] = True
     parameters.conv_args.b1["34"]["reshard_if_not_optimal"] = False
@@ -260,7 +244,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["34"]["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
     parameters.conv_args.d1.up["act_block_h"] = None
-    parameters.conv_args.d1.up["enable_split_reader"] = True
     parameters.conv_args.d1.up["enable_act_double_buffer"] = True
     parameters.conv_args.d1.up["deallocate_activation"] = False
     parameters.conv_args.d1.up["reshard_if_not_optimal"] = False
@@ -268,7 +251,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d1.conv_block.conv1["act_block_h"] = None
-    parameters.conv_args.d1.conv_block.conv1["enable_split_reader"] = True
     parameters.conv_args.d1.conv_block.conv1["enable_act_double_buffer"] = True
     parameters.conv_args.d1.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d1.conv_block.conv1["reshard_if_not_optimal"] = True
@@ -279,7 +261,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv1["tile_layout"] = True
 
     parameters.conv_args.d1.conv_block.conv2["act_block_h"] = None
-    parameters.conv_args.d1.conv_block.conv2["enable_split_reader"] = True
     parameters.conv_args.d1.conv_block.conv2["enable_act_double_buffer"] = True
     parameters.conv_args.d1.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d1.conv_block.conv2["reshard_if_not_optimal"] = False
@@ -290,7 +271,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv2["tile_layout"] = True
 
     parameters.conv_args.d2.up["act_block_h"] = None
-    parameters.conv_args.d2.up["enable_split_reader"] = True
     parameters.conv_args.d2.up["enable_act_double_buffer"] = True
     parameters.conv_args.d2.up["deallocate_activation"] = True
     parameters.conv_args.d2.up["reshard_if_not_optimal"] = False
@@ -298,7 +278,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d2.conv_block.conv1["act_block_h"] = None
-    parameters.conv_args.d2.conv_block.conv1["enable_split_reader"] = True
     parameters.conv_args.d2.conv_block.conv1["enable_act_double_buffer"] = True
     parameters.conv_args.d2.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d2.conv_block.conv1["reshard_if_not_optimal"] = True
@@ -309,7 +288,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv1["tile_layout"] = True
 
     parameters.conv_args.d2.conv_block.conv2["act_block_h"] = None
-    parameters.conv_args.d2.conv_block.conv2["enable_split_reader"] = True
     parameters.conv_args.d2.conv_block.conv2["enable_act_double_buffer"] = True
     parameters.conv_args.d2.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d2.conv_block.conv2["reshard_if_not_optimal"] = False
@@ -320,7 +298,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv2["tile_layout"] = True
 
     parameters.conv_args.d3.up["act_block_h"] = 32 * 4
-    parameters.conv_args.d3.up["enable_split_reader"] = True
     parameters.conv_args.d3.up["enable_act_double_buffer"] = True
     parameters.conv_args.d3.up["deallocate_activation"] = True
     parameters.conv_args.d3.up["reshard_if_not_optimal"] = False
@@ -328,7 +305,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d3.conv_block.conv1["act_block_h"] = 32 * 2
-    parameters.conv_args.d3.conv_block.conv1["enable_split_reader"] = True
     parameters.conv_args.d3.conv_block.conv1["enable_act_double_buffer"] = True
     parameters.conv_args.d3.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d3.conv_block.conv1["reshard_if_not_optimal"] = False
@@ -339,7 +315,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv1["tile_layout"] = True
 
     parameters.conv_args.d3.conv_block.conv2["act_block_h"] = None
-    parameters.conv_args.d3.conv_block.conv2["enable_split_reader"] = True
     parameters.conv_args.d3.conv_block.conv2["enable_act_double_buffer"] = True
     parameters.conv_args.d3.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d3.conv_block.conv2["reshard_if_not_optimal"] = False
@@ -349,7 +324,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv2["do_sharded_to_interleaved"] = False
 
     parameters.conv_args.d4.up["act_block_h"] = None
-    parameters.conv_args.d4.up["enable_split_reader"] = True
     parameters.conv_args.d4.up["enable_act_double_buffer"] = True
     parameters.conv_args.d4.up["deallocate_activation"] = True
     parameters.conv_args.d4.up["reshard_if_not_optimal"] = True
@@ -357,7 +331,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d4.conv_block.conv1["act_block_h"] = 32 * 4
-    parameters.conv_args.d4.conv_block.conv1["enable_split_reader"] = True
     parameters.conv_args.d4.conv_block.conv1["enable_act_double_buffer"] = True
     parameters.conv_args.d4.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d4.conv_block.conv1["reshard_if_not_optimal"] = False
@@ -368,7 +341,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv1["tile_layout"] = True
 
     parameters.conv_args.d4.conv_block.conv2["act_block_h"] = 32 * 16
-    parameters.conv_args.d4.conv_block.conv2["enable_split_reader"] = True
     parameters.conv_args.d4.conv_block.conv2["enable_act_double_buffer"] = True
     parameters.conv_args.d4.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d4.conv_block.conv2["reshard_if_not_optimal"] = False
@@ -379,7 +351,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv2["tile_layout"] = True
 
     parameters.conv_args.out["act_block_h"] = None
-    parameters.conv_args.out["enable_split_reader"] = True
     parameters.conv_args.out["enable_act_double_buffer"] = True
     parameters.conv_args.out["deallocate_activation"] = True
     parameters.conv_args.out["reshard_if_not_optimal"] = False

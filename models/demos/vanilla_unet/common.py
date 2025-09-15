@@ -8,7 +8,7 @@ import torch
 
 from models.demos.vanilla_unet.reference.unet import UNet
 
-VANILLA_UNET_L1_SMALL_SIZE = (7 * 8192) + 1730
+VANILLA_UNET_L1_SMALL_SIZE = (7 * 8192) + 2592
 
 
 def load_torch_model(model_location_generator=None):
