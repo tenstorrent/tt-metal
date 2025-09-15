@@ -87,7 +87,7 @@ private:
             // Update data store from snapshot
             telemetry_data_store_.update_from_snapshot(*snapshot);
 
-            // Serialize telemetry data to JSON and send to clients
+            // Send the delta snapshot directly to clients
             json j = *snapshot;
             std::string message = j.dump();
             send_message_to_clients(message);
