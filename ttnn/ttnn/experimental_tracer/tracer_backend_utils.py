@@ -910,6 +910,86 @@ class AtenEmbedding(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.tril")
+class AtenTril(WrappedOperation):
+    """Represents the tril operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.exp")
+class AtenExp(WrappedOperation):
+    """Represents the exp operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._to_copy")
+class AtenToCopy(WrappedOperation):
+    """Represents the _to_copy operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.cumsum")
+class AtenCumsum(WrappedOperation):
+    """Represents the cumsum operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.masked_fill.Scalar")
+class AtenMaskedFillScalar(WrappedOperation):
+    """Represents the masked_fill.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.zeros_like")
+class AtenZerosLike(WrappedOperation):
+    """Represents the zeros_like operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.eq.Tensor")
+class AtenEqTensor(WrappedOperation):
+    """Represents the eq.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.add_.Scalar")
+class AtenAddScalar(WrappedOperation):
+    """Represents the add_.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.masked_fill_.Scalar")
+class AtenMaskedFillScalar(WrappedOperation):
+    """Represents the masked_fill_.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.div_.Tensor")
+class AtenDivTensor(WrappedOperation):
+    """Represents the div_.Tensor operation."""
+
+    pass
+
+
+@dataclass
 class InputOp(Operation):
     """Represents an input operation in the graph."""
 

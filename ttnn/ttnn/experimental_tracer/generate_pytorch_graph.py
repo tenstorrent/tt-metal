@@ -17,9 +17,6 @@ import json
 class PytorchGraph:
     def __init__(self, operation_graph: OperationGraph):
         self.graph = operation_graph
-        assert (
-            not operation_graph.tracer.fake_original_tensor
-        ), f"Make sure LazyParams(fake=False) when tracing the model."
 
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         imports: Dict[str, List[str]] = {}
@@ -68,9 +65,10 @@ class CompositePytorchGraph(PytorchGraph):
     It overrides the `find_repeated_subgraphs` method to use the custom implementation.
     """
 
-    def __init__(self, graph: OperationGraph, clustered_graph=False):
+    def __init__(self, graph: OperationGraph, clustered_graph=False, dump_constants=False):
         super().__init__(graph)
         self.clustered_graph = clustered_graph
+        self.dump_constants = dump_constants
 
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         self.orig_config = ConstantTensor.ConstantTensorFromModel
@@ -143,12 +141,9 @@ class CustomModel(torch.nn.Module):
         """
         code_lines[
             "main"
-        ] += """\n# Set fake=False for real tensors
-fake = True
+        ] += """\n# Fake tensors used based on const_meta.json
 params = LazyParams(
-    meta_path="const_meta.json",
-    data_path="graph.pth",
-    fake=fake
+    meta_path="const_meta.json"
 )\n"""
         input_shapes = [tuple(input_op.args[0]) for input_op in input_ops]
         input_args = [f"torch.ones({shape})" for shape in input_shapes]
@@ -163,15 +158,14 @@ params = LazyParams(
         else:
             code_lines[
                 "main"
-            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=not fake)"
-            code_lines["main"] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)"
+            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True)"
             code_lines[
                 "main"
-            ] += """\nif not fake:
-    pytorch_graph = CompositePytorchGraph(clustered_graph, clustered_graph=True)
-    pytorch_graph.dump_to_python_file('clustered_graph.py', True)
-"""
+            ] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph, custom_patterns=[])"
+            code_lines["main"] += f"\npytorch_graph = CompositePytorchGraph(clustered_graph, clustered_graph=True)"
+            code_lines["main"] += f"\npytorch_graph.dump_to_python_file('clustered_graph.py', True)"
             tensor_dict = {k: v.value.detach() for k, v in CompositeOperation.ALL_CONSTANTS.items()}
+        if self.dump_constants:
             with open("graph.pth", "wb") as f:
                 torch.save(tensor_dict, f)
         ConstantTensor.ConstantTensorFromModel = self.orig_config

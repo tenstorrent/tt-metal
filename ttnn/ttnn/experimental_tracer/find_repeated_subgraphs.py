@@ -371,6 +371,7 @@ def merge_nodes_as_composite(
         function_call_name="composite",
         args=[],
         kwargs={},
+        meta_data=G.nodes[main_output]["operation"].meta_data,
     )
     for edge in incoming.union(outgoing):
         G.remove_edge(*edge)

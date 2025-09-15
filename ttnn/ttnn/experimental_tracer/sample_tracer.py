@@ -41,6 +41,7 @@ allowed_modes = [
     "swin_transformer_v2",
     "open_vla",
     "meta-llama/Llama-2-7b-hf",
+    "Qwen3-Next-80B-A3B-Instruct",
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
@@ -94,6 +95,16 @@ def get_parser():
         "--no-infer",
         action="store_true",
         help="Disable inference during tracing.",
+    )
+    parser.add_argument(
+        "--no-track-params",
+        action="store_true",
+        help="Do not track model parameters during tracing.",
+    )
+    parser.add_argument(
+        "--dump-constants",
+        action="store_true",
+        help="Dump constant tensors during tracing.",
     )
     return parser
 
@@ -249,6 +260,24 @@ def main(args_dict):
 
         model_name = "meta-llama/Llama-2-7b-hf"
         torch_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+
+    elif args.model == "Qwen3-Next-80B-A3B-Instruct":
+        # Load model directly
+        from transformers import AutoModelForCausalLM
+
+        torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
+
+        class QWEN80B(torch.nn.Module):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.qwen = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-Next-80B-A3B-Instruct")
+                self.qwen.eval()
+
+            def forward(self, input_ids):
+                inputs = {"input_ids": input_ids}
+                return self.qwen.forward(**inputs)
+
+        torch_model = QWEN80B()
     # torch_model = CustomClass()
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
@@ -262,12 +291,8 @@ def main(args_dict):
         input_dtypes=args.input_dtype,
         dump_visualization=True,
         save_original_tensors=not args.no_infer,
+        track_params=not args.no_track_params,
     )
-    pytorch_graph = PytorchGraph(operation_graph)
-    if not args.no_infer:
-        pytorch_graph = CompositePytorchGraph(operation_graph)
-
-    pytorch_graph.dump_to_python_file("graph.py", True)
     pytorch_excel_graph = PytorchExcelGraph(operation_graph)
     pytorch_excel_graph.dump_to_excel_file("graph.xlsx")
     graph = PytorchLayerUnitTestGraph(
@@ -277,6 +302,9 @@ def main(args_dict):
     )
     graph.dump_to_python_file("test.py", True)
     dump_graph_patterns(operation_graph, "graph_patterns.py")
+    pytorch_graph = CompositePytorchGraph(operation_graph, dump_constants=args.dump_constants)
+
+    pytorch_graph.dump_to_python_file("graph.py", True)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import json
 
 
 def _tensor_info(obj):
-    if isinstance(obj, torch.Tensor) and not obj.__class__.__name__ == "Trackable_Tensor":
+    if isinstance(obj, torch.Tensor) and not obj.__class__.__name__ == "Trackable_Tensor" and obj.device.type != "meta":
         return {
             "shape": list(obj.shape),
             "dtype": str(obj.dtype),
@@ -58,12 +58,14 @@ def get_tensors_from_input_spec(input_specs):
 
 
 class LazyParams:
-    def __init__(self, meta_path="const_meta.json", data_path="graph.pth.gz", fake=False):
+    def __init__(self, meta_path="const_meta.json", data_path=None, fake=True, empty=False):
         self.meta_path = meta_path
         self.data_path = data_path
         self.data = None
         self.fake = fake
+        self.empty = empty
         if not fake:
+            assert self.data_path is not None, "data_path must be provided when fake=False"
             with open(self.data_path, "rb") as f:
                 self.data = torch.load(f)
         else:
@@ -77,6 +79,8 @@ class LazyParams:
             shape = const_meta["shape"]
             dtype = getattr(torch, const_meta["dtype"].split(".")[1])
             min_max = const_meta["min_max"]
+            if self.empty:
+                return torch.empty(*shape, device="meta", dtype=dtype)
             if torch.is_floating_point(torch.empty((), dtype=dtype)):
                 # torch.randn does not support min/max, so use uniform_ after creation
                 t = torch.randn(*shape, dtype=dtype)
@@ -86,7 +90,7 @@ class LazyParams:
             low, high = min_max
             if high == low:
                 high = low + 1
-            t = torch.randint(low, high, shape, dtype=dtype)
+            t = torch.randint(int(low), int(high), shape, dtype=dtype)
             return t
         return self.data[const_name]
 
