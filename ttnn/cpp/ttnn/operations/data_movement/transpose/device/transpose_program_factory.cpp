@@ -558,8 +558,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             }
         }
     }
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
+    std::vector<uint32_t> reader_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"num_writes", num_writes},
         {"padding_val_packed", padding_val_packed},

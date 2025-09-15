@@ -295,16 +295,25 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
-    size_t hash_value = 0;
+    size_t define_hash_value = 0;
     for (const auto& [define, value] : this->defines_) {
-        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(define + value));
+        tt::utils::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+    }
+
+    size_t named_names_hash_value = 0;
+    size_t named_values_hash_value = 0;
+    for (const auto& [name, value] : this->named_compile_time_args_) {
+        tt::utils::hash_combine(named_names_hash_value, std::hash<std::string>{}(name));
+        tt::utils::hash_combine(named_values_hash_value, std::hash<std::uint32_t>{}(value));
     }
 
     return fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        hash_value,
+        define_hash_value,
+        named_names_hash_value,
+        named_values_hash_value,
         this->config_hash());
 }
 

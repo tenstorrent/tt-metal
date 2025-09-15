@@ -239,18 +239,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
             .set_page_size(src2_cb_index, x_block_size * w_block_size * input_tensor.element_size());
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        N,
-        input_cb_page_size,
-        num_rows,
-        x_dim,
-        num_blocks_total,
-        x_blocks,
-        w_blocks,
-        x_block_size,
-        w_block_size,
-        input_tensor.element_size(),
-        input_tensor.logical_shape()[-1] * input_tensor.element_size()};
+    std::vector<uint32_t> reader_compile_time_args = {};
 
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"N", N},
@@ -275,25 +264,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         tt::tt_metal::ReaderDataMovementConfig(
             reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        N,
-        output_cb_page_size,
-        num_rows,  // test starts to fail when this line is commented out
-
-        // X,
-        // X_stride,
-        // x_dim,
-        // W_stride,
-        // input_cb_page_size,
-        // input_tensor.element_size(),
-        // num_blocks_total,
-        // x_blocks,
-        // w_blocks,
-        // x_block_size,
-        // w_block_size,
-        // W,
-        // output_tensor.logical_shape()[-1] * output_tensor.element_size()
-    };
+    std::vector<uint32_t> writer_compile_time_args = {};
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
         {"N", N},
