@@ -20,18 +20,8 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t> output_shape,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const QueueId queue_id) { return self(input_tensor, output_shape, memory_config, queue_id); },
-            py::arg("input_tensor"),
-            py::arg("output_shape"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+        ttnn::pybind_arguments_t{
+            py::arg("input_tensor"), py::arg("output_shape"), py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

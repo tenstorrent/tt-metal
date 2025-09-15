@@ -10,7 +10,7 @@ namespace py = pybind11;
 
 void py_bind_llama_rs_create_heads(py::module& module) {
     auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -26,7 +26,6 @@ void py_bind_llama_rs_create_heads(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
                ttnn.Tensor: the output tensor.
@@ -44,47 +43,11 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                                 num_links=num_links,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::experimental::llama_rs_create_heads);
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::llama_rs_create_heads,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& intermediate_packet_buffer,
-               uint32_t dim,
-               const GlobalSemaphore& cross_device_semaphore,
-               const tt::tt_metal::SubDeviceId& subdevice_id,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               ttnn::ccl::Topology topology,
-               const uint32_t num_links,
-               const uint32_t num_heads,
-               const uint32_t num_kv_heads,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
-               const bool use_noc1_only,
-               const bool use_optimal_ccl_for_llama,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    intermediate_packet_buffer,
-                    dim,
-                    cross_device_semaphore,
-                    subdevice_id,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    num_links,
-                    num_heads,
-                    num_kv_heads,
-                    memory_config,
-                    qkv_memory_config,
-                    use_noc1_only,
-                    use_optimal_ccl_for_llama);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
             py::arg("dim"),
@@ -100,9 +63,7 @@ void py_bind_llama_rs_create_heads(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("qkv_memory_config") = std::nullopt,
             py::arg("use_noc1_only") = false,
-            py::arg("use_optimal_ccl_for_llama") = false,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("use_optimal_ccl_for_llama") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

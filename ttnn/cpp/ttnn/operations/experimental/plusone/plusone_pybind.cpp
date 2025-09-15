@@ -34,12 +34,7 @@ void bind_experimental_plusone_operation(py::module& module) {
         module,
         ttnn::plus_one,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) { return self(input_tensor, sub_core_grids); },
-            py::arg("input_tensor").noconvert(),
-            py::arg("sub_core_grids") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor").noconvert(), py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

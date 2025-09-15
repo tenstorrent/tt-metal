@@ -12,6 +12,7 @@
 #include <pybind11/stl.h>
 
 #include "kv_cache.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
 
@@ -85,11 +86,15 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
                const ttnn::Tensor& cache,
                const ttnn::Tensor& input,
                const uint32_t update_index,
-               const uint32_t batch_offset) -> ttnn::Tensor { return self(cache, input, update_index, batch_offset); },
+               const uint32_t batch_offset,
+               std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
+                return self(cache, input, update_index, batch_offset, compute_kernel_config);
+            },
             py::arg("cache"),
             py::arg("input"),
             py::arg("update_index"),
-            py::arg("batch_offset") = DefaultQueueId});
+            py::arg("batch_offset") = 0,
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 
 template <typename update_cache_operation_t>

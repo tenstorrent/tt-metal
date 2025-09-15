@@ -18,17 +18,11 @@ void bind_nlp_concat_heads(py::module& module) {
         R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
         )doc",
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, optional_output_tensor); },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

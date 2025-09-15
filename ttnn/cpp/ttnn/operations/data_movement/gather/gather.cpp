@@ -7,7 +7,6 @@
 
 #include "device/gather_device_operation.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -92,7 +91,6 @@ Tensor post_gather_transform_tensor(
 }  // namespace
 
 Tensor ExecuteGather::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const int8_t dim,
     const Tensor& input_index_tensor,
@@ -142,13 +140,7 @@ Tensor ExecuteGather::invoke(
     }
 
     Tensor gather_tensor = ttnn::prim::gather(
-        queue_id,
-        padded_input_tensor,
-        dim,
-        padded_index_tensor,
-        sparse_grad,
-        memory_config_value,
-        optional_output_tensor_value);
+        padded_input_tensor, dim, padded_index_tensor, sparse_grad, memory_config_value, optional_output_tensor_value);
 
     return CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);

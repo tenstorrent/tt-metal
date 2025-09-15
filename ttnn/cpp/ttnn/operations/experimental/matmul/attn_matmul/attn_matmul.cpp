@@ -12,7 +12,6 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor AttnMatmulOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -34,14 +33,12 @@ ttnn::Tensor AttnMatmulOperation::invoke(
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
 }
 
 // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
 ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const uint32_t num_tokens,
@@ -70,8 +67,7 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
 }
 

@@ -15,7 +15,6 @@ namespace detail {
 void bind_indexed_fill(pybind11::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Replaces batch of input in input_b denoted by batch_ids into input_a.
 
             Args:
@@ -26,7 +25,6 @@ void bind_indexed_fill(pybind11::module& module) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dim (int, optional): Dimension value. Defaults to `0`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -39,28 +37,17 @@ void bind_indexed_fill(pybind11::module& module) {
         )doc",
         ttnn::indexed_fill.base_name());
 
-    using OperationType = decltype(ttnn::indexed_fill);
     ttnn::bind_registered_operation(
         module,
         ttnn::indexed_fill,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& batch_id,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               int64_t dim,
-               QueueId queue_id) {
-                return self(queue_id, batch_id, input_tensor_a, input_tensor_b, memory_config, dim);
-            },
+        ttnn::pybind_arguments_t{
             pybind11::arg("batch_id").noconvert(),
             pybind11::arg("input_tensor_a").noconvert(),
             pybind11::arg("input_tensor_b").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("memory_config") = std::nullopt,
-            pybind11::arg("dim") = 0,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("dim") = 0});
 }
 
 }  // namespace detail

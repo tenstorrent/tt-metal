@@ -51,7 +51,6 @@ void py_bind_all_broadcast_async(pybind11::module& module) {
         module,
         ttnn::experimental::all_broadcast_async,
         R"doc(
-
         Performs an all-broadcast operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:

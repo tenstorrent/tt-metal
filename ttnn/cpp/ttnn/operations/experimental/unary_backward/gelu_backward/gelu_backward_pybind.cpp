@@ -25,7 +25,6 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             approximate (str, optional): "tanh" or "none" (default). The gelu approximation algorithm to use.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for this operation. Defaults to None.
             input_grad (ttnn.Tensor, optional): Preallocated output tensor. Defaults to None.
-            queue_id (int, optional): Command queue ID. Defaults to 0.
 
         Returns:
             ttnn.Tensor: The output tensor.
@@ -68,16 +67,14 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
                const Tensor& input_tensor,
                const std::string& approximate,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor>& input_grad_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
+               std::optional<Tensor>& input_grad_tensor) -> ttnn::Tensor {
+                return self(grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
             },
             py::arg("grad_output_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("approximate") = "none",
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 }  // namespace ttnn::operations::experimental::gelu_backward::detail

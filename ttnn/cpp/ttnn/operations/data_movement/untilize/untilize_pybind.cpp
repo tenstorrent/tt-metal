@@ -31,35 +31,22 @@ void bind_untilize(py::module& module) {
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
 
         )doc";
 
-    using OperationType = decltype(ttnn::untilize);
     ttnn::bind_registered_operation(
         module,
         ttnn::untilize,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize,
-               const std::optional<CoreRangeSet>&& sub_core_grids,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
-            py::arg("sub_core_grids") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("sub_core_grids") = std::nullopt});
 }
 }  // namespace ttnn::operations::data_movement::detail

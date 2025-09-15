@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
                         ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), DataType::BFLOAT16, Layout::TILE, *device);
 
                     for (auto bcast_math : enchantum::values_generator<ttnn::BcastOpMath>) {
-                        Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, bcast_math, bcast_dim);
+                        Tensor c = ttnn::bcast(a, b, bcast_math, bcast_dim);
                         Tensor d = c.cpu();
 
                         ////////////////////////////////////////////////////////////////////////////
@@ -87,28 +87,28 @@ int main(int argc, char** argv) {
             {
                 Tensor a = ttnn::random::random(Shape({1, 1, 32, 4544})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 1, 32, 4544})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 71, 32, 32})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 71, 32, 64})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
         };

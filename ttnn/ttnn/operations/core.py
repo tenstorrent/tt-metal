@@ -367,7 +367,7 @@ def to_torch(
     import torch
 
     if ttnn.is_tensor_storage_on_device(tensor):
-        tensor = ttnn.from_device(tensor, cq_id=cq_id)
+        tensor = ttnn.from_device(tensor, queue_id=cq_id)
 
     tensor = tensor.to_torch(mesh_composer=mesh_composer)
 

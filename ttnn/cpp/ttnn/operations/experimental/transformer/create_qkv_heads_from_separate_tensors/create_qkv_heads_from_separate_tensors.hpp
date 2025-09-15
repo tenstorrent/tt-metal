@@ -12,7 +12,6 @@ namespace operations::experimental::transformer {
 
 struct CreateQKVHeadsSeparateTensorsOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const Tensor& input_tensor_kv,
         uint32_t num_q_heads,

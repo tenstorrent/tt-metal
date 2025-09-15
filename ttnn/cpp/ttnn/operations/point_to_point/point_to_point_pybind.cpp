@@ -27,7 +27,6 @@ void py_bind_point_to_point(py::module& module) {
                 topology (ttnn.Topology): Fabric topology.
 
             Keyword Args:
-                queue_id (int, optional): command queue id. Defaults to `0`.
                 optional_output_tensoe (ttnn.Tensor,optional): Optional output tensor.
 
            Returns:
@@ -53,28 +52,16 @@ void py_bind_point_to_point(py::module& module) {
                 >>> assert sent_tensor_torch[1,:,:,:] == input_tensor_torch[0,:,:,:]
             )doc";
 
-    using OperationType = decltype(ttnn::point_to_point);
     ttnn::bind_registered_operation(
         module,
         ttnn::point_to_point,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& receiver_coord,
-               const MeshCoordinate& sender_coord,
-               const ccl::Topology topology,
-               const std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, receiver_coord, sender_coord, topology, optional_output_tensor);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor").noconvert(),
             py::arg("receiver_coord"),
             py::arg("sender_coord"),
             py::arg("topology"),
             py::kw_only(),
-            py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_output_tensor") = std::nullopt});
 }
 }  // namespace ttnn::operations::point_to_point
