@@ -116,9 +116,14 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
                 program,
                 kernel_src_code,
                 *active_ethernet_cores.begin(),
+<<<<<<< HEAD
                 tt_metal::EthernetConfig{.noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
             distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
             this->RunProgram(mesh_device, workload);
+=======
+                tt_metal::EthernetConfig{.noc = static_cast<tt_metal::NOC>(dm_processor), .processor = dm_processor});
+            this->RunProgram(device, program);
+>>>>>>> 468f504dd5 (Enforce NoC1 on RISC1 due to the lack of Dynamic NoC functionality)
         }
     };
 }

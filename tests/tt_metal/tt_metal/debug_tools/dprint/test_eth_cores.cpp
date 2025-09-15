@@ -59,7 +59,7 @@ void RunTest(
     auto device = mesh_device->get_devices()[0];
     // Try printing on all ethernet cores on this device
     std::unordered_set<CoreCoord> test_cores;
-    tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = processor};
+    tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
     if (active) {
         test_cores = device->get_active_ethernet_cores(true);
         config.eth_mode = Eth::SENDER;
