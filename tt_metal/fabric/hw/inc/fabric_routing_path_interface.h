@@ -8,35 +8,24 @@
 
 namespace tt::tt_fabric {
 
-// Common helper function for both 1D and 2D routing
-template <uint8_t dim>
-inline bool decode_route_to_buffer_common(
-    const routing_path_t<dim, false>& routing_path,
-    uint16_t dst_chip_id,
-    volatile uint8_t* out_route_buffer,
-    uint16_t max_chips,
-    uint16_t route_size) {
-    if (dst_chip_id >= max_chips) {
+// Device-side decoder function for 1D routing (packed paths)
+template <>
+inline bool routing_path_t<1, false>::decode_route_to_buffer(
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
+    if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // Out of bounds - fill buffer with NOOPs/zeros
-        for (uint16_t i = 0; i < route_size; ++i) {
+        for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
             out_route_buffer[i] = 0;
         }
         return false;
     }
 
-    const uint8_t* packed_route = &routing_path.paths[dst_chip_id * route_size];
+    const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
     // Copy packed data directly to output buffer
-    for (uint16_t i = 0; i < route_size; ++i) {
+    for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
         out_route_buffer[i] = packed_route[i];
     }
     return true;
-}
-
-// Device-side decoder function for 1D routing (packed paths)
-template <>
-inline bool routing_path_t<1, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
-    return decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 // Helper function to pack 4-bit commands into bytes

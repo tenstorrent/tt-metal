@@ -39,7 +39,7 @@ void routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     }
 }
 
-// 1D compressed routing specialization
+// 1D compressed routing specialization. No-op
 template <>
 void routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {

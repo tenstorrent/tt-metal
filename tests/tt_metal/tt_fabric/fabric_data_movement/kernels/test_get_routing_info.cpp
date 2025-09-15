@@ -63,7 +63,7 @@ void kernel_main() {
             uint8_t distance_in_hops = (dst_fabric_dev_id > src_fabric_dev_id)
                                            ? (dst_fabric_dev_id - src_fabric_dev_id)
                                            : (src_fabric_dev_id - dst_fabric_dev_id);
-            routing_success = get_routing_info<1, true>(dst_fabric_dev_id, route_buffer);
+            routing_success = get_routing_info<1>(dst_fabric_dev_id, route_buffer);
             if (distance_in_hops != 0) {
                 // For 1D fabric, use LowLatencyPacketHeader with distance in hops
                 packet_header->to_chip_unicast(distance_in_hops);
