@@ -89,6 +89,21 @@ def run_yolov13_demo(
     logger.info("Inference done")
 
 
+def run_inference_and_save(
+    model, runner, model_type, outputs_mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
+):
+    if model_type == "torch_model":
+        preds = model(im_tensor)
+    else:
+        preds = runner.run(im_tensor)
+        preds = ttnn.to_torch(preds, dtype=torch.float32, mesh_composer=outputs_mesh_composer)
+
+    results = postprocess(preds, im_tensor, orig_images, paths_images, names)
+
+    for result, image_path in zip(results, paths_images):
+        save_yolo_predictions_by_model(result, save_dir, image_path, model_type)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV13_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
