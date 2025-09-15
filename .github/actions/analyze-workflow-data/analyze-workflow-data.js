@@ -195,265 +195,6 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
 }
 
 /**
- * Download workflow run logs and extract up to N error snippets.
- * Returns an array of strings (snippets).
- */
-async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3) {
-  const owner = context.repo.owner;
-  const repo = context.repo.repo;
-  try {
-    await core.startGroup(`Extracting error snippets for run ${runId}`);
-    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`));
-    const zipPath = path.join(tmpDir, 'run_logs.zip');
-    fs.writeFileSync(zipPath, Buffer.from(data));
-    const extractDir = path.join(tmpDir, 'extract');
-    fs.mkdirSync(extractDir, { recursive: true });
-    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
-    core.info(`Total snippets collected: ${snippets.length}`);
-
-    // Query job/step status once to validate findings and/or provide fallback
-    let hasFailingJob = false;
-    let failingLabel = 'no failing job detected';
-    let apiCheckSucceeded = false;
-    try {
-      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
-      const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
-      let failingStep = undefined;
-      if (!failingJob) {
-        for (const job of jobs) {
-          const step = (job.steps || []).find(s => s.conclusion === 'failure');
-          if (step) { failingJob = job; failingStep = step; break; }
-        }
-      }
-      apiCheckSucceeded = true;
-      if (failingJob) {
-        hasFailingJob = true;
-        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`;
-      }
-    } catch (e) {
-      core.info(`Job status lookup failed for run ${runId}: ${e.message}`);
-    }
-
-    // If we found FAILED lines but the run has no failing job, suppress false positives
-    // Only do this if the API check succeeded; on API failure, keep the snippets.
-    // if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
-    //   snippets = [];
-    // }
-
-    // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
-    if ((!snippets || snippets.length === 0) && hasFailingJob) {
-      const owner = findOwnerForLabel(failingLabel) || 'no owner found';
-      snippets = [{ label: failingLabel, owner, snippet: 'could not find failure in logs' }];
-    }
-
-    return snippets;
-  } catch (e) {
-    core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
-    return [];
-  } finally {
-    core.endGroup();
-  }
-}
-
-/**
- * Recursively find up to maxCount error snippets in a directory of text logs.
- */
-function findErrorSnippetsInDir(rootDir, maxCount) {
-  // Relaxed: match anywhere on the line (after prefix stripping)
-  const infoRegex = /info:/i;
-  const backtraceRegex = /backtrace:/i;
-  // Failure markers used both in primary and fallback passes
-  const failureMarkers = [
-    /\bFAILED\b/i,          // pytest summary and generic FAILED
-    /\[\s*FAILED\s*\]/i,  // gtest [  FAILED  ]
-    /\bERROR\b/i,           // generic ERROR
-    /Traceback\b/i,         // python tracebacks
-    /AssertionError\b/i,
-    /Segmentation fault/i
-  ];
-
-  const collected = [];
-  const stack = [rootDir];
-
-  while (stack.length && collected.length < maxCount) {
-    const dir = stack.pop();
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      const p = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        stack.push(p);
-      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-        // Only consider logs whose filenames indicate test content
-        const fileBaseName = path.basename(p);
-        if (!/tests?/i.test(fileBaseName)) {
-          core.info(`Skipping non-test log file: ${fileBaseName}`);
-          continue;
-        }
-        try {
-          const text = fs.readFileSync(p, 'utf8');
-          const rawLines = text.split(/\r?\n/);
-          const lines = rawLines.map(l => l
-            .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-            .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
-          );
-          core.info(`Scanning ${lines.length} lines in ${p}`);
-          let foundInFile = 0;
-
-          // A) info: ... until backtrace:
-          for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
-            if (infoRegex.test(lines[i])) {
-              // Guardrail: only consider this an error snippet if nearby lines include
-              // a failure marker or a backtrace. Scan a small window ahead.
-              const upper = Math.min(lines.length, i + 200);
-              let windowHasFailure = false;
-              for (let k = i; k < upper; k++) {
-                const ln = lines[k];
-                if (backtraceRegex.test(ln) || failureMarkers.some(rx => rx.test(ln))) {
-                  windowHasFailure = true;
-                  break;
-                }
-              }
-              if (!windowHasFailure) continue;
-
-              const block = [lines[i].trim()];
-              let j = i + 1;
-              while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
-                if (lines[j].trim() !== '') block.push(lines[j].trim());
-                j++;
-              }
-              const testLabel = extractTestLabelBackward(lines, i);
-              const textBlock = block.join('\n');
-              const fileBase = path.basename(p).split('.')[0];
-              const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`;
-              collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel });
-              foundInFile++;
-              i = j;
-            }
-          }
-
-          // No other passes by design (keep it simple): only info..backtrace blocks
-
-          core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`);
-        } catch (_) { /* ignore */ }
-      }
-      if (collected.length >= maxCount) break;
-    }
-  }
-
-  // Fallback: if no snippets collected via primary heuristics, try to at least
-  // return names (and a small context) of log files that clearly indicate failure.
-  if (collected.length === 0) {
-
-    const stack2 = [rootDir];
-    while (stack2.length && collected.length < maxCount) {
-      const dir = stack2.pop();
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const ent of entries) {
-        const p = path.join(dir, ent.name);
-        if (ent.isDirectory()) {
-          stack2.push(p);
-        } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-          try {
-            // Simple fallback: Only consider lines where 'FAILED' is the first word after
-            // stripping leading timestamps and whitespace.
-            const text = fs.readFileSync(p, 'utf8');
-            const rawLines = text.split(/\r?\n/);
-            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/;
-            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word
-            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) {
-              const original = rawLines[i];
-              const modified = rawLines.slice(i, i + 2).join('\n');
-              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, '');
-              if (FAILED_AT_START.test(stripped)) {
-                const fileBase = path.basename(p).split('.')[0];
-                collected.push({
-                  label: `${fileBase}:\nFAILED line`,
-                  // Return the original line (full context), truncated
-                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : modified,
-                });
-                break; // one per file is enough
-              }
-            }
-          } catch (_) { /* ignore */ }
-        }
-        if (collected.length >= maxCount) break;
-      }
-    }
-  }
-
-  // Attach owners based on mapping
-  try {
-    for (const it of collected) {
-      if (it && !it.owner) {
-        const owner = findOwnerForLabel(it.label || '');
-        if (owner) it.owner = owner;
-      }
-    }
-  } catch (_) { /* ignore */ }
-
-  return collected;
-}
-
-/**
- * Try to extract a test identifier from the nearby log lines or path.
- */
-function extractTestLabelBackward(lines, errIdx) {
-  const runExact = /^\s*\[\s*RUN\s*\]\s*(.+)$/; // capture gtest name after [ RUN ]
-  const failedTests = /^\s*FAILED\s+tests\//;      // lines starting with FAILED tests/
-  const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
-  const testsPathStart = /^\s*tests\//;       // must start with tests/
-
-  for (let i = errIdx; i >= 0; i--) {
-    // Normalize the line the same way as in the scanner (strip prefixes)
-    const raw = lines[i] || '';
-    const line = raw
-      .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
-    // gtest: return the part after [ RUN ]
-    const mRun = line.match(runExact);
-    if (mRun) return mRun[1].trim();
-    // pytest FAILED header: extract tests/...py::test_name (without params)
-    if (failedTests.test(line)) {
-      const mF = line.match(/^\s*FAILED\s+((tests\/[^\s]+\.py))::([^\s\[]+)/);
-      if (mF) return `${mF[1]}::${mF[3]}`;
-      // fallback to any tests path at start
-      const mFs = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-      if (mFs) return mFs[1];
-      return line.trim();
-    }
-    if (failedOnly.test(line)) {
-      // return first non-empty line below
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() === '') j++;
-      if (j < lines.length) {
-        const candRaw = lines[j];
-        const cand = candRaw
-          .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-          .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
-        const mPy = cand.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
-        if (mPy) return `${mPy[1]}::${mPy[3]}`;
-        const mStart = cand.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-        if (mStart) return mStart[1];
-        const mRun2 = cand.match(runExact);
-        if (mRun2) return mRun2[1].trim();
-        return cand.trim();
-      }
-    }
-    if (testsPathStart.test(line)) {
-      const m = line.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
-      if (m) return `${m[1]}::${m[3]}`;
-      const m2 = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-      if (m2) return m2[1];
-      return line.trim();
-    }
-  }
-  return undefined;
-}
-
-/**
  * Calculates statistics for a set of workflow runs.
  *
  * @param {Array<object>} runs - Array of workflow run objects
@@ -1036,6 +777,11 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
+          // Commit author enrichment
+          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
@@ -1045,6 +791,9 @@ async function run() {
             changeRef.first_failed_head_sha = item.first_failed_head_sha;
             changeRef.first_failed_head_short = item.first_failed_head_short;
             changeRef.no_success_in_window = item.no_success_in_window;
+            changeRef.first_failed_author_login = item.first_failed_author_login;
+            changeRef.first_failed_author_name = item.first_failed_author_name;
+            changeRef.first_failed_author_url = item.first_failed_author_url;
           }
         }
       } catch (e) {
@@ -1064,6 +813,10 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
+          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -1074,6 +827,9 @@ async function run() {
           changeRef.first_failed_head_sha = item.first_failed_head_sha;
           changeRef.first_failed_head_short = item.first_failed_head_short;
           changeRef.no_success_in_window = item.no_success_in_window;
+          changeRef.first_failed_author_login = item.first_failed_author_login;
+          changeRef.first_failed_author_name = item.first_failed_author_name;
+          changeRef.first_failed_author_url = item.first_failed_author_url;
         }
       }
       catch (e) {
@@ -1100,10 +856,13 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            const author = it.first_failed_author_login
+              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
           }
           return base;
         });
@@ -1118,10 +877,13 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            const author = it.first_failed_author_login
+              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
           }
           return base;
         });
