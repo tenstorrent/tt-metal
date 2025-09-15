@@ -335,7 +335,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout()
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not config.dry_run
+    child_mode = not config.dry_run and not config.vector_id
     timeout_before_rejoin = 5
 
     if child_mode:
