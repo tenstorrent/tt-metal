@@ -53,15 +53,3 @@ line-length = 120
 [tool.cibuildwheel]
 skip = "*-musllinux_*"
 build-verbosity = 2
-
-# pyproject.toml
-[tool.setuptools_scm]
-tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+)$'  # only vX.Y.Z
-git_describe_command = [
-  "git","describe","--dirty","--tags","--long",
-  "--match","v[0-9]*.[0-9]*.[0-9]*",
-  "--exclude","*-*"
-]
-version_scheme = "no-guess-dev"
-local_scheme = "node"
-fallback_version = "0.0.0.dev0"
