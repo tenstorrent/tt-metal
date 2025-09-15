@@ -15,18 +15,17 @@ Description:
 from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
+from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
-from ttexalens.tt_exalens_lib import parse_elf
 from ttexalens.context import Context
-from utils import ORANGE, RST
 from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data"],
+    depends=["inspector_data", "elfs_cache"],
 )
 
 
@@ -46,7 +45,7 @@ class DispatcherCoreData:
 
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context):
+    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
         self.inspector_data = inspector_data
         if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
@@ -62,8 +61,8 @@ class DispatcherData:
         if not os.path.exists(idle_erisc_elf_path):
             raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
 
-        self._brisc_elf = parse_elf(brisc_elf_path, context)
-        self._idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
+        self._brisc_elf = elfs_cache[brisc_elf_path]
+        self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
 
         # Check if debug info is obtained correctly
         if not self._brisc_elf:
@@ -230,7 +229,8 @@ class DispatcherData:
 @triage_singleton
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
-    return DispatcherData(inspector_data, context)
+    elfs_cache = get_elfs_cache(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache)
 
 
 if __name__ == "__main__":
