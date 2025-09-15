@@ -385,7 +385,7 @@ public:
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
-    uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
+    uint32_t get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
     // Query device features. Returns true if the feature is enabled.
@@ -486,18 +486,8 @@ public:
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
 
-inline uint32_t Hal::get_processor_classes_count(
-    std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
-    // TODO extract as reusable function like `to_index(programmable_core_type)`
-    uint32_t index = std::visit(
-        ttsl::overloaded{
-            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return utils::underlying_type(core_type_specifier);
-            },
-            [](uint32_t core_type_specifier) { return core_type_specifier; },
-        },
-        programmable_core_type);
-    TT_ASSERT(index < this->core_info_.size());
+inline uint32_t Hal::get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = get_programmable_core_type_index(programmable_core_type);
     return this->core_info_[index].get_processor_classes_count();
 }
 
