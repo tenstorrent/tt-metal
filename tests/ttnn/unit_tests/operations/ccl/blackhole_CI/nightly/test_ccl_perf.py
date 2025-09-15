@@ -9,11 +9,11 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 THRESHOLD = 0.4
-from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0
+from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(2)
 @skip_for_n_dev(8)
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",

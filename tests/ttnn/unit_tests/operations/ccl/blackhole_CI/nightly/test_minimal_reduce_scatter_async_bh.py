@@ -8,7 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
@@ -235,7 +235,7 @@ def run_reduce_scatter_impl(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @skip_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -352,7 +352,7 @@ def test_reduce_scatter_async_4dev_ring(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
@@ -468,22 +468,23 @@ def test_reduce_scatter_async_line(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
         # Scatter on dim 0
-        # (4, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 1
-        # (4, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 2
-        # (4, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # # Scatter on dim 3
         (4, [1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -537,6 +538,8 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
+    if dim != 3:
+        pytest.skip("#26572: Can only operate on dim 3")
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
     if enable_trace:
         pytest.skip("We've seen ND PCC when running the composite-RS with trace")
@@ -561,7 +564,7 @@ def test_reduce_scatter_async_training_shapes(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -706,7 +709,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -822,7 +825,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",

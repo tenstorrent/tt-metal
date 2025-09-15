@@ -7,11 +7,12 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -108,7 +109,7 @@ def test_all_gather_2D_line(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -204,7 +205,7 @@ def test_all_gather_4D_line(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout",
     [
@@ -301,8 +302,7 @@ def test_all_gather_ring(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
-@skip_for_n_dev(4)
+@skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
