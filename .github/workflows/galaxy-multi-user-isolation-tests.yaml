@@ -46,6 +46,12 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Extract Wheel and files
+        run: |
+          rm -rf ./docker_artifacts
+          mkdir -p ./docker_artifacts
+          mv tar -xvf ttm_any.tar ./docker_artifacts
+          mv *.whl ./docker_artifacts
       - name: Create Docker Compose file
         run: |
           rm -rf .github/scripts/utils/muti-user-galaxy-docker-files
@@ -62,6 +68,7 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
+                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -87,6 +94,7 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -112,6 +120,7 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -137,6 +146,7 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -198,16 +208,16 @@ jobs:
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray-1"
-              TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
-              cd TRAY_PODS_DIR
-              testlogfile="test_output_$tray.log"
+              # TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
+              # cd TRAY_PODS_DIR
+              # testlogfile="test_output_$tray.log"
               echo ">>> Running tests in $cname" 
-              docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
-              # (
-              # docker exec "$cname" bash -c "$command" \
-              # | sed "s/^/[$cname] /" 
-              # exit ${PIPESTATUS[0]}
-              # ) &         
+              # docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
+              (
+              docker exec "$cname" bash -c "$command" \
+              | sed "s/^/[$cname] /" 
+              exit ${PIPESTATUS[0]}
+              ) &         
               pids+=($!)
             done
 
@@ -227,13 +237,13 @@ jobs:
           # run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           echo "run the pytest"
           run_test "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
-      - name: Print test logs with folding
-        run: |
-          for logfile in logs/*.log; do
-            echo "::group::Logs for $logfile"
-            cat "$logfile"
-            echo "::endgroup::"
-          done
+      # - name: Print test logs with folding
+      #   run: |
+      #     for logfile in logs/*.log; do
+      #       echo "::group::Logs for $logfile"
+      #       cat "$logfile"
+      #       echo "::endgroup::"
+      #     done
 
       - name: Tear down containers
         if: always()
