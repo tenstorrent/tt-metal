@@ -174,7 +174,7 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
 
     // LLK wrapper
     sfpi_inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_dst0);
+        _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0);
     }
 
     #endif // TRISC_MATH
