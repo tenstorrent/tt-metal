@@ -99,13 +99,14 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  const patterns = [
-    /\b(error|fatal|exception|assert|failed|failure|traceback)\b/i,
-    /\bFAIL\b/,
-  ];
-  const results = [];
+  const errorLineRegex = /\berror:\b/i; // matches 'error:' (case-insensitive), includes RuntimeError:, AssertionError:, etc.
+  const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
+  const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
+
+  const collected = [];
   const stack = [rootDir];
-  while (stack.length && results.length < maxCount) {
+
+  while (stack.length && collected.length < maxCount) {
     const dir = stack.pop();
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const ent of entries) {
@@ -116,20 +117,50 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
         try {
           const content = fs.readFileSync(p, 'utf8');
           const lines = content.split(/\r?\n/);
-          for (let idx = 0; idx < lines.length && results.length < maxCount; idx++) {
-            const line = lines[idx];
-            if (patterns.some(rx => rx.test(line))) {
-              const before = lines[idx - 1] ? `${lines[idx - 1]}\n` : '';
-              const after = lines[idx + 1] ? `\n${lines[idx + 1]}` : '';
-              const snippetRaw = `${before}${line}${after}`.trim();
-              results.push(snippetRaw.length > 600 ? snippetRaw.slice(0, 600) + '…' : snippetRaw);
+          const used = new Set();
+
+          // Pass 1: capture info..backtrace blocks (include preceding error line if present)
+          for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
+            if (infoRegex.test(lines[i])) {
+              const block = [];
+              // Include immediately preceding error line if it matches errorLineRegex
+              if (i - 1 >= 0 && errorLineRegex.test(lines[i - 1])) {
+                block.push(lines[i - 1]);
+                used.add(i - 1);
+              }
+              block.push(lines[i]);
+              used.add(i);
+              let j = i + 1;
+              while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
+                block.push(lines[j]);
+                used.add(j);
+                j++;
+              }
+              // Do not include the backtrace line itself
+              const snippet = block.join('\n').trim();
+              if (snippet.length > 0) {
+                collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
+              }
+              i = j; // advance
             }
           }
-        } catch (_) { /* ignore */ }
+
+          // Pass 2: capture standalone error lines not already included
+          for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
+            if (!used.has(k) && errorLineRegex.test(lines[k])) {
+              const snippet = lines[k].trim();
+              if (snippet.length > 0) {
+                collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
+              }
+            }
+          }
+        } catch (_) { /* ignore file errors */ }
       }
+      if (collected.length >= maxCount) break;
     }
   }
-  return results;
+
+  return collected;
 }
 
 /**
