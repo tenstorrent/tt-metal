@@ -30,12 +30,11 @@ int main() {
     bool pass = true;
 
     try {
-        // Initialize the device (here we use the 1st device, but you can use any device)
+        // Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)
         constexpr int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        // In Metalium, submitting operations to the device is done through a command queue. This includes
-        // uploading/downloading data to/from the device, and executing programs.
+        // Submit work via the mesh command queue: uploads/downloads and program execution.
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
         // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
@@ -45,7 +44,7 @@ int main() {
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
         constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
-        // Configuration for the buffers.
+        // Configure mesh buffers. Use single-tile page size so transfers operate tile-by-tile.
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = tile_size_bytes,  // Number of bytes when round-robin between banks. Usually this is the same
                                            // as the tile size for efficiency.
@@ -53,10 +52,11 @@ int main() {
         distributed::DeviceLocalBufferConfig l1_config{
             .page_size = tile_size_bytes, .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
 
-        distributed::ReplicatedBufferConfig dram_buffer_config{.size = dram_buffer_size}; // Size of the buffers in bytes
+        distributed::ReplicatedBufferConfig dram_buffer_config{
+            .size = dram_buffer_size};  // Size per device (replicated across mesh)
         distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
 
-        // Allocate the buffers
+        // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
         auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
         auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
         auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
@@ -101,24 +101,20 @@ int main() {
         // memory holding the data is freed.
         distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 
-        // Set the arguments for the kernel.
+        // Set runtime arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
             l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
-        // Run the program. Again blocking is set to false. So the host function returns immediately and can continue
-        // executing while the program is running on the device; leading the better performance if the host has other
-        // work to do.
+        // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading back.
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);
-        // NOTE: The above is equivalent to the following single line:
-        // EnqueueProgram(cq, program, /*blocking=*/true);
+        // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
-        // Read the result back from the device. The `blocking` argument is set to true. Telling Metalium to wait for
-        // the read to complete before returning. Thus we can be sure the data is ready to be used right after the call.
-        // The vector will be automatically resized to fit the data.
+        // Read the result back from the shard at mesh coordinate {0,0}. Use blocking=true to wait for completion.
+        // The vector is automatically resized to fit the data.
         std::vector<bfloat16> result_vec;
         distributed::ReadShard(
             cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking*/ true);
