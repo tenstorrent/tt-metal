@@ -169,33 +169,35 @@ void MAIN {
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
 
-                    max_reduce_with_indices_init();
+                    if (first_c_block) {
+                        max_reduce_with_indices_init();
+                    }
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
                     // update the current index column
-
-                    if (current_idx_col + right_inc + kernel_w > in_w_padded) {
-                        // we reached the edge, wrap down and to the left
-                        current_idx_col = pad_l;
-                        tilize_init_short_with_dt_no_pack(
-                            curr_in_cb_id, down_left_wrap_inc_tmp_cb_id, topk_output_tiles);
-                        pack_reconfig_data_format(down_left_wrap_inc_tmp_cb_id);
-                        tilize_block_no_pack(
-                            down_left_wrap_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
-                        tilize_uninit_with_dt_no_pack(down_left_wrap_inc_tmp_cb_id, idx_tmp_cb_id);
-                        // UNPACK(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
-                    } else {
-                        // we are still in the same row, move to the right
-                        current_idx_col += right_inc;
-                        tilize_init_short_with_dt_no_pack(curr_in_cb_id, right_inc_tmp_cb_id, topk_output_tiles);
-                        pack_reconfig_data_format(right_inc_tmp_cb_id);
-                        tilize_block_no_pack(right_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
-                        tilize_uninit_with_dt_no_pack(right_inc_tmp_cb_id, idx_tmp_cb_id);
-                        // UNPACK(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
+                    if (last_c_block) {
+                        if (current_idx_col + right_inc + kernel_w > in_w_padded) {
+                            // we reached the edge, wrap down and to the left
+                            current_idx_col = pad_l;
+                            tilize_init_short_with_dt_no_pack(
+                                curr_in_cb_id, down_left_wrap_inc_tmp_cb_id, topk_output_tiles);
+                            pack_reconfig_data_format(down_left_wrap_inc_tmp_cb_id);
+                            tilize_block_no_pack(
+                                down_left_wrap_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
+                            tilize_uninit_with_dt_no_pack(down_left_wrap_inc_tmp_cb_id, idx_tmp_cb_id);
+                            // UNPACK(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
+                        } else {
+                            // we are still in the same row, move to the right
+                            current_idx_col += right_inc;
+                            tilize_init_short_with_dt_no_pack(curr_in_cb_id, right_inc_tmp_cb_id, topk_output_tiles);
+                            pack_reconfig_data_format(right_inc_tmp_cb_id);
+                            tilize_block_no_pack(right_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
+                            tilize_uninit_with_dt_no_pack(right_inc_tmp_cb_id, idx_tmp_cb_id);
+                            // UNPACK(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
+                        }
+                        add_int_tile_init();
+                        add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
-                    add_int_tile_init();
-                    add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
-
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -228,9 +230,11 @@ void MAIN {
                     tensix_sync();
                 }
 
-                tensix_sync();
-                pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                tensix_sync();
+                if (first_c_block) {
+                    tensix_sync();
+                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
+                    tensix_sync();
+                }
 
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
@@ -239,27 +243,29 @@ void MAIN {
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
 
-                tensix_sync();
-                pack_untilize_dest_init<topk_output_tiles>(idx_tmp_cb_id, 32, 4);
-                tensix_sync();
+                if (last_c_block) {
+                    tensix_sync();
+                    pack_untilize_dest_init<topk_output_tiles>(idx_tmp_cb_id, 32, 4);
+                    tensix_sync();
 
-                pack_untilize_dest<
-                    topk_output_tiles,
-                    topk_output_tiles,
-                    false,
-                    false,
-                    TILE_C_DIM,
-                    index_scratch_out_dst_idx>(
-                    idx_tmp_cb_id, 1, 0, 32, 4);  // write back to the idx tmp cb to be used in the next iteration
+                    pack_untilize_dest<
+                        topk_output_tiles,
+                        topk_output_tiles,
+                        false,
+                        false,
+                        TILE_C_DIM,
+                        index_scratch_out_dst_idx>(
+                        idx_tmp_cb_id, 1, 0, 32, 4);  // write back to the idx tmp cb to be used in the next iteration
 
-                // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
-                // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK tilizes
-                // them again,
-                // TODO why does tensix_sync not achieve this?
-                cb_push_back(sync_cb_id, 1);
-                cb_reserve_back(sync_cb_id, 1);
-                cb_wait_front(sync_cb_id, 1);
-                cb_pop_front(sync_cb_id, 1);
+                    // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
+                    // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK
+                    // tilizes them again,
+                    // TODO why does tensix_sync not achieve this?
+                    cb_push_back(sync_cb_id, 1);
+                    cb_reserve_back(sync_cb_id, 1);
+                    cb_wait_front(sync_cb_id, 1);
+                    cb_pop_front(sync_cb_id, 1);
+                }
 
                 if constexpr (pack_untilize_reinit) {
                     tensix_sync();
