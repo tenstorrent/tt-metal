@@ -920,24 +920,14 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize the launch_msg ring buffer. Entry 0 contains the proper firmware startup message,
-    // while entries 1 through N-1 are zero-initialized and will be populated by the dispatcher
-    // with actual work messages during normal operation.
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries);
+    // Initialize the launch_msg ring buffer. Only entry 0 needs initialization for firmware startup.
+    // Entries 1 through N-1 are left as zeros and will be populated by the dispatcher
+    // with actual work messages during normal operation. The firmware should only process
+    // entry 0 during initialization and then wait for the dispatcher to manage subsequent entries.
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, {});
 
     // Entry 0: Use the proper firmware startup message
     init_launch_msg_data[0] = *launch_msg;
-
-    // Entries 1 to N-1: Initialize with DISPATCH_MODE_NONE so they are safely skipped
-    // until the dispatcher overwrites them with actual work messages during normal operation.
-    // This prevents firmware from processing garbage data if it advances past entry 0.
-    for (uint32_t i = 1; i < launch_msg_buffer_num_entries; i++) {
-        std::memset(&init_launch_msg_data[i], 0, sizeof(launch_msg_t));
-        init_launch_msg_data[i].kernel_config.mode = DISPATCH_MODE_NONE;
-        // Ensure enables and preload are 0 to prevent any kernel execution
-        init_launch_msg_data[i].kernel_config.enables = 0;
-        init_launch_msg_data[i].kernel_config.preload = 0;
-    }
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
