@@ -858,7 +858,7 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);
-    log_info(LogMetal, "DPRINT Server dettached device {}", device_id);
+    log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
