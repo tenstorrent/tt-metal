@@ -157,7 +157,6 @@ int main(int argc, char **argv) {
     // maintaining uniform memory and runtime state across all physical devices.
     //A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
-    auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
