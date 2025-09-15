@@ -90,11 +90,10 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    # Issue 28341: The unit test for Welford is failing with random weights and biases.
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16) if use_welford else torch.rand((C,), dtype=torch.bfloat16)
-    torch_bias = torch.ones((C,), dtype=torch.bfloat16) if use_welford else torch.rand((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
-        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
     )
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
@@ -118,7 +117,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     reciprocals_tensor = None
     if use_reciprocals:
         # Generate reciprocals tensor
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size.x, grid_size.y)
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size)
         reciprocals_tensor = ttnn.from_torch(
             torch_reciprocals,
             dtype=ttnn.DataType.FLOAT32,
