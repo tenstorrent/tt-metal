@@ -28,7 +28,7 @@ void kernel_main() {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
 
-        noc_async_write(l1_read_addr, page.get_noc_addr(), page_size);
+        noc_async_write(l1_read_addr, page.noc_addr(), page_size);
         noc_async_write_barrier();
 
         cb_pop_front(cb_id, 1);

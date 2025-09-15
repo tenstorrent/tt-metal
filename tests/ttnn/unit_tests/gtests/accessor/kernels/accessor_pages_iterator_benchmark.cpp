@@ -27,7 +27,7 @@ void kernel_main() {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             // Iterator-based iteration over all pages
             for (const auto& page : pages) {
-                volatile auto _ = page.get_noc_addr();
+                volatile auto _ = page.noc_addr();
             }
         }
     }

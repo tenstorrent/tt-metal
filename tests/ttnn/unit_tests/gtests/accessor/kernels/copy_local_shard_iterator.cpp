@@ -29,7 +29,7 @@ void kernel_main() {
         uint32_t shard_id = first_shard_id + i * num_cores;
         auto shard_pages = tensor_accessor_src.shard_pages(shard_id);
         for (const auto& page : shard_pages) {
-            noc_async_write_page(page.page_id(), tensor_accessor_dst, page.get_noc_addr());
+            noc_async_write_page(page.page_id(), tensor_accessor_dst, page.noc_addr());
             noc_async_writes_flushed();
         }
     }

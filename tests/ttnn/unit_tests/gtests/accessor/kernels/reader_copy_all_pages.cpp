@@ -34,7 +34,7 @@ void kernel_main() {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
 
-        noc_async_read(page.get_noc_addr(), l1_write_addr, page_size);
+        noc_async_read(page.noc_addr(), l1_write_addr, page_size);
         noc_async_read_barrier();
 
         cb_push_back(cb_id, 1);
