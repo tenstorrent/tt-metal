@@ -380,6 +380,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         b.padded_shape(),
         {filter_h, filter_w},
         {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
+        {dilation_h, dilation_w},
         conv_config,
         a.dtype(),
         output.dtype(),
@@ -387,7 +388,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         output_image_width,
         has_bias,
         false,
-        skip_activation_mcast);
+        skip_activation_mcast,
+        input_channels_padded);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
