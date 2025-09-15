@@ -186,7 +186,8 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
   for (const run of mainBranchRunsWindow) {
     if (run.conclusion === 'success') {
       if (firstFailInStreak) {
-        return { run: firstFailInStreak, noSuccessInWindow: false };
+        // We found a success after observing failures: return the oldest failure in the streak
+        return { run: firstFailInStreak, boundarySuccessRun: run, noSuccessInWindow: false };
       }
       // Success encountered before any failure in the current scan; keep scanning older entries
     } else if (run.conclusion && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped') {
@@ -199,7 +200,7 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
 
   if (seenAnyFailure) {
     // No success found in-window; report oldest failure in the window
-    return { run: oldestFailure, noSuccessInWindow: true };
+    return { run: oldestFailure, boundarySuccessRun: undefined, noSuccessInWindow: true };
   }
   return null;
 }
@@ -425,6 +426,38 @@ function filterRunsByDate(runs, days) {
 }
 
 /**
+ * Collect commits between two SHAs on the default branch (main), inclusive of endSha.
+ * Returns an array of { sha, short, url, author_login, author_name, author_url }.
+ * Note: Uses compareCommits, which is base..head; base is typically the success commit, head is the failed run commit.
+ */
+async function listCommitsBetween(octokit, context, startShaExclusive, endShaInclusive) {
+  try {
+    const { data } = await octokit.rest.repos.compareCommits({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      base: startShaExclusive,
+      head: endShaInclusive,
+    });
+    // compareCommits includes both endpoints; to make start exclusive, filter it out explicitly
+    const commits = data.commits || [];
+    return commits
+      .filter(c => c.sha !== startShaExclusive)
+      .concat(data.merge_base_commit && data.merge_base_commit.sha === endShaInclusive ? [] : [])
+      .map(c => ({
+        sha: c.sha,
+        short: c.sha.substring(0, SHA_SHORT_LENGTH),
+        url: `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${c.sha}`,
+        author_login: c.author?.login,
+        author_name: c.commit?.author?.name,
+        author_url: c.author?.html_url,
+      }));
+  } catch (e) {
+    core.warning(`Failed to list commits between ${startShaExclusive}..${endShaInclusive}: ${e.message}`);
+    return [];
+  }
+}
+
+/**
  * Main function to run the action
  */
 async function run() {
@@ -572,23 +605,32 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
-          // Commit author enrichment
-          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
-          item.first_failed_author_login = author.login;
-          item.first_failed_author_name = author.name;
-          item.first_failed_author_url = author.htmlUrl;
+          if (!res.noSuccessInWindow && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
+            // Get commits between boundary success and first failing run (inclusive of failing run)
+            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+          }
+          // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
+          if (item.first_failed_head_sha) {
+            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+            item.first_failed_author_login = author.login;
+            item.first_failed_author_name = author.name;
+            item.first_failed_author_url = author.htmlUrl;
+          }
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
-            changeRef.first_failed_run_id = item.first_failed_run_id;
-            changeRef.first_failed_run_url = item.first_failed_run_url;
-            changeRef.first_failed_created_at = item.first_failed_created_at;
-            changeRef.first_failed_head_sha = item.first_failed_head_sha;
-            changeRef.first_failed_head_short = item.first_failed_head_short;
-            changeRef.no_success_in_window = item.no_success_in_window;
-            changeRef.first_failed_author_login = item.first_failed_author_login;
-            changeRef.first_failed_author_name = item.first_failed_author_name;
-            changeRef.first_failed_author_url = item.first_failed_author_url;
+            Object.assign(changeRef, {
+              first_failed_run_id: item.first_failed_run_id,
+              first_failed_run_url: item.first_failed_run_url,
+              first_failed_created_at: item.first_failed_created_at,
+              first_failed_head_sha: item.first_failed_head_sha,
+              first_failed_head_short: item.first_failed_head_short,
+              no_success_in_window: item.no_success_in_window,
+              first_failed_author_login: item.first_failed_author_login,
+              first_failed_author_name: item.first_failed_author_name,
+              first_failed_author_url: item.first_failed_author_url,
+              commits_between: item.commits_between || [],
+            });
           }
         }
       } catch (e) {
@@ -608,23 +650,33 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
-          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
-          item.first_failed_author_login = author.login;
-          item.first_failed_author_name = author.name;
-          item.first_failed_author_url = author.htmlUrl;
+          // Do not fetch commits/authors for stayed_failing if no success in-window
+          if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
+            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+          }
+          // Commit author of the first failed in-window (optional)
+          if (item.first_failed_head_sha) {
+            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+            item.first_failed_author_login = author.login;
+            item.first_failed_author_name = author.name;
+            item.first_failed_author_url = author.htmlUrl;
+          }
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
         if (changeRef) {
-          changeRef.first_failed_run_id = item.first_failed_run_id;
-          changeRef.first_failed_run_url = item.first_failed_run_url;
-          changeRef.first_failed_created_at = item.first_failed_created_at;
-          changeRef.first_failed_head_sha = item.first_failed_head_sha;
-          changeRef.first_failed_head_short = item.first_failed_head_short;
-          changeRef.no_success_in_window = item.no_success_in_window;
-          changeRef.first_failed_author_login = item.first_failed_author_login;
-          changeRef.first_failed_author_name = item.first_failed_author_name;
-          changeRef.first_failed_author_url = item.first_failed_author_url;
+          Object.assign(changeRef, {
+            first_failed_run_id: item.first_failed_run_id,
+            first_failed_run_url: item.first_failed_run_url,
+            first_failed_created_at: item.first_failed_created_at,
+            first_failed_head_sha: item.first_failed_head_sha,
+            first_failed_head_short: item.first_failed_head_short,
+            no_success_in_window: item.no_success_in_window,
+            first_failed_author_login: item.first_failed_author_login,
+            first_failed_author_name: item.first_failed_author_name,
+            first_failed_author_url: item.first_failed_author_url,
+            commits_between: item.commits_between || [],
+          });
         }
       }
       catch (e) {
@@ -655,9 +707,18 @@ async function run() {
               ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
               : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
+            // Include commits between success and failure
+            let commitsList = '';
+            if (Array.isArray(it.commits_between) && it.commits_between.length > 0) {
+              const commitLines = it.commits_between.map(c => {
+                const who = c.author_login ? `[@${c.author_login}](${c.author_url})` : (c.author_name || 'unknown');
+                return `    - [\`${c.short}\`](${c.url}) ${who}`;
+              });
+              commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
+            }
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
@@ -672,13 +733,19 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
-            const author = it.first_failed_author_login
-              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
-              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
+            // If there is a success boundary in-window, show commits between; otherwise, just show first failure
+            let commitsList = '';
+            if (Array.isArray(it.commits_between) && it.commits_between.length > 0) {
+              const commitLines = it.commits_between.map(c => {
+                const who = c.author_login ? `[@${c.author_login}](${c.author_url})` : (c.author_name || 'unknown');
+                return `    - [\`${c.short}\`](${c.url}) ${who}`;
+              });
+              commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
+            }
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
