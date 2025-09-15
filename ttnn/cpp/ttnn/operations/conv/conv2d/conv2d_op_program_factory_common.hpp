@@ -98,7 +98,7 @@ bool is_split_reader_supported(
 bool is_split_reader_viable(
     uint32_t act_block_h_ntiles,
     uint32_t input_channels_padded,
-    uint32_t kernel_width,
+    std::array<uint32_t, 2> kernel_size,
     tt::ARCH arch,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
@@ -108,6 +108,7 @@ bool is_split_reader_viable(
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
-    bool act_reuse_enabled);
+    bool act_reuse_enabled,
+    uint32_t output_image_width_ntiles);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

@@ -14,6 +14,7 @@
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -105,7 +106,7 @@ std::vector<CBInfo> get_cb_info(
         is_split_reader_viable(
             block_config.act_block_h_ntiles,
             input_channels_padded,
-            kernel_size[1],
+            kernel_size,
             tt::tt_metal::hal::get_arch(),
             input_datatype,
             per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
@@ -115,7 +116,8 @@ std::vector<CBInfo> get_cb_info(
             block_config.act_block_w_ntiles,
             fp32_dest_acc_en,
             output_datatype,
-            conv_config.enable_activation_reuse);
+            conv_config.enable_activation_reuse,
+            tt::div_up(output_image_width, tt::constants::TILE_HEIGHT));
 
     // Block dims
     if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {
@@ -545,7 +547,8 @@ static uint32_t get_tilize_cycles_per_tile(
 /*
     Split reader viability is determined by comparing the time required before matmul computation begins.
 
-    NOTE: if activation reuse is enabled, we always enable split reader (for now)
+    NOTE: if activation reuse is enabled, it changes the size of activation block and the amount of data each reader
+   needs to read, be it single reader or split reader.
 
     Thread organization and dependencies differ based on split reader configuration:
 
@@ -585,7 +588,7 @@ static uint32_t get_tilize_cycles_per_tile(
 bool is_split_reader_viable(
     uint32_t act_block_h_ntiles,
     uint32_t input_channels_padded,
-    uint32_t kernel_width,
+    std::array<uint32_t, 2> kernel_size,
     tt::ARCH arch,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
@@ -595,16 +598,16 @@ bool is_split_reader_viable(
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
-    bool act_reuse_enabled) {
-    // If activation reuse is enabled, we always enable split_reader
-    if (act_reuse_enabled) {
-        return true;
-    }
+    bool act_reuse_enabled,
+    uint32_t output_image_width_ntiles) {
+    const uint32_t kernel_height = kernel_size[0];
+    const uint32_t kernel_width = kernel_size[1];
     // Clock frequency in GHz used in the transfer rate lookup tables for this architecture
     // This is the reference clock frequency that the lookup tables were measured against
     const float clock_frequency_ghz = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;
 
     // Calculate activation transfer cost in cycles
+    // TODO sofija nit comment
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     const DataType halo_datatype = input_datatype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
 
@@ -616,12 +619,30 @@ bool is_split_reader_viable(
     const float noc_local_l1_transfer_rate_gbps = get_local_l1_noc_transfer_rate(noc_transfer_unit_bytes, arch);
 
     // Calculate total activation data size in bytes
-    const uint32_t activation_data_bytes = input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
-                                           input_channels_padded * kernel_width;
+    uint32_t activation_data_bytes_first_reader = input_bytes_per_element * tt::div_up(act_block_h_ntiles, 2) *
+                                                  tt::constants::TILE_HEIGHT * input_channels_padded * kernel_width;
+    uint32_t activation_data_bytes_second_reader = input_bytes_per_element * act_block_h_ntiles / 2 *
+                                                   tt::constants::TILE_HEIGHT * input_channels_padded * kernel_width;
+
+    uint32_t activation_data_bytes_single_reader = input_bytes_per_element * act_block_h_ntiles *
+                                                   tt::constants::TILE_HEIGHT * input_channels_padded * kernel_width;
+
+    if (act_reuse_enabled) {
+        activation_data_bytes_first_reader += output_image_width_ntiles * (kernel_height - 1) *
+                                              input_bytes_per_element * input_channels_padded * kernel_width;
+        activation_data_bytes_second_reader += output_image_width_ntiles * (kernel_height - 1) *
+                                               input_bytes_per_element * input_channels_padded * kernel_width;
+        activation_data_bytes_single_reader += output_image_width_ntiles * (kernel_height - 1) *
+                                               input_bytes_per_element * input_channels_padded * kernel_width;
+    }
 
     // Convert to cycles: (bytes / GB_per_s) * GHz = cycles
-    const float activation_cycles =
-        clock_frequency_ghz * static_cast<float>(activation_data_bytes) / noc_local_l1_transfer_rate_gbps;
+    const float activation_cycles_single_reader =
+        clock_frequency_ghz * static_cast<float>(activation_data_bytes_single_reader) / noc_local_l1_transfer_rate_gbps;
+    const float activation_cycles_first_reader =
+        clock_frequency_ghz * static_cast<float>(activation_data_bytes_first_reader) / noc_local_l1_transfer_rate_gbps;
+    const float activation_cycles_second_reader =
+        clock_frequency_ghz * static_cast<float>(activation_data_bytes_second_reader) / noc_local_l1_transfer_rate_gbps;
 
     // Calculate weight transfer cost in cycles
     const uint32_t weight_data_bytes = weights_tile_size * weights_block_ntiles;
@@ -642,14 +663,20 @@ bool is_split_reader_viable(
 
     // Compare scenarios:
     // Single reader: max(activation_cycles + tilize_cycles, weight_cycles)
-    // Split reader: activation_cycles/2 + max(weight_cycles, tilize_cycles)
-    const bool is_viable = activation_cycles / 2 + std::max(weight_cycles, tilize_cycles) <
-                           std::max(activation_cycles + tilize_cycles, weight_cycles);
+    // Split reader: max(activation_cycles_first_reader + tilize_cycles, activation_cycles_second_reader +
+    // weight_cycles)
+    const bool is_viable =
+        std::max(activation_cycles_first_reader + tilize_cycles, activation_cycles_second_reader + weight_cycles) <
+        std::max(activation_cycles_single_reader + tilize_cycles, weight_cycles);
 
     log_debug(
         tt::LogOp,
-        "Split reader viability: activation_cycles={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, is_viable={}",
-        activation_cycles,
+        "Split reader viability: activation_cycles_single_reader={:.3f}, activation_cycles_first_reader={:.3f}, "
+        "activation_cycles_second_reader={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, "
+        "is_viable={}",
+        activation_cycles_single_reader,
+        activation_cycles_first_reader,
+        activation_cycles_second_reader,
         weight_cycles,
         tilize_cycles,
         is_viable);

@@ -298,7 +298,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_split_reader_viable(
             act_block_h_ntiles,
             input_channels_padded,
-            filter_w,
+            {filter_h, filter_w},
             tt::tt_metal::hal::get_arch(),
             a.dtype(),
             parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
@@ -308,7 +308,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             act_block_w_ntiles,
             fp32_dest_acc_en,
             output.dtype(),
-            enable_activation_reuse);
+            enable_activation_reuse,
+            tt::div_up(sliding_window_config.get_output_shape()[2], tt::constants::TILE_HEIGHT));
     log_debug(
         tt::LogOp,
         "enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, act_block_h_ntiles: {}",
