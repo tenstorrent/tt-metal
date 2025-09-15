@@ -552,13 +552,14 @@ on:
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
+          - reduction.cross_entropy_loss.cross_entropy_loss
       suite_name:
         description: "Which sweep suite to run?"
         type: string
       upload_results:
         description: "Upload sweep results to SFTP server?"
         type: boolean
-        default: false
+        default: true
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
