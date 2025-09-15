@@ -14,16 +14,12 @@ namespace ttnn {
 
 void write_buffer(
     QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
-    if (auto mesh_device = dst.device()) {
-        auto& cq = mesh_device->mesh_command_queue(*cq_id);
-        auto device_tensors = ttnn::distributed::get_device_tensors(dst);
-        for (size_t i = 0; i < device_tensors.size(); i++) {
-            tt::tt_metal::memcpy(cq, device_tensors[i], src.at(i).get(), region);
-        }
-    } else {
-        auto* dst_device = dst.device();
-        auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(dst_device->id());
-        tt::tt_metal::memcpy(dst_device->command_queue(*cq_id), dst, src_for_device.get(), region);
+    auto mesh_device = dst.device();
+    TT_FATAL(mesh_device, "dst must be a mesh tensor");
+    auto& cq = mesh_device->mesh_command_queue(*cq_id);
+    auto device_tensors = ttnn::distributed::get_device_tensors(dst);
+    for (size_t i = 0; i < device_tensors.size(); i++) {
+        tt::tt_metal::memcpy(cq, device_tensors[i], src.at(i).get(), region);
     }
 }
 
@@ -35,16 +31,12 @@ void read_buffer(
     size_t src_offset,
     bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
-    if (auto mesh_device = src.device()) {
-        auto& cq = mesh_device->mesh_command_queue(*cq_id);
-        auto device_tensors = ttnn::distributed::get_device_tensors(src);
-        for (size_t i = 0; i < device_tensors.size(); i++) {
-            tt::tt_metal::memcpy(cq, dst.at(i).get(), device_tensors[i], region);
-        }
-    } else {
-        auto* src_device = src.device();
-        auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(src_device->id());
-        tt::tt_metal::memcpy(src_device->command_queue(*cq_id), dst_for_device.get(), src, region, blocking);
+    auto mesh_device = src.device();
+    TT_FATAL(mesh_device, "src must be a mesh tensor");
+    auto& cq = mesh_device->mesh_command_queue(*cq_id);
+    auto device_tensors = ttnn::distributed::get_device_tensors(src);
+    for (size_t i = 0; i < device_tensors.size(); i++) {
+        tt::tt_metal::memcpy(cq, dst.at(i).get(), device_tensors[i], region);
     }
 }
 
