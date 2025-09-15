@@ -172,19 +172,17 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          TRAY_PODS_DIR= ".multi-user-galaxy-docker-files"
+          TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
           REQUIRED_PODS=4
           TIMEOUT=300
-          
+
           rm -rf "$TRAY_PODS_DIR"
           mkdir -p "$TRAY_PODS_DIR"
-
-          echo "make folder"
 
           EPOCH_START=$(date +%s)
 
           USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
-          
+
           # wait for REQUIRED .txt files to appear (with timeout)
           while true; do
             files=( "$TRAY_PODS_DIR"/tray-presence-*.txt )
@@ -210,12 +208,12 @@ jobs:
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray"
-              echo ">>> Running $testname in $cname" 
+              echo ">>> Running $testname in $cname"
               (
               docker exec "$cname" bash -c "$command" \
-              | sed "s/^/[$cname] /" 
+              | sed "s/^/[$cname] /"
               exit ${PIPESTATUS[0]}
-              ) &         
+              ) &
               pids+=($!)
             done
 
