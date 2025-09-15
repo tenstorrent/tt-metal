@@ -27,16 +27,15 @@
  *
  * This function only processes ONE FACE of a tile. The wrapper will call it for each face.
  */
-void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
-    const uint32_t in0_base_idx = 0;
+inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
     for (size_t i = 0; i < 8; i++) {
-        vFloat x = dst_reg[in0_base_idx + i];
+        vFloat x = dst_reg[i];
         vFloat t = (x - edge0) * inv_delta;
         v_if(t < 0.0f) { t = 0.0f; }
         v_elseif(t > 1.0f) { t = 1.0f; }
         v_endif;
         vFloat result = t * t * (3.0f - 2.0f * t);
-        dst_reg[in0_base_idx + i] = result;
+        dst_reg[i] = result;
     }
 }
 

@@ -7,7 +7,7 @@ The SFPU (Special Function Processing Unit) is a programmable vector engine desi
 
 The SFPU operates on 32-wide vectors and supports FP32 and INT32 arithmetic, with full instruction predication. Note that FP32 arithmetic on the SFPU does not fully comply with the IEEE 754 standard, but it is a practical implementation for most use cases.
 
-SFPI (SFPU Interface) is a library and compiler for writing custom SFPU programs in C++. SFPI provides a high-level abstraction over the SFPU's instruction set, making it easier to develop and maintain SFPU code.
+SFPI (SFPU Interface) is a library and compiler for writing custom SFPU programs in C++. SFPI provides a high-level abstraction over the SFPU's instruction set, making it easier to develop and maintain code running on the SFPU.
 
 Please also see the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>`, the :ref:`LLK<llk>` documentation, and the :ref:`Internal structure of a Tile<internal_structure_of_a_tile>` documentation for more context on how the SFPU fits into the overall architecture.
 

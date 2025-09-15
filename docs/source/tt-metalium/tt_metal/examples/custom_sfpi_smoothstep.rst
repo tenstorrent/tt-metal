@@ -3,14 +3,14 @@
 Smoothstep using SFPI
 =====================
 
-This document details the implementation of a custom SFPI kernel for the `smoothstep` function. It is intended for developers familiar with parallel programming concepts who are new to the Tenstorrent platform.
+This document details the implementation of a custom SFPI kernel for the ``smoothstep`` function. It is intended for developers familiar with parallel programming concepts who are new to the Tenstorrent platform.
 
 This example builds upon the :ref:`Vector addition using SFPI<Custom_SFPI_Add>` example, and introduces the following advanced SFPI concepts:
 
 *   **Parameter Passing:** Passing scalar arguments to an SFPI kernel.
 *   **Vector Predicates:** Performing element-wise conditional operations.
 
-The `smoothstep` function is a non-linear interpolation function commonly used in graphics:
+The ``smoothstep`` function is a non-linear interpolation function commonly used in graphics (see `GLSL smoothstep documentation <https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/smoothstep.xhtml>`_ for reference). It is defined as:
 
 .. math::
 
@@ -157,41 +157,63 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
-        const uint32_t in0_base_idx = 0;
+    inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
         for (size_t i = 0; i < 8; i++) {
-            vFloat x = dst_reg[in0_base_idx + i];
+            vFloat x = dst_reg[i];
             vFloat t = (x - edge0) * inv_delta;
             v_if(t < 0.0f) { t = 0.0f; }
             v_elseif(t > 1.0f) { t = 1.0f; }
             v_endif;
             vFloat result = t * t * (3.0f - 2.0f * t);
-            dst_reg[in0_base_idx + i] = result;
+            dst_reg[i] = result;
         }
     }
 
     // LLK wrapper
     inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
+        // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
+        // uses software floating-point
         float inv_delta = 1.0f / (edge1 - edge0);
-        _llk_math_eltwise_unary_sfpu_params_<false>(smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta);
+        // passes parameters to the SFPI kernel
+        _llk_math_eltwise_unary_sfpu_params_<false>(
+            smoothstep_tile_face,
+            idx_dst0,
+            VectorMode::RC, // Apply on all 4 faces of the tile
+            edge0,
+            edge1,
+            inv_delta);
     }
 
     #endif // TRISC_MATH
 
     // High-level API function
+    // Additionally accepts `edge0` and `edge1` as parameters
     inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1) {
         MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1));
     }
 
-### Parameter Passing
+Parameter Passing
+~~~~~~~~~~~~~~~~~
 
-The `smoothstep` function requires scalar parameters (`edge0` and `edge1`). These are passed to the SFPI kernel via the ``_llk_math_eltwise_unary_sfpu_params_`` helper function.
+The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. These are passed to the SFPI kernel using the ``_llk_math_eltwise_unary_sfpu_params_`` helper function.
 
-This function is a template that takes the low-level face function as a parameter. The subsequent arguments are the destination register index, the vector mode, and then the scalar parameters to be passed to the face function. This mechanism allows for passing compile-time constants into the SFPU kernel.
+.. code-block:: cpp
 
-### Vector Predicates
+    // Passes edge0 and edge1 as arguments to the SFPI kernel
+    my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1);
+    // ↓
+    // Calculates inv_delta and forwards all parameters
+    my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1);
+    // ↓
+    // Uses inv_delta for all elements in the tile face
+    smoothstep_tile_face(float edge0, float edge1, float inv_delta);
 
-The clamping of the intermediate value `t` to the [0, 1] range is implemented using vector predicates.
+The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
+
+Vector Predicates
+~~~~~~~~~~~~~~~~~
+
+The clamping of the intermediate value ``t`` to the [0, 1] range is implemented using vector predicates.
 
 .. code-block:: cpp
 
