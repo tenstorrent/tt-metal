@@ -4676,6 +4676,9 @@ def test_conv2d_activation_reuse(
     )
 
 
+# this test case represents the first conv in unet on WH;
+# the test case is useful since it hits case where shards on cores don't start from the beginning
+# of the row of the output image - and this happens if we divide the workload on 63 cores
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
