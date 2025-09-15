@@ -88,63 +88,6 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
-def initialize_vllm_text_transformer_qwen(
-    hf_config,
-    tt_data_parallel,
-    mesh_device,
-    max_batch_size,
-    max_seq_len,
-    n_layers=None,
-    dtype=ttnn.bfloat8_b,
-    optimizations=LlamaOptimizations.performance,
-):
-    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
-    # Load model args, weights
-    model_args = []
-    for submesh in submesh_devices:
-        model_args_i = TtQwenModelArgs(
-            submesh,
-            instruct=(
-                "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
-            ),
-            max_batch_size=max_batch_size // tt_data_parallel,
-            # optimizations=optimizations,
-            max_seq_len=max_seq_len,
-        )
-
-        if n_layers is not None:
-            model_args_i.n_layers = n_layers
-
-        model_args.append(model_args_i)
-
-    state_dict = model_args[0].load_state_dict()
-
-    tt_model = []
-    for i, submesh in enumerate(submesh_devices):
-        tt_model_i = TtTransformer(
-            args=model_args[i],
-            mesh_device=submesh,
-            dtype=ttnn.bfloat8_b,
-            state_dict=state_dict,
-            weight_cache_path=model_args[i].weight_cache_path(ttnn.bfloat8_b),
-            use_paged_kv_cache=True,
-            mode="prefill",
-            enable_prefetcher_performance_mode=True,
-        )
-        tt_model.append(tt_model_i)
-
-    return tt_model, model_args
-
-
-def input_processor_for_llama_text(ctx, inputs):
-    return inputs
-
-
-def input_processor_for_qwen_text(ctx, inputs):
-    return inputs
-
-
-# @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
