@@ -6,6 +6,8 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################

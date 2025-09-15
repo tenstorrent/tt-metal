@@ -24,9 +24,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

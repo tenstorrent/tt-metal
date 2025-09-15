@@ -13,14 +13,12 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor = tensor_args;
-    auto& output_tensor = tensor_return_value;
     constexpr CoreCoord core = {0, 0};
 
     tt::tt_metal::Program program{};
 
     std::vector<uint32_t> compute_kernel_args = {};
-    KernelHandle void_compute_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
         core,
