@@ -150,11 +150,7 @@ class TTObjectEncoder:
         heatmaps_4d = ttnn.permute(heatmaps_4d, (0, 2, 3, 1))  # NHWC for conv/maxpool
 
         smoothed, out_h, out_w = self.nms_conv(device, heatmaps_4d)
-        # TODO(mbezulj) there is a bug with mpwi that it doesn't handle properly padded&sharded tensors;
-        # going to torch and back as a workaround, until a proper fix is implemented.
         torch_smoothed = ttnn.to_torch(smoothed, dtype=torch.float32)
-        ttnn.deallocate(smoothed)
-        smoothed = ttnn.from_torch(torch_smoothed, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         mp, indices = ttnn.max_pool2d(
             input_tensor=smoothed,
@@ -166,7 +162,7 @@ class TTObjectEncoder:
             stride=[1, 1],
             padding=[1, 1],
             dilation=[1, 1],
-            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            # applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ceil_mode=False,
             in_place_halo=False,
             deallocate_input=False,
@@ -188,7 +184,7 @@ class TTObjectEncoder:
 
         # Keep only the top N peaks
         if peaks.long().sum() > self.max_peaks:
-            scores = heatmaps_torch[peaks]
+            scores = heatmaps_torch[peaks[0]]
             scores, _ = torch.sort(scores, descending=True)
             peaks = peaks & (heatmaps_torch > scores[self.max_peaks - 1])
 

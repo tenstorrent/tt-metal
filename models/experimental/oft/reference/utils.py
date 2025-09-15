@@ -85,14 +85,14 @@ def bbox_corners(obj):
             [0.5, -1.0, 0.5],  # Front-right upper
         ]
     )
-    corners = offsets * torch.tensor(obj.dimensions)
+    corners = offsets * obj.dimensions.detach().clone()
     # corners = corners[:, [2, 0, 1]]
 
     # Apply y-axis rotation
-    corners = rotate(corners, torch.tensor(obj.angle))
+    corners = rotate(corners, obj.angle.detach().clone())
 
     # Apply translation
-    corners = corners + torch.tensor(obj.position)
+    corners = corners + obj.position.detach().clone()
     return corners
 
 

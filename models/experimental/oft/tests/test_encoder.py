@@ -20,7 +20,7 @@ import os
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     # fmt: off
-    "use_host_peaks, pcc_peaks, pcc_scores_ttnn, pcc_positions_ttnn, pcc_dimensions_ttnn, pcc_angles_ttnn",
+    "pcc_peaks, pcc_scores_ttnn, pcc_positions_ttnn, pcc_dimensions_ttnn, pcc_angles_ttnn",
     [(False, 0.86, 0.99, 0.99, 0.99, 0.99)],
     # fmt: on
     ids=["use_ttnn_peaks"],
@@ -38,7 +38,6 @@ def test_decode(
     device,
     model_dtype,
     input_file_path,
-    use_host_peaks,
     pcc_peaks,
     pcc_scores_ttnn,
     pcc_positions_ttnn,
