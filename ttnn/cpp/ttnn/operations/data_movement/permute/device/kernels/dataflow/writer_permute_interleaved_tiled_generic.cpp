@@ -49,15 +49,6 @@ void kernel_main() {
     constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(21);
     constexpr uint32_t permuted_w_dim = get_compile_time_arg_val(22);
     constexpr auto dst_args = TensorAccessorArgs<23>();
-    constexpr uint32_t W_t = get_compile_time_arg_val(15);
-    constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(17);
-    constexpr uint32_t xw_blocks = get_compile_time_arg_val(18);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(20);
-    constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(21);
-    constexpr uint32_t permuted_w_dim = get_compile_time_arg_val(22);
-    constexpr auto dst_args = TensorAccessorArgs<23>();
 
     //--------------------------------------------------------------------------
     // 2) Derived Constants (all constexpr)
