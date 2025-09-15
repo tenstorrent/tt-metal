@@ -75,15 +75,15 @@ class MotifImage(nn.Module):
 
         # Text encoders
         # 1. T5-XXL from Google
-        self.t5 = T5EncoderModel.from_pretrained(t5_path).to(dtype=torch.bfloat16)
+        self.t5 = T5EncoderModel.from_pretrained(t5_path)
         self.t5_tokenizer = T5Tokenizer.from_pretrained(t5_path)
 
         # 2. CLIP-L from OpenAI
-        self.clip_l = CLIPTextModel.from_pretrained(clip_l_path).to(dtype=torch.bfloat16)
+        self.clip_l = CLIPTextModel.from_pretrained(clip_l_path)
         self.clip_l_tokenizer = CLIPTokenizerFast.from_pretrained(clip_l_path)
 
         # 3. CLIP-G from LAION
-        self.clip_g = CLIPTextModel.from_pretrained(clip_g_path).to(dtype=torch.bfloat16)
+        self.clip_g = CLIPTextModel.from_pretrained(clip_g_path)
         self.clip_g_tokenizer = CLIPTokenizerFast.from_pretrained(clip_g_path)
 
         self.tokenizers = [
@@ -316,8 +316,6 @@ class MotifImage(nn.Module):
         tokens = [token.to(device) for token in tokens]
         masks = [mask.to(device) for mask in masks]
         text_embeddings, pooled_text_embeddings = self.text_encoding(tokens, masks, zero_masking=zero_masking)
-        text_embeddings = [text_embedding.bfloat16() for text_embedding in text_embeddings]
-        pooled_text_embeddings = pooled_text_embeddings.bfloat16()
         return text_embeddings, pooled_text_embeddings
 
     @torch.no_grad()
@@ -406,8 +404,8 @@ class MotifImage(nn.Module):
         text_embeddings, pooled_text_embeddings = self.prompt_embedding(
             prompts, latents.device, zero_masking=zero_masking
         )
-        text_embeddings = [emb.to(device=latents.device, dtype=torch.bfloat16) for emb in text_embeddings]
-        pooled_text_embeddings = pooled_text_embeddings.to(device=latents.device, dtype=torch.bfloat16)
+        text_embeddings = [emb.to(device=latents.device) for emb in text_embeddings]
+        pooled_text_embeddings = pooled_text_embeddings.to(device=latents.device)
 
         # Keep conditional embeddings separate for potential per-step CFG handling
         cond_text_embeddings = text_embeddings
@@ -429,12 +427,8 @@ class MotifImage(nn.Module):
                 negative_text_embeddings, negative_pooled_text_embeddings = self.prompt_embedding(
                     negative_prompt, latents.device, zero_masking=zero_masking
                 )
-                negative_text_embeddings = [
-                    emb.to(device=latents.device, dtype=torch.bfloat16) for emb in negative_text_embeddings
-                ]
-                negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(
-                    device=latents.device, dtype=torch.bfloat16
-                )
+                negative_text_embeddings = [emb.to(device=latents.device) for emb in negative_text_embeddings]
+                negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(device=latents.device)
                 text_embeddings = [
                     torch.cat([cond, neg], dim=0) for cond, neg in zip(cond_text_embeddings, negative_text_embeddings)
                 ]
@@ -449,12 +443,8 @@ class MotifImage(nn.Module):
                         latents.device,
                         get_rare_negative_token=get_rare_negative_token,
                     )
-                    empty_text_embeddings = [
-                        emb.to(device=latents.device, dtype=torch.bfloat16) for emb in empty_text_embeddings
-                    ]
-                    empty_pooled_text_embeddings = empty_pooled_text_embeddings.to(
-                        device=latents.device, dtype=torch.bfloat16
-                    )
+                    empty_text_embeddings = [emb.to(device=latents.device) for emb in empty_text_embeddings]
+                    empty_pooled_text_embeddings = empty_pooled_text_embeddings.to(device=latents.device)
 
                     zero_text_embeddings = [
                         torch.zeros_like(text_embedding, device=text_embedding.device)
@@ -483,12 +473,8 @@ class MotifImage(nn.Module):
                             latents.device,
                             get_rare_negative_token=get_rare_negative_token,
                         )
-                        negative_text_embeddings = [
-                            emb.to(device=latents.device, dtype=torch.bfloat16) for emb in negative_text_embeddings
-                        ]
-                        negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(
-                            device=latents.device, dtype=torch.bfloat16
-                        )
+                        negative_text_embeddings = [emb.to(device=latents.device) for emb in negative_text_embeddings]
+                        negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(device=latents.device)
 
                     text_embeddings = [
                         torch.cat([cond, neg], dim=0)
@@ -561,7 +547,7 @@ class MotifImage(nn.Module):
 
             # Predict velocity dx = v(x_t, t) ≈ e - x_0
             dx = self.dit(
-                input_latents.to(torch.bfloat16),
+                input_latents,
                 timestep,
                 text_embeddings_step,
                 pooled_text_embeddings_step,

@@ -140,7 +140,7 @@ class TextTimeEmbedding(nn.Module):
 
     def forward(self, pooled_text_emb, time_steps):
         time_steps = self.time_proj(time_steps)
-        time_emb = self.time_emb(time_steps.to(dtype=torch.bfloat16))
+        time_emb = self.time_emb(time_steps)
         pooled_text_emb = self.pooled_text_emb(pooled_text_emb)
 
         return time_emb + pooled_text_emb
@@ -158,10 +158,7 @@ class LatentPatchModule(nn.Module):
         assert x.shape[1] == SD3_LATENT_CHANNEL, (
             f"VAE-Latent channel is not matched with '{SD3_LATENT_CHANNEL}'. current shape: {x.shape}"
         )
-        patches = self.projection_SD3(
-            x.to(dtype=torch.bfloat16)
-        )  # Shape: (B, embedding_dim, num_patches_h, num_patches_w)
-        patches = patches.to(dtype=torch.bfloat16)
+        patches = self.projection_SD3(x)  # Shape: (B, embedding_dim, num_patches_h, num_patches_w)
         patches = patches.contiguous()
         patches = patches.flatten(2)  # Shape: (B, embedding_dim, num_patches)
 
@@ -202,7 +199,7 @@ class TextConditionModule(nn.Module):
         clip_emb = torch.cat([clip_a, clip_b], dim=-1)
         clip_emb = torch.nn.functional.pad(clip_emb, (0, t5_xxl.shape[-1] - clip_emb.shape[-1]))
         text_emb = torch.cat([clip_emb, t5_xxl], dim=-2)
-        text_emb = self.projection(text_emb.to(torch.bfloat16))
+        text_emb = self.projection(text_emb)
         return text_emb
 
 
@@ -321,7 +318,7 @@ class MotifDiT(nn.Module):
             get_2d_sincos_pos_embed(
                 config.hidden_dim, (self.h // self.patch_size, self.w // self.patch_size), base_size=pos_emb_size
             )
-        ).to(dtype=torch.bfloat16)
+        )
 
         # set register tokens (https://arxiv.org/abs/2309.16588)
         if config.register_token_num > 0:
@@ -648,4 +645,4 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     emb_cos = np.cos(out)  # (M, D/2)
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
-    return emb
+    return emb.astype(np.float32)

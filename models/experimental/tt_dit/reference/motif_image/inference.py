@@ -49,7 +49,6 @@ def main(args: argparse.Namespace) -> None:
     else:
         model.load_state_dict(ema_instance)
 
-    model = model.to(dtype=torch.bfloat16)
     model.eval()
 
     guidance_scales = args.guidance_scales if args.guidance_scales else [5.0]
