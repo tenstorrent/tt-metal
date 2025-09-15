@@ -20,6 +20,7 @@
 #include "fabric_edm_types.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include "hostdevcommon/fabric_common.h"
 
@@ -206,11 +207,9 @@ struct EdmChannelWorkerInterface {
 #if defined(COMPILE_FOR_ERISC)
         static_assert(WORKER_HANDSHAKE_NOC == 1);
 #endif
+        auto packed_inc_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
         noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(
-            this->cached_worker_semaphore_address,
-            inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
-            0xf,
-            WORKER_HANDSHAKE_NOC);
+            this->cached_worker_semaphore_address, packed_inc_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
