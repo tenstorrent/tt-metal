@@ -22,6 +22,7 @@ void RunCustomCycle(std::shared_ptr<distributed::MeshDevice> mesh_device, int lo
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
+    // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -55,6 +56,7 @@ void RunCustomCycle(std::shared_ptr<distributed::MeshDevice> mesh_device, int lo
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
+    // Enqueue mesh workload (non-blocking) and read profiler results
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     ReadMeshDeviceProfilerResults(*mesh_device);
