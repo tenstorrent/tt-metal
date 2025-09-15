@@ -224,10 +224,14 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
     block_args["channels"] = C
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
+    h_parallel_factor = 4
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        hw_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
     )
+    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
+    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     reference_model, tt_model = create_random_resblock_models(
         mesh_device,
@@ -244,10 +248,17 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
     if T % num_devices_T:
         padded_T = get_padded_size(T, num_devices_T) - T
         tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, padded_T))
-    num_devices_HW = mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]
-    if W % num_devices_HW:
-        padded_HW = get_padded_size(W, num_devices_HW) - W
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, padded_HW))
+    num_devices_W = vae_parallel_config.w_parallel.factor
+    if W % num_devices_W:
+        padded_W = get_padded_size(W, num_devices_W) - W
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, padded_W))
+    num_devices_H = vae_parallel_config.h_parallel.factor
+    if H % num_devices_H:
+        padded_H = get_padded_size(H, num_devices_H) - H
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, padded_H))
+    tt_input = torch.reshape(tt_input, (N, T, num_devices_H, H // num_devices_H, num_devices_W, W // num_devices_W, C))
+    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
+    tt_input = torch.reshape(tt_input, (N, T, num_devices_H * num_devices_W, H // num_devices_H, W // num_devices_W, C))
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -255,16 +266,27 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
     )
+    tt_input = ttnn.squeeze(tt_input, 2)
+
     logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
     tt_output = tt_model(tt_input)
+    tt_output = ttnn.unsqueeze(tt_output, 2)
+
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
     )
+
+    tt_output_torch = torch.reshape(
+        tt_output_torch, (N, T, num_devices_H, num_devices_W, H // num_devices_H, W // num_devices_W, C)
+    )
+    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
+    tt_output_torch = torch.reshape(tt_output_torch, (N, T, H, W, C))
+
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H, 0:W]
 

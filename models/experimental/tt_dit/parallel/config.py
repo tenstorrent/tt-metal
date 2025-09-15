@@ -32,7 +32,8 @@ class VaeHWParallelConfig(NamedTuple):
 
 class MochiVAEParallelConfig(NamedTuple):
     time_parallel: ParallelFactor
-    hw_parallel: ParallelFactor
+    h_parallel: ParallelFactor
+    w_parallel: ParallelFactor
 
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
@@ -90,6 +91,8 @@ def vae_neighbor_pad(
     padding_left: int = 0,
     padding_right: int = 0,
     padding_mode: str = "replicate",
+    secondary_cluster_axis=None,
+    secondary_mesh_shape=None,
 ) -> ttnn.Tensor:
     global_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
@@ -107,6 +110,8 @@ def vae_neighbor_pad(
         num_links=ccl_manager.num_links,
         mesh_device=x.device(),
         topology=ttnn.Topology.Linear,
+        secondary_cluster_axis=secondary_cluster_axis,
+        secondary_mesh_shape=secondary_mesh_shape,
     )
 
     return x_pad
