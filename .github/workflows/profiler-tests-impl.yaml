@@ -90,7 +90,7 @@ jobs:
   profiler-tests-galaxy:
     name: "profiler tests galaxy"
     if: inputs.topology == 'topology-6u'
-    runs-on: 
+    runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
