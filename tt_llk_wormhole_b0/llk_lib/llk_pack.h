@@ -254,7 +254,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
  * tile_index is the index of the tile inside the destination register to read from
  * address is the 16B address of where to start packing to (usually the start of the tile row)
  * currently supports only 4 16x16 faces per tile
- * supported output formats are: FP32, FP16_B, BFP8_B
+ * supported output formats are: FP32, FP16_B, BFP8_B, BFP4_B
  * both dest modes are supported (same usage notes from math apply here)
  * only DstSync::SyncHalf is supported
  * tiles are expected to be split into top and bottom faces in separate halves of the active dest bank
@@ -326,6 +326,15 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
 
     // set the address offset to the size of the tile in 16B words
     uint tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
+    // Not sure why BFP formats are not included SCALE_DATUM_SIZE but too scared to change that.
+    if (pack_dst_format == (uint)DataFormat::Bfp4 || pack_dst_format == (uint)DataFormat::Bfp4_b)
+    {
+        tile_size = tile_size / 2; // 2 BFP4 datums per byte
+    }
+    else if (pack_dst_format == (uint)DataFormat::Bfp2 || pack_dst_format == (uint)DataFormat::Bfp2_b)
+    {
+        tile_size = tile_size / 4; // 4 BFP2 datums per byte
+    }
     if (IS_BFP_FORMAT(pack_dst_format))
     {
         tile_size += (TILE_C_DIM * TILE_R_DIM) / 16; // one exp byte per 16 datums
