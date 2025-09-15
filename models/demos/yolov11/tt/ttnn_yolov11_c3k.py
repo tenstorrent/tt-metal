@@ -16,12 +16,12 @@ def p(x, a="x"):
 
 
 class TtnnC3K:
-    def __init__(self, device, parameter, conv_pt):
+    def __init__(self, device, parameter, conv_pt, core_count=None):
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
         self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3, reshard=True)
-        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
-        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
+        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0], core_count=core_count)
+        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1], core_count=core_count)
 
     def __call__(self, device, x, use_shard_concat=True):
         x1 = self.cv1(device, x)

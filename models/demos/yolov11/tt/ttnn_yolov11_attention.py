@@ -10,7 +10,7 @@ class TtnnAttention:
     def __init__(self, device, parameter, conv_pt):
         self.qkv = TtnnConv(device, parameter.qkv, conv_pt.qkv, enable_act=False)
         self.proj = TtnnConv(device, parameter.proj, conv_pt.proj, enable_act=False)
-        self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False)
+        self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False)  # ,reshard=True,core_count=64)
         self.num_heads = 2
         self.key_dim = 32
         self.head_dim = 64
@@ -37,6 +37,7 @@ class TtnnAttention:
         v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
         v = ttnn.permute(v, (0, 1, 3, 2))
         x2 = self.pe(device=device, x=v)
+        print("outt is", x2.memory_config())
         x = ttnn.add(x1, x2, memory_config=x2.memory_config())
         x = self.proj(device=device, x=x)
 
