@@ -20,14 +20,18 @@ The Cabling Descriptor is designed to support a generic hierarchy structure so t
 There are 3 main parts to how the Cabling Hierarchy works
 
 1. Nodes: the base level of the hierarchy, they describe a host system. A user of the Cabling Generator tool would define a node format as a collection of boards or use some defaults that we have included ourselves. For example, a T3K would best be described as a Node.
+Examples can be seen at [Node Code](node/node.cpp).
 
 2. Graphs: Essentially collections of Nodes (to represent a collection of multiple hosts) or other Graphs (to represent some hierarchy). This would be where users would consider groupings of hosts and how connections are duplicated at different levels of groupings.
+Examples can be seen at [Graph Example](../tests/scaleout/cabling_descriptors/)
 
 3. Root Instance: A summary of the hierarchical view of the system, also used to assign host_ids to each host. This structure in the hierarchy will enumerate every possible host in the system and where they are in the hierarchy. The host_ids enumerated here will help inform the mapping to real hosts defined in the Deployment Descriptor.
+Examples can be seen at the last section of files in [Graph Example](../tests/scaleout/cabling_descriptors/)
 
 ### Deployment Descriptor
 
 This is where a person managing a specific data center deployment of a system cluster will work. After installing/setting up the hosts required for the cluster, the technician can fill out a deployment descriptor enumerating the physical location and hostnames of each host in the cluster they wish to connect.
+Examples can be seen at [Deployment Example](../tests/scaleout/deployment_descriptors/).
 
 ### Putting Them Together
 
@@ -47,5 +51,7 @@ Example:
 A `.textproto` file that will enumerate all the expected hosts, boards, and connected channels in a scaleout system.
 
 ## Notes/Warnings
+
+- Usage examples can be found in the tests directory at [Examples](../tests/scaleout/test_factory_system_descriptor.cpp)
 
 - As stated previously, the ordering of hosts in the deployment descriptor does matter. This means that you will get different cabling setups with different ordering of hosts.
