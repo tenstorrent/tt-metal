@@ -164,11 +164,11 @@ private:
     ArrayU32 global_page_coord = {};
     ArrayU32 shard_coord = {};
 
-    mutable Page current_page{0, 0, 0};
+    mutable Page current_page{0, 0};
 
     void update_current_page() {
         if (current_page_id_in_shard < end_page_id_in_shard) {
-            current_page = Page(current_noc_addr, page_id(), current_shard_id);
+            current_page = Page(current_noc_addr, page_id());
         }
     }
 

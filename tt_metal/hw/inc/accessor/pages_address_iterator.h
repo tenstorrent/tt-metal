@@ -119,7 +119,7 @@ private:
 
     // State for efficient incremental updates
     typename Accessor::PageMapping current_page_mapping{0, 0};  // {bank_id, bank_page_offset}
-    mutable Page current_page{0, 0, 0};
+    mutable Page current_page{0, 0};
 
     // Coordinates and derived state for avoiding divisions
     [[no_unique_address]] mutable tensor_accessor::detail::
@@ -129,7 +129,7 @@ private:
     uint32_t flattened_shard_id = 0;             // Linear shard id in the shard grid
     uint32_t bank_shard_id = 0;                  // Which shard within the bank this page belongs to
 
-    void update_current_page() { current_page = Page(current_noc_addr, current_page_id, current_shard_id); }
+    void update_current_page() { current_page = Page(current_noc_addr, current_page_id); }
 
     // Initialize all state from a page_id (used in constructor and operator+=)
     void initialize_from_page_id(uint32_t page_id) {
@@ -347,11 +347,11 @@ private:
     uint32_t current_page_id = 0;
     const uint32_t end_page_id_ = 0;
     const uint8_t noc = noc_index;
-    mutable Page current_page{0, 0, 0};
+    mutable Page current_page{0, 0};
 
     void update_current_page() {
         auto current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
-        current_page = Page(current_noc_addr, current_page_id, current_page_id);
+        current_page = Page(current_noc_addr, current_page_id);
     }
 };
 
