@@ -50,7 +50,6 @@ class Yolov11Conv2D:
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
         )
