@@ -876,7 +876,6 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .parent_instance_id = mesh_id,
         };
 
-        const auto id = data_reverse.connection_id;
         add_connection_to_fast_lookups(data_reverse, instance.type);
         connections_.emplace(data_reverse.connection_id, std::move(data_reverse));
     }
@@ -968,9 +967,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
         // Add the connection in every direction of the connection
-        for (const auto& node : nodes) {
-            const auto src_device_id = node;
-
+        for ([[maybe_unused]] const auto& node : nodes) {
             ConnectionData data{
                 .nodes = nodes,
                 .count = connection.channels().count(),
@@ -979,7 +976,6 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
                 .parent_instance_id = graph_id,
             };
 
-            const auto id = data.connection_id;
             add_connection_to_fast_lookups(data, instance.type);
             connections_.emplace(data.connection_id, std::move(data));
 
