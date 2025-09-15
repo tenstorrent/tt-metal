@@ -54,7 +54,7 @@ jobs:
           mv *.whl ./docker_artifacts
       - name: Create Docker Compose file
         run: |
-          rm -rf .github/scripts/utils/muti-user-galaxy-docker-files
+          # rm -rf .github/scripts/utils/muti-user-galaxy-docker-files
           for i in [1..4]; do
             mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
             chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
@@ -69,6 +69,7 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
+                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -95,6 +96,7 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
+                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -121,6 +123,7 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
+                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -147,6 +150,7 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
+                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -173,6 +177,7 @@ jobs:
           REQUIRED_PODS=4
           TIMEOUT=300
 
+          rm -rf "$TRAY_PODS_DIR"
           mkdir -p "$TRAY_PODS_DIR"
 
           EPOCH_START=$(date +%s)
@@ -208,16 +213,15 @@ jobs:
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray-1"
-              # TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
-              # cd TRAY_PODS_DIR
-              # testlogfile="test_output_$tray.log"
+              cd /app/multi-user-galaxy-docker-files || exit 1
+              testlogfile="test_output_$tray.log"
               echo ">>> Running tests in $cname" 
-              # docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
-              (
-              docker exec "$cname" bash -c "$command" \
-              | sed "s/^/[$cname] /" 
-              exit ${PIPESTATUS[0]}
-              ) &         
+              docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
+              # (
+              # docker exec "$cname" bash -c "$command" \
+              # | sed "s/^/[$cname] /" 
+              # exit ${PIPESTATUS[0]}
+              # ) &         
               pids+=($!)
             done
 
@@ -237,13 +241,13 @@ jobs:
           # run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           echo "run the pytest"
           run_test "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
-      # - name: Print test logs with folding
-      #   run: |
-      #     for logfile in logs/*.log; do
-      #       echo "::group::Logs for $logfile"
-      #       cat "$logfile"
-      #       echo "::endgroup::"
-      #     done
+      - name: Print test logs with folding
+        run: |
+          for logfile in logs/*.log; do
+            echo "::group::Logs for $logfile"
+            cat "$logfile"
+            echo "::endgroup::"
+          done
 
       - name: Tear down containers
         if: always()
