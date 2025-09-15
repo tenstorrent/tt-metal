@@ -418,7 +418,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     output_file.close();
 }
 
-void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path) const {
+void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
     if (output_file_path.has_parent_path()) {
@@ -430,13 +430,26 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path) co
         throw std::runtime_error("Failed to open output file: " + output_path);
     }
 
+    const std::unordered_map<CableLength, std::string> cable_length_str = {
+        {CableLength::CABLE_0P5, "0.5m"},
+        {CableLength::CABLE_1, "1m"},
+        {CableLength::CABLE_2P5, "2.5m"},
+        {CableLength::CABLE_3, "3m"},
+        {CableLength::CABLE_5, "5m"},
+        {CableLength::UNKNOWN, "UNKNOWN"}};
+
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
 
     CablingGenerator::get_all_connections_of_type(root_instance_, PortType::QSFP, conn_list);
     output_file.fill('0');
-    output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
-    output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,," << std::endl;
+    if (loc_info) {
+        output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,," << std::endl;
+    } else {
+        output_file << "Source,,,Destination,," << std::endl;
+        output_file << "Hostname,Tray,Port,Hostname,Tray,Port" << std::endl;
+    }
     for (const auto& [start, end] : conn_list) {
         auto host_id1 = std::get<0>(start).get();
         auto tray_id1 = std::get<1>(start).get();
@@ -450,26 +463,28 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path) co
         const auto& host2 = deployment_hosts_[host_id2];
 
         CableLength cable_l = calc_cable_length(host1, host2);
+        if (loc_info) {
+            output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
+                        << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
-        output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
-                    << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
+            output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
+                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << ",";
 
-        output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2) << host1.shelf_u
-                    << "-" << tray_id1 << "-" << port_id1 << ",";
+            output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
+                        << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
+            output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
+                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << ",";
 
-        output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
-                    << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
-
-        output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2) << host2.shelf_u
-                    << "-" << tray_id2 << "-" << port_id2 << ",";
-
-        output_file << cable_length_str.at(cable_l) << ",";
-        output_file << ((cable_l == CableLength::OPTICAL_CABLE) ? "Optical" : "QSFP_DD_AEC") << std::endl;
+            output_file << cable_length_str.at(cable_l) << ",";
+            output_file << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "QSFP_DD_AEC") << std::endl;
+        } else {
+            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << ",";
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << std::endl;
+        }
     }
 
     output_file.close();
 }
-
 
 // Validate that each host_id is assigned to exactly one node
 void CablingGenerator::validate_host_id_uniqueness() {
@@ -657,6 +672,9 @@ void CablingGenerator::get_all_connections_of_type(
     }
 
     for (const auto& [child_name, child_instance] : instance->nodes) {
+        if (child_instance.inter_board_connections.count(port_type) == 0) {
+            continue;
+        }
         for (const auto& [start, end] : child_instance.inter_board_connections.at(port_type)) {
             std::tuple<HostId, TrayId, PortId> s_tuple =
                 std::make_tuple(child_instance.host_id, start.first, start.second);
@@ -673,9 +691,9 @@ void CablingGenerator::get_all_connections_of_type(
 
 CableLength calc_cable_length(Host host1, Host host2) {
     if (host1.hall != host2.hall) {
-        return CableLength::OPTICAL_CABLE;
+        return CableLength::UNKNOWN;
     } else if (host1.aisle != host2.aisle) {
-        return CableLength::OPTICAL_CABLE;
+        return CableLength::UNKNOWN;
     }
 
     int rack_0 = host1.rack;
@@ -692,17 +710,17 @@ CableLength calc_cable_length(Host host1, Host host2) {
     double cable_length = std::sqrt(rack_distance * rack_distance + u_distance * u_distance) + 150;  // 150mm slack
 
     if (cable_length <= 500.0) {
-        return CableLength::CABLE_0_5;
+        return CableLength::CABLE_0P5;
     } else if (cable_length <= 1000.0) {
         return CableLength::CABLE_1;
     } else if (cable_length <= 2500.0) {
-        return CableLength::CABLE_2_5;
+        return CableLength::CABLE_2P5;
     } else if (cable_length <= 3000.0) {
         return CableLength::CABLE_3;
     } else if (cable_length <= 5000.0) {
         return CableLength::CABLE_5;
     } else {
-        return CableLength::OPTICAL_CABLE;
+        return CableLength::UNKNOWN;
     }
 }
 
