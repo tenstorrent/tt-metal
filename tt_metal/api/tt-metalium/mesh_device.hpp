@@ -32,9 +32,9 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
 namespace tt {
 namespace tt_metal {
 class Allocator;
@@ -56,13 +56,13 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
 
@@ -236,7 +236,7 @@ public:
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;

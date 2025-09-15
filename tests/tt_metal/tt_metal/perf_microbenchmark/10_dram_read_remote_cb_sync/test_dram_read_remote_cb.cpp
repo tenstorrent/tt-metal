@@ -52,8 +52,8 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
@@ -345,7 +345,7 @@ create_mesh_workloads(
     return {std::move(mesh_workloads), std::move(global_cb)};
 }
 
-float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
+float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {

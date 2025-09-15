@@ -22,9 +22,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class Buffer;
@@ -369,13 +369,6 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
-
-/**
- * Return the name of the architecture present.
- *
- * Return value: std::string
- */
-std::string get_physical_architecture_name();
 
 }  // namespace detail
 }  // namespace tt::tt_metal

@@ -31,8 +31,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"

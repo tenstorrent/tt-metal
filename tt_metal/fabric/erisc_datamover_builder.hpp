@@ -9,7 +9,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
@@ -170,6 +170,14 @@ struct StreamRegAssignments {
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
     static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
     static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Used by Lite Fabric
+    // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
+    static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
+    static constexpr uint32_t reserved_lite_fabric_1_stream_id = 24;
+    static constexpr uint32_t reserved_lite_fabric_2_stream_id = 25;
+    static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
+    static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
+    static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 

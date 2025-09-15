@@ -53,9 +53,9 @@
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -2449,7 +2449,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
+TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallPrograms) {
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
