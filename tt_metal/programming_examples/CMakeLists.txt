@@ -76,6 +76,7 @@ install(
         NoC_tile_transfer
         sfpu_eltwise_chain
         custom_sfpi_add
+        custom_sfpi_smoothstep
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
