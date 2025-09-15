@@ -931,50 +931,10 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         projected_patch_embeddings = None
 
         # Note :: We only support forward passes with the following cases:
-        #   => Cached Generation :: (input_ids.shape[1] == 1) and (past_key_values is not None)
-        #   => Unimodal Forward :: (pixel_values is None)
         #   => Multimodal Forward :: (pixel_values is not None) and (input_ids/embeds.shape[0] == pixel_values.shape[0])
 
-        # === Handle Generation with Cache (`input_ids.shape[1] == 1`) =>> requires `past_keys_values` ===
-        if input_ids.shape[1] == 1:
-            assert input_ids.shape[0] == 1, "Generation is only currently supported for batch size of 1!"
-            assert past_key_values is not None, "You must provide `past_key_values` during cached generation!"
-            assert labels is None, "Unexpected key `labels` provided during cached generation!"
-
-            language_model_output = self.language_model(
-                input_ids=input_ids,
-                attention_mask=None,
-                position_ids=None,
-                past_key_values=past_key_values,
-                inputs_embeds=None,
-                labels=None,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-
-        # === Handle Unimodal Forward ===
-        elif pixel_values is None:
-            assert (input_ids is not None) and (inputs_embeds is None), "Missing `input_ids` in language-only forward!"
-            assert past_key_values is None, "Unexpected key `past_key_values` provided during language-only forward!"
-
-            language_model_output = self.language_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=None,
-                past_key_values=None,
-                inputs_embeds=None,
-                labels=labels,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-
-        # === Handle Multimodal Forward ===
-        elif (input_ids.shape[0] == pixel_values.shape[0]) or (inputs_embeds.shape[0] == pixel_values.shape[0]):
-            assert past_key_values is None, "Unexpected key `past_key_values` provided during language-only forward!"
+        if (input_ids.shape[0] == pixel_values.shape[0]) or (inputs_embeds.shape[0] == pixel_values.shape[0]):
+            assert past_key_values is None, "Unexpected key `past_key_values` provided during multi-modal forward!"
             assert labels is None
 
             # Visual Feature Extraction
@@ -1238,7 +1198,16 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 81920,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -1273,7 +1242,16 @@ def test_language_model(mesh_device, prompt):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 81920,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
