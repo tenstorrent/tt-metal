@@ -41,7 +41,8 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> compute_distribution_to_m
         // For ROW_MAJOR mode, map distribution coordinates to mesh coordinates in row-major order
         auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape);
         auto mesh_iter = mesh_range.begin();
-        for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(distribution_shape)) {
+        for ([[maybe_unused]] const auto& dist_coord :
+             tt::tt_metal::distributed::MeshCoordinateRange(distribution_shape)) {
             if (mesh_iter != mesh_range.end()) {
                 mesh_coords.emplace_back(*mesh_iter);
                 ++mesh_iter;

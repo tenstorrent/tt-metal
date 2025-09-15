@@ -29,11 +29,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& input_dtype{input_tensor.dtype()};
     const auto& index_dtype{index_tensor.dtype()};
     const auto& src_dtype{src_tensor.dtype()};
-    const auto& input_shape{input_tensor.logical_shape()};
-    const auto& index_shape{index_tensor.logical_shape()};
-    const auto& src_shape{src_tensor.logical_shape()};
-    const uint32_t input_rank{input_shape.rank()};
-    const uint32_t index_rank{index_shape.rank()};
 
     TT_FATAL(
         input_dtype == src_dtype,

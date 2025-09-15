@@ -398,9 +398,6 @@ TEST_F(SmallVectorIntTest, SwapExchangesContentsAndStorage) {
     for (int i = 0; i < kInlineCapacity + 2; ++i) {
         large.push_back(i + 10);
     }
-    auto smallPtr = small.data();
-    auto largePtr = large.data();
-    std::size_t smallCap = small.capacity();
     std::size_t largeCap = large.capacity();
 
     std::size_t small_size = small.size();
