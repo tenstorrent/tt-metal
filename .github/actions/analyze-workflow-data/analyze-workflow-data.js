@@ -552,6 +552,41 @@ function getWorkflowLink(context, workflowFile) {
 }
 
 /**
+ * Finds, within the provided window (newest→oldest, main branch only), either:
+ * - the first failing run since the most recent success (oldest in the current failing streak), or
+ * - if no success exists in-window, the oldest failing run in the window.
+ * Returns null if there are no failing runs in the window.
+ *
+ * @param {Array<object>} mainBranchRunsWindow - Runs on main, sorted by created_at desc (newest first)
+ * @returns {{run: object, noSuccessInWindow: boolean}|null}
+ */
+function findFirstFailInWindow(mainBranchRunsWindow) {
+  let seenAnyFailure = false;
+  let oldestFailure = null;
+  let firstFailInStreak = null; // oldest failure observed before crossing a success boundary
+
+  for (const run of mainBranchRunsWindow) {
+    if (run.conclusion === 'success') {
+      if (firstFailInStreak) {
+        return { run: firstFailInStreak, noSuccessInWindow: false };
+      }
+      // Success encountered before any failure in the current scan; keep scanning older entries
+    } else if (run.conclusion && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped') {
+      // Treat anything non-success, non-cancelled/skipped as failure for this purpose
+      seenAnyFailure = true;
+      firstFailInStreak = run; // update to become oldest failure within the current failing streak
+      oldestFailure = run; // this will end up as the oldest failure in the entire window
+    }
+  }
+
+  if (seenAnyFailure) {
+    // No success found in-window; report oldest failure in the window
+    return { run: oldestFailure, noSuccessInWindow: true };
+  }
+  return null;
+}
+
+/**
  * Finds the first failing run on main since the last success (i.e., the start of the current failing streak).
  * Scans runs in reverse chronological order and returns the oldest failure before the first encountered success.
  * Falls back to the oldest failure in history if no success is found.
@@ -975,7 +1010,7 @@ async function run() {
         const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined;
         const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined;
         changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, workflow_path: info?.path, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl });
-        if (change === 'stayed_failing' && info) {
+        if (change === 'success_to_fail' && info) {
           regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
         else if (change === 'stayed_failing' && info) {
@@ -989,14 +1024,6 @@ async function run() {
       .filter(r => r.head_branch === 'main')
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // Helper to get up to N most-recent failing runs (excluding successes) from a run list
-  const getRecentFailingRuns = (runs, limit = 1) => {
-      return runs
-        .filter(r => r.head_branch === 'main' && r.conclusion !== 'success')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, limit);
-    };
-
     // Enrich regressions with first failing run within the window
     for (const item of regressedDetails) {
       try {
@@ -1009,54 +1036,15 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
-          if (!res.noSuccessInWindow && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
-            // Get commits between boundary success and first failing run (inclusive of failing run)
-            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
-          }
-          // Also capture the latest failing run in the window
-          const latestFailRun = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
-          if (latestFailRun) {
-            item.latest_failed_run_id = latestFailRun.id;
-            item.latest_failed_run_url = latestFailRun.html_url;
-            item.latest_failed_created_at = latestFailRun.created_at;
-            item.latest_failed_head_sha = latestFailRun.head_sha;
-            item.latest_failed_head_short = latestFailRun.head_sha ? latestFailRun.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-          }
-          // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
-          if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
-            item.first_failed_author_login = author.login;
-            item.first_failed_author_name = author.name;
-            item.first_failed_author_url = author.htmlUrl;
-          }
-          // Error snippets for the first failing run (best-effort)
-          // Use the most recent failing run instead of the first in-window failure
-          const latestFail = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
-          item.error_snippets = latestFail?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 20) : [];
-          // Omit repeated errors logic (simplified)
-          item.repeated_errors = [];
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
-            Object.assign(changeRef, {
-              first_failed_run_id: item.first_failed_run_id,
-              first_failed_run_url: item.first_failed_run_url,
-              first_failed_created_at: item.first_failed_created_at,
-              first_failed_head_sha: item.first_failed_head_sha,
-              first_failed_head_short: item.first_failed_head_short,
-              no_success_in_window: item.no_success_in_window,
-              first_failed_author_login: item.first_failed_author_login,
-              first_failed_author_name: item.first_failed_author_name,
-              first_failed_author_url: item.first_failed_author_url,
-              commits_between: item.commits_between || [],
-              error_snippets: item.error_snippets || [],
-              repeated_errors: item.repeated_errors || [],
-              latest_failed_run_id: item.latest_failed_run_id,
-              latest_failed_run_url: item.latest_failed_run_url,
-              latest_failed_created_at: item.latest_failed_created_at,
-              latest_failed_head_sha: item.latest_failed_head_sha,
-              latest_failed_head_short: item.latest_failed_head_short,
-            });
+            changeRef.first_failed_run_id = item.first_failed_run_id;
+            changeRef.first_failed_run_url = item.first_failed_run_url;
+            changeRef.first_failed_created_at = item.first_failed_created_at;
+            changeRef.first_failed_head_sha = item.first_failed_head_sha;
+            changeRef.first_failed_head_short = item.first_failed_head_short;
+            changeRef.no_success_in_window = item.no_success_in_window;
           }
         }
       } catch (e) {
@@ -1076,82 +1064,19 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
-          // Do not fetch commits/authors for stayed_failing if no success in-window
-          if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
-            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
-          }
-          // Also capture latest failing run in window
-          const latestFailRun2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
-          if (latestFailRun2) {
-            item.latest_failed_run_id = latestFailRun2.id;
-            item.latest_failed_run_url = latestFailRun2.html_url;
-            item.latest_failed_created_at = latestFailRun2.created_at;
-            item.latest_failed_head_sha = latestFailRun2.head_sha;
-            item.latest_failed_head_short = latestFailRun2.head_sha ? latestFailRun2.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-          }
-          // Commit author of the first failed in-window (optional)
-          if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
-            item.first_failed_author_login = author.login;
-            item.first_failed_author_name = author.name;
-            item.first_failed_author_url = author.htmlUrl;
-          }
-          // Use the most recent failing run instead of the first in-window failure
-          const latestFail2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
-          item.error_snippets = latestFail2?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail2.id, 20) : [];
-          // Omit repeated errors (simplified)
-          item.repeated_errors = [];
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
         if (changeRef) {
-          Object.assign(changeRef, {
-            first_failed_run_id: item.first_failed_run_id,
-            first_failed_run_url: item.first_failed_run_url,
-            first_failed_created_at: item.first_failed_created_at,
-            first_failed_head_sha: item.first_failed_head_sha,
-            first_failed_head_short: item.first_failed_head_short,
-            no_success_in_window: item.no_success_in_window,
-            first_failed_author_login: item.first_failed_author_login,
-            first_failed_author_name: item.first_failed_author_name,
-            first_failed_author_url: item.first_failed_author_url,
-            commits_between: item.commits_between || [],
-            error_snippets: item.error_snippets || [],
-            repeated_errors: item.repeated_errors || [],
-            latest_failed_run_id: item.latest_failed_run_id,
-            latest_failed_run_url: item.latest_failed_run_url,
-            latest_failed_created_at: item.latest_failed_created_at,
-            latest_failed_head_sha: item.latest_failed_head_sha,
-            latest_failed_head_short: item.latest_failed_head_short,
-          });
+          changeRef.first_failed_run_id = item.first_failed_run_id;
+          changeRef.first_failed_run_url = item.first_failed_run_url;
+          changeRef.first_failed_created_at = item.first_failed_created_at;
+          changeRef.first_failed_head_sha = item.first_failed_head_sha;
+          changeRef.first_failed_head_short = item.first_failed_head_short;
+          changeRef.no_success_in_window = item.no_success_in_window;
         }
       }
       catch (e) {
-        core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
-      }
-    }
-
-    // Enrich regressions with first failing run on main since last success
-    for (const item of regressedDetails) {
-      try {
-        const firstFail = await findFirstFailOnMainSinceLastSuccess(octokit, github.context, item.workflow_path);
-        if (firstFail) {
-          item.first_failed_run_id = firstFail.id;
-          item.first_failed_run_url = firstFail.html_url;
-          item.first_failed_created_at = firstFail.created_at;
-          item.first_failed_head_sha = firstFail.head_sha;
-          item.first_failed_head_short = firstFail.head_sha ? firstFail.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-          // Mirror into the corresponding change entry
-          const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
-          if (changeRef) {
-            changeRef.first_failed_run_id = item.first_failed_run_id;
-            changeRef.first_failed_run_url = item.first_failed_run_url;
-            changeRef.first_failed_created_at = item.first_failed_created_at;
-            changeRef.first_failed_head_sha = item.first_failed_head_sha;
-            changeRef.first_failed_head_short = item.first_failed_head_short;
-          }
-        }
-      } catch (e) {
         core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
       }
     }
@@ -1175,6 +1100,9 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            if (it.no_success_in_window) {
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+            }
             return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
           }
           return base;
@@ -1190,34 +1118,10 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
-            // Error snippets first
-            let errorsList = '';
-            const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
             if (it.no_success_in_window) {
-              const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-              const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-              const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
-                : '';
-              const latestLine = it.latest_failed_run_url
-                ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
-                : '';
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList].filter(Boolean).join('\n');
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
             }
-            // If there is a success boundary in-window, show commits between; otherwise, just show first failure
-            let commitsList = '';
-            const commitsHtml2 = renderCommitsTable(it.commits_between || []);
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
-            const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-            const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-            const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
-              : '';
-            const latestLine = it.latest_failed_run_url
-              ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
-              : '';
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
+            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
           }
           return base;
         });
