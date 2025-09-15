@@ -28,56 +28,32 @@
  * @param dst_index_in1  Index of the second input tile in Dst registers (not CB index!)
  * @param dst_index_out  Index of the output tile in Dst registers (not CB index!)
  */
-void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
+void smoothstep_tile_face() {
     // SFPU Tile Organization:
     // Each tile in Dst registers is divided into four 16x16 faces.
     // n_vector_in_face = 32 as there are 32 SIMD lanes per tile
-    // i.e.
-    //   dst_reg[0:31] holds the first tile
-    //          dst_reg[0:8] holds the first face of the first tile
-    //          dst_reg[8:15] holds the second face of the first tile,
-    //   dst_reg[32:63] holds the second tile
-    //          dst_reg[32:40] holds the first face of the second tile
-    //          dst_reg[40:47] holds the second face of the second tile,
-    //         etc.
-    // NOTE: This value is architectural dependent and may change in future hardware revisions.
-    //       For Blackhole and Whitehole, SFPU is 32 elements wide.
+    float edge0 = 0;
+    float edge1 = 1.0;
     constexpr uint32_t n_vector_in_face = 32;
 
     // Calculate base indices for each tile in the Dst register array.
-    // Each tile occupies multiple consecutive slots in dst_reg[].
-    // The multiplication accounts for the face structure within each tile.
-    const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_face;
-    const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_face;
-    const uint32_t out_base_idx = dst_index_out * n_vector_in_face;
+    const uint32_t in0_base_idx = 0;
 
     // Process one face of the tile (8 SIMD operations).
-    // Why 8 iterations? Each iteration processes 32 elements (vFloat is 32-elements-wide SIMD),
-    // so 32 * 8 = 16*16 (a full face).
-    //
-    // SFPU Programming Pattern:
-    // 1. Load data from Dst registers into vFloat SIMD variables
-    // 2. Perform SIMD arithmetic operations
-    // 3. Store results back to Dst registers
+    // Implements smoothstep: result = t * t * (3 - 2 * t), where t = clamp((x - edge0) / (edge1 - edge0), 0, 1)
+    float inv_delta = 1.0f / (edge1 - edge0);
     for (size_t i = 0; i < 8; i++) {
-        // Load 32-element SIMD vectors from Dst registers.
-        // vFloat represents 32 parallel floating-point values.
-        // This is the SFPU's native SIMD data type.
-        vFloat a = dst_reg[in0_base_idx + i];
-        vFloat b = dst_reg[in1_base_idx + i];
-
-        // Perform SIMD addition: all 32 elements are added in parallel.
-        // This is where the actual computation happens on the vector engine.
-        // For FP32 accuracy, ensure the host sets fp32_dest_acc_en=true.
-        dst_reg[out_base_idx + i] = a + b;
-
-        // The above program can be shortened to a single line:
-        // However, the expanded form is clearer for educational purposes.
-        // dst_reg[out_base_idx + i] = dst_reg[in0_base_idx + i] + dst_reg[in1_base_idx + i];
+        vFloat x = dst_reg[in0_base_idx + i];
+        vFloat t = (x - edge0) * inv_delta;
+        // t = min(max(t, 0.0f), 1.0f);
+        v_if(t < 0.0f) { t = 0.0f; }
+        v_elseif(t > 1.0f) { t = 1.0f; }
+        v_endif;
+        vFloat result = t * t * (3.0f - 2.0f * t);
+        dst_reg[in0_base_idx + i] = result;
     }
-
     // Note: This function only processes ONE FACE of a tile.
-    // The _llk_math_eltwise_binary_sfpu_params_ wrapper (used in my_add_tile_internal)
+    // The _llk_math_eltwise_binary_sfpu_params_ wrapper (used in my_smoothstep_tile_internal)
     // will call this function for each face in the tile (typically 4 times for a 32x32 tile).
 }
 
@@ -98,10 +74,10 @@ void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, c
  *
  * This function is only compiled for the MATH core (TRISC_MATH context).
  */
-inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    // LLK wrapper that calls add_tile_face for each face in the tiles.
-    // Parameters: (custom_function, input1_dst_idx, input2_dst_idx, output_dst_idx)
-    _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_dst0);
+inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
+    // LLK wrapper that calls smoothstep_tile_face for each face in the tiles.
+    // Parameters: (custom_function, input_dst_idx, output_dst_idx, edge0, edge1)
+    _llk_math_eltwise_unary_sfpu_params_<false>(smoothstep_tile_face, idx_dst0);
 }
 
 #endif
@@ -129,8 +105,8 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  * This function takes tile idx_dst0 and idx_dst1 as inputs, adds them,
  * and writes the result to tile idx_out0 in the Dst registers.
  */
-inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(my_add_tile_internal(idx_dst0, idx_dst1, idx_out0));
+inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1) {
+    MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1));
 }
 
 namespace NAMESPACE {
@@ -139,7 +115,6 @@ void MAIN {
 
     // We are going to read from these two circular buffers
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
     // and write to the output circular buffer
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
@@ -149,17 +124,15 @@ void MAIN {
 
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Wait until there is a tile in both input circular buffers
+        // Wait until there is a tile in the input circular buffer
         cb_wait_front(cb_in0, 1);
-        cb_wait_front(cb_in1, 1);
         // Make sure there is registers we can use and hold it. The register can be being used by other
         // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
         // time acquire a register, we get 8 of them that we can use until released.
         tile_regs_acquire();
         // Copy the tiles from the circular buffers into Dst registers
-        copy_tile(cb_in0, 0, 0);
-        copy_tile(cb_in1, 0, 1);
-        my_add_tiles(0, 1, 0);  // <-- The custom SFPU addition happens here
+        copy_tile(cb_in0, 0, 0);           // input x
+        my_smoothstep_tiles(0, 0.0, 1.0);  // <-- The custom SFPU smoothstep happens here
         // Finished the computation, transfer register ownership to the unpacker
         tile_regs_commit();
         tile_regs_wait();
@@ -170,7 +143,6 @@ void MAIN {
         // Mark the output tile as ready and pop the input tiles
         cb_push_back(cb_out0, 1);
         cb_pop_front(cb_in0, 1);
-        cb_pop_front(cb_in1, 1);
         // Release the held register
         tile_regs_release();
     }
