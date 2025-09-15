@@ -58,18 +58,12 @@ Tensor where_impl(
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
 inline bool typecast_predicate(const Tensor& predicate, const Tensor& t_true, const Tensor& t_false) {
-    if (!is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
-        is_floating_point(t_false.dtype())) {
-        return true;
-    }
-    return false;
+    return !is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
+           is_floating_point(t_false.dtype());
 }
 
 inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
-    if (!is_floating_point(predicate.dtype()) && is_floating_point(b.dtype())) {
-        return true;
-    }
-    return false;
+    return !is_floating_point(predicate.dtype()) && is_floating_point(b.dtype());
 }
 
 }  // namespace ternary_utils
@@ -125,6 +119,8 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(predicate, t_true.dtype());
             }
+
+            // Check if shapes are broadcast-compatible for TTS using broadcast detection
             auto broadcast_type =
                 ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
 

@@ -4,9 +4,9 @@
 
 #include <fmt/ranges.h>
 #include <gtest/gtest.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -60,7 +60,6 @@ protected:
 
     static void TearDownTestSuite() {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
         lite_fabric::TerminateLiteFabric(cluster, desc);
     }
