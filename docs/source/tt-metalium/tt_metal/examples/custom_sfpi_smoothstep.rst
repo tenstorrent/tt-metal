@@ -3,41 +3,51 @@
 Smoothstep using SFPI
 =====================
 
-Smoothstep is a commonly used function in graphics and procedural generation to interpolate smoothly between two values. It is defined as the following piecewise function. It is a simple, familiar and widely used yet non-trivial function that can benefit from acceleration on the SFPU (and non-SFPU) hardware.
+This document details the implementation of a custom SFPI kernel for the `smoothstep` function. It is intended for developers familiar with parallel programming concepts who are new to the Tenstorrent platform.
+
+This example builds upon the :ref:`Vector addition using SFPI<Custom_SFPI_Add>` example, and introduces the following advanced SFPI concepts:
+
+*   **Parameter Passing:** Passing scalar arguments to an SFPI kernel.
+*   **Vector Predicates:** Performing element-wise conditional operations.
+
+The `smoothstep` function is a non-linear interpolation function commonly used in graphics:
 
 .. math::
 
     \operatorname{smoothstep}(e_0, e_1, x) =
     \begin{cases}
-    0, & x \leq e_0, \\[6pt]
-    1, & x \geq e_1, \\[6pt]
+    0, & x \leq e_0, \\
+    1, & x \geq e_1, \\
     \left( \dfrac{x - e_0}{e_1 - e_0} \right)^2 \bigl(3 - 2 \tfrac{x - e_0}{e_1 - e_0}\bigr),
     & e_0 < x < e_1 .
     \end{cases}
 
-Please refer to the `OpenGL documentation <https://registry.khronos.org/OpenGL-Refpages/gl4/html/smoothstep.xhtml>`_ for more details on the smoothstep function.
+The full source code is available in the ``tt_metal/programming_examples/custom_sfpi_smoothstep`` directory.
 
-The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpi_smoothstep`` directory.
+Building and Running
+--------------------
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_custom_sfpi_smoothstep`` executable in the ``build/programming_examples`` directory. For example:
+Build the example using the ``--build-programming-examples`` flag:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
-    # To run the example
+
+Run the example:
+
+.. code-block:: bash
+
     ./build/programming_examples/metal_example_custom_sfpi_smoothstep
 
 .. warning::
 
-    Tenstorrent does not guarantee backward compatibility for user-implemented SFPI functions. Keep your implementations up to date with the latest Metalium releases. APIs that call low-level SFPI functions may change without notice, and SFPI specifications may also change in future hardware versions.
+    Tenstorrent does not guarantee backward compatibility for user-implemented SFPI functions.
 
 Program setup
 -------------
 
-This example builds on top of the :ref:`Vector addition using SFPI<Custom_SFPI_Add>` example and by extension the :ref:`Eltwise sfpu example<Eltwise sfpu example>`. If you're new to these concepts, we recommend starting with them for a gentler introduction to programming Metalium kernels and SFPI programming.
-
-The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (``src0_dram_buffer``) plus the output buffer (``dst_dram_buffer``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
@@ -46,20 +56,18 @@ The host-side setup for this custom SFPI example follows the standard pattern: d
     IDevice* device = CreateDevice(device_id);
     Program program = CreateProgram();
 
-    // DRAM buffers: two inputs + one output
+    // DRAM buffers: single input + one output for unary operation
     auto src0_dram_buffer = CreateBuffer(config);
-    auto src1_dram_buffer = CreateBuffer(config);
     auto dst_dram_buffer = CreateBuffer(config);
 
     // Circular buffers for kernel communication
     CreateCircularBuffer(program, core, /* cb_in0 config */);
-    CreateCircularBuffer(program, core, /* cb_in1 config */);
     CreateCircularBuffer(program, core, /* cb_out0 config */);
 
     // Kernels: reader, writer, and custom SFPU compute
     auto reader = CreateKernel(program, "..../read_tiles.cpp", core, DataMovementConfig{...});
     auto writer = CreateKernel(program, "..../write_tile.cpp", core, DataMovementConfig{...});
-    auto compute = CreateKernel(program, "..../tiles_add.cpp", core, ComputeConfig{});
+    auto compute = CreateKernel(program, "..../tiles_smoothstep.cpp", core, ComputeConfig{});
 
 The Kernels
 -----------
@@ -67,24 +75,21 @@ The Kernels
 Data Movement Kernels
 ~~~~~~~~~~~~~~~~~~~~~
 
-The reader kernel reads tiles from two source DRAM buffers and pushes them into two separate input circular buffers.
+The reader kernel reads tiles from a single source DRAM buffer and pushes them into the input circular buffer. Since smoothstep is a unary operation, we only need to read from one source buffer.
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/read_tiles.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
-        // ...
-        for (uint32_t i = 0; i < num_tiles; i++) {
+        uint32_t in0_addr = get_arg_val<uint32_t>(0);
+        uint32_t n_tiles = get_arg_val<uint32_t>(1);
+        ...
+        for (uint32_t i = 0; i < n_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
-            cb_reserve_back(cb_in1, 1);
             uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            uint32_t cb_in1_addr = get_write_ptr(cb_in1);
             noc_async_read_tile(i, in0, cb_in0_addr);
-            noc_async_read_tile(i, in1, cb_in1_addr);
-
             noc_async_read_barrier();
             cb_push_back(cb_in0, 1);
-            cb_push_back(cb_in1, 1);
         }
     }
 
@@ -92,9 +97,11 @@ The writer kernel is straightforward: it reads result tiles from the output circ
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/write_tile.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp
     void kernel_main() {
-        // ...
+        uint32_t c_addr = get_arg_val<uint32_t>(0);
+        uint32_t n_tiles = get_arg_val<uint32_t>(1);
+        ...
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);
             uint32_t cb_out0_addr = get_read_ptr(cb_out0);
@@ -107,143 +114,105 @@ The writer kernel is straightforward: it reads result tiles from the output circ
 SFPI Compute Kernel
 ~~~~~~~~~~~~~~~~~~~
 
-The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CBs, performs the addition using the SFPI, and pushes the result to the output CB.
+The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CB, performs the smoothstep operation using the SFPI, and pushes the result to the output CB.
 
-The overall flow follows the same pattern as other compute kernels:
-
-1. Wait for input tiles to be available in ``cb_in0`` and ``cb_in1``.
-2. Acquire destination registers. These registers will be used as a scratchpad for the computation.
-3. Copy tiles from CBs to the destination registers.
-4. Execute the custom SFPI addition function on the data in the destination registers.
-5. Transfer the ownership of the destination registers to the packer
-6. Reserve space in the output CB, pack the result tile, and push it.
-7. Pop the input tiles from the input CBs.
-8. Release the destination registers.
+The overall flow follows the standard pattern for unary compute kernels:
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
     namespace NAMESPACE {
     void MAIN {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         constexpr auto cb_in0 = tt::CBIndex::c_0;
-        constexpr auto cb_in1 = tt::CBIndex::c_1;
         constexpr auto cb_out0 = tt::CBIndex::c_16;
 
         init_sfpu(cb_in0, cb_out0);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_in0, 1);
-            cb_wait_front(cb_in1, 1);
-
             tile_regs_acquire();
-            copy_tile(cb_in0, 0, 0);
-            copy_tile(cb_in1, 0, 1);
-
-            my_add_tiles(0, 1, 0); // <-- Call to custom SFPI addition function
-
+            copy_tile(cb_in0, 0, 0); // input x
+            my_smoothstep_tiles(0, 0.0f, 1.0f);  // <-- Custom SFPI smoothstep
             tile_regs_commit();
-
+            tile_regs_wait();
             cb_reserve_back(cb_out0, 1);
             pack_tile(0, cb_out0);
             cb_push_back(cb_out0, 1);
-
             cb_pop_front(cb_in0, 1);
-            cb_pop_front(cb_in1, 1);
             tile_regs_release();
         }
     }
-    } // namespace NAMESPACE
 
-Custom SFPI Implementation
---------------------------
+Custom SFPI Implementation of Smoothstep
+----------------------------------------
 
-The core of this example is the custom SFPI function ``my_add_tiles``. It's implemented in a layered way, which is a common pattern for SFPI programming to enable easy consumption and maintainability.
+The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown in previous examples. This section focuses on the new concepts introduced in this kernel.
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
+
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
-        constexpr uint32_t n_vector_in_face = 32;
-
-        // Calculate base indices for each tile in the Dst register array.
-        // Each tile occupies 32 consecutive Dst registers (n_vector_in_face) in WH and BH
-        // For example: tile 0 uses dst_reg[0-31], tile 1 uses dst_reg[32-63], etc.
-        const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_face;
-        const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_face;
-        const uint32_t out_base_idx = dst_index_out * n_vector_in_face;
-
-        // Process one face of the tile (8 SIMD operations covering 256 elements).
-        // Each iteration processes 32 elements, so 8 iterations = 256 elements = one 16x16 face.
+    void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+        const uint32_t in0_base_idx = 0;
         for (size_t i = 0; i < 8; i++) {
-            vFloat a = dst_reg[in0_base_idx + i];
-            vFloat b = dst_reg[in1_base_idx + i];
-            dst_reg[out_base_idx + i] = a + b;
+            vFloat x = dst_reg[in0_base_idx + i];
+            vFloat t = (x - edge0) * inv_delta;
+            v_if(t < 0.0f) { t = 0.0f; }
+            v_elseif(t > 1.0f) { t = 1.0f; }
+            v_endif;
+            vFloat result = t * t * (3.0f - 2.0f * t);
+            dst_reg[in0_base_idx + i] = result;
         }
     }
 
     // LLK wrapper
-    inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_dst0);
+    inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
+        float inv_delta = 1.0f / (edge1 - edge0);
+        _llk_math_eltwise_unary_sfpu_params_<false>(smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta);
     }
 
     #endif // TRISC_MATH
 
     // High-level API function
-    inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(my_add_tile_internal(idx_dst0, idx_dst1, idx_out0));
+    inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1) {
+        MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1));
     }
 
+### Parameter Passing
 
-Here's a breakdown of the layers. The functions ``add_tile_face`` and ``my_add_tile_internal`` must be inside a ``#ifdef TRISC_MATH`` block, since they use math-thread-specific code that will not compile for other RISC-V cores.
+The `smoothstep` function requires scalar parameters (`edge0` and `edge1`). These are passed to the SFPI kernel via the ``_llk_math_eltwise_unary_sfpu_params_`` helper function.
 
-1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.
+This function is a template that takes the low-level face function as a parameter. The subsequent arguments are the destination register index, the vector mode, and then the scalar parameters to be passed to the face function. This mechanism allows for passing compile-time constants into the SFPU kernel.
 
-2.  **`my_add_tile_internal`**: This function is a wrapper around the low-level kernel API. ``_llk_math_eltwise_binary_sfpu_params_`` is an internal helper that sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
+### Vector Predicates
 
-3.  **`add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers.
+The clamping of the intermediate value `t` to the [0, 1] range is implemented using vector predicates.
 
-    The function calculates base indices (``in0_base_idx``, ``in1_base_idx``, ``out_base_idx``) to map tile indices to register addresses within ``dst_reg``. Since each tile occupies 32 registers, the base index is calculated by multiplying the tile index by 32. For instance, processing tiles at indices 0, 1, and 0 would result in base indices of 0, 32, and 0, respectively. This means the first input tile starts at ``dst_reg[0]``, the second at ``dst_reg[32]``, and the output overwrites the first input tile at ``dst_reg[0]``.
+.. code-block:: cpp
 
-    Within each face, the function loads SIMD vectors (``vFloat``) from the input registers, adds them, and writes the result back to the output registers.
+    v_if(t < 0.0f) { t = 0.0f; }
+    v_elseif(t > 1.0f) { t = 1.0f; }
+    v_endif;
 
-    Each time the SFPI function is called, the helper automatically offsets ``dst_reg`` to point to the start of the current face. So, on the first call, ``dst_reg`` has an offset of 0; on the second, the offset is 8, and so on. The programmer does not need to manage this offset manually.
+The ``v_if`` and ``v_elseif`` instructions perform element-wise conditional assignments on the ``vFloat`` vector `t`. Each lane of the SIMD vector is evaluated independently. A ``v_endif`` is required to terminate the conditional block.
 
-    For a deeper understanding of tile structure, refer to :ref:`Internal structure of a Tile<internal_structure_of_a_tile>`. And the number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
-
-This layered structure keeps high-level logic separate from hardware-specific details, making the code easier to read and maintain.
-
-.. warning::
-
-    The value of ``n_vector_in_face`` is architecture dependent. The example above assumes a Tensix architecture where each vector is 32 wide. Which is true for currently shipping Tensix Processors (Wormhole and Blackhole). But may change in future versions. Users should verify this value against their target architecture specifications when adapting this example.
-
-.. note::
-
-    There are 3 internal APIs to invoke custom SFPI functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
-
-    *  ``_llk_math_eltwise_unary_sfpu_params_``: For functions with one input tile (e.g., ``sin``, ``exp``).
-    *  ``_llk_math_eltwise_binary_sfpu_params_``: For functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
-    *  ``_llk_math_eltwise_ternary_sfpu_params_``: For functions with three input tiles (e.g., ``where``).
-
-.. warning::
-
-    ``_llk_math_eltwise_binary_sfpu_params_`` and similar LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
+This is analogous to conditional execution in other parallel programming models, where a mask is used to control which processing elements are active.
 
 Runtime Arguments and Execution
 -------------------------------
 
-Back on the host, we set the runtime arguments for the kernels. The reader and writer kernels need the DRAM buffer addresses, and all three kernels need to know the number of tiles to process.
+Back on the host, we set the runtime arguments for the kernels. Since this is a unary operation, the reader and writer kernels need only a single DRAM buffer address each, and all three kernels need to know the number of tiles to process.
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
     SetRuntimeArgs(program, reader, core, {
         src0_dram_buffer->address(),
-        src1_dram_buffer->address(),
         n_tiles
     });
 
@@ -256,27 +225,35 @@ Back on the host, we set the runtime arguments for the kernels. The reader and w
         n_tiles
     });
 
-Finally, we enqueue the program for execution and read back the results from the destination DRAM buffer to verify correctness.
+Finally, we enqueue the program for execution and read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.
 
 .. code-block:: cpp
 
-    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
     std::vector<bfloat16> result_vec;
     EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-    // Validation against golden output...
+    // Validation against golden smoothstep output
+    for (size_t i = 0; i < result_vec.size(); ++i) {
+        // CPU version of the same smoothstep function for validation
+        auto smoothstep = [](float edge0, float edge1, float x) {
+            x = (x - edge0) / (edge1 - edge0);
+            x = std::clamp(x, 0.0f, 1.0f);
+            return x * x * (3 - 2 * x);
+        };
+        const float expected = smoothstep(0.0f, 1.0f, a_data[i].to_float());
+        const float actual = result_vec[i].to_float();
+        // Check for match within tolerance...
+    }
 
 Conclusion
 ----------
 
-This example demonstrated how to create a custom SFPI kernel for vector addition. Key takeaways include:
+This example demonstrates the implementation of a custom SFPI kernel with parameter passing and conditional logic. Key takeaways are:
 
-*   The layered approach to SFPI kernel development (high-level API, LLK wrapper, low-level face function).
-*   The use of destination registers (``dst_reg``) for SFPU computations.
-*   The role of the LLK API (e.g., ``_llk_math_eltwise_binary_sfpu_params_``) in simplifying SFPI programming by handling tile face iteration.
-*   The standard pipeline of reader, compute, and writer kernels for processing data on Tensix cores.
-
-By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads.
+*   **Parameter Passing:** The ``_llk_math_eltwise_*_sfpu_params_`` family of functions is used to pass scalar arguments to a custom SFPI kernel.
+*   **Vector Predicates:** The ``v_if``, ``v_elseif``, and ``v_endif`` instructions provide a mechanism for element-wise conditional logic within an SFPI kernel.
+*   **Unary Operations:** Unary SFPI kernels can be implemented efficiently by performing the computation in-place in the destination registers.
