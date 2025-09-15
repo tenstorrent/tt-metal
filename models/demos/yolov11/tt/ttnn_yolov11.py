@@ -28,15 +28,15 @@ class TtnnYoloV11:
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=True)
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3])
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=True)
-        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], reshard=True, core_count=64)
+        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5])
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
-        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7], reshard=True, core_count=64)
-        self.c3k2_4 = TtnnC3k2(
-            device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False, core_count=None
-        )  # fps drops, corecoubt is increaed
+        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
+        self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
-        self.c3k2_5 = TtnnC3k2(device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=True, reshard=True)
+        self.c3k2_5 = TtnnC3k2(
+            device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=True, reshard=True
+        )  # needs to tilize prev  RM concat out
         self.c3k2_6 = TtnnC3k2(device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=True, reshard=True)
         self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17])
         self.c3k2_7 = TtnnC3k2(device, parameters.conv_args[19], parameters.model[19], is_bk_enabled=True, reshard=True)
