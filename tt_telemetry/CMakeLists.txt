@@ -70,6 +70,7 @@ target_sources(
         telemetry/telemetry_data_store.cpp
         server/web_server.cpp
         server/websocket_server.cpp
+        server/websocket_test_client.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp
         telemetry/ethernet/ethernet_helpers.cpp
