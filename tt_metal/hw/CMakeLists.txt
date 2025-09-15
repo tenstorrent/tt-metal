@@ -13,14 +13,7 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
-    qsr_dm=0
-    qsr_dm=1
-    qsr_dm=2
-    qsr_dm=3
-    qsr_dm=4
-    qsr_dm=5
-    qsr_dm=6
-    qsr_dm=7
+    qsr_dm
 )
 set(TYPES
     firmware

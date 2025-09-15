@@ -17,12 +17,12 @@ OUTPUT_ARCH(riscv)
 #include "tensix_dev_map.h"
 
 #if defined (COMPILE_FOR_QSR_DM)
-#define DATA_START MEM_LOCAL_BASE
-#define DATA_SIZE MEM_BRISC_LOCAL_SIZE
+#define DATA_START MEM_DM_LOCAL_BASE
+#define DATA_SIZE MEM_DM_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_BRISC_STACK_MIN_SIZE
 #define TEXT_START MEM_DM_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
-#define TEXT_SIZE MEM_BRISC_FIRMWARE_SIZE
+#define TEXT_SIZE MEM_DM_FIRMWARE_SIZE
 #else
 #define TEXT_SIZE MEM_BRISC_KERNEL_SIZE
 #endif
@@ -155,8 +155,6 @@ SECTIONS
 #endif
 
 /* Begin the data area.  */
-#if defined(COMPILE_FOR_QSR_DM)
-#else
 #if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
   .data DATA_START :
@@ -191,7 +189,6 @@ SECTIONS
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
   } :data
-  #endif
   SECTION(.empty.init_array.fini_array, .empty.ctors.dtors)
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
@@ -215,8 +212,6 @@ SECTIONS
     __ldm_bss_end = .;
   } :data
 
-#if defined(COMPILE_FOR_QSR_DM)
-#else
   . = ALIGN(ABSOLUTE(.), 16);
 #ifdef TYPE_FIRMWARE
   __fw_export_ldm_end = ABSOLUTE(.);
@@ -240,7 +235,6 @@ SECTIONS
 #endif
          )
   }
-#endif
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 

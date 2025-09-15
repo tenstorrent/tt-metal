@@ -21,7 +21,7 @@ enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 8;
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
-constexpr uint8_t NumTensixDispatchClasses = 2;
+constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;
 constexpr uint8_t NumDramDispatchClasses = 1;
 constexpr uint8_t noc_size_x = 8;

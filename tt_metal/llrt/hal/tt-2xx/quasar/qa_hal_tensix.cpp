@@ -85,6 +85,9 @@ HalCoreInfoType create_tensix_mem_map() {
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types;
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
+        if (processor_class_idx == 1) {  // TODO currently DM1 is used for NCRISC, see comment in create_build_state
+            continue;
+        }
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
@@ -98,7 +101,7 @@ HalCoreInfoType create_tensix_mem_map() {
                     fw_launch = 0x0;  // BRISC is hardcoded to have reset PC of 0
                     fw_launch_value = generate_risc_startup_addr(fw_base);
                 } break;
-                case 1: {
+                case 2: {
                     switch (processor_type_idx) {
                         case 0: {
                             fw_base = MEM_TRISC0_FIRMWARE_BASE;

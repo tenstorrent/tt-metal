@@ -45,7 +45,7 @@
 #define STREAM_REG_ADDR(stream_id, reg_id) \
     ((NOC_OVERLAY_START_ADDR) + (((uint32_t)(stream_id)) * (NOC_STREAM_REG_SPACE_SIZE)) + (((uint32_t)(reg_id)) << 2))
 
-#define NUM_NOCS 2
+#define NUM_NOCS 1
 #define NOC0_REGS_START_ADDR 0xFFB20000
 #define NOC1_REGS_START_ADDR 0xFFB30000
 
