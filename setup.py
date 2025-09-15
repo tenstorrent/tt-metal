@@ -98,6 +98,7 @@ def get_is_srcdir_build():
 
 
 def get_metal_local_version_scheme(metal_build_config, version):
+    print(f"Version info: {version}\nMetal build config: {metal_build_config}\n")
     if version.dirty:
         return f"+g{version.node}"
     else:
