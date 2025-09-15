@@ -173,8 +173,8 @@ void LaunchLiteFabric(
             "Wrote lite fabric. Core: {}, Config: {:#x}, Binary: {:#x}, Size: {} B",
             tunnel_1x.mmio_core_logical,
             config_addr,
-            config.binary_addr,
-            config.binary_size);
+            static_cast<uint32_t>(config.binary_addr),
+            static_cast<uint32_t>(config.binary_size));
     }
 
     cluster.l1_barrier(0);

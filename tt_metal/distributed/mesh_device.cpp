@@ -55,10 +55,11 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;

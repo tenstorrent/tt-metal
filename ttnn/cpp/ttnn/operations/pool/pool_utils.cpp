@@ -54,8 +54,7 @@ bool is_pool_op_one_scalar_per_core(
     uint32_t pad_w,
     std::optional<int32_t> divisor_override) {
     return pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
-           ((ceil_mode == false || (ceil_h == 0 && ceil_w == 0)) &&
-            (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
+           ((!ceil_mode || (ceil_h == 0 && ceil_w == 0)) && (count_include_pad || (pad_h == 0 && pad_w == 0)));
 }
 
 std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
