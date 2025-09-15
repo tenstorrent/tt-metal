@@ -48,7 +48,7 @@ public:
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
         channel_id = channel_id_val;
 
-        static_assert(NUM_BUFFERS == 1, "NUM_BUFFERS must be 1");
+        // static_assert(NUM_BUFFERS == 1, "NUM_BUFFERS must be 1");
 
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
