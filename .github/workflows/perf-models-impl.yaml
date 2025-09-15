@@ -32,6 +32,7 @@ jobs:
           # {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "P150 BH", model-group: "other", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "other_mlperf_required", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
 
@@ -103,7 +104,7 @@ jobs:
         uses: ./.github/actions/single-card-perf-test
         with:
           commands: pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
+        if: ${{ !cancelled() && ((matrix.test-info.arch == 'wormhole_b0' && matrix.test-info.model-group == 'other') || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) }}
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
