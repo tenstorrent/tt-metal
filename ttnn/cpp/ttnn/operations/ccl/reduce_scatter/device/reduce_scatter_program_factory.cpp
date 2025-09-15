@@ -165,5 +165,6 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             tensor_return_value.at(0),
             tensor_return_value.at(1));
     }
+}
 
 }  // namespace ttnn::operations::ccl
