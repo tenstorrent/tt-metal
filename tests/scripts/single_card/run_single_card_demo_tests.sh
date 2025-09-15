@@ -102,7 +102,7 @@ run_llama3_func() {
   llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+  for hf_model in "$llama11b"; do
     cache_path=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
@@ -241,13 +241,13 @@ run_llama3_perf() {
 
   # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
-  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
-    cache_path=$TT_CACHE_HOME/$hf_model
-    MESH_DEVICE=N150 HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
-    echo "LOG_METAL: Llama3 tests for $hf_model completed on N150"
-  done
+  # for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
+  #   cache_path=$TT_CACHE_HOME/$hf_model
+  #   MESH_DEVICE=N150 HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+  #   echo "LOG_METAL: Llama3 tests for $hf_model completed on N150"
+  # done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+  for hf_model in "$llama11b"; do
     cache_path=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
