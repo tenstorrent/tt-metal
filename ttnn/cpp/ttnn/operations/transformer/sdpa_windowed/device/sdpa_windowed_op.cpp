@@ -78,7 +78,6 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
-        const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto Sk = k_shape[2];
 
@@ -170,10 +169,6 @@ operation::ProgramWithCallbacks WindowedScaledDotProductAttention::create_progra
 operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_performance_model(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     // Similar to regular SDPA performance model but accounting for windowed pattern
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
-    auto& cu_window_seqlens = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
@@ -190,23 +185,9 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 
-    // Get main dimensions
-    auto q_shape = input_tensor_q.logical_shape();
-    auto k_shape = input_tensor_k.logical_shape();
-    auto v_shape = input_tensor_v.logical_shape();
-
-    uint32_t batch_size = q_shape[0];
-    uint32_t num_heads_q = q_shape[1];
-    const auto Sq = q_shape[2];
-    const auto Sk = k_shape[2];
-    const auto Sv = v_shape[3];
-    const auto DH = q_shape[3];
-    const auto DV = v_shape[2];
-
     // For windowed attention, we only compute attention within windows
     // Calculate total number of attention computations based on windows
     int64_t num_mul_adds = 0;
-    constexpr int64_t FLOPS_PER_FMA = 2;
 
     CoreCoord compute_grid_dims = output_tensor.device()->compute_with_storage_grid_size();
     int num_cores = compute_grid_dims.x * compute_grid_dims.y;

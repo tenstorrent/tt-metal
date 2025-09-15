@@ -190,8 +190,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
     TT_ASSERT(gather_config1.dtype() == DataType::UINT16);
 
-    const uint32_t num_cores = all_cores.num_cores();
-
     const auto& padding_config_storage0 = padding_config0.device_storage();
     auto padding_config_buffer0 = padding_config_storage0.get_buffer();
     cb_indices.padding_config0 = cb_indices.get_next_cb_id();
@@ -502,8 +500,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     TT_ASSERT(padding_config.dtype() == DataType::UINT16);
     TT_ASSERT(local_config.dtype() == DataType::UINT16);
     TT_ASSERT(remote_config.dtype() == DataType::UINT16);
-
-    const uint32_t num_cores = all_cores.num_cores();
 
     const auto& padding_config_storage = padding_config.device_storage();
     auto padding_config_buffer = padding_config_storage.get_buffer();

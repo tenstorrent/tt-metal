@@ -222,7 +222,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // parallelization config
     CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
-    CoreCoord last_input_core = input_cores.ranges().back().end_coord;
     CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
     TT_ASSERT(
         input_cores == output_cores || block_sharded,
@@ -695,8 +694,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
-
-    uint32_t last_core_with_work = 0;
 
     ActivationReuseConfig activation_reuse_config;
     if (enable_activation_reuse) {

@@ -60,7 +60,6 @@ protected:
 
     static void TearDownTestSuite() {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
         lite_fabric::TerminateLiteFabric(cluster, desc);
     }
