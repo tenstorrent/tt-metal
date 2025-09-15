@@ -41,7 +41,7 @@ struct fmt::formatter<CoreCoord> {
     auto format(const CoreCoord& core_coord, format_context& ctx) const -> format_context::iterator;
 };
 
-constexpr inline bool operator<=(const CoreCoord& a, const CoreCoord& b) { return (a < b) or (a == b); }
+constexpr bool operator<=(const CoreCoord& a, const CoreCoord& b) { return (a < b) or (a == b); }
 
 struct RelativeCoreCoord {
     long x = 0;
@@ -50,11 +50,9 @@ struct RelativeCoreCoord {
     std::string str() const;
 };
 
-constexpr inline bool operator==(const RelativeCoreCoord& a, const RelativeCoreCoord& b) {
-    return a.x == b.x && a.y == b.y;
-}
+constexpr bool operator==(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return a.x == b.x && a.y == b.y; }
 
-constexpr inline bool operator!=(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return !(a == b); }
+constexpr bool operator!=(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return !(a == b); }
 
 CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size);
 
