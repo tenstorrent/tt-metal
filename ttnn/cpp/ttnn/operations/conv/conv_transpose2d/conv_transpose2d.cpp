@@ -184,14 +184,11 @@ Result conv_transpose2d(
         output_parallel_config,
         round_up_size);
 
-    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
-                                       ? output_parallel_config
-                                       : parallel_config;
-
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(largest_parallel_config));
+        get_num_cores_nhw_from_parallel_config(parallel_config),
+        get_num_cores_channels_from_parallel_config(parallel_config),
+        get_num_cores_channels_from_parallel_config(output_parallel_config));
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
@@ -211,6 +208,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -350,11 +348,11 @@ Result ConvTranpose2dOperation::invoke(
         output_padding,
         dilation,
         groups,
-        std::move(dtype),
+        dtype,
         std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
-        std::move(memory_config),
+        conv_config_,
+        compute_config_,
+        memory_config,
         mirror_kernel,
         return_output_dim,
         return_weights_and_bias);

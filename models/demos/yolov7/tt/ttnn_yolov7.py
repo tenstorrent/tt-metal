@@ -145,6 +145,30 @@ class ttnn_repconv:
     def __call__(self, x):
         x1 = self.rbr_dense(self.device, x)
         x2 = self.rbr_1x1(self.device, x)
+
+        # Handle memory config mismatch by resharding tensor with smaller core count
+        x1_mem_config = x1.memory_config()
+        x2_mem_config = x2.memory_config()
+
+        # Check if memory configs don't match
+        if x1_mem_config != x2_mem_config:
+            # Only check shard specs if they exist
+            if (
+                hasattr(x1_mem_config, "shard_spec")
+                and x1_mem_config.shard_spec is not None
+                and hasattr(x2_mem_config, "shard_spec")
+                and x2_mem_config.shard_spec is not None
+            ):
+                # Get core counts for comparison
+                x1_cores = x1_mem_config.shard_spec.num_cores()
+                x2_cores = x2_mem_config.shard_spec.num_cores()
+
+                # Reshard the tensor with smaller core count to match the larger one
+                if x1_cores < x2_cores:
+                    x1 = ttnn.to_memory_config(x1, x2_mem_config)
+                elif x2_cores < x1_cores:
+                    x2 = ttnn.to_memory_config(x2, x1_mem_config)
+
         out = ttnn.add(x1, x2)
         out = ttnn.silu(out)
         ttnn.deallocate(x)
@@ -180,7 +204,11 @@ class ttnn_detect:
 
         self.m = []
         self.convm_1 = Conv(
-            [1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="sigmoid"
+            [1, 80, 80, 256],
+            (1, 1, 1, 1, 0, 0, 1, 1),
+            parameters["0"],
+            is_reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
         )
         self.m.append(self.convm_1)
 
@@ -189,7 +217,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["1"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -199,7 +227,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["2"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -303,7 +331,6 @@ class ttnn_detect:
                 z_1 = reshaped
             if i == 2:
                 z_2 = reshaped
-
         concatenated = concat(1, False, z_0, z_1, z_2)
         concatenated = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT)
         out = (concatenated, x)
@@ -530,8 +557,15 @@ class ttnn_yolov7:
 
         self.conv22 = Conv(
             [1, 40, 40, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["26"],
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=2,
+            out_subblock_h=7,
+            out_subblock_w=1,
+            out_block_h=7,
+            out_block_w=1,
+            math_approx_mode=True,
         )
 
         self.conv23 = Conv(

@@ -39,7 +39,7 @@ mesh_descriptors {
   }
   host_topology   { dims: [1, 1] }
   channels {
-    count: 2
+    count: 4
     policy: STRICT
   }
 }
@@ -52,7 +52,7 @@ mesh_descriptors {
   }
   host_topology   { dims: [1, 1] }
   channels {
-    count: 2
+    count: 4
     policy: STRICT
   }
 }
@@ -65,7 +65,7 @@ mesh_descriptors {
   }
   host_topology   { dims: [1, 1] }
   channels {
-    count: 2
+    count: 4
     policy: STRICT
   }
 }
@@ -77,11 +77,11 @@ graph_descriptors {
   name: "G0"
   type: "POD"
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M1" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 0 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 device_id: 0 } }
+    channels { count: 4 policy: RELAXED }
     directional: false
   }
 }
@@ -89,20 +89,24 @@ graph_descriptors {
 graph_descriptors {
   name: "G1"
   type: "POD"
-  channels { count: 2 policy: RELAXED }
   instances { mesh { mesh_descriptor: "M2" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M3" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M4" mesh_id: 0 } }
-  graph_topology: { layout_type: ALL_TO_ALL }
+  instances { mesh { mesh_descriptor: "M3" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M4" mesh_id: 2 } }
+  graph_topology: {
+    layout_type: ALL_TO_ALL
+    channels { count: 2 policy: RELAXED }
+  }
 }
 
 graph_descriptors {
   name: "G2"
   type: "CLUSTER"
-  channels { count: 2 policy: RELAXED }
   instances { graph { graph_descriptor: "G1" graph_id: 0 } }
-  instances { graph { graph_descriptor: "G0" graph_id: 0 } }
-  graph_topology: { layout_type: ALL_TO_ALL }
+  instances { graph { graph_descriptor: "G0" graph_id: 1 } }
+  graph_topology: {
+    layout_type: ALL_TO_ALL
+    channels { count: 2 policy: RELAXED }
+  }
 }
 
 # --- Instantiation ----------------------------------------------------------

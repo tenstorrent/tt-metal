@@ -29,9 +29,8 @@
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "metal_soc_descriptor.h"
-// #include <umd/device/driver_atomics.h> - This should be included as it is used here, but the file is missing include
-// guards
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
@@ -43,7 +42,7 @@ using std::uint32_t;
 using std::uint64_t;
 
 const ll_api::memory& get_risc_binary(
-    std::string_view path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
+    const std::string& path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -51,7 +50,7 @@ const ll_api::memory& get_risc_binary(
     } cache;
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(std::string(path));
+    auto [slot, inserted] = cache.map.try_emplace(path);
     const ll_api::memory* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
@@ -252,7 +251,6 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -268,12 +266,14 @@ void wait_until_cores_done(
             }
         }
 
+#ifdef DEBUG
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
+#endif
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;
@@ -307,7 +307,6 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
-    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
@@ -399,7 +398,6 @@ void send_msg_to_eth_mailbox(
 }
 
 void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
-    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
@@ -422,8 +420,6 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
-                auto core_type_idx =
-                    hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.8.0",

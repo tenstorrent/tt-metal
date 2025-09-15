@@ -46,12 +46,20 @@ void fabric_set_route(
         case eth_chan_directions::EAST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
-            packet_header->routing_fields.branch_east_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_east_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_east_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::WEST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
-            packet_header->routing_fields.branch_west_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_west_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_west_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::NORTH:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
@@ -166,13 +174,12 @@ void fabric_set_unicast_route(
         // determine the east/west hops
         uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        fabric_set_route(
+            packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops - bool(ew_hops), ew_hops == 0);
         if (ew_hops) {
-            ns_hops--;
-            ew_hops++;
-        }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
-        if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
+            // +1 because this branch is now implementing the turn
+            fabric_set_route(
+                packet_header, (eth_chan_directions)turn_direction, 0, ns_hops - bool(ew_hops), ew_hops + 1, true);
         }
     }
 }
@@ -222,6 +229,18 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
         reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
     return connection_info->read_only[eth_channel].edm_direction;
+}
+
+template <uint8_t dim, bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, volatile uint8_t* out_route_buffer) {
+    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
+    tt_l1_ptr routing_path_t<dim, compressed>* routing_info;
+    if constexpr (dim == 1) {
+        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+    } else {
+        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    }
+    return routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
 }
 
 }  // namespace tt::tt_fabric

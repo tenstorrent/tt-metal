@@ -44,7 +44,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/types/arch.h"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 

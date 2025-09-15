@@ -37,7 +37,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -126,7 +126,6 @@ bool single_core_binary(
     Program program = tt::tt_metal::CreateProgram();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};

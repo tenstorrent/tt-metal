@@ -34,10 +34,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     std::vector<OutputType> output_buffer(output_shape.volume());
 
     // Extract dimensions
-    uint32_t batch_size = tensor_input_shape[0];
     uint32_t input_h = tensor_input_shape[1];
     uint32_t input_w = tensor_input_shape[2];
-    uint32_t channels = tensor_input_shape[3];
 
     // Extract dimensions from grid tensor shape
     auto grid_shape = input_tensor.logical_shape();
@@ -137,11 +135,7 @@ Tensor convert_grid_tensor(
 
     TT_FATAL(is_cpu_tensor(input_tensor), "Prepare_grid_sample_grid only supports host tensors");
 
-    return Tensor(
-        input_tensor.host_storage().transform(compute),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
 }
 
 }  // anonymous namespace

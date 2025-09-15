@@ -10,9 +10,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <vector>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <optional>
 
 namespace tt {
@@ -71,7 +71,7 @@ void append_fabric_connection_rt_args(
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<FabricNodeId>& next_hop_nodes,
+    const std::vector<FabricNodeId>& dst_nodes,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,

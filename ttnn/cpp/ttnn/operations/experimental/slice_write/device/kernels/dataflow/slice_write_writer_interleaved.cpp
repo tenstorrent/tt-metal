@@ -40,7 +40,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t page_offset = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
@@ -62,7 +63,7 @@ void kernel_main() {
             }
 #else
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-            noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
+            noc_async_write(src_buffer_l1_addr + page_offset, dst_noc_addr, noc_write_size);
 #endif
 #ifdef DEBUG
             DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id

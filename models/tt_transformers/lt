@@ -43,7 +43,7 @@ pareto_commands = {
     for cmd in [
         {
             # dmf is short for "dtype and math fidelity"
-            f"accuracy-dmf-{i}": f"pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-accuracy and file' --optimizations '{setting}'",
+            f"accuracy-dmf-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'accuracy and ci-token-accuracy' --optimizations '{setting}'",
             f"demo-dmf-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'params0-performance and batch-1' --optimizations '{setting}'",
         }
         for i, setting in enumerate(dtype_mf_settings)
@@ -58,7 +58,7 @@ pareto_commands_from_json = {
     k: v
     for i, file in enumerate(decoder_config_files)
     for k, v in {
-        f"accuracy-dmf-json-{i}": f"pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-accuracy and file' --decoder_config_file {file}",
+        f"accuracy-dmf-json-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'accuracy and ci-token-accuracy' --decoder_config_file {file}",
         f"demo-dmf-json-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'params0 and batch-1' --decoder_config_file {file}",
     }.items()
 }
@@ -922,8 +922,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Define command shortcuts
     command_shortcuts = {
-        "accuracy": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-performance and file'",
-        "accuracy-acc": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-acc and file'",
+        "accuracy": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and ci-token-accuracy'",
+        "accuracy-acc": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'accuracy and ci-token-accuracy'",
         "demo": "pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1",
         "demo-acc": "pytest models/tt_transformers/demo/simple_text_demo.py -k accuracy-batch-1",
         "demo-32": "pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-32",

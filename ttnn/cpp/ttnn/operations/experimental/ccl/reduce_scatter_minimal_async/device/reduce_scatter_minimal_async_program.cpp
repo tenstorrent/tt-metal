@@ -38,6 +38,100 @@ using namespace tt::tt_metal;
 
 namespace ttnn {
 
+namespace operations::experimental::ccl::detail {
+
+uint32_t reduce_scatter_minimal_async_core_count_per_link(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    log_trace(
+        tt::LogOp,
+        "DEBUG: num_workers_per_direction: {}, num_directions_per_link: {}, num_mux_cores_per_direction_per_link: {}",
+        num_workers_per_direction,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link);
+    return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+}
+
+uint32_t default_workers(
+    const MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ttnn::ccl::Topology topology,
+    uint32_t input_data_size_bytes,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
+    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
+    log_trace(tt::LogOp, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
+    // Heuristic values are based on the sweep test:
+    // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
+    if (topology == ttnn::ccl::Topology::Ring) {
+        // For ring, 50+MB is where 8 workers start scaling. 1-50MB is where 4 workers start scaling. 0-1MB is where 2
+        // workers start scaling.
+        constexpr double RING_HIGH_DATA_THRESHOLD_MB = 50.0;
+        constexpr double RING_LOW_DATA_THRESHOLD_MB = 1.0;
+        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {8, 4, 2, 1};
+        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {2, 1};
+        } else {
+            candidate_worker_counts = {4, 2, 1};
+        }
+    } else if (topology == ttnn::ccl::Topology::Linear) {
+        // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
+        // 2 workers start scaling.
+        constexpr double LINEAR_HIGH_DATA_THRESHOLD_MB = 4.0;
+        constexpr double LINEAR_LOW_DATA_THRESHOLD_MB = 0.5;
+        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {8, 4, 2, 1};
+        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {2, 1};
+        } else {
+            candidate_worker_counts = {4, 2, 1};
+        }
+    }
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            num_links * reduce_scatter_minimal_async_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        log_trace(tt::LogOp, "DEBUG: core_count {} for worker_count {}", core_count, worker_count);
+        if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
+        num_links);
+}
+
+uint32_t default_chunks_per_sync(
+    ttnn::ccl::Topology topology, uint32_t tiles_to_read, uint32_t tiles_read, uint32_t tile_granularity) {
+    // For Line, as early as 20 chunks per sync we get statistically significant performance improvements
+    // For Ring there is no statistically significant performance improvements until 80 chunks per sync, which beats the
+    // default value of syncing once This was determined by the sweep test:
+    // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
+    TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
+    constexpr uint32_t RING_DEFAULT_CHUNKS_PER_SYNC = 80;
+    constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
+    uint32_t default_value =
+        topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
+    uint32_t total_chunks = std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1);
+    return std::min(default_value, total_chunks);
+}
+}  // namespace operations::experimental::ccl::detail
+
 using namespace ccl;
 
 void append_fabric_mux_connection_ct_args(
@@ -232,8 +326,28 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     bool fuse_op = fused_op_signaler.has_value();
 
     // op hyperparams
-    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    // Get worker cores
+    // 2 senders per direction (2: forward, backward) per link (num_links)
+    // Each sender is reader + compute + writer
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    uint32_t input_data_size_bytes = input_tensor.buffer()->size();
+    uint32_t num_workers_per_direction =
+        num_workers_per_direction_opt.value_or(operations::experimental::ccl::detail::default_workers(
+            *mesh_device,
+            sub_device_id,
+            topology,
+            input_data_size_bytes,
+            num_links,
+            ring_size,
+            num_directions_per_link,
+            num_mux_cores_per_direction_per_link));
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
+
+    uint32_t num_cores_per_link =
+        operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
+            num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -242,13 +356,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
 
-    // Get worker cores
-    // 2 senders per direction (2: forward, backward) per link (num_links)
-    // Each sender is reader + compute + writer
-    uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;
@@ -431,8 +538,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 uint32_t num_workers = num_links * num_workers_per_direction;
                 uint32_t tiles_read = (worker_id * batch_slice_num_pages / num_workers);
                 uint32_t tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(
-                    std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1));
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                        topology, tiles_to_read, tiles_read, tile_granularity));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,              // my_chip_id
@@ -736,7 +845,22 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     bool is_last_chip = ring_index == ring_size - 1;
 
     // op hyperparams
-    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    // Get worker cores
+    // 2 senders (reader + core + writer) per direction (forward, backward) per link
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    uint32_t input_data_size_bytes = input_tensor.buffer()->size();
+    uint32_t num_workers_per_direction =
+        num_workers_per_direction_opt.value_or(operations::experimental::ccl::detail::default_workers(
+            *mesh_device,
+            sub_device_id,
+            topology,
+            input_data_size_bytes,
+            num_links,
+            ring_size,
+            num_directions_per_link,
+            num_mux_cores_per_direction_per_link));
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     log_trace(
@@ -757,14 +881,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
-    // Get worker cores
-    // 2 senders (reader + core + writer) per direction (forward, backward) per link
-    uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 1;
-    // uint32_t num_workers_per_direction = 2;
-
     uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+        operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
+            num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -977,7 +1096,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 uint32_t tiles_to_read = (link * num_workers_per_direction + worker + 1) * batch_slice_num_pages /
                                          (num_links * num_workers_per_direction);
                 uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or(std::max((tiles_to_read - tiles_read) / tile_granularity, (uint32_t)1));
+                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                        topology, tiles_to_read, tiles_read, tile_granularity));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {

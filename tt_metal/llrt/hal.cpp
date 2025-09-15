@@ -9,8 +9,9 @@
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
+#include "hal/generated/dev_msgs.hpp"
 #include "hal_types.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 
@@ -72,7 +73,8 @@ HalCoreInfoType::HalCoreInfoType(
     const std::vector<uint32_t>& mem_map_sizes,
     const std::vector<uint32_t>& eth_fw_mailbox_msgs,
     bool supports_cbs,
-    bool supports_receiving_multicast_cmds) :
+    bool supports_receiving_multicast_cmds,
+    dev_msgs::Factory dev_msgs_factory) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
     processor_classes_(processor_classes),
@@ -80,7 +82,8 @@ HalCoreInfoType::HalCoreInfoType(
     mem_map_sizes_(mem_map_sizes),
     eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
     supports_cbs_(supports_cbs),
-    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
+    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+    dev_msgs_factory_(dev_msgs_factory) {}
 
 uint32_t HalCoreInfoType::get_processor_index(
     HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
@@ -144,6 +147,53 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
         jal_offset_bits_19_to_12;
 
     return jal_offset | opcode;
+}
+
+HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
+    HalProcessorSet set;
+
+    // TODO: might need a new syntax for new architectures.
+    // Current syntax hardcodes the RISC-V names for WH/BH.
+    // Either keep this syntax but move it to hal/tt-1xx, and create the new one in hal/tt-2xx,
+    // or break compatibility and use the new syntax for all architectures.
+    if (spec.find("BR") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 0);
+    }
+    if (spec.find("NC") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 1);
+    }
+    if (spec.find("TR0") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 2);
+    }
+    if (spec.find("TR1") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 3);
+    }
+    if (spec.find("TR2") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 4);
+    }
+    if (spec.find("TR*") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 2);
+        set.add(HalProgrammableCoreType::TENSIX, 3);
+        set.add(HalProgrammableCoreType::TENSIX, 4);
+    }
+    if (spec.find("ER0") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
+    }
+    if (spec.find("ER1") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
+    }
+    if (spec.find("ER*") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
+    }
+    if (set.empty()) {
+        TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", spec);
+    }
+    return set;
 }
 
 }  // namespace tt_metal

@@ -16,7 +16,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
@@ -24,6 +24,11 @@ namespace tt::tt_metal::blackhole {
 
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
+
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace idle_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
 
 HalCoreInfoType create_idle_eth_mem_map() {
     constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
@@ -112,7 +117,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        idle_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

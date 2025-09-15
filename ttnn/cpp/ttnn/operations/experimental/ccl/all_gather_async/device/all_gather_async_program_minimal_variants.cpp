@@ -39,7 +39,7 @@ namespace ttnn {
 
 namespace detail {
 
-uint32_t all_gather_async_core_count(
+uint32_t all_gather_async_core_count_per_link(
     uint32_t num_workers_per_direction,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
@@ -73,7 +73,8 @@ uint32_t default_workers(
     }
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
-            all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+            num_links * all_gather_async_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
         if (num_cores >= core_count) {
             log_trace(
                 tt::LogOp,
@@ -216,7 +217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         ring_size,
         num_directions_per_link,
         num_mux_cores_per_direction_per_link));
-    uint32_t num_cores_per_link = detail::all_gather_async_core_count(
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
@@ -258,9 +259,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
         topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
 
-    auto [ring_barrier_mcast_forward_args, ring_barrier_mcast_backward_args] =
-        ccl::get_forward_backward_line_mcast_configuration(
-            topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
 

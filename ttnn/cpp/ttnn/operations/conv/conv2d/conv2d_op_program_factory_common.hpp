@@ -66,10 +66,12 @@ std::vector<CBInfo> get_cb_info(
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> input_shape,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
+    uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create);
@@ -80,7 +82,7 @@ std::vector<CBInfo> get_cb_info(
 void allocate_cbs(
     std::vector<CBInfo>& cb_info,
     tt::tt_metal::Program& program,
-    const CoreRange& all_cores,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const Tensor& l1_indices_tensor);
