@@ -63,12 +63,12 @@ namespace HAL_BUILD {
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
 #ifdef ARCH_BLACKHOLE
-constexpr uint32_t PROFILER_RISC_COUNT = 1;
+constexpr uint32_t PROCESSOR_COUNT = 1;
 #else
-constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #endif
 #else
-constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
@@ -80,7 +80,7 @@ struct profiler_msg_buffer_t {
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    profiler_msg_buffer_t buffer[PROFILER_RISC_COUNT];
+    profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
 // Messages for host to tell brisc to go
@@ -320,7 +320,7 @@ struct watcher_msg_t {
 // TODO: DebugPrintMemLayout not visible by codegen
 // To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[MaxProcessorsPerCoreType];
+    DebugPrintMemLayout data[PROCESSOR_COUNT];
     uint32_t pad;  // to 1024 bytes
 };
 #endif
