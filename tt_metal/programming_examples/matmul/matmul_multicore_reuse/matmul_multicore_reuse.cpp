@@ -69,11 +69,10 @@ void matmul_multicore_reuse(
     uint32_t B,
     std::shared_ptr<distributed::MeshDevice> mesh_device) {
     /*
-     * Setup program to execute along with its buffers and kernels to use
-     * Core range is just single core
+     * Set up Mesh API constructs: command queue, workload, device range, and program.
+     * We'll distribute work across multiple cores using the device's compute grid.
      */
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    IDevice* device = mesh_device->get_devices()[0];
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
@@ -83,7 +82,7 @@ void matmul_multicore_reuse(
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -331,15 +330,14 @@ void matmul_multicore_reuse(
         }
     }
 
-    /* Launch program & read in output buffer result into the host vector */
-    // LaunchProgram(device, program);
-    // ReadFromBuffer(dst_dram_buffer, output);
-    // ReadFromBuffer(src0_dram_buffer, output);
+    /* Launch program & read back results */
 
+    // Non-blocking uploads allow overlapping host setup with device transfers
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    // Blocking read from shard {0,0} waits for completion and populates 'output'
     distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 }
 
