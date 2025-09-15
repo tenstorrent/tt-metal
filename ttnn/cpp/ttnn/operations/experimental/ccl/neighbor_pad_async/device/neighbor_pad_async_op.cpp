@@ -59,35 +59,11 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
     for (uint32_t i = 0; i < target_ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
-            if (this->secondary_cluster_axis.has_value()) {
-                uint32_t secondary_cluster_axis = this->secondary_cluster_axis.value();
-                // secondary_mesh_shape(0)==x should be columns, (1)==y is rows
-                uint32_t row_index = i / this->secondary_mesh_shape.value().at(0);
-                uint32_t col_index = i % this->secondary_mesh_shape.value().at(0);
-                if (secondary_cluster_axis) {
-                    // row
-                    if (col_index != 0) {
-                        backward_device = devices_to_use.at(i - 1);
-                    }
-                    if (col_index != this->secondary_mesh_shape.value().at(0) - 1) {
-                        forward_device = devices_to_use.at(i + 1);
-                    }
-                } else {
-                    // column
-                    if (row_index != 0) {
-                        backward_device = devices_to_use.at(i - this->secondary_mesh_shape.value().at(0));
-                    }
-                    if (row_index != this->secondary_mesh_shape.value().at(1) - 1) {
-                        forward_device = devices_to_use.at(i + this->secondary_mesh_shape.value().at(0));
-                    }
-                }
-            } else {
-                if (i != 0) {
-                    backward_device = devices_to_use.at(i - 1);
-                }
-                if (i != target_ring_size - 1) {
-                    forward_device = devices_to_use.at(i + 1);
-                }
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            }
+            if (i != target_ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
             }
         }
     }
@@ -107,7 +83,9 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         this->num_links,
         this->topology,
         target_ring_size,
-        device_index);
+        device_index,
+        secondary_cluster_axis,
+        secondary_mesh_shape);
 }
 
 tt::tt_metal::operation::Hash NeighborPadAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
