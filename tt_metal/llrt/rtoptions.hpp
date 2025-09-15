@@ -22,7 +22,8 @@
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
@@ -311,7 +312,7 @@ public:
         return feature_targets[feature].processors;
     }
     void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
-        feature_targets[feature].processors = std::move(processors);
+        feature_targets[feature].processors = processors;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {

@@ -39,7 +39,7 @@ bool runTest(
 
     auto program(tt::tt_metal::CreateProgram());
     distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
-    auto kernel = CreateKernel(
+    CreateKernel(
         program,
         path,
         coord,
@@ -136,7 +136,7 @@ using tt::tt_metal::CommandQueueSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(runTestsuite(mesh_device, core));
     }
 }
