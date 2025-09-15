@@ -25,6 +25,7 @@ void RunFillUpAllBuffers(std::shared_ptr<distributed::MeshDevice> mesh_device, i
     CoreRange all_cores(start_core, end_core);
     auto eth_cores = device->get_active_ethernet_cores(true);
 
+    // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -68,6 +69,7 @@ void RunFillUpAllBuffers(std::shared_ptr<distributed::MeshDevice> mesh_device, i
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     if (fast_dispatch) {
         for (int i = 0; i < enqueue_times; i++) {
+            // Enqueue the same mesh workload multiple times to generate profiler events
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }
     } else {
