@@ -188,6 +188,13 @@ void LayerNorm::validate(
                     TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
+                    TT_FATAL(
+                        a.device()->arch() == tt::ARCH::WORMHOLE_B0,
+                        "Welford's algorithm for Layernorm is only supported on Wormhole");
+                }
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
