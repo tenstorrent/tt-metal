@@ -4,7 +4,7 @@ This test suite implements tests that measure the performance (i.e. bandwidth) o
 They are based on kernel runtime arguments of existing metal tests.
 
 ## Slow Dispatch Support
-This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `MeshDeviceFixture` and are designed to work with the slow dispatch API.
+This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `MeshDeviceFixture` and are designed to work with TT-Mesh APIs.
 
 **Note**: These tests require slow dispatch mode for proper operation. They use `tt::tt_metal::detail::LaunchProgram()` for direct program execution without command queues.
 
