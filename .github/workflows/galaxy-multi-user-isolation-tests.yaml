@@ -168,8 +168,11 @@ jobs:
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray-1"
               echo ">>> Running tests in $cname" 
+              (
               docker exec "$cname" bash -c "$command" \
-              | sed "s/^/[$cname] /" &
+              | sed "s/^/[$cname] /" 
+              exit ${PIPESTATUS[0]}
+              ) &         
               pids+=($!)
             done
 
