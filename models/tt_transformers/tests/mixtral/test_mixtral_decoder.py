@@ -12,7 +12,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.utility_functions import comp_allclose, comp_pcc
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
@@ -78,7 +77,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, device_p
         dtype=dtype,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=rope_setup.get_both_trans_mats(),
-        tt_ccl=tt_ccl
+        tt_ccl=tt_ccl,
     )
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
