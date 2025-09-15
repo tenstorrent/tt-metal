@@ -229,7 +229,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
             -1.0f,
             1.0f,
-            cfg.size_bytes / bfloat16::SIZEOF,
+            cfg.size_bytes / sizeof(bfloat16),
             std::chrono::system_clock::now().time_since_epoch().count());*/
 
     distributed::DeviceLocalBufferConfig sender_dram_config{

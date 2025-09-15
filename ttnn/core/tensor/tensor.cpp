@@ -286,7 +286,7 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
             std::vector<float> physical_data;
             physical_data.reserve(buffer.size());
             std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
-                return val.to_float();
+                return static_cast<float>(val);
             });
             if (tensor_impl::logical_matches_physical(cpu_tensor.tensor_spec())) {
                 return physical_data;

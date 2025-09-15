@@ -29,7 +29,7 @@ struct type_caster<bfloat16> {
     }
 
     static handle cast(const bfloat16& src, return_value_policy, handle) {
-        return pybind11::float_(src.to_float()).release();
+        return pybind11::float_(static_cast<float>(src)).release();
     }
 };
 }  // namespace detail
