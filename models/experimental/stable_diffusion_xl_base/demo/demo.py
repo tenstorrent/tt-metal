@@ -200,10 +200,8 @@ def run_demo_inference(
     ],
     ids=("with_trace", "no_trace"),
 )
-# Not currently working with mesh_device when using multichip (N300 and above)
-# Need encoders to handle data parallel case
 def test_demo(
-    device,
+    mesh_device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -215,7 +213,7 @@ def test_demo(
     guidance_scale,
 ):
     return run_demo_inference(
-        device,
+        mesh_device,
         is_ci_env,
         prompt,
         negative_prompt,
