@@ -50,7 +50,7 @@ jobs:
         run: |
           rm -rf ./docker_artifacts
           mkdir -p ./docker_artifacts
-          mv tar -xvf ttm_any.tar ./docker_artifacts
+          tar -xvf ttm_any.tar -C ./docker_artifacts
           mv *.whl ./docker_artifacts
       - name: Create Docker Compose file
         run: |
