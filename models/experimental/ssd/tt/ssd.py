@@ -16,7 +16,7 @@ from models.experimental.ssd.tt.ssd_box_generator import (
 )
 from models.experimental.ssd.tt.ssd_lite_head import TtSSDLiteHead
 
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.ssd.tt.ssd_backbone import TtSSDLiteFeatureExtractorMobileNet
 from models.experimental.ssd.tt.ssd_box_generator import TtDefaultBoxGenerator
 from torchvision.ops.boxes import batched_nms, clip_boxes_to_image

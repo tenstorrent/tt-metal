@@ -6,7 +6,7 @@ import torch
 from transformers import FalconForCausalLM
 
 import ttnn
-from models.utility_functions import tt_tensors_to_torch_tensors
+from models.common.utility_functions import tt_tensors_to_torch_tensors
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 

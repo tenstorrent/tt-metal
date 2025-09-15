@@ -9,7 +9,7 @@ from loguru import logger
 
 
 from models.experimental.inceptionV4.reference.inception import InceptionV4
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 

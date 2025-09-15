@@ -8,7 +8,7 @@ import ttnn
 from models.experimental.bert_tiny.tt.bert import TtBert
 
 from transformers import BertForQuestionAnswering, BertTokenizer
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

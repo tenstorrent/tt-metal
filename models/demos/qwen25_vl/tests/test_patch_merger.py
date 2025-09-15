@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()

@@ -15,11 +15,11 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div
 from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.utility_functions import comp_pcc
 
 
 def load_state_dict(model_path: Path, module_path: str):

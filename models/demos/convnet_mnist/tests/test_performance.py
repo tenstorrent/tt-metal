@@ -11,12 +11,16 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_grayskull,
+)
 from models.demos.convnet_mnist import convnet_mnist_preprocessing
 from models.demos.convnet_mnist.tt.convnet_mnist import convnet_mnist, custom_preprocessor
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
 
 
 def get_expected_times(convnet_mnist):

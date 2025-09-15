@@ -6,7 +6,7 @@ import torch
 import ttnn
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,

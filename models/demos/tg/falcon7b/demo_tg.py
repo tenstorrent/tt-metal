@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(

@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_vgg_unet_e2e(device, device_batch_size, model_location_generator, channels=3, resolution=256):

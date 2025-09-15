@@ -7,7 +7,7 @@ import ttnn
 
 from tt_lib.fused_ops.softmax import softmax
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 from models.experimental.mnist.reference.mnist import MnistModel
 
 

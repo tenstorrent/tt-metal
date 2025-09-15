@@ -15,7 +15,7 @@ from models.experimental.gemma3_4b.tt.attention import Attention
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.rope import RotarySetup, compute_freqs_cis
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 from models.tt_transformers.tt.model_config import ModelArgs
 

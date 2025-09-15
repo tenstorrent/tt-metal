@@ -11,7 +11,7 @@ import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
 from typing import Optional, Tuple
-from models.utility_functions import pad_by_zero
+from models.common.utility_functions import pad_by_zero
 
 
 def _make_causal_mask(

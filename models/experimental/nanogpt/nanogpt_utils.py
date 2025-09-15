@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import tt2torch_tensor
 import torch
 import ttnn
 from transformers import GPT2LMHeadModel

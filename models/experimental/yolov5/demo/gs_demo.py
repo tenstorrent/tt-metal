@@ -34,7 +34,7 @@ from models.experimental.yolov5.reference.utils.plots import (
     colors,
 )
 
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 
 
 def download_images(path, imgsz):

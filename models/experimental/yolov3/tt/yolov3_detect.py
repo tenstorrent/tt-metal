@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch
 
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     torch_to_tt_tensor_rm,
 )

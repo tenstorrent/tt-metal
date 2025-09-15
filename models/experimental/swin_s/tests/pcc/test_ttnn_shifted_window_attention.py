@@ -6,7 +6,7 @@ import torch
 import pytest
 
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from models.experimental.swin_s.reference.shifted_window_attention import ShiftedWindowAttention
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc

@@ -11,6 +11,7 @@ from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
@@ -18,7 +19,6 @@ from models.demos.metal_BERT_large_11.tt.model_config import (
     get_tt_cache_path,
     skip_unsupported_config,
 )
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
