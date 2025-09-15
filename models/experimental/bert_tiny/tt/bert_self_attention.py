@@ -8,7 +8,7 @@ import math
 import torch
 from typing import Optional
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor
+from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor
 from models.experimental.bert_tiny.bert_tiny_helper_funcs import Linear as TtLinear
 
 

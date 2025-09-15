@@ -26,10 +26,10 @@ from vllm.multimodal.processing import BaseMultiModalProcessor, EncDecMultiModal
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.utility_functions import is_wormhole_b0, nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):

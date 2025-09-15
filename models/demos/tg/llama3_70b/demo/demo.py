@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
+from models.common.utility_functions import skip_for_grayskull
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
@@ -22,7 +23,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.tg.llama3_70b.tt.llama_generation_galaxy import TtLlamaModelForGeneration
-from models.utility_functions import skip_for_grayskull
 
 
 @dataclass

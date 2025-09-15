@@ -8,9 +8,9 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.utility_functions import divup
 
 
 class VitTestInfra:

@@ -13,7 +13,7 @@ if os.getenv("CI") == "true":
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 

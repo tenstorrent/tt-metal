@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_e75, is_grayskull
+from models.common.utility_functions import is_e75, is_grayskull
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS

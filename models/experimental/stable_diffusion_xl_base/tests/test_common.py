@@ -15,7 +15,7 @@ from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
     TtCLIPTextTransformer,
     TtCLIPTextTransformerParameters,
 )
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn

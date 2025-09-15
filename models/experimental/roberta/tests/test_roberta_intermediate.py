@@ -9,7 +9,7 @@ from transformers import RobertaModel
 
 
 from models.experimental.roberta.tt.roberta_intermediate import TtRobertaIntermediate
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,

@@ -24,7 +24,7 @@ from models.experimental.yolov3.reference.utils.plots import (
     Annotator,
     colors,
 )
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 
 f = f"{Path(__file__).parent}"
 

@@ -11,13 +11,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names
 from models.demos.utils.common_demo_utils import postprocess as obj_postprocess
 from models.demos.utils.common_demo_utils import preprocess, save_yolo_predictions_by_model
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov9c.demo.demo_utils import postprocess, save_seg_predictions_by_model
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
 def ttnn_preds_postprocess(
