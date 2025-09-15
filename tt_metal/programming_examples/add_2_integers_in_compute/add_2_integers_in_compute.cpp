@@ -62,13 +62,13 @@ int main() {
         .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
                                         // as the tile size for efficiency.
         .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-    distributed::ReplicatedBufferConfig buffer_config{
+    distributed::ReplicatedBufferConfig distributed_buffer_config{
         .size = single_tile_size  // Size of the buffer in bytes
     };
     // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
