@@ -140,8 +140,11 @@ class ContextParallelConv3d:
         self.groups = groups
 
         # Calculate padding
-        height_pad = (self.kernel_size[1] - 1) // 2
-        if self.parallel_config.hw_parallel.factor > 1:
+        if self.parallel_config.h_parallel.factor > 1:
+            height_pad = 0
+        else:
+            height_pad = (self.kernel_size[1] - 1) // 2
+        if self.parallel_config.w_parallel.factor > 1:
             width_pad = 0
         else:
             width_pad = (self.kernel_size[2] - 1) // 2
