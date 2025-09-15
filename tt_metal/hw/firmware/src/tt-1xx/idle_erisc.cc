@@ -143,17 +143,6 @@ int main() {
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
-
-        // Check if current launch message entry has DISPATCH_MODE_NONE and skip it
-        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-        launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-        if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
-            // Skip unused buffer entries with DISPATCH_MODE_NONE
-            launch_msg_address->kernel_config.enables = 0;
-            mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-            continue;  // Skip to next iteration
-        }
-
         while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
@@ -202,6 +191,12 @@ int main() {
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 notify_dispatch_core_done(dispatch_addr, noc_index);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // Handle entries with DISPATCH_MODE_NONE (either zero-initialized or cleared after processing)
+                // These entries should be skipped without processing or notification
+                launch_msg_address->kernel_config.enables = 0;
+                // Move to the next entry in the ring buffer
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
