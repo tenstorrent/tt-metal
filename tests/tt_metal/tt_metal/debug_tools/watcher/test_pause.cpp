@@ -23,7 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////

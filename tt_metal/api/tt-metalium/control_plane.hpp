@@ -313,6 +313,9 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
+    template <uint8_t dim, bool compressed>
+    void write_all_to_all_routing_fields(MeshId mesh_id) const;
+
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
 

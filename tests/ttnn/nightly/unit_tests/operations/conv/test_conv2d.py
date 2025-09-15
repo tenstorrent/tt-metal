@@ -112,7 +112,6 @@ def run_conv(
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
-    enable_split_reader=False,
     activation=None,
     in_place=False,
     run_twice=False,
@@ -124,6 +123,8 @@ def run_conv(
     bs_full_inner_dim=False,
     sharded_cfg=None,
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    enable_activation_reuse=False,
+    config_tensors_in_dram=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -227,6 +228,7 @@ def run_conv(
         )
 
     requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
+
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         input_dtype,
@@ -244,13 +246,14 @@ def run_conv(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
-        enable_split_reader=enable_split_reader,
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
+        enable_activation_reuse=enable_activation_reuse,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -947,7 +950,6 @@ def test_conv_ws(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
-        enable_split_reader=False,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
@@ -1862,9 +1864,7 @@ def test_unet_conv_wh(
         (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 8 * 32}),
         (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 16 * 32}),
-        # Issue #28172 fix bug with weights preparation in case conv maps to matmul
-        # and input tensor is interleaved and auto shard is used.
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32} if is_wormhole_b0() else None),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 5 * 32}),
     ),
 )
 @pytest.mark.parametrize(
@@ -1907,6 +1907,19 @@ def test_unet_conv_groups_2_wh(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
         pytest.skip("OOM")
+    # Issue #28172 fix bug with weights preparation in case conv maps to matmul
+    # and input tensor is interleaved and auto shard is used.
+    if (
+        filter_height == 1
+        and filter_width == 1
+        and stride_h == 1
+        and stride_w == 1
+        and pad_h == 0
+        and pad_w == 0
+        and is_blackhole()
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < 130  # P100
+    ):
+        config_override = None
     run_conv(
         device,
         torch_tensor_map,
@@ -2287,7 +2300,6 @@ def test_conv_core_nondivis(
     ],
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@pytest.mark.parametrize("split_reader", [True, False], ids=["split_reader_on", "split_reader_on_off"])
 def test_conv_dilation(
     device,
     torch_tensor_map,
@@ -2307,7 +2319,6 @@ def test_conv_dilation(
     output_layout,
     dilation_hw,
     auto_shard,
-    split_reader,
 ):
     config_override = {"act_block_w_div": act_block_w_div}
     run_conv(
@@ -2333,7 +2344,6 @@ def test_conv_dilation(
         dilation_w=dilation_hw[1],
         has_bias=False,
         auto_shard=auto_shard,
-        enable_split_reader=split_reader,
         input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
     )
 
@@ -2938,7 +2948,6 @@ def test_split_reader_regression(
         config_override=config_override,
         has_bias=False,
         shard_layout=shard_layout,
-        enable_split_reader=True,
         input_layout=ttnn.TILE_LAYOUT,
     )
 
@@ -3060,30 +3069,30 @@ def test_block_sharding_relu_act_block_h(
 
 # fmt: off
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, enable_act_double_buffer",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_act_double_buffer",
     (
         # # model strawberry
-        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
 
         # # model kiwi
-        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (5, 5), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (2, 2), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (4, 4), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (8, 8), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (2, 2), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
-        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (5, 5), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (2, 2), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (4, 4), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (8, 8), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (2, 2), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
 
         # model kiwi new convs
-        ( 1,  4,    32, 1024,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
-        ( 4,  32,   48,  512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
-        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
-        (64,  56,   64,  128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
-        ( 1,  64,  128,  1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (2, 2), (1, 1), [1, 0, 1, 0], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
+        ( 1,  4,    32, 1024,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True),
+        ( 4,  32,   48,  512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True),
+        (64,  56,   64,  128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True),
+        ( 1,  64,  128,  1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (2, 2), (1, 1), [1, 0, 1, 0], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True),
     ),
 )
  #fmt: on
@@ -3111,7 +3120,6 @@ def test_conv2d_model_fruit(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     enable_act_double_buffer,
     input_dtype,
     input_layout,
@@ -3163,7 +3171,6 @@ def test_conv2d_model_fruit(
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
         input_layout= input_layout,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         enable_act_double_buffer=enable_act_double_buffer,
@@ -3173,47 +3180,48 @@ def test_conv2d_model_fruit(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db",
     (
         # 1024x1024 resolution
 
         # UNet
         # kernel 3x3
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 1024, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 640, 1280, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 1024, 1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 640, 1280, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, 1, 1, True, True),
+        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
 
         # stride 2x2
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0,   1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0, 1, False, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0,   1, False, ttnn.MathFidelity.HiFi2, True, False, 1, 1, True, True),
 
         # output_channels 4
-        (1, 320, 4, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, True, False),
+        (1, 320, 4, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
 
         # # input_channels 4
-        (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, True, False),
+        (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
 
         # kernel 1x1
-        (1, 1280, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 1920, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 320, 640, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 960, 640, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
-        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
+        (1, 1280, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 1920, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 320, 640, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 960, 640, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
+
     ),
 )
 
@@ -3240,7 +3248,6 @@ def test_conv2d_sdxl(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     split_input_channels_factor,
     split_output_channels_factor,
     act_db,
@@ -3316,56 +3323,55 @@ def test_conv2d_sdxl(
             input_mesh_mapper=None,
             weight_mesh_mapper=None,
             output_mesh_composer=None,
-            enable_split_reader=enable_split_reader,
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
         )
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db",
     (
         # UNet
         # kernel 3x3
-        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 2, 1, False, False),
-        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1536, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1536, 1536, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 768, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
+        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 2, 1, False, False),
+        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 2, 1, False, False),
+        (1, 1536, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # stride 2x2
-        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # output_channels 4
-        (1, 384, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
+        (1, 384, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # input_channels 4
-        (1, 4, 384, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
+        (1, 4, 384, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # kernel 1x1
-        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
-        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, 1, 1, False, False),
+        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
     ),
 )
 
@@ -3392,7 +3398,6 @@ def test_conv2d_sdxl_refiner(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     split_input_channels_factor,
     split_output_channels_factor,
     act_db,
@@ -3468,7 +3473,6 @@ def test_conv2d_sdxl_refiner(
             input_mesh_mapper=None,
             weight_mesh_mapper=None,
             output_mesh_composer=None,
-            enable_split_reader=enable_split_reader,
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
@@ -3496,7 +3500,7 @@ def test_conv2d_sdxl_refiner(
         (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                  None, 1,     0, 0),
     ),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
@@ -3569,15 +3573,14 @@ def test_conv2d_vae_sdxl(
         slice_config=slice_config,
         input_layout=ttnn.TILE_LAYOUT,
         enable_act_double_buffer=False, # TODO: this is set to true in SDXL, need to adapt tests
-        enable_split_reader=True if shard_layout == HS else False,
         throttle_level=throttle
     )
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
     (
-        (1, (1920, 1280, 1920), 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, (1920, 1280, 1920), 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, 0, 1, False, ttnn.MathFidelity.LoFi, False, False),
     ),
 )
 
@@ -3604,7 +3607,6 @@ def test_conv2d_ws_program_cache(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
 
 ):
 
@@ -3644,7 +3646,6 @@ def test_conv2d_ws_program_cache(
             input_mesh_mapper=None,
             weight_mesh_mapper=None,
             output_mesh_composer=None,
-            enable_split_reader=enable_split_reader,
             run_twice=False,
         )
 
@@ -3717,9 +3718,8 @@ def test_conv_sharded_non_tile(device):
 
 
 @pytest.mark.parametrize("enable_act_double_buffer", [True, False])
-@pytest.mark.parametrize("enable_split_reader", [True, False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_channel_padding(device, enable_act_double_buffer, enable_split_reader):
+def test_segformer_channel_padding(device, enable_act_double_buffer):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
@@ -3780,7 +3780,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
     conv_config = ttnn.Conv2dConfig(
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
     )
 
     ttnn_output_tensor = ttnn.conv2d(
@@ -4157,9 +4156,9 @@ def test_conv_single_core(
     )
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, act_db, w_db",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, act_db, w_db",
     (
-        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, True, True),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -4185,7 +4184,6 @@ def test_conv_sharded_rm_input(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     act_db,
     w_db,
 ):
@@ -4237,7 +4235,6 @@ def test_conv_sharded_rm_input(
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
         sharded_cfg=sharded_cfg,
         enable_act_double_buffer=act_db,
@@ -4433,12 +4430,12 @@ def test_conv_dram_panoptic(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
     # fmt: off
     (
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
     ),
     # fmt: on
 )
@@ -4466,7 +4463,6 @@ def test_conv2d_ch_split_dram_panoptic(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     split_input_channels_factor,
     split_output_channels_factor,
     act_db,
@@ -4553,5 +4549,184 @@ def test_conv_bs_grid(
         None,
         shard_layout=BS,
         has_bias=False,
+        input_dtype=ttnn.bfloat16
+    )
+
+
+# fmt: off
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("config_in_dram", [False, True])
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
+    (
+        # model kiwi new convs
+        ( 1,  4,    32, 1024,   128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  32,   32, 512,    40, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  3,    45, 512,    60, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  7,    32, 1024,   140, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (4, 4), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 4,  32,   32,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+    ),
+)
+ #fmt: on
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
+def test_conv2d_activation_reuse(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    auto_shard,
+    act_block_h_override,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    input_dtype,
+    input_layout,
+    enable_activation_reuse,
+    config_in_dram
+):
+    if batch == 16 and is_wormhole_b0():
+        # not enough memory on WH for this case
+        act_block_h_override = 32*4
+
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=math_fidelity,
+        output_dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=(padding[0], padding[1], padding[2], padding[3]),
+        config_override=config_override,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=deallocate_activation,
+        groups=groups,
+        has_bias=True,
+        shard_layout=None,
+        auto_shard=auto_shard,
+        memory_config=None,
+        input_mesh_mapper=None,
+        weight_mesh_mapper=None,
+        output_mesh_composer=None,
+        input_layout= input_layout,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
+        input_dtype = input_dtype,
+        enable_activation_reuse=enable_activation_reuse,
+        config_tensors_in_dram=config_in_dram
+    )
+
+
+@skip_for_blackhole()
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
+    (
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv2d_activation_reuse_unet_conv_group_4(
+    device,
+    torch_tensor_map,
+    math_fidelity,
+    output_dtype,
+    weights_dtype,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+    output_layout,
+    in_place,
+    enable_activation_reuse,
+):
+    batch_size = 1
+    groups = 4
+    input_channels = groups * input_channels
+    output_channels = groups * output_channels
+
+    input_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        config_override,
+        shard_layout=shard_layout,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=output_layout,
+        groups=groups,
+        in_place=in_place,
+        deallocate_activation=True,
+        enable_act_double_buffer=True, # will be disabled if activation reuse is enabled
+        enable_weights_double_buffer=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         input_dtype=ttnn.bfloat16,
+        sharded_cfg=memory_config,
+        enable_activation_reuse=enable_activation_reuse
     )

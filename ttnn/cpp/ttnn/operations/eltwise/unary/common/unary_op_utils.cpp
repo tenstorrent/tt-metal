@@ -20,6 +20,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::GELU: return "SFPU_OP_GELU_INCLUDE";
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
+        case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
         case UnaryOpType::ERFINV: return "SFPU_OP_ERFINV_INCLUDE";
         case UnaryOpType::ERFC:
         case UnaryOpType::ERF: return "SFPU_OP_ERF_ERFC_INCLUDE";
@@ -50,12 +51,14 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
         case UnaryOpType::ACOSH:
         case UnaryOpType::COS:
+        case UnaryOpType::COSH:
         case UnaryOpType::SIN:
         case UnaryOpType::ASINH:
         case UnaryOpType::TAN:
         case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
+        case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
         case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_XOR_INCLUDE";
@@ -155,11 +158,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
-            break;
-        case UnaryOpType::RSQRT:
-            op_init_and_name = {
-                fmt::format("rsqrt_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("rsqrt_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::LOG:
             op_init_and_name = {
@@ -470,6 +468,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
             break;
         }
+        case UnaryOpType::SELU: {
+            TT_FATAL(params.size() == 2, "Expected selu to take 2 parameters");
+            float param1 = params[1];
+            op_init_and_name = {
+                "selu_tile_init();",
+                fmt::format(
+                    "selu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
+            break;
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -482,10 +492,16 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITWISE_NOT:
             op_init_and_name = {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
             break;
-        case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
+        case UnaryOpType::RECIP:
+            op_init_and_name = {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
+            break;
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)}; break;
-        case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)}; break;
-        case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
+        case UnaryOpType::RSQRT:
+            op_init_and_name = {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false>({});", idst)};
+            break;
+        case UnaryOpType::SQRT:
+            op_init_and_name = {"sqrt_tile_init<false>();", fmt::format("sqrt_tile<false>({});", idst)};
+            break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
         case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
@@ -509,6 +525,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
+        case UnaryOpType::COSH: op_init_and_name = {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
             op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
             break;
@@ -747,6 +764,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
+    } else if (name == "rsqrt") {
+        return UnaryWithParam(UnaryOpType::RSQRT);
     } else if (name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
     } else if (name == "recip") {
@@ -765,6 +784,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SIN);
     } else if (name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
+    } else if (name == "cosh") {
+        return UnaryWithParam(UnaryOpType::COSH);
     } else if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
     } else if (name == "abs_int32") {
@@ -775,6 +796,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     } else if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
+    } else if (name == "selu") {
+        return UnaryWithParam(UnaryOpType::SELU);
     } else if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     }

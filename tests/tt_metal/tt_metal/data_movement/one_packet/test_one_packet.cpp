@@ -104,7 +104,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        test_config.packet_size_bytes / bfloat16::SIZEOF,
+        test_config.packet_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output

@@ -44,15 +44,13 @@ target_sources(
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
+        compressed_routing_path.cpp
         serialization/intermesh_link_table.cpp
         serialization/physical_system_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
 )
-
-# Make .clang-tidy available in the fabric binary directory for generated files
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
@@ -85,12 +83,8 @@ endforeach()
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-target_include_directories(
-    fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric

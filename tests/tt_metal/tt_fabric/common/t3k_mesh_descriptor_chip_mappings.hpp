@@ -8,7 +8,7 @@
 #include <tuple>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 #include <map>
 #include <tt-metalium/host_api.hpp>
@@ -80,7 +80,7 @@ protected:
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
-        for (auto [device_id, device] : id_to_device_) {
+        for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
     }

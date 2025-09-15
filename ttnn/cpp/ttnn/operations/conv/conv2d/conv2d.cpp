@@ -556,6 +556,16 @@ Result conv2d_L1(
         kernel_size = folding_result.kernel_size;
         mm_conv = folding_result.mm_conv;
     }
+
+    if (conv_config.enable_activation_reuse) {
+        if (conv_config.enable_act_double_buffer) {
+            conv_config.enable_act_double_buffer = false;
+            log_warning(
+                tt::LogOp,
+                "Activation double buffering is currently not supported when activation reuse optimization is enabled, "
+                "disabling double buffering.");
+        }
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
@@ -646,6 +656,7 @@ Result conv2d_L1(
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
         conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse,
         kernel_size,
         orig_stride,
         padding_n4);
@@ -734,7 +745,8 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 input_tensor_post_tm.memory_config(),
                 true,
-                conv_config.in_place);
+                conv_config.in_place,
+                conv_config.config_tensors_in_dram);
 
             if (conv_config.deallocate_activation) {
                 input_tensor_post_tm.deallocate(/*force*/ true);
@@ -747,15 +759,6 @@ Result conv2d_L1(
             }
         }
 
-        bool enable_split_reader = conv_config.enable_split_reader;
-        if (enable_split_reader && opt_conv_op_block_config.act_block_h_ntiles == 1) {
-            // If the activation block height is 1, we can't enable split reader.
-            enable_split_reader = false;
-            log_warning(
-                tt::LogOp,
-                "Conv2D: Split reader was requested by the user, but it can't be support with just one tile per core "
-                "in activation matrix height.");
-        }
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
@@ -775,7 +778,8 @@ Result conv2d_L1(
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
             conv_config.full_inner_dim,
-            enable_split_reader);
+            conv_config.enable_activation_reuse,
+            conv_config.config_tensors_in_dram);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -873,12 +877,12 @@ ResultWithOptions Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
-        std::move(memory_config),
-        std::move(slice_config_),
+        dtype,
+        bias_tensor,
+        conv_config_,
+        compute_config_,
+        memory_config,
+        slice_config_,
         return_output_dim,
         return_weights_and_bias);
 }
