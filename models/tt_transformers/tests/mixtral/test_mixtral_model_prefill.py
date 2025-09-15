@@ -177,7 +177,7 @@ def test_model_inference(
 
     # Load prompt
     current_file_path = os.path.abspath(__file__)
-    current_file_dir = os.path.dirname(current_file_path)
+    current_file_dir = os.path.dirname(os.path.dirname(current_file_path))
     prompt_file = os.path.join(current_file_dir, "tale-of-two-cities.txt.bz2")
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()

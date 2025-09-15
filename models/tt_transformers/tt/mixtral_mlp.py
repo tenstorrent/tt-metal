@@ -39,7 +39,7 @@ class TtMixtralMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
             memory_config=self.get_mem_config(name, torch_weight),
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         self.w1 = as_tensor("w1")
@@ -75,9 +75,6 @@ class TtMixtralMLP(LightweightModule):
                 x = ttnn.reshape(
                     x, [1, seq_len // self.model_args.prefill_len_cutoff, self.model_args.prefill_len_cutoff, -1]
                 )
-                # pc_1 = self.model_config["FF1_OUTPUT_PROGCFG"]
-                # pc_2 = self.model_config["FF2_OUTPUT_PROGCFG"]
-                # pc_3 = self.model_config["FF3_OUTPUT_PROGCFG"]
                 pc_1 = self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"](seq_len)
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
                 pc_3 = self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"](seq_len)
@@ -129,8 +126,9 @@ class TtMixtralMLP(LightweightModule):
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
-                program_config=self.model_config["DECODE_MIXTRAL_MLP_W1_PRG_CONFIG"],  # SILu activation fused in the op
-                # program_config=self.model_config["FF1_OUTPUT_PROGCFG"],
+                program_config=self.model_args.dram_matmul_config(
+                    1, 4096, 14336, num_cores=8, fused_activation=ttnn.UnaryOpType.SILU
+                ),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
@@ -138,8 +136,7 @@ class TtMixtralMLP(LightweightModule):
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
-                program_config=self.model_config["DECODE_MIXTRAL_MLP_W3_PRG_CONFIG"],
-                # program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
+                program_config=self.model_args.dram_matmul_config(1, 4096, 14336, num_cores=8),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
@@ -151,8 +148,7 @@ class TtMixtralMLP(LightweightModule):
             w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
-                program_config=self.model_config["DECODE_MIXTRAL_MLP_W2_PRG_CONFIG"],
-                # program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
+                program_config=self.model_args.dram_matmul_config(1, 14336, 4096, num_cores=8),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,

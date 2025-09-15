@@ -104,12 +104,9 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config[
-                    "SHARDED_NORM_ATTN_PRGM_CFG"
-                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=4),subblock_w=4,block_h=1,block_w=4,inplace=0)
-                sharded_output_config=self.model_config[
-                    "SHARDED_ATTN_INPUT_MEMCFG"
-                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=3)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
@@ -128,12 +125,9 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config[
-                    "SHARDED_NORM_MLP_PRGM_CFG"
-                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=1),subblock_w=4,block_h=1,block_w=16,inplace=0)
-                sharded_output_config=self.model_config[
-                    "SHARDED_MLP_INPUT_MEMCFG"
-                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 512},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
+                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),

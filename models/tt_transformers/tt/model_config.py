@@ -1854,34 +1854,10 @@ class ModelArgs:
         if self.is_mixture_of_experts:
             self.initialize_mixture_of_experts_configs()
             self.moe = True
-            self.num_experts = 8
+            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
 
     def initialize_mixture_of_experts_configs(self):
-        self.model_config[
-            "DECODE_MIXTRAL_MLP_W1_PRG_CONFIG"
-        ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=2,  # 14336 / 32 / 8 / 8 the largest divisor
-            per_core_M=1,
-            per_core_N=56,
-            fused_activation=ttnn.UnaryOpType.SILU,
-        )
-        self.model_config[
-            "DECODE_MIXTRAL_MLP_W3_PRG_CONFIG"
-        ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=2,  # 14336 / 32 / 8 / 8 the largest divisor
-            per_core_M=1,
-            per_core_N=56,
-            fused_activation=None,
-        )
-        self.model_config[
-            "DECODE_MIXTRAL_MLP_W2_PRG_CONFIG"
-        ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=7,  # 14336 / 32 / 8 / 8 the largest divisor
-            per_core_M=1,
-            per_core_N=16,
-            fused_activation=None,
-        )
         # Porting mixtral to llama
         self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -1956,16 +1932,6 @@ class ModelArgs:
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
-        assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
-        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
-        shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
-        )
-        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-    def _create_dram_sharded_mem_config(self, k, n):
-        """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 8  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
@@ -2127,7 +2093,7 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -2140,7 +2106,7 @@ class ModelArgs:
             in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
-            fused_activation=None,
+            fused_activation=fused_activation,
         )
 
     def matmul_1d_config(
