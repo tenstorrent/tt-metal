@@ -15,9 +15,9 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/fabric.hpp>
-
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "context/metal_context.hpp"
-#include "distributed.hpp"
 #include "fabric_types.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"

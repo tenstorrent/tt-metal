@@ -6,7 +6,8 @@
 #include <fmt/base.h>
 #include <stdint.h>
 #include <sys/types.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <functional>

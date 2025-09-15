@@ -52,7 +52,8 @@ Replace all usages of `CreateDevice` as follows:
 // Old
 tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 // New
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 ```

@@ -24,7 +24,8 @@
 #include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>

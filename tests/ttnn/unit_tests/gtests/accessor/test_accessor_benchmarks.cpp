@@ -11,7 +11,8 @@
 #include <string>
 #include <cstdint>
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 

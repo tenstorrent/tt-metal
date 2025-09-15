@@ -16,6 +16,8 @@ class MeshWorkloadImpl;
 class MeshCommandQueue;
 class FDMeshCommandQueue;
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+MeshWorkload CreateMeshWorkload();
+void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
 class MeshWorkload {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions

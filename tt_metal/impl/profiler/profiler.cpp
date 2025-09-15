@@ -6,7 +6,8 @@
 #include "dev_msgs.h"
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
-#include <distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "device_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"

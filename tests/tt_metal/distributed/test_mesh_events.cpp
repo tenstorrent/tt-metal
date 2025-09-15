@@ -6,7 +6,8 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <cstddef>
 #include <memory>
 #include <numeric>

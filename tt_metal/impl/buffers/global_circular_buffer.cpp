@@ -21,7 +21,8 @@
 #include <variant>
 #include <vector>
 
-#include "distributed.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hal_types.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"

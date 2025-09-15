@@ -10,7 +10,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include "llrt.hpp"

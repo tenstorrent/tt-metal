@@ -5,7 +5,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <unordered_set>

@@ -35,14 +35,17 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+
+enum class CoreType;
 
 using namespace tt;
 using namespace tt::tt_metal;

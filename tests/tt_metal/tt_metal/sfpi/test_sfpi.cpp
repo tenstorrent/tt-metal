@@ -19,7 +19,8 @@
 #include <string_view>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 namespace {
 

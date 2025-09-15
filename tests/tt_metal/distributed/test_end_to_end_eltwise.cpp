@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
 
-
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 

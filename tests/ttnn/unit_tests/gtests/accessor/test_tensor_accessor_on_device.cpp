@@ -13,7 +13,8 @@
 #include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>

@@ -5,7 +5,8 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <array>
 #include <cstddef>
 #include <initializer_list>

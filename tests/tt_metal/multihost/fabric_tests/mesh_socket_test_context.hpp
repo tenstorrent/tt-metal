@@ -9,7 +9,9 @@
 #include <unordered_map>
 #include <random>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_socket.hpp>
 #include <tt-metalium/fabric.hpp>
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"

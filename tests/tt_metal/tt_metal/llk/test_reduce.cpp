@@ -30,7 +30,8 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>

@@ -8,7 +8,8 @@
 #include <functional>
 #include <unordered_map>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt_stl/overloaded.hpp>
 

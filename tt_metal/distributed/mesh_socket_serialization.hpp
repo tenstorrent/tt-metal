@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 
 namespace tt::tt_metal::distributed {

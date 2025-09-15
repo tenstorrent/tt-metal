@@ -6,7 +6,8 @@
 
 #include <memory>
 #include <tt-metalium/event.hpp>
-#include "tt-metalium/distributed.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 

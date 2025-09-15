@@ -4,7 +4,8 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"

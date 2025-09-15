@@ -7,7 +7,8 @@
 #include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>

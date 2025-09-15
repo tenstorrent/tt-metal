@@ -7,7 +7,8 @@
 #include <cstddef>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>

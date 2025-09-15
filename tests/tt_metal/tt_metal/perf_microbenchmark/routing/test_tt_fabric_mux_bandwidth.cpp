@@ -19,7 +19,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"

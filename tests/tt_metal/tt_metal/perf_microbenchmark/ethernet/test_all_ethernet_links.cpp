@@ -14,7 +14,8 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-logger/tt-logger.hpp>
