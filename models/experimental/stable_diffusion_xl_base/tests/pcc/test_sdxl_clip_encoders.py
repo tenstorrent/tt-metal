@@ -39,7 +39,7 @@ def test_clip_encoder(
 
     # Note: Factor for SDXL should always be 1; since we don't support TP
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
     ccl_manager = None
 
