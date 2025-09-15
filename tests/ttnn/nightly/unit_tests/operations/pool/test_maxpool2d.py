@@ -695,3 +695,46 @@ def test_run_max_pool_vovnet_model(
         ceil_mode=ceil_mode,
         nightly_skips=False,
     )
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_run_max_pool_vovnet_model_with_pcc_comparison(device, tensor_map):
+    """
+    Test VoVNet max_pool2d with PCC comparison mode enabled.
+    This reproduces the original issue from #27576 by enabling the same environment
+    variables that caused the failure, ensuring the fix works correctly.
+
+    Original issue: When PCC comparison mode was enabled via environment variables,
+    the test would fail with "RuntimeError: max_pool2d: padding must either be a
+    single int, or a tuple of two ints"
+
+    Environment variables that reproduced the issue:
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_comparison_mode": true,
+        "comparison_mode_should_raise_exception": true,
+        "comparison_mode_pcc": 0.999
+    }'
+
+    This test ensures the golden_maxpool2d function correctly handles 4D padding
+    format [pad_t, pad_b, pad_l, pad_r] used by ttnn.max_pool2d.
+    """
+
+    # Enable PCC comparison mode - equivalent to setting the environment variables
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config(
+        "comparison_mode_pcc", 0.999
+    ), ttnn.manage_config("comparison_mode_should_raise_exception", True):
+        # Run the exact same test that was failing in the original issue
+        run_max_pool(
+            [1, 256, 56, 56],  # input_shape
+            (3, 3),  # kernel_size
+            (0, 0),  # padding
+            (2, 2),  # stride
+            (1, 1),  # dilation
+            device,
+            tensor_map,
+            ttnn.bfloat16,  # dtype
+            ceil_mode=True,
+            nightly_skips=False,
+        )
