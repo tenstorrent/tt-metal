@@ -146,17 +146,37 @@ async function run() {
           const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: art.id, archive_format: 'zip' });
           const zipPath = path.join(tmpDir, `${art.name}.zip`);
           fs.writeFileSync(zipPath, Buffer.from(resp.data));
-          // List entries and check for workflow-data.json
-          const listOut = execFileSync('unzip', ['-l', zipPath], { encoding: 'utf8' });
-          if (listOut.includes('workflow-data.json')) {
-            const jsonBuf = execFileSync('unzip', ['-p', zipPath, 'workflow-data.json']);
+          // Extract artifact to a temp dir and search for workflow JSON file
+          const extractDir = path.join(tmpDir, art.name);
+          if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+          // Avoid buffering large stdout/stderr to prevent ENOBUFS
+          execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+          // Search recursively for workflow JSON
+          const targetNames = new Set(['workflow-data.json', 'workflow.json']);
+          const stack = [extractDir];
+          let foundPath;
+          while (stack.length && !foundPath) {
+            const dir = stack.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) {
+                stack.push(p);
+              } else if (ent.isFile() && targetNames.has(ent.name)) {
+                foundPath = p;
+                break;
+              }
+            }
+          }
+          if (foundPath) {
+            const jsonBuf = fs.readFileSync(foundPath);
             // Ensure output directory exists
             const outputDir = path.dirname(outputPath);
             if (!fs.existsSync(outputDir)) {
               fs.mkdirSync(outputDir, { recursive: true });
             }
             fs.writeFileSync(outputPath, jsonBuf);
-            core.info(`[TEST MODE] Wrote ${outputPath} from artifact ${art.name}`);
+            core.info(`[TEST MODE] Wrote ${outputPath} from ${path.basename(foundPath)} in artifact ${art.name}`);
             // Compute outputs from content
             let grouped;
             try {
