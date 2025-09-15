@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // clang-format off
