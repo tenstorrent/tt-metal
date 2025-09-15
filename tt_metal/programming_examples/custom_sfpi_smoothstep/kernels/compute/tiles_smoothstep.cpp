@@ -46,8 +46,7 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  * Calls smoothstep_tile_face for each face in the tile (typically 4 faces per tile).
  * Only compiled for the MATH core (TRISC_MATH context).
  */
-inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
-    float inv_delta = 1.0f / (edge1 - edge0);
+inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
     _llk_math_eltwise_unary_sfpu_params_<false>(
         smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta);
 }
@@ -68,8 +67,8 @@ inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float ed
  *   - Specify Dst register indices (not CB indices!)
  *   - Results written to specified Dst register
  */
-inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1) {
-    MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1));
+inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
+    MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1, inv_delta));
 }
 
 namespace NAMESPACE {
@@ -84,6 +83,11 @@ void MAIN {
     // Initialize SFPU for computation using cb_in0 and cb_out0
     init_sfpu(cb_in0, cb_out0);
 
+    // precompute inverse of (edge1 - edge0) for efficiency
+    constexpr float edge0 = 0.0f;
+    constexpr float edge1 = 1.0f;
+    float inv_delta = 1.0f / (edge1 - edge0);
+
     // Loop over all tiles and apply smoothstep
     for (uint32_t i = 0; i < n_tiles; i++) {
         // Wait for input tile
@@ -93,7 +97,7 @@ void MAIN {
         // Copy input tile from circular buffer to Dst register
         copy_tile(cb_in0, 0, 0);  // input x
         // Apply smoothstep SFPU operation
-        my_smoothstep_tiles(0, 0.0f, 1.0f);  // <-- Custom SFPU smoothstep
+        my_smoothstep_tiles(0, edge0, edge1, inv_delta);  // <-- Custom SFPU smoothstep
         // Commit and wait for register transfer
         tile_regs_commit();
         tile_regs_wait();
