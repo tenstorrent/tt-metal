@@ -595,6 +595,7 @@ class ModelArgs:
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1474,9 +1475,6 @@ class ModelArgs:
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
-        # Falcon3 branch only
-        # No attention multipliers in this branch
-
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -2177,6 +2175,7 @@ class ModelArgs:
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
                 "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
                 "Falcon3-1B": "tiiuae/Falcon3-1B-Instruct",
+                "Falcon3-7B": "tiiuae/Falcon3-7B-Instruct",
             }
 
             logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2198,6 +2197,8 @@ class ModelArgs:
                     model_name_lower = self.model_name.lower()
                     if "falcon3" in model_name_lower and "1b" in model_name_lower:
                         fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                    elif "falcon3" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
                     if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
                         fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
                     elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:

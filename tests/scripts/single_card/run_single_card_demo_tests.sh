@@ -7,6 +7,25 @@ run_falcon7b_func() {
 
 }
 
+run_falcon3_func() {
+
+  fail=0
+
+  # Falcon3 1B and 7B accuracy/perf sanity via simple_text_demo (functional lane)
+  falcon3_1b=tiiuae/Falcon3-1B-Instruct
+  falcon3_7b=tiiuae/Falcon3-7B-Instruct
+
+  for repo in "$falcon3_1b" "$falcon3_7b"; do
+    HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+    echo "LOG_METAL: Falcon3 functional tests for $repo completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
 run_mistral7b_func() {
 
   mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
@@ -254,6 +273,30 @@ run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
   pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+
+}
+
+run_falcon3_perf() {
+
+  fail=0
+
+  falcon3_1b=tiiuae/Falcon3-1B-Instruct
+  falcon3_7b=tiiuae/Falcon3-7B-Instruct
+
+  # N150 perf executed on N300 perf pipeline machines (mirroring llama3 perf section approach for N150)
+  for repo in "$falcon3_1b" "$falcon3_7b"; do
+    MESH_DEVICE=N150 HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Falcon3 tests for $repo completed on N150"
+  done
+
+  for repo in "$falcon3_1b" "$falcon3_7b"; do
+    HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Falcon3 tests for $repo completed on N300"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 
 }
 

@@ -181,7 +181,6 @@ class LMHead(LightweightModule):
                 output = ttnn.add(output, bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
             output = ttnn.sharded_to_interleaved(
-                # output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
                 output,
                 memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG),
             )

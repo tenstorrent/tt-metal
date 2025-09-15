@@ -96,13 +96,8 @@ class Transformer(LightweightModule):
             for i in tqdm(range(self.n_layers))
         ]
 
-        # Resolve final norm key dynamically (prefer Falcon3's 'norm')
-        def _resolve_final_norm_key(sd):
-            if "norm.weight" in sd:
-                return "norm"
-            return "norm"
-
-        final_norm_key = _resolve_final_norm_key(state_dict)
+        # Final norm key is always 'norm' for supported models
+        final_norm_key = "norm"
 
         self.norm = DistributedNorm(
             RMSNorm(

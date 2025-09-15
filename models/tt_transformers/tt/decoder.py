@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -221,9 +220,6 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        # Falcon3 path: no extra attention input multiplier
-        # Compute Mamba branch BEFORE attention (attention may deallocate its input)
-        # No Mamba branch
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
@@ -237,7 +233,6 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # Falcon3 path: no extra attention out multiplier
 
         if self.pre_ff_norm is None:
             # Residual connection after attention
@@ -260,7 +255,7 @@ class TransformerBlock(LightweightModule):
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
-                    self.tt_ccl,
+                    tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
