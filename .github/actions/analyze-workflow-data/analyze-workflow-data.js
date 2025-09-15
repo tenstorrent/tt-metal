@@ -195,6 +195,37 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
 }
 
 /**
+ * Fetch summaries of failed jobs for a workflow run.
+ * Returns an array of { job_name, job_url, failed_steps: [names] }.
+ */
+async function fetchFailedJobSummaries(octokit, context, runId) {
+  const summaries = [];
+  try {
+    const owner = context.repo.owner;
+    const repo = context.repo.repo;
+    await octokit.paginate(
+      octokit.rest.actions.listJobsForWorkflowRun,
+      { owner, repo, run_id: runId, per_page: 100 },
+      (res) => {
+        const jobs = res.data.jobs || [];
+        for (const job of jobs) {
+          if (job.conclusion && job.conclusion !== 'success') {
+            const failedSteps = Array.isArray(job.steps)
+              ? job.steps.filter(s => s.conclusion && s.conclusion !== 'success' && s.conclusion !== 'skipped').map(s => s.name).slice(0, 3)
+              : [];
+            summaries.push({ job_name: job.name, job_url: job.html_url, failed_steps: failedSteps });
+          }
+        }
+        return [];
+      }
+    );
+  } catch (e) {
+    core.warning(`Failed to fetch failed job summaries for run ${runId}: ${e.message}`);
+  }
+  return summaries.slice(0, 5);
+}
+
+/**
  * Calculates statistics for a set of workflow runs.
  *
  * @param {Array<object>} runs - Array of workflow run objects
@@ -789,6 +820,8 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
+          // Failed job summaries for first failing run
+          item.failed_job_summaries = await fetchFailedJobSummaries(octokit, github.context, item.first_failed_run_id);
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
@@ -803,6 +836,7 @@ async function run() {
               first_failed_author_name: item.first_failed_author_name,
               first_failed_author_url: item.first_failed_author_url,
               commits_between: item.commits_between || [],
+              failed_job_summaries: item.failed_job_summaries || [],
             });
           }
         }
@@ -834,6 +868,8 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
+          // Failed job summaries for first failing run in window
+          item.failed_job_summaries = await fetchFailedJobSummaries(octokit, github.context, item.first_failed_run_id);
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -849,6 +885,7 @@ async function run() {
             first_failed_author_name: item.first_failed_author_name,
             first_failed_author_url: item.first_failed_author_url,
             commits_between: item.commits_between || [],
+            failed_job_summaries: item.failed_job_summaries || [],
           });
         }
       }
@@ -879,8 +916,16 @@ async function run() {
             const author = it.first_failed_author_login
               ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
               : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
+            let jobsList = '';
+            if (Array.isArray(it.failed_job_summaries) && it.failed_job_summaries.length > 0) {
+              const jobLines = it.failed_job_summaries.map(j => {
+                const steps = (j.failed_steps && j.failed_steps.length > 0) ? ` — steps: ${j.failed_steps.join(', ')}` : '';
+                return `    - [${j.job_name}](${j.job_url})${steps}`;
+              });
+              jobsList = ['','  - Failed jobs:', ...jobLines].join('\n');
+            }
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, jobsList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
@@ -891,7 +936,7 @@ async function run() {
               });
               commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
             }
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, jobsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
@@ -906,8 +951,16 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            let jobsList = '';
+            if (Array.isArray(it.failed_job_summaries) && it.failed_job_summaries.length > 0) {
+              const jobLines = it.failed_job_summaries.map(j => {
+                const steps = (j.failed_steps && j.failed_steps.length > 0) ? ` — steps: ${j.failed_steps.join(', ')}` : '';
+                return `    - [${j.job_name}](${j.job_url})${steps}`;
+              });
+              jobsList = ['','  - Failed jobs:', ...jobLines].join('\n');
+            }
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, jobsList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
@@ -918,7 +971,7 @@ async function run() {
               });
               commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
             }
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, jobsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
