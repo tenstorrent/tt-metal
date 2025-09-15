@@ -73,14 +73,14 @@ void kernel_main() {
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
     // For split reader: track grid point index starting from reader_id
-    uint32_t in_grid_row_idx = split_reader ? reader_id : 0;
+    uint32_t in_grid_row_idx = 0;
 
     // Track current batch and grid position for batch increment logic
     uint32_t curr_batch = starting_batch;
     uint32_t grid_points_processed = global_grid_stick_start % grid_hw;
 
     // Advance at start if needed
-    if (in_grid_row_idx == grid_batching_factor) {
+    if constexpr (split_reader && reader_id == 1) {
         advance_grid_index(
             in_grid_row_idx,
             grid_stick_idx,
