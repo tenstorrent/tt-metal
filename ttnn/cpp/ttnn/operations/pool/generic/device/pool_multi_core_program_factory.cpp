@@ -91,7 +91,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 scalars.back().end = i;
             }
             // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
+            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -259,7 +259,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     const auto& input_shape = inputs[0].padded_shape();
-    const auto& output_shape = outputs[0].padded_shape();
+    [[maybe_unused]] const auto& output_shape = outputs[0].padded_shape();
+
     const uint32_t in_nbytes_c = in_c / num_shards_c * params.nbytes;  // row of input (channels)
     const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * params.nbytes;
 
@@ -417,6 +418,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
+    const bool is_output_bfp4_b = outputs[0].dtype() == DataType::BFLOAT4_B;
 
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
@@ -616,7 +618,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)return_indices,       // 18
         pre_tilize_cb_id,               // 19
         is_output_tiled,                // 20
-        is_output_block_format};        // 21
+        is_output_block_format,         // 21
+        is_output_bfp4_b};              // 22
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

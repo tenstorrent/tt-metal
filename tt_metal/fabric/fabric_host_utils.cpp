@@ -115,7 +115,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);

@@ -133,7 +133,7 @@ int main() {
 
     fmt::print("Original tensor values: ");
     for (uint32_t src_vec_idx = 0; src_vec_idx < src_vec.size(); src_vec_idx++) {
-        fmt::print("{:0.1f} ", src_vec[src_vec_idx].to_float());
+        fmt::print("{:0.1f} ", static_cast<float>(src_vec[src_vec_idx]));
     }
     fmt::print("\n");
 
