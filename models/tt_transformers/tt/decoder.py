@@ -92,6 +92,7 @@ class TransformerBlock(LightweightModule):
         )
 
         # Resolve FFN norm key dynamically for broader model compatibility (Falcon, etc.)
+        # ssinghal: Not happy with this location at the moment but will have to figure out where to put this.
         def _resolve_ffn_norm_key(sd, ln):
             base = f"layers.{ln}."
             # Preferred aliases in order
