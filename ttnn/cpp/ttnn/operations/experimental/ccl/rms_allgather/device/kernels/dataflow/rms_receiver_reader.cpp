@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -46,19 +47,22 @@ void kernel_main() {
     uint64_t remote_noc_addrs_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];
     if constexpr (is_all_to_all_worker) {
         if constexpr (use_two_stage_reduce) {
+            // Stage 1: vertical (vary y at fixed x=start_x)
             uint32_t x = start_x, y = start_y;
             for (uint32_t i = 0; i < num_blocks_first_stage; ++i) {
                 remote_noc_addrs_first_stage[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-                ++x;
-                if (x == num_x) {
-                    x = 0;
+                ++y;  // move down
+                if (y == num_y) {
+                    y = 0;
                 }
             }
-            x = start_x;
-            y = 0;
+
+            // Stage 2: horizontal across the top row
+            x = 0;
+            y = start_y;
             for (uint32_t i = 0; i < num_blocks_second_stage; ++i) {
                 remote_noc_addrs_second_stage[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-                ++y;
+                ++x;  // move right
             }
         } else {
             uint32_t x = start_x, y = start_y;
@@ -109,7 +113,7 @@ void kernel_main() {
         uint32_t block_index_stride = 0;
         if constexpr (use_two_stage_reduce) {
             l1_read_addr_ex = get_read_ptr(cb_ex2);
-            block_index_stride = num_x;
+            block_index_stride = num_y;
         }
         cb_reserve_back(cb_ex_external2, num_blocks_first_stage);
         uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external2);

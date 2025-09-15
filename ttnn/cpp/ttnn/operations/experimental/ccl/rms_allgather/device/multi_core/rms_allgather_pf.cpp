@@ -287,13 +287,17 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores_all_to_all = 1;
-    uint32_t num_blocks_first_stage = num_blocks;
-    uint32_t num_blocks_second_stage = 0;
+
+    // --- Vertical-first two-stage parameters ---
+    uint32_t num_cores_all_to_all = 1;             // number of cores in the "all-to-all" stripe
+    uint32_t num_blocks_first_stage = num_blocks;  // stage 1: vertical (Y)
+    uint32_t num_blocks_second_stage = 0;          // stage 2: horizontal (X)
     if (use_two_stage_reduce) {
-        num_blocks_first_stage = num_cores_x;
-        num_cores_all_to_all = num_cores_y;
-        num_blocks_second_stage = num_cores_y;
+        // First stage reduces within each column (Y direction)
+        num_blocks_first_stage = num_cores_y;
+        // Second stage is performed across columns on the top row (y==0)
+        num_cores_all_to_all = num_cores_x;
+        num_blocks_second_stage = num_cores_x;
     }
     // change tt::CBIndex external size
     if (use_two_stage_reduce) {
@@ -312,8 +316,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (use_two_stage_reduce) {
-        all_core_grid_size = {1, num_cores_y};
-        none_core_grid_size = {num_cores_x - 1, num_cores_y};
+        // "All-to-all cores" are the top row spanning X (y==0)
+        all_core_grid_size = {num_cores_x, 1};
+        // Non all-to-all workers are the remaining rows (y > 0)
+        none_core_grid_size = {num_cores_x, num_cores_y - 1};
     } else {
         all_core_grid_size = grid_size;
         none_core_grid_size = grid_size;
@@ -323,6 +329,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         CoreCoord all_start_core;
         CoreCoord end_core = sender_cores.end_coord;
         if (use_two_stage_reduce) {
+            // After selecting the first core, move right across the top row
             if (end_core.x == all_core_grid_size.x - 1) {
                 all_start_core = {0, end_core.y + 1};
             } else {
@@ -340,10 +347,15 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     }
     if (num_none_all_to_all_workers > 0) {
         if (use_two_stage_reduce) {
-            CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
+            // Top row is all-to-all; "not_all_to_all" begins at (0, 1) down to bottom-right
+            CoreCoord none_start_core = {0, sender_cores.end_coord.y + 1};
             CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-            CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-            not_all_to_all_workers = CoreRangeSet(none_core_range);
+            if (none_start_core.y <= none_end_core.y) {
+                CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
+                not_all_to_all_workers = CoreRangeSet(none_core_range);
+            } else {
+                not_all_to_all_workers = CoreRangeSet();
+            }
         } else {
             CoreCoord none_start_core;
             CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
@@ -399,7 +411,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     }
 
     // compute defines
-    // reader defines
     std::map<std::string, std::string> compute_defines;
     if (b.has_value()) {
         compute_defines["FUSE_PRE_ADD"] = "1";
@@ -686,9 +697,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // write back compile time args
     writer_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
-    writer_compile_time_args.push_back(
-        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
-                                                     // to the next data chunk
+    writer_compile_time_args.push_back(block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
@@ -877,9 +886,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     in0_mcast_noc_x.reserve(num_cores_x);
     in0_mcast_noc_y.reserve(num_cores_y);
     CoreCoord core_start_offset = grid_offset.value_or(CoreCoord{0, 0});
+    // X stripe (top row) for second-stage all-to-all
     for (uint32_t core_idx_x = core_start_offset.x; core_idx_x < num_cores_x + core_start_offset.x; ++core_idx_x) {
         in0_mcast_noc_x.push_back(mesh_device->worker_core_from_logical_core({core_idx_x, core_start_offset.y}).x);
     }
+    // Y stripe (first-stage vertical) anchored at leftmost column
     for (uint32_t core_idx_y = core_start_offset.y; core_idx_y < num_cores_y + core_start_offset.y; ++core_idx_y) {
         in0_mcast_noc_y.push_back(mesh_device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
     }
@@ -907,17 +918,25 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
         log_debug(tt::LogOp, "core: {}, {}", core.x, core.y);
 
-        uint32_t width_index = 0;
-        width_index = i;
+        // Local logical coords (relative)
+        const uint32_t local_x = core.x - start_core.x;
+        const uint32_t local_y = core.y - start_core.y;
 
-        uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
+        // Keep width_index semantics for K/gamma tiling (X-related paths)
+        uint32_t width_index = i;
+
+        // For two-stage control, use Y first: modulo over num_cores_y
+        uint32_t height_index_two_stage = use_two_stage_reduce ? (local_y % num_blocks_first_stage) : 0;
 
         uint32_t all_to_all_worker_tile_offset_size_bytes;
         if (use_two_stage_reduce) {
-            all_to_all_worker_tile_offset_size_bytes = (width_index_two_stage)*single_tile_size;
+            // Vertical-first: offset is based on row within the column-reduce (Y)
+            all_to_all_worker_tile_offset_size_bytes = (height_index_two_stage)*single_tile_size;
         } else {
+            // One-stage case retains X-based offset
             all_to_all_worker_tile_offset_size_bytes = (width_index)*single_tile_size;
         }
+
         uint32_t gamma_tile_start_id = width_index * block_wt;
         uint32_t num_reduce_tiles_per_block_h = block_wt;
         // account for padding
@@ -926,16 +945,12 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         }
 
         std::vector<uint32_t> compute_args{num_reduce_tiles_per_block_h};
-        if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < 1)) {
+        // All-to-all compute cores: top row (local_y == 0) when two-stage is enabled.
+        if ((!use_two_stage_reduce && width_index < num_cores_all_to_all) || (use_two_stage_reduce && local_y == 0)) {
             compute_args.push_back(1);
             compute_args.push_back((uint32_t)use_two_stage_reduce);
-            bool is_second_stage_reader;
-            if (use_two_stage_reduce) {
-                is_second_stage_reader = width_index < 1;
-            } else {
-                is_second_stage_reader = false;
-            }
+            // Second-stage leader: choose (x==0, y==0) only
+            bool is_second_stage_reader = (use_two_stage_reduce && local_x == 0 && local_y == 0);
             compute_args.push_back((uint32_t)is_second_stage_reader);
             compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
             compute_args.push_back((uint32_t)num_distributed_devices);
@@ -967,18 +982,12 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
         } else if (
-            (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < 1)) {
+            (!use_two_stage_reduce && width_index < num_cores_all_to_all) || (use_two_stage_reduce && local_y == 0)) {
             std::vector<uint32_t> mcast_receiver_args;
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            bool is_second_stage_reader;
-            if (use_two_stage_reduce and width_index < 1) {
-                is_second_stage_reader = true;
-                mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
-            } else {
-                is_second_stage_reader = false;
-                mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
-            }
+            // Second-stage reader only on (x==0,y==0)
+            bool is_second_stage_reader = (use_two_stage_reduce && local_x == 0 && local_y == 0);
+            mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);
             mcast_receiver_args.push_back(core.x - start_core.x);
             mcast_receiver_args.push_back(core.y - start_core.y);
             mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
@@ -1112,8 +1121,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
         write_back_writer_args.insert(write_back_writer_args.begin(), current_worker_num_segments_to_write_back);
 
-        if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
-            (use_two_stage_reduce and width_index_two_stage < 1)) {
+        if ((!use_two_stage_reduce && width_index < num_cores_all_to_all) || (use_two_stage_reduce && local_y == 0)) {
             std::vector<uint32_t> writer_mcast_sender_args = {0};
             CoreCoord mcast_start, mcast_end;
             CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
@@ -1130,7 +1138,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             writer_mcast_sender_args.push_back(mcast_start.y);
             writer_mcast_sender_args.push_back(mcast_end.x);
             writer_mcast_sender_args.push_back(mcast_end.y);
-            if (use_two_stage_reduce && (!(width_index < 1))) {
+            if (use_two_stage_reduce && !(local_x == 0 && local_y == 0)) {
                 writer_mcast_sender_args.push_back(packed_winv_value);
                 writer_mcast_sender_args.push_back(packed_cinv_value_one);
             } else {
@@ -1143,11 +1151,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             writer_mcast_sender_args.at(0) = writer_mcast_sender_args.size();
             std::vector<uint32_t> writer_mcast_post_sender_args;
             if (use_two_stage_reduce) {
-                if (width_index < 1) {
-                    writer_mcast_post_sender_args.push_back(packed_cinv_value);
-                } else {
-                    writer_mcast_post_sender_args.push_back(packed_cinv_value_one);
-                }
+                // Only the (x==0,y==0) second-stage leader applies cinv across devices
+                writer_mcast_post_sender_args.push_back(
+                    (local_x == 0 && local_y == 0) ? packed_cinv_value : packed_cinv_value_one);
             } else {
                 writer_mcast_post_sender_args.push_back(packed_cinv_value);
             }
