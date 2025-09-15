@@ -179,8 +179,8 @@ void matmul_multicore_reuse(
 
     //////////////////////////////////////////////////
     /*
-     * Create DRAM Buffers for input and output vectors
-     * Writing data from input vectors to source buffers
+     * Create DRAM buffers for input and output matrices (replicated per device across the mesh).
+     * We'll upload input vectors into these mesh buffers prior to launching the program.
      */
 
     uint32_t dram_buffer_A_size =
