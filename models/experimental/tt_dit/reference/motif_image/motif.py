@@ -26,9 +26,13 @@ class MotifJointTransformerBlock(JointTransformerBlock):
         encoder_hidden_states_residual = encoder_hidden_states
 
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-            encoder_hidden_states, emb=temb
-        )
+
+        if self.context_pre_only:
+            norm_encoder_hidden_states = self.norm1_context(encoder_hidden_states, temb)
+        else:
+            norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
+                encoder_hidden_states, emb=temb
+            )
 
         attn_output, context_attn_output = self.attn(
             hidden_states=norm_hidden_states,
@@ -46,6 +50,9 @@ class MotifJointTransformerBlock(JointTransformerBlock):
         # different in Motif:
         # hidden_states = hidden_states + ff_output
         hidden_states = hidden_states_residual + ff_output
+
+        if self.context_pre_only:
+            return None, hidden_states
 
         context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
@@ -112,7 +119,7 @@ class MotifDiT(torch.nn.Module):
                     dim=self.inner_dim,
                     num_attention_heads=num_attention_heads,
                     attention_head_dim=attention_head_dim,
-                    context_pre_only=False,
+                    context_pre_only=i == num_layers - 1,
                     qk_norm="rms_norm",
                     use_dual_attention=False,
                 )
@@ -133,11 +140,16 @@ class MotifDiT(torch.nn.Module):
         self.time_text_embed.text_embedder.linear_1 = torch.nn.Linear(pooled_projection_dim, 4 * pooled_projection_dim)
         self.time_text_embed.text_embedder.linear_2 = torch.nn.Linear(4 * pooled_projection_dim, modulation_dim)
         self.time_text_embed.time_proj = Timesteps(time_embed_dim, flip_sin_to_cos=True, downscale_freq_shift=0)
-        for block in self.transformer_blocks:
+        for i, block in enumerate(self.transformer_blocks):
+            is_last_layer = i == num_layers - 1
+
+            context_mult = 2 if is_last_layer else 6
+
             block.norm1.linear = torch.nn.Linear(modulation_dim, 6 * self.inner_dim)
-            block.norm1_context.linear = torch.nn.Linear(modulation_dim, 6 * self.inner_dim)
+            block.norm1_context.linear = torch.nn.Linear(modulation_dim, context_mult * self.inner_dim)
             block.ff = FeedForward(dim=self.inner_dim, dim_out=self.inner_dim, activation_fn="linear-silu")
-            block.ff_context = FeedForward(dim=self.inner_dim, dim_out=self.inner_dim, activation_fn="linear-silu")
+            if not is_last_layer:
+                block.ff_context = FeedForward(dim=self.inner_dim, dim_out=self.inner_dim, activation_fn="linear-silu")
 
     def forward(
         self,
@@ -231,12 +243,16 @@ class MotifDiT(torch.nn.Module):
             "mlp_3_x.down_proj.bias": "ff.net.2.bias",
         }
 
-        def swap_scale_and_shift(prefix: str) -> None:
-            ts = out[f"{prefix}.weight"].chunk(6, dim=0)
-            out[f"{prefix}.weight"] = torch.concat([ts[1], ts[0], ts[2], ts[4], ts[3], ts[5]], dim=0)
+        def convert_ada_norm(prefix: str, *, pre_only: bool) -> None:
+            ws = out[f"{prefix}.weight"].chunk(6)
+            bs = out[f"{prefix}.bias"].chunk(6)
 
-            ts = out[f"{prefix}.bias"].chunk(6, dim=0)
-            out[f"{prefix}.bias"] = torch.concat([ts[1], ts[0], ts[2] + 1, ts[4], ts[3] - 1, ts[5]], dim=0)
+            if pre_only:
+                out[f"{prefix}.weight"] = torch.concat(ws[:2])
+                out[f"{prefix}.bias"] = torch.concat(bs[:2])
+            else:
+                out[f"{prefix}.weight"] = torch.concat([ws[1], ws[0], ws[2], ws[4], ws[3], ws[5]])
+                out[f"{prefix}.bias"] = torch.concat([bs[1], bs[0], bs[2] + 1, bs[4], bs[3] - 1, bs[5]])
 
         out = dict(state_dict)
 
@@ -279,10 +295,19 @@ class MotifDiT(torch.nn.Module):
             out[f"{dst_prefix}.attn.to_out.0.bias"] = torch.zeros_like(out[f"{dst_prefix}.attn.to_out.0.weight"][0])
             out[f"{dst_prefix}.attn.to_add_out.bias"] = torch.zeros_like(out[f"{dst_prefix}.attn.to_add_out.weight"][0])
 
-            swap_scale_and_shift(f"{dst_prefix}.norm1.linear")
-            swap_scale_and_shift(f"{dst_prefix}.norm1_context.linear")
+            convert_ada_norm(f"{dst_prefix}.norm1.linear", pre_only=False)
+            convert_ada_norm(f"{dst_prefix}.norm1_context.linear", pre_only=i == num_layers - 1)
 
         out["pos_embed.pos_embed"] = out["pos_embed.pos_embed"].unsqueeze(0)
+
+        # unused since context_pre_only=True in the last block
+        last_block_prefix = f"transformer_blocks.{num_layers - 1}"
+        del out[f"{last_block_prefix}.attn.to_add_out.weight"]
+        del out[f"{last_block_prefix}.attn.to_add_out.bias"]
+        del out[f"{last_block_prefix}.ff_context.net.0.proj.weight"]
+        del out[f"{last_block_prefix}.ff_context.net.0.proj.bias"]
+        del out[f"{last_block_prefix}.ff_context.net.2.weight"]
+        del out[f"{last_block_prefix}.ff_context.net.2.bias"]
 
         # unused:
         del out["t_token_proj.weight"]
