@@ -10,7 +10,7 @@ from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout
 
 
 def convert_enum_values_to_strings(data):
-    """Convert enum integer values to human-readable strings for PostgreSQL storage."""
+    """Convert enum integer values to human-readable strings"""
     if not isinstance(data, dict):
         return data
 
@@ -82,7 +82,7 @@ def serialize_structured(object, warnings=[]):
     if "to_json" in dir(object):
         json_str = object.to_json()
         try:
-            # Parse the JSON string to make it queryable in PostgreSQL JSONB
+            # Parse the JSON string
             parsed_data = json.loads(json_str)
             # Convert enum integers to human-readable strings
             parsed_data = convert_enum_values_to_strings(parsed_data)
