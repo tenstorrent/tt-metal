@@ -110,6 +110,8 @@ def get_metal_main_version_scheme(metal_build_config, version):
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
+    tag = getattr(version, "tag", "") or ""
+    is_nightly = "-dev" in tag
 
     if is_clean_prod_build:
         return version.format_with("{tag}")
@@ -117,6 +119,10 @@ def get_metal_main_version_scheme(metal_build_config, version):
         return version.format_with("{tag}.dev{distance}")
     elif is_dirty and is_release_version:
         return version.format_with("{tag}")
+    elif is_nightly:
+        base = ".".join(str(x) for x in version.version.release)
+        dev = tag.rsplit("-dev", 1)[-1]
+        return f"{base}.dev{dev}"
     else:
         assert not is_dirty and not is_release_version
         return version.format_with("{tag}.dev{distance}")
