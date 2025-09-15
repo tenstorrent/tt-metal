@@ -3500,7 +3500,7 @@ def test_conv2d_sdxl_refiner(
         (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                  None, 1,     0, 0),
     ),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
