@@ -12,6 +12,8 @@ This example builds upon the :ref:`Vector addition using SFPI<Custom_SFPI_Add>` 
 
 The ``smoothstep`` function is a non-linear interpolation function commonly used in graphics (see `GLSL smoothstep documentation <https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/smoothstep.xhtml>`_ for reference). It is defined as:
 
+Although ``smoothstep`` is conceptually simple, its implementation is complex enough to demonstrate several advanced features of SFPI, such as parameter passing and vector predicates.
+
 .. math::
 
     \operatorname{smoothstep}(e_0, e_1, x) =
@@ -128,13 +130,19 @@ The overall flow follows the standard pattern for unary compute kernels:
         constexpr auto cb_in0 = tt::CBIndex::c_0;
         constexpr auto cb_out0 = tt::CBIndex::c_16;
 
+        constexpr float edge0 = 0.0f;
+        constexpr float edge1 = 1.0f;
+        // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
+        // uses software floating-point. Constexpr making this evaulation compile-time
+        constexpr float inv_delta = 1.0f / (edge1 - edge0);
+
         init_sfpu(cb_in0, cb_out0);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_in0, 1);
             tile_regs_acquire();
             copy_tile(cb_in0, 0, 0); // input x
-            my_smoothstep_tiles(0, 0.0f, 1.0f);  // <-- Custom SFPI smoothstep
+            my_smoothstep_tiles(0, edge0, edge1, inv_delta);  // <-- Custom SFPI smoothstep
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_out0, 1);
@@ -171,9 +179,6 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
 
     // LLK wrapper
     inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
-        // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
-        // uses software floating-point
-        float inv_delta = 1.0f / (edge1 - edge0);
         // passes parameters to the SFPI kernel
         _llk_math_eltwise_unary_sfpu_params_<false>(
             smoothstep_tile_face,
@@ -187,9 +192,9 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     #endif // TRISC_MATH
 
     // High-level API function
-    // Additionally accepts `edge0` and `edge1` as parameters
-    inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1) {
-        MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1));
+    // Accepts `edge0`, `edge1` and `inv_delta` as parameters
+    inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
+        MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1, inv_delta));
     }
 
 Parameter Passing
@@ -200,12 +205,12 @@ The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. 
 .. code-block:: cpp
 
     // Passes edge0 and edge1 as arguments to the SFPI kernel
-    my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1);
+    my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
     // ↓
-    // Calculates inv_delta and forwards all parameters
-    my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1);
+    // Passes the parameters to the low-level function
+    my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
     // ↓
-    // Uses inv_delta for all elements in the tile face
+    // Use the parameters for all elements in the tile face
     smoothstep_tile_face(float edge0, float edge1, float inv_delta);
 
 The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
