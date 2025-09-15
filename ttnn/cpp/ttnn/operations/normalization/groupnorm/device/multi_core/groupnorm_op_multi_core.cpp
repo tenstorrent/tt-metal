@@ -2282,7 +2282,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
             tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
                 .set_page_size(ex2_cb_partial_index, single_tile_size);
-        auto cb_ex2_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     }
     // ex_external
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
@@ -2310,7 +2310,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
                 .set_page_size(ex2_global_cb_index, single_tile_size)
                 .set_page_size(ex2_cb_index, single_tile_size);
-        auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
     }
     // ex2pe
     uint32_t cb_ex2pe_index;

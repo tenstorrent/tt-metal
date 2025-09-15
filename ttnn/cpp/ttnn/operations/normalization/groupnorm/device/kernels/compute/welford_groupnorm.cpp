@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <optional>
 
 #define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -212,7 +211,7 @@ void MAIN {
     tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_in0, cb_in0);
+    binary_op_init_common(cb_in0, cb_ex_global, cb_xmm);
 #endif
 
     index_b_offset = 0;
@@ -308,8 +307,9 @@ void MAIN {
                             auto this_tile_offset = (j + w) ? 0 : tile_offset;
                             // DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
                             //    << this_tile_offset << ENDL();
-                            welford_tile<0, 1, 2, false, false, reciprocal_size>(
+                            welford_tile<0, 1, 2, false, reciprocal_size>(
                                 curr_xy_coord, curr_xy_limit, this_tile_offset, *p_reciprocal);
+                            dprint_tensix_dest_reg(1);
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                         }
                         index_subblock_w_offset += subblock_w;
@@ -325,7 +325,7 @@ void MAIN {
 
             DPRINT << "welford_M2_to_var args: " << curr_xy_limit << " " << ENDL();
             welford_M2_to_var<0, 1, 2, reciprocal_size>(curr_xy_limit, *p_reciprocal);  // Convert M2 to variance
-            // dprint_tensix_dest_reg(1);
+            dprint_tensix_dest_reg(1);
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;

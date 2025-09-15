@@ -25,14 +25,14 @@ inline void llk_math_welfords_sfpu(
     uint32_t num_skip_rows,
     const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_calculate_welfords_online_<reciprocal_size>,
+        ckernel::sfpu::_welfords_llk_entry_,
         input_dst_index,
         mean_dst_index,
         m2_dst_index,
         current_row,
         final_row,
         num_skip_rows,
-        reciprocal_lut,
+        0,
         reformat_dst_to_col_on_end,
         convert_M2_to_var_on_end);
 }

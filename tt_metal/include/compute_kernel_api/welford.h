@@ -61,7 +61,6 @@ template <
     uint32_t mean_dst_index,
     uint32_t m2_dst_index,
     bool reformat_dst_to_col_on_end,
-    bool convert_M2_to_var_on_end,
     uint32_t reciprocal_size>
 ALWI void welford_tile(
     uint32_t current_row,
@@ -73,7 +72,7 @@ ALWI void welford_tile(
           mean_dst_index,
           m2_dst_index,
           reformat_dst_to_col_on_end,
-          convert_M2_to_var_on_end,
+          false,
           reciprocal_size>(current_row, final_row, num_skip_rows, reciprocal_lut)));
 }
 
@@ -94,8 +93,10 @@ ALWI void welford_tile(
 //  invalid
 //  * value.
 //  */
-ALWI void welford_M2_to_var(uint32_t scale_factor) {
-    welford_tile<0, 1, 2, false, true>(scale_factor, scale_factor, 0, 0);
+template <uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reciprocal_size>
+ALWI void welford_M2_to_var(uint32_t scale_factor, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu<input_dst_index, mean_dst_index, m2_dst_index, false, true, reciprocal_size>(
+        scale_factor, 0, 0, reciprocal_lut)));
 }
 
 /**

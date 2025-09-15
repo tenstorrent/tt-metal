@@ -22,6 +22,7 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "debug/dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -82,6 +83,8 @@ void MAIN {
         pack_reconfig_data_format(cb_ex);
     }
 
+    std::array<uint32_t, 0>* p_reciprocal = nullptr;
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
@@ -116,8 +119,9 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, false>(start_N, W, 0, 0);
+                welford_tile<dst0, dst1, dst2, true, 0>(start_N, W, 0, *p_reciprocal);
                 start_N += tile_width;
+                dprint_tensix_dest_reg(1);
             }
         }
 

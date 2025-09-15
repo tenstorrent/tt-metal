@@ -23,6 +23,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -149,6 +150,7 @@ void MAIN {
                 cb_wait_front(cb_result_or_input, j + 1);
                 transpose_wh_tile(cb_result_or_input, j, dst0);
                 welford_tile<dst0, dst1, dst2, true, false>((wt + j) * tile_width, W, 0, 0);
+                dprint_tensix_dest_reg(1);
             }
             tile_regs_commit();
 

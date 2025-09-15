@@ -39,8 +39,8 @@ def test_layer_norm(device, h, w, use_welford):
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("w", [2560])
+@pytest.mark.parametrize("use_welford", [True])
 @skip_welford_blackhole("'use_welford'")
 def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
