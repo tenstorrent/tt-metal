@@ -24,10 +24,11 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize Program and Device
+    // Initialize mesh device, command queue, workload, device range, and program
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device =
+        distributed::MeshDevice::create_unit_mesh(device_id);  // 1x1 mesh
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -45,7 +46,7 @@ int main() {
         core,
         ComputeConfig{});
 
-    // Configure Program and Start Program Execution on Device
+    // Configure program and enqueue it as a mesh workload (non-blocking)
     SetRuntimeArgs(program, void_compute_kernel_id, core, {});
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -62,7 +63,7 @@ int main() {
     // TR1: Compute core 1 (MATH)
     // TR2: Compute core 2 (PACK)
 
-    // Wait for the program to finish execution.
+    // Wait for the program to finish execution, then close the mesh device.
     distributed::Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
     mesh_device->close();
