@@ -97,7 +97,7 @@ A "Waiting for connection ..." dialog will appear after clicking connect.
 
 When the host machine starts running a tracy-enabled application, the GUI will automatically collect profiling data and display it in real time.
 
-The Tracy GUI connects as a TCP client, while the profiled application runs as a TCP server, usually listening on port 8086. If your application host is on a different network than the Tracy GUI, you may need to set up port forwarding or a VPN connection. SSH port forwarding is a common solution:
+Counterintuitively, the Tracy GUI connects as a TCP server, while the profiled application runs as a TCP client, usually connecting to port 8086. If your application host is on a different network than the Tracy GUI, you may need to set up port forwarding or a VPN connection. SSH port forwarding is a common solution:
 
 .. code-block:: bash
 

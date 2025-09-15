@@ -57,7 +57,7 @@ Then, wrap the code you want to measure with the macro:
 Controlling Profiling from Host Code
 ------------------------------------
 
-After instrumenting your kernels, you need to instruct the host application when to download the profiled results and collect the data from the device. This is done by calling the ``ReadDeviceProfilerResults`` function.
+After instrumenting your kernels, the profiling data is automatically collected when closing the device.
 
 .. code-block:: c++
 
@@ -65,7 +65,14 @@ After instrumenting your kernels, you need to instruct the host application when
     tt::tt_metal::EnqueueProgram(cq, program, false);
     tt::tt_metal::Finish(cq);
 
-    // Read profiler results from the device
+    // Also reads profiler results from the device
+    tt::tt_metal::CloseDevice(device);
+
+If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call ``ReadDeviceProfilerResults``:
+
+.. code-block:: c++
+
+    // Manually read profiler results from the device (if needed)
     tt::tt_metal::detail::ReadDeviceProfilerResults(device);
 
 This call should be placed after you have finished running the program of interest. It signals the device to sync the profiling results, which can then be viewed in the Tracy client or analyzed from the generated CSV file.
