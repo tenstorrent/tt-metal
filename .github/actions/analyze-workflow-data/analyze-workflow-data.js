@@ -99,7 +99,8 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  const errorLineRegex = /\berror:\b/i; // matches 'error:' (case-insensitive), includes RuntimeError:, AssertionError:, etc.
+  // Match any occurrence of 'error:' regardless of position/casing
+  const errorLineRegex = /error:/i;
   const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
   const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
 
@@ -119,39 +120,42 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
           const lines = content.split(/\r?\n/);
           const used = new Set();
 
-          // Pass 1: capture info..backtrace blocks (include preceding error line if present)
+          // Pass 1: capture info..backtrace blocks (include nearest previous non-blank error line if present)
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
             if (infoRegex.test(lines[i])) {
               const block = [];
-              // Include immediately preceding error line if it matches errorLineRegex
-              if (i - 1 >= 0 && errorLineRegex.test(lines[i - 1])) {
-                block.push(lines[i - 1]);
-                used.add(i - 1);
+              // Find nearest previous non-blank line
+              let prev = i - 1;
+              while (prev >= 0 && lines[prev].trim() === '') prev--;
+              if (prev >= 0 && errorLineRegex.test(lines[prev])) {
+                block.push(lines[prev].trim());
+                used.add(prev);
               }
-              block.push(lines[i]);
+              // Add the info: line
+              block.push(lines[i].trim());
               used.add(i);
+              // Collect until backtrace:, skipping blank lines
               let j = i + 1;
               while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
-                block.push(lines[j]);
-                used.add(j);
+                if (lines[j].trim() !== '') {
+                  block.push(lines[j].trim());
+                  used.add(j);
+                }
                 j++;
               }
-              // Do not include the backtrace line itself
               const snippet = block.join('\n').trim();
               if (snippet.length > 0) {
                 collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
               }
-              i = j; // advance
+              i = j; // advance past this block (backtrace line is not included)
             }
           }
 
-          // Pass 2: capture standalone error lines not already included
+          // Pass 2: capture standalone error lines not already included (skip blanks)
           for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
-            if (!used.has(k) && errorLineRegex.test(lines[k])) {
+            if (!used.has(k) && lines[k].trim() !== '' && errorLineRegex.test(lines[k])) {
               const snippet = lines[k].trim();
-              if (snippet.length > 0) {
-                collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
-              }
+              collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
             }
           }
         } catch (_) { /* ignore file errors */ }
