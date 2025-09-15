@@ -4,6 +4,7 @@ This module defines the transformer blocks for multi-modal text–image conditio
 patch projection, text/time conditioning, SD3-style joint attention, and the final head that
 predicts latent-space velocity for rectified flow sampling.
 """
+
 import math
 from typing import List
 
@@ -19,7 +20,7 @@ try:
     MotifRMSNorm = motif_ops.T5LayerNorm
     ScaledDotProductAttention = None
     MotifFlashAttention = motif_ops.flash_attention
-except Exception: # if motif_ops is not available
+except Exception:  # if motif_ops is not available
     MotifRMSNorm = None
     ScaledDotProductAttention = None
     MotifFlashAttention = None
@@ -27,7 +28,8 @@ except Exception: # if motif_ops is not available
 NUM_MODULATIONS = 6
 SD3_LATENT_CHANNEL = 16
 LOW_RES_POSEMB_BASE_SIZE = 16
-HIGH_RES_POSEMB_BASE_SIZE = 64 
+HIGH_RES_POSEMB_BASE_SIZE = 64
+
 
 class IdentityConv2d(nn.Module):
     def __init__(self, channels, kernel_size=3, stride=1, padding=1, bias=True):
@@ -153,9 +155,9 @@ class LatentPatchModule(nn.Module):
         self.latent_channels = latent_channels
 
     def forward(self, x):
-        assert (
-            x.shape[1] == SD3_LATENT_CHANNEL
-        ), f"VAE-Latent channel is not matched with '{SD3_LATENT_CHANNEL}'. current shape: {x.shape}"
+        assert x.shape[1] == SD3_LATENT_CHANNEL, (
+            f"VAE-Latent channel is not matched with '{SD3_LATENT_CHANNEL}'. current shape: {x.shape}"
+        )
         patches = self.projection_SD3(
             x.to(dtype=torch.bfloat16)
         )  # Shape: (B, embedding_dim, num_patches_h, num_patches_w)
@@ -280,6 +282,7 @@ class MotifDiT(nn.Module):
     Returns:
         Tensor: Predicted velocity d(x)/dt in latent space with shape [B, 16, H/vae, W/vae].
     """
+
     ENCODED_TEXT_DIM = 4096
 
     def __init__(self, config):
@@ -428,6 +431,7 @@ class JointAttn(nn.Module):
     Returns:
         Tuple[Tensor, Tensor]: Updated (hidden_states, encoder_hidden_states) with the same rank as inputs.
     """
+
     def __init__(self, config):
         super().__init__()
         self.config = config

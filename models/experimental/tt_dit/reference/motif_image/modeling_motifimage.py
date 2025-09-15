@@ -315,9 +315,7 @@ class MotifImage(nn.Module):
         tokens, masks = self.tokenization(prompts, get_rare_negative_token=get_rare_negative_token)
         tokens = [token.to(device) for token in tokens]
         masks = [mask.to(device) for mask in masks]
-        text_embeddings, pooled_text_embeddings = self.text_encoding(
-            tokens, masks, zero_masking=zero_masking
-        )
+        text_embeddings, pooled_text_embeddings = self.text_encoding(tokens, masks, zero_masking=zero_masking)
         text_embeddings = [text_embedding.bfloat16() for text_embedding in text_embeddings]
         pooled_text_embeddings = pooled_text_embeddings.bfloat16()
         return text_embeddings, pooled_text_embeddings
@@ -416,7 +414,7 @@ class MotifImage(nn.Module):
         cond_pooled_text_embeddings = pooled_text_embeddings
 
         do_classifier_free_guidance = guidance_scale > 1.0
-        
+
         # Dynamic negative switch is only considered when zero_embedding_for_cfg is True and no explicit negatives
         use_dynamic_negative_switch = (
             do_classifier_free_guidance
@@ -493,7 +491,8 @@ class MotifImage(nn.Module):
                         )
 
                     text_embeddings = [
-                        torch.cat([cond, neg], dim=0) for cond, neg in zip(cond_text_embeddings, negative_text_embeddings)
+                        torch.cat([cond, neg], dim=0)
+                        for cond, neg in zip(cond_text_embeddings, negative_text_embeddings)
                     ]
                     pooled_text_embeddings = torch.cat(
                         [cond_pooled_text_embeddings, negative_pooled_text_embeddings], dim=0
@@ -501,12 +500,13 @@ class MotifImage(nn.Module):
         else:
             # CFG disabled: use zeros
             text_embeddings = [
-                torch.zeros_like(text_embedding, device=text_embedding.device) for text_embedding in cond_text_embeddings
+                torch.zeros_like(text_embedding, device=text_embedding.device)
+                for text_embedding in cond_text_embeddings
             ]
             pooled_text_embeddings = torch.zeros_like(
                 cond_pooled_text_embeddings, device=cond_pooled_text_embeddings.device
             )
-        
+
         # --- [Timestep Schedule (Sigmas)] ---
         # linear t schedule
         sigmas = torch.linspace(1, 0, steps + 1) if pre_timestep is None else torch.linspace(pre_timestep, 0, steps + 1)
