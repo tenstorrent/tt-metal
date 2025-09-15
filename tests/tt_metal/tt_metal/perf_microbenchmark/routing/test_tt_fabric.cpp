@@ -205,6 +205,11 @@ int main(int argc, char** argv) {
     test_context.close_devices();
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+    // If any tests ran multiple iterations of high-level patterns, gather statistics
+    // TODO: Put this in an if statement
+    // Problem: Reset_devices resets benchmark mode to false
+    test_context.generate_multirun_statistics();
+
 
     // Setup Bandwidth CSV files for CI to upload
     if (benchmark_mode) {

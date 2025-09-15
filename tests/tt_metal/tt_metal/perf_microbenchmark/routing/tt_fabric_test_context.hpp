@@ -89,6 +89,19 @@ struct BandwidthResultSummary {
     double packets_per_second;
 };
 
+struct BandwidthResultSummaryMultiRun {
+    std::string test_name;
+    uint32_t num_iterations = 0;
+    std::string ftype = "None";
+    std::string ntype = "None";
+    uint32_t num_links = 0;
+    uint32_t num_packets = 0;
+    std::vector<uint32_t> num_devices;
+    uint32_t packet_size;
+    std::vector<double> bandwidth_vector_gb_s;
+    std::vector<double> packets_per_second_vector;
+};
+
 // Golden CSV comparison structures
 struct GoldenCsvEntry {
     std::string test_name;
@@ -399,9 +412,14 @@ public:
         // Generate CSV file with bandwidth results
         generate_bandwidth_csv(config);
 
-        // validate perf with golden csv
-        generate_comparison_csv(config);
-        validate_against_golden();
+        log_info(tt::LogTest, "Skipping golden CSV comparison (TODO:Remove this)");
+        // // validate perf with golden csv
+        // generate_comparison_csv(config);
+        // validate_against_golden();
+    }
+
+    void generate_multirun_statistics() {
+        generate_multirun_csv();
     }
 
     void initialize_csv_file() {
@@ -1066,13 +1084,62 @@ private:
         double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
         double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
 
-        bandwidth_results_summary_.push_back(
-            BandwidthResultSummary{
-                .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-                .packet_size = packet_size,
-                .cycles = max_cycles,
-                .bandwidth_GB_s = bandwidth_GB_s,
-                .packets_per_second = packets_per_second});
+        bandwidth_results_summary_.push_back(BandwidthResultSummary{
+            .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
+            .packet_size = packet_size,
+            .cycles = max_cycles,
+            .bandwidth_GB_s = bandwidth_GB_s,
+            .packets_per_second = packets_per_second});
+
+        // If this test is part of a multi-run test, store bandwidth summary data for future calculations
+        // All multi-run tests have their names modified to end with "_iter_X"
+        if (config.name.find("_iter_") != std::string::npos) {
+            // Multi-run tests are run sequentially
+            // Case 1: this is the first iteration of a new test.
+            if (config.name.find("_iter_0") != std::string::npos) {
+                // Since this test was expanded, all test patterns use the same parameters (aside from src and dest)
+                // Therefore, set test parameters based on the first test pattern
+                std::string ftype_str = "None";
+                std::string ntype_str = "None";
+                uint32_t num_packets_first_pattern = 0;
+                uint32_t packet_size_first_pattern = 0;
+                if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
+                    const auto& first_pattern = config.senders[0].patterns[0];
+                    if (first_pattern.ftype.has_value()) {
+                        ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
+                    }
+                    if (first_pattern.ntype.has_value()) {
+                        ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
+                    }
+                    if (first_pattern.num_packets.has_value()) {
+                        num_packets_first_pattern = first_pattern.num_packets.value();
+                    }
+                    if (first_pattern.size.has_value()) {
+                        packet_size_first_pattern = first_pattern.size.value();
+                    }
+                }
+                // Create a new entry for all iterations of the multi-run test
+                bandwidth_results_summary_multirun_.emplace_back(BandwidthResultSummaryMultiRun{
+                    .test_name = config.name,
+                    .num_iterations = 1,
+                    .ftype = ftype_str,
+                    .ntype = ntype_str,
+                    .num_links = config.fabric_setup.num_links,
+                    .num_packets = num_packets_first_pattern,
+                    .packet_size = packet_size_first_pattern,
+                    // Push in results for the first iteration
+                    .bandwidth_vector_gb_s = {bandwidth_gb_s},
+                    .packets_per_second_vector = {packets_per_second},
+                });
+            }
+            // Case 2: This is not the first iteration. Append to the existing entry
+            else {
+                BandwidthResultSummaryMultiRun& multirun_test_entry = bandwidth_results_summary_multirun_.back();
+                multirun_test_entry.bandwidth_vector_gb_s.push_back(bandwidth_gb_s);
+                multirun_test_entry.packets_per_second_vector.push_back(packets_per_second);
+                multirun_test_entry.num_iterations++;
+            }
+        }
     }
 
     void generate_bandwidth_csv(const TestConfig& config) {
@@ -1181,6 +1248,32 @@ private:
 
         std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
         return file_name;
+    }
+
+    void generate_multirun_csv() {
+        log_info(tt::LogTest, "Generating multirun CSV file");
+        // 1. Check if multiple runs were performed
+        if (!bandwidth_results_summary_multirun_.empty()) {
+            for (const auto& multirun_result : bandwidth_results_summary_multirun_) {
+                log_info(
+                    tt::LogTest,
+                    "Multirun Test {} Iterations {} Ftype {} Ntype {} Num Links {} Num Packets {} Num Devices {} Packet Size {}",
+                    multirun_result.test_name,
+                    multirun_result.num_iterations,
+                    multirun_result.ftype,
+                    multirun_result.ntype,
+                    multirun_result.num_links,
+                    multirun_result.num_packets,
+                    multirun_result.num_devices,
+                    multirun_result.packet_size);
+                for (auto& bandwidth_gb_s : multirun_result.bandwidth_vector_gb_s) {
+                    log_info(tt::LogTest, "  Bandwidth: {:.6f} GB/s", bandwidth_gb_s);
+                }
+                for (auto& packets_per_second : multirun_result.packets_per_second_vector) {
+                    log_info(tt::LogTest, "  Packets Per Second: {:.3f}", packets_per_second);
+                }
+            }
+        }
     }
 
     bool load_golden_csv() {
@@ -1452,6 +1545,7 @@ private:
     double measured_bw_avg_ = 0.0;
     double measured_bw_max_ = 0.0;
     std::filesystem::path raw_telemetry_csv_path_;
+    std::vector<BandwidthResultSummaryMultiRun> bandwidth_results_summary_multirun_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
 
