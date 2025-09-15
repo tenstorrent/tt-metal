@@ -21,6 +21,7 @@ target_link_libraries(
         Metalium::Metal
         numa
         benchmark::benchmark
+	execinfo
 )
 target_include_directories(
     mem_bench

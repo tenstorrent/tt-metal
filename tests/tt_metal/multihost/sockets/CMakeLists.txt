@@ -18,7 +18,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
 
-target_link_libraries(multi_host_sockets PRIVATE test_metal_common_libs)
+target_link_libraries(multi_host_sockets PRIVATE test_metal_common_libs execinfo)
 
 # Target for all STL tests regardless of duration
 add_executable(multi_host_socket_tests)
@@ -30,4 +30,4 @@ set_target_properties(
 )
 
 # Link the object library to the executable
-target_link_libraries(multi_host_socket_tests PRIVATE multi_host_sockets)
+target_link_libraries(multi_host_socket_tests PRIVATE multi_host_sockets execinfo)

@@ -45,6 +45,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+	execinfo
 )
 
 target_precompile_headers(lite_fabric REUSE_FROM TT::CommonPCH)

@@ -27,6 +27,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+	execinfo
 )
 
 target_include_directories(
@@ -58,6 +59,7 @@ target_link_libraries(
         test_common_libs
         benchmark::benchmark
         benchmark::benchmark_main
+	execinfo
 )
 
 target_include_directories(

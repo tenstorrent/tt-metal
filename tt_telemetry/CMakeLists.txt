@@ -22,6 +22,7 @@ target_link_libraries(
         fmt::fmt-header-only
         Boost::algorithm
         Taskflow::Taskflow
+	execinfo
     # We use some TT::Metalium headers but do not need to link the library in
     # httplib will be linked directly to the executable
 )

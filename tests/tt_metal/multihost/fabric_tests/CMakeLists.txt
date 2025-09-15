@@ -21,7 +21,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
 
-target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs)
+target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs execinfo)
 
 # Create separate object library for mesh socket components
 add_library(mesh_socket_components OBJECT)
@@ -48,6 +48,7 @@ target_link_libraries(
     PRIVATE
         test_metal_common_libs
         yaml-cpp
+	execinfo
 )
 
 add_executable(multi_host_fabric_tests)
@@ -59,7 +60,7 @@ set_target_properties(
 )
 
 # Link the object library to the executable
-target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric)
+target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric execinfo)
 
 # Create separate executable for mesh socket tests
 add_executable(test_mesh_socket_main mesh_socket_test_main.cpp)
@@ -77,6 +78,7 @@ target_link_libraries(
         mesh_socket_components
         test_metal_common_libs
         yaml-cpp
+	execinfo
 )
 
 target_include_directories(

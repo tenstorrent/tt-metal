@@ -1,6 +1,6 @@
 add_executable(example_add)
 target_sources(example_add PRIVATE add/add.cpp)
-target_link_libraries(example_add PRIVATE TTNN::CPP)
+target_link_libraries(example_add PRIVATE TTNN::CPP execinfo)
 
 install(
     DIRECTORY
