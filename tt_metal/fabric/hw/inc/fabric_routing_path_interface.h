@@ -139,7 +139,7 @@ inline bool routing_path_t<1, true>::decode_route_to_buffer(uint16_t hops, volat
 inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
-    if (hops > routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
+    if (hops >= routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
         // invalid chip or Noop to self
         *route_ptr = 0;
         return false;
