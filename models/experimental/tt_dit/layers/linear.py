@@ -8,17 +8,6 @@ import ttnn
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
-def gelu(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
-    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
-    sqrt_2 = math.sqrt(2.0)
-    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
-    erf_x = ttnn.erf(x_div_sqrt2)
-    one_plus_erf = ttnn.add(erf_x, 1.0)
-    x_times_bracket = ttnn.multiply(x, one_plus_erf)
-    return ttnn.multiply(x_times_bracket, 0.5)
-
-
 class Linear:
     """
     Linear layer with replicated weights
@@ -87,7 +76,9 @@ class Linear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = gelu(output)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
         elif self.activation_fn == "quick_gelu":
             output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
@@ -96,6 +87,17 @@ class Linear:
         else:
             assert self.activation_fn is None, f"Unsupported activation: {self.activation_fn}"
         return output
+
+
+def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    sqrt_2 = math.sqrt(2.0)
+    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
+    erf_x = ttnn.erf(x_div_sqrt2)
+    one_plus_erf = ttnn.add(erf_x, 1.0)
+    x_times_bracket = ttnn.multiply(x, one_plus_erf)
+    return ttnn.multiply(x_times_bracket, 0.5)
 
 
 class ColParallelLinear:
@@ -219,7 +221,9 @@ class ColParallelLinear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = gelu(output)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
         elif self.activation_fn == "quick_gelu":
             output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
@@ -362,6 +366,8 @@ class RowParallelLinear:
 
         if self.activation_fn is not None:
             assert self.activation_fn == "gelu"
-            output = gelu(output)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
 
         return output

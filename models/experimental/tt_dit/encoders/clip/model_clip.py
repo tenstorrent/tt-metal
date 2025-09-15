@@ -9,7 +9,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ParallelFeedForward, FeedForward
+from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
 
@@ -62,7 +62,10 @@ class CLIPConfig:
         self.max_prompt_length = max_prompt_length
         self.layer_norm_eps = layer_norm_eps
         self.attention_dropout = attention_dropout
-        self.hidden_act = hidden_act
+        if hidden_act == "gelu":
+            self.hidden_act = "decomposed_gelu"
+        else:
+            self.hidden_act = hidden_act
 
 
 class CLIPEncoder:
@@ -134,7 +137,11 @@ class CLIPEncoder:
             self.eos_token_id = 2
 
         pooled_output = self._gather_eos(
-            normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device, self.ccl_manager
+            normalized_final_state,
+            prompt_tokenized,
+            self.eos_token_id,
+            mesh_device=mesh_device,
+            ccl_manager=self.ccl_manager,
         )
 
         # apply text projection if specified
@@ -181,10 +188,11 @@ class CLIPEncoder:
         seq_emb: ttnn.Tensor,
         input_ids: ttnn.Tensor,
         eos_token_id: int,
-        device: ttnn.Device,
+        mesh_device: ttnn.Device,
         ccl_manager: CCLManager,
     ) -> ttnn.Tensor:
         if ccl_manager is not None:
+            # parallel case - get tensors from first device
             ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
             seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
 
@@ -194,12 +202,13 @@ class CLIPEncoder:
                 pooled_t,
                 dtype=seq_emb.get_dtype(),
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
         else:
-            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(device, dim=0))
-            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(device, dim=0))
+            # non-parallel case - concatenate across mesh
+            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
+            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
 
             pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
 
@@ -207,8 +216,8 @@ class CLIPEncoder:
                 pooled_t,
                 dtype=seq_emb.get_dtype(),
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
             )
 
 
@@ -278,22 +287,14 @@ class CLIPEncoderLayer:
         self.layer_norm_eps = config.layer_norm_eps
         self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
         self.parallel_config = parallel_config
-        if self.parallel_config.tensor_parallel.factor > 1:
-            self.mlp = ParallelFeedForward(
-                dim=config.embed_dim,
-                dim_out=config.embed_dim,
-                activation_fn=config.hidden_act,
-                mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                ccl_manager=ccl_manager,
-            )
-        else:
-            self.mlp = FeedForward(
-                dim=config.embed_dim,
-                dim_out=config.embed_dim,
-                activation_fn=config.hidden_act,
-                mesh_device=mesh_device,
-            )
+        self.mlp = ParallelFeedForward(
+            dim=config.embed_dim,
+            dim_out=config.embed_dim,
+            activation_fn=config.hidden_act,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=ccl_manager,
+        )
         self.ccl_manager = ccl_manager
 
     def load_state_dict(self, state_dict):
