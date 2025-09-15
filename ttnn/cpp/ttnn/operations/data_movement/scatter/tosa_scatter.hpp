@@ -14,6 +14,7 @@ namespace operations::data_movement {
 
 struct TOSAScatterOperation {
     static Tensor invoke(
+        const QueueId& queue_id,
         const Tensor& input_tensor,
         const Tensor& index_tensor,
         const Tensor& source_tensor,

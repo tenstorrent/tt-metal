@@ -847,7 +847,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
-        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
@@ -858,11 +857,15 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
                             const auto& rt_args = kernel->runtime_args(logical_core);
-                            auto dispatch_class = kernel->dispatch_class();
 
+                            // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.
+                            uint32_t processor_index = hal.get_processor_index(
+                                kernel->get_kernel_programmable_core_type(),
+                                kernel->get_kernel_processor_class(),
+                                kernel->get_kernel_processor_type(0));
+                            const auto& rta_offset = kg->launch_msg.kernel_config.rta_offset[processor_index];
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base +
-                                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -879,9 +882,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
-                                auto common_rt_args_addr =
-                                    kernel_config_base +
-                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -1351,27 +1352,6 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
             }
         }
     }
-}
-
-void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
-    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
-    cq_stack.push_back(cq_id);
-}
-
-uint8_t PopCurrentCommandQueueIdForThread() {
-    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
-    TT_FATAL(!cq_stack.empty(), "Current command queue id stack is empty!");
-    uint8_t cq_id = cq_stack.back();
-    cq_stack.pop_back();
-    return cq_id;
-}
-
-uint8_t GetCurrentCommandQueueIdForThread() {
-    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
-    if (cq_stack.empty()) {
-        return 0;
-    }
-    return cq_stack.back();
 }
 
 namespace experimental {
