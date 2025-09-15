@@ -57,6 +57,7 @@ from models.common.utility_functions import (
     skip_for_blackhole,
     skip_for_grayskull,
     skip_for_n_dev,
+    skip_for_n_or_less_dev,
     skip_for_wormhole_b0,
     tilize,
     tilize_to_list,

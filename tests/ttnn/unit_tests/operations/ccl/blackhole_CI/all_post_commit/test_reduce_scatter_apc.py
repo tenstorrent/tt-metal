@@ -5,11 +5,12 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout",
@@ -107,7 +108,7 @@ def test_rs_row_2D_nightly_linear(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout",
@@ -205,7 +206,7 @@ def test_rs_row_4D_nightly_linear(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout",
@@ -304,8 +305,7 @@ def test_rs_row_nightly_ring(
 
 
 @skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
-@skip_for_n_dev(2)
-@skip_for_n_dev(4)
+@skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout",

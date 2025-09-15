@@ -992,6 +992,10 @@ def skip_for_n_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant fo
     return pytest.mark.skipif(ttnn.get_num_devices() == n, reason=reason_str)
 
 
+def skip_for_n_or_less_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
+    return pytest.mark.skipif(ttnn.get_num_devices() <= n, reason=reason_str)
+
+
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.

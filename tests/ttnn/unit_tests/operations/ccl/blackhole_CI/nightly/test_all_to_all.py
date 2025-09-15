@@ -9,7 +9,7 @@ from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
-from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0
+from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 def run_with_trace(
@@ -284,7 +284,7 @@ def run_all_to_all_impl(
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_dev(2)
+@skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
     "num_links, logical_shape, in_dim, out_dim, layout",
     [
