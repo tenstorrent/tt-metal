@@ -69,8 +69,7 @@ void kernel_main() {
     uint32_t offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // First pass
-        // Layernorm: Calculate E[x] and Var[x]
-        // RMS norm: Calculate (∑x^2)/n
+        // Calculate E[x] and Var[x]
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD

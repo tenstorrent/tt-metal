@@ -50,7 +50,6 @@ void MAIN {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t W = get_compile_time_arg_val(5);
     constexpr uint32_t tile_width = get_compile_time_arg_val(6);
-    constexpr bool rms_norm = static_cast<bool>(get_compile_time_arg_val(7));
     constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
 
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
@@ -61,18 +60,17 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;                   // x minus mean (or x^2 for RMS norm)
+    uint32_t cb_xmm = tt::CBIndex::c_24;                   // x - E[x]
     constexpr auto cb_ex = tt::CBIndex::c_18;              // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;             // Var[x] = E[(x-E[x])^2] (or (∑x^2)/n for RMS norm)
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;           // E[(x-E[x])^2]+ε (or (∑x^2)/n+ε for RMS norm)
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;             // Var[x] = E[(x-E[x])^2]
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;           // Var[x]+ε
     constexpr auto cb_fusion = tt::CBIndex::c_22;          // stream gamma/beta
-    constexpr auto cb_interm_pre_add = tt::CBIndex::c_23;  // intermediate for layernorm fused pre-add
+    constexpr auto cb_interm_pre_add = tt::CBIndex::c_23;  // intermediate for fused pre-add
     auto cb_welford_ping = tt::CBIndex::c_4;               // Ping-pong buffer for storing Welford's mean/var
     auto cb_welford_pong = tt::CBIndex::c_7;               // Ping-pong buffer for storing Welford's mean/var
     constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
 
     constexpr auto scaler0 = 0;
-    constexpr auto layernorm = !rms_norm;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t twotiles = 2;
 
@@ -80,132 +78,125 @@ void MAIN {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_ex2 : cb_interm_pre_add);
+        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
     } else {
-        // Init for transpose (layernorm) or square (rms)
-        constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
+        // Init for transpose
+        constexpr auto first_out_cb = cb_ex;
         unary_op_init_common(cb_in, first_out_cb);
     }
 
-    cb_wait_front(cb_scaler, 1);  // comes from the reader
-    cb_wait_front(cb_eps, 1);     // comes from the reader
+    cb_wait_front(cb_scaler, onetile);  // comes from the reader
+    cb_wait_front(cb_eps, onetile);     // comes from the reader
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t dst2 = 2;
+    constexpr uint32_t dst0 = 0;  // Input tile for Welford's
+    constexpr uint32_t dst1 = 1;  // Mean tile for Welford's
+    constexpr uint32_t dst2 = 2;  // Variance tile for Welford's
 
     auto cb_welford = cb_ping_pong(cb_welford_ping, cb_welford_pong);
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // =====================================
         // First pass over the input.
-        // Layernorm: Calculate E[x] and Var[x]
-        // RMS norm: Calculate (∑x^2)/n
+        // Calculate E[x] and Var[x]
         // =====================================
-        if constexpr (layernorm) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                if constexpr (fuse_pre_add) {
-                    // Fused pre-add
-                    reconfig_data_format(cb_in, cb_inb);
-                    add_tiles_init(cb_in, cb_inb);
-                    tile_regs_acquire();
-                    for (uint32_t j = 0; j < blk; j++) {
-                        cb_wait_front(cb_in, j + 1);
-                        cb_wait_front(cb_inb, j + 1);
-                        add_tiles(cb_in, cb_inb, j, j, j);
-                    }
-                    tile_regs_commit();
-
-                    cb_pop_front(cb_inb, blk);
-
-                    // Pack to intermediate CB (needed
-                    // to workaround transpose_wh_dest bug)
-                    pack_reconfig_data_format(cb_interm_pre_add);
-                    cb_reserve_back(cb_interm_pre_add, blk);
-                    tile_regs_wait();
-                    for (uint32_t j = 0; j < blk; j++) {
-                        pack_tile(j, cb_interm_pre_add);
-                    }
-                    tile_regs_release();
-                    cb_push_back(cb_interm_pre_add, blk);
-                }
-
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            if constexpr (fuse_pre_add) {
+                // Fused pre-add
+                reconfig_data_format(cb_in, cb_inb);
+                add_tiles_init(cb_in, cb_inb);
                 tile_regs_acquire();
-                if (wt > 0) {
-                    // Copy previous accumulated (row tiles)
-                    // mean and variance to dest regs
-                    cb_wait_front(cb_welford.read(), twotiles);
-
-                    reconfig_data_format_srca(cb_welford.read());
-                    copy_tile_to_dst_init_short(cb_welford.read());
-                    copy_tile(cb_welford.read(), 0, dst1);
-                    copy_tile(cb_welford.read(), 1, dst2);
-
-                    cb_pop_front(cb_welford.read(), twotiles);
-                }
-
-                // Process block of Welford's
-                // Shouldn't need a full init, but there's a bug
-                // in short init that causes accuracy to drop
-                reconfig_data_format_srca(cb_result_or_input);
-                transpose_wh_init(cb_result_or_input, cb_result_or_input);
-                welford_init();
                 for (uint32_t j = 0; j < blk; j++) {
-                    cb_wait_front(cb_result_or_input, j + 1);
-                    transpose_wh_tile(cb_result_or_input, j, dst0);
-                    welford_tile<dst0, dst1, dst2, true, false>((wt + j) * tile_width, W, 0, 0);
+                    cb_wait_front(cb_in, j + 1);
+                    cb_wait_front(cb_inb, j + 1);
+                    add_tiles(cb_in, cb_inb, j, j, j);
                 }
                 tile_regs_commit();
 
-                // Pop the input or result CB
-                if constexpr (fuse_pre_add) {
-                    cb_pop_front(cb_in, blk);
-                    cb_pop_front(cb_interm_pre_add, blk);
-                } else {
-                    cb_pop_front(cb_in, blk);
-                }
+                cb_pop_front(cb_inb, blk);
 
-                // Pack dst1 and dst2 into CBs
-                // Leave as row tiles
+                // Pack to intermediate CB (needed
+                // to workaround transpose_wh_dest bug)
+                pack_reconfig_data_format(cb_interm_pre_add);
+                cb_reserve_back(cb_interm_pre_add, blk);
                 tile_regs_wait();
-                cb_reserve_back(cb_welford.write(), twotiles);
-                pack_reconfig_data_format(cb_welford.write());
-                pack_tile_block(dst1, cb_welford.write(), twotiles);
+                for (uint32_t j = 0; j < blk; j++) {
+                    pack_tile(j, cb_interm_pre_add);
+                }
                 tile_regs_release();
-
-                cb_push_back(cb_welford.write(), twotiles);
-
-                cb_welford.swap();
+                cb_push_back(cb_interm_pre_add, blk);
             }
 
-            // Transpose mean and variance back to
-            // columns and pack back to CBs
-            cb_wait_front(cb_welford.read(), twotiles);
-            transpose_wh_init_short(cb_welford.read());
-            reconfig_data_format_srca(cb_welford.read());
             tile_regs_acquire();
-            transpose_wh_tile(cb_welford.read(), 0, dst1);
-            transpose_wh_tile(cb_welford.read(), 1, dst2);
+            if (wt > 0) {
+                // Copy previous accumulated (row tiles)
+                // mean and variance to dest regs
+                cb_wait_front(cb_welford.read(), twotiles);
 
+                reconfig_data_format_srca(cb_welford.read());
+                copy_tile_to_dst_init_short(cb_welford.read());
+                copy_tile(cb_welford.read(), 0, dst1);
+                copy_tile(cb_welford.read(), 1, dst2);
+
+                cb_pop_front(cb_welford.read(), twotiles);
+            }
+
+            // Process block of Welford's
+            // Shouldn't need a full init, but there's a bug
+            // in short init that causes accuracy to drop
+            reconfig_data_format_srca(cb_result_or_input);
+            transpose_wh_init(cb_result_or_input, cb_result_or_input);
+            welford_init();
+            for (uint32_t j = 0; j < blk; j++) {
+                cb_wait_front(cb_result_or_input, j + 1);
+                transpose_wh_tile(cb_result_or_input, j, dst0);
+                welford_tile<dst0, dst1, dst2, true, false>((wt + j) * tile_width, W, 0, 0);
+            }
             tile_regs_commit();
-            tile_regs_wait();
 
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
-            pack_reconfig_data_format(cb_ex);
-            pack_tile(dst1, cb_ex);
-            pack_reconfig_data_format(cb_ex2);
-            pack_tile(dst2, cb_ex2);
-            cb_push_back(cb_ex, onetile);
-            cb_push_back(cb_ex2, onetile);
+            // Pop the input or result CB
+            if constexpr (fuse_pre_add) {
+                cb_pop_front(cb_in, blk);
+                cb_pop_front(cb_interm_pre_add, blk);
+            } else {
+                cb_pop_front(cb_in, blk);
+            }
+
+            // Pack dst1 and dst2 into CBs
+            // Leave as row tiles
+            tile_regs_wait();
+            cb_reserve_back(cb_welford.write(), twotiles);
+            pack_reconfig_data_format(cb_welford.write());
+            pack_tile_block(dst1, cb_welford.write(), twotiles);
             tile_regs_release();
-        } else {
-            // RMS norm not supported for Welford's algorithm
-            return;
+
+            cb_push_back(cb_welford.write(), twotiles);
+
+            cb_welford.swap();
         }
 
+        // Transpose mean and variance back to
+        // columns and pack back to CBs
+        cb_wait_front(cb_welford.read(), twotiles);
+        transpose_wh_init_short(cb_welford.read());
+        reconfig_data_format_srca(cb_welford.read());
+        tile_regs_acquire();
+        transpose_wh_tile(cb_welford.read(), 0, dst1);
+        transpose_wh_tile(cb_welford.read(), 1, dst2);
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        cb_reserve_back(cb_ex, onetile);
+        cb_reserve_back(cb_ex2, onetile);
+        pack_reconfig_data_format(cb_ex);
+        pack_tile(dst1, cb_ex);
+        pack_reconfig_data_format(cb_ex2);
+        pack_tile(dst2, cb_ex2);
+        cb_push_back(cb_ex, onetile);
+        cb_push_back(cb_ex2, onetile);
+        tile_regs_release();
+
         // =====================================
-        // Calculate 1/(√(Var(X) + ε)).
-        // Var[x] for RMS norm is (∑x^2)/n
+        // Calculate 1/(√(Var(X) + ε))
         // =====================================
         tile_regs_acquire();
         tile_regs_wait();
@@ -247,15 +238,10 @@ void MAIN {
 
         // =====================================
         // Second pass over the input.
-        // Computes the final value.
-        // Layernorm:
+        // Computes the final value:
         //    x-E[x]
         //(---------------*𝛄)+ß
         //  √(Var(x)+ε)
-        // RMS norm:
-        //    x
-        //(---------------*𝛄)+ß
-        //  √(Var(X)+ε)
         // =====================================
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
@@ -263,21 +249,11 @@ void MAIN {
             cb_reserve_back(cb_out, blk);
             cb_wait_front(cb_ex, onetile);
             cb_wait_front(cb_in, blk);
-            if constexpr (layernorm) {
-                // Layernorm: Calculate x-E[x]
-                reconfig_data_format(cb_in, cb_ex);
-                sub_bcast_cols_init_short(cb_in, cb_ex);
-                // x-E[x]
-                for (uint32_t j = 0; j < blk; j++) {
-                    sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
-                }
-            } else {
-                // RMS: Just copy input
-                reconfig_data_format_srca(cb_in);
-                copy_tile_init(cb_in);
-                for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile(cb_in, j, j);
-                }
+            reconfig_data_format(cb_in, cb_ex);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
+            // x-E[x]
+            for (uint32_t j = 0; j < blk; j++) {
+                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
             cb_pop_front(cb_in, blk);
             reconfig_data_format_srca(cb_in, cb_ex2pe);
@@ -371,9 +347,7 @@ void MAIN {
 
         cb_xmm = tt::CBIndex::c_24;  // x minus mean
         cb_pop_front(cb_ex2pe, onetile);
-        if constexpr (layernorm) {
-            cb_pop_front(cb_ex, onetile);
-        }
+        cb_pop_front(cb_ex, onetile);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE
