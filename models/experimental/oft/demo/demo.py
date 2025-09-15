@@ -15,7 +15,7 @@ from models.experimental.oft.reference.utils import (
     make_grid,
 )
 from models.experimental.oft.reference.utils_objects import print_object_comparison
-from models.experimental.oft.tests.test_common import (
+from models.experimental.oft.tests.common import (
     GRID_HEIGHT,
     GRID_RES,
     GRID_SIZE,
@@ -52,10 +52,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     ],
 )
 @pytest.mark.parametrize(
-    "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
+    "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False,  False, 0.92, .98, 0.99, 0.94),
+       ( torch.float32, False, False, False, False, 0.92, .98, 0.99, 0.94),
     ],
     # fmt: on
 )
@@ -72,7 +72,6 @@ def test_oftnet(
     fallback_lateral,
     fallback_oft,
     use_host_decoder,
-    scale_features,
     pcc_scores_oft,
     pcc_positions_oft,
     pcc_dimensions_oft,
@@ -104,7 +103,6 @@ def test_oftnet(
         grid_res=GRID_RES,
         grid_height=GRID_HEIGHT,
         dtype=model_dtype,
-        scale_features=scale_features,
     )
 
     ref_model = load_checkpoint(checkpoints_path, ref_model)
@@ -162,7 +160,6 @@ def test_oftnet(
         fallback_feedforward=fallback_feedforward,
         fallback_lateral=fallback_lateral,
         fallback_oft=fallback_oft,  # True, #False, <----------------------------
-        scale_features=scale_features,
     )
 
     # 3 Create tt encoder
@@ -220,7 +217,7 @@ def test_oftnet(
             fig = visualize_tensor_distributions(out, tt_out_torch, title1="Reference Integral", title2="TTNN Integral")
 
             # Create output filename with same naming pattern as other visualizations
-            test_id = f"{'scaled_' if scale_features else ''}{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
+            test_id = f"{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
             output_file = os.path.join(output_dir, f"oft_integral_{basename}_{layer_name}_{test_id}.png")
             fig.savefig(output_file, dpi=300, bbox_inches="tight")
             logger.info(f"Saved integral tensor distribution to {output_file}")
@@ -256,7 +253,7 @@ def test_oftnet(
     # plt.suptitle(basename, fontsize=16)
     # plt.tight_layout()
     # # Create an ID from the test parameters
-    test_id = f"{'scaled_' if scale_features else ''}{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
+    test_id = f"{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
 
     # output_file = os.path.join(output_dir, f"oft_scores_{basename}_{test_id}.png")
     # plt.savefig(output_file, dpi=300, bbox_inches="tight")

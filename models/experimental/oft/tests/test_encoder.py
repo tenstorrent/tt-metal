@@ -7,7 +7,7 @@ import pytest
 from models.experimental.oft.reference.utils import make_grid, get_abs_and_relative_error, visualize_score
 from models.experimental.oft.reference.utils_objects import print_object_comparison
 from models.experimental.oft.tt.model_preprocessing import create_decoder_model_parameters
-from models.experimental.oft.tests.test_common import GRID_RES, GRID_SIZE, Y_OFFSET
+from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, Y_OFFSET
 
 from loguru import logger
 import os

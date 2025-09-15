@@ -1,5 +1,4 @@
 import ttnn
-import torch
 
 from models.experimental.oft.tt.common import Conv
 from models.experimental.oft.tt.common import GroupNorm
@@ -36,7 +35,6 @@ class TTOftNet:
         fallback_feedforward=False,
         fallback_lateral=False,
         fallback_oft=False,
-        scale_features=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
         self.lat8 = Conv(
@@ -112,18 +110,6 @@ class TTOftNet:
         self.std = ttnn.from_torch(
             std, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-
-        self.scale_features = scale_features
-        if scale_features:
-            self.scale_lat8 = ttnn.from_torch(
-                torch.tensor(1.0 / (48.0 * 160.0 * 8.0)), dtype=ttnn.bfloat16, device=device
-            )
-            self.scale_lat16 = ttnn.from_torch(
-                torch.tensor(1.0 / (24.0 * 80.0 * 8.0)), dtype=ttnn.bfloat16, device=device
-            )
-            self.scale_lat32 = ttnn.from_torch(
-                torch.tensor(1.0 / (12.0 * 40.0 * 8.0)), dtype=ttnn.bfloat16, device=device
-            )
 
         self.host_fallback_model = host_fallback_model
         self.OFT_fallback = fallback_oft
@@ -403,12 +389,6 @@ class TTOftNet:
         else:
             lat8, lat16, lat32 = self.forward_lateral_layers(device, feats8, feats16, feats32)
 
-        # ##### to move this to initialization
-        if self.scale_features:
-            lat8 = ttnn.mul(lat8, self.scale_lat8)
-            lat16 = ttnn.mul(lat16, self.scale_lat16)
-            lat32 = ttnn.mul(lat32, self.scale_lat32)
-
         # Apply OFT transformation
         import torch  # HACK
 
@@ -572,14 +552,3 @@ class TTOftNet:
             tt_dim_offsets,
             tt_ang_offsets,
         )
-
-
-# t:210 - ❌ Intermediate 22 ortho8: passed=False, pcc='0.9362682225553642', abs=0.020, rel=5.186
-# 2025-09-11 20:55:51.347 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 23 ortho16: passed=False, pcc='0.7590762751818536', abs=0.012, rel=8.976
-# 2025-09-11 20:55:51.480 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 24 ortho32: passed=False, pcc='0.23913996605309806', abs=0.010, rel=10.158
-# 2025-09-11 20:55:51.606 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 25 ortho: passed=False, pcc='0.8775682206383804', abs=0.038, rel=8.909
-
-# 2025-09-11 20:45:41.946 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 22 ortho8: passed=False, pcc='0.9328076630475304', abs=0.020, rel=4.501
-# 2025-09-11 20:45:42.078 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 23 ortho16: passed=False, pcc='0.8560993601442494', abs=0.012, rel=7.414
-# 2025-09-11 20:45:42.210 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 24 ortho32: passed=False, pcc='0.2889192612418983', abs=0.009, rel=18.084
-# 2025-09-11 20:45:42.347 | WARNING  | models.experimental.oft.demo.demo:test_oftnet:210 - ❌ Intermediate 25 ortho: passed=False, pcc='0.9087737732972131', abs=0.036, rel=7.714

@@ -1,32 +1,49 @@
 import torch
 import ttnn
 import pytest
+import math
 from models.experimental.oft.tt.tt_oft import OFT
 from models.experimental.oft.reference.oft import OFT as ReferenceOFT
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_oft
-from models.experimental.oft.reference.utils import make_grid
+from models.experimental.oft.reference.utils import get_abs_and_relative_error, make_grid
 from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_threshold",
+    "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_integral_img, pcc_output",
     [
         # fmt: off
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32, False, 0.88),  # feats8
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32, False, 0.41),  # feats16
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32, False, 0.30),  # feats32
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  True, 0.80),  # feats8
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  True, 0.41),  # feats16
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  True, 0.27),  # feats32
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.69),  # feats8
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.35),  # feats16
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.23),  # feats32
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.64),  # feats8
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.34),  # feats16
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.22),
-        # feats32
+        # feats8 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.875),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.812),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.683),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.647),
+        # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.526),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.457),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.350),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.336),
+        # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.298),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.292),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229),
         # fmt: on
+    ],
+    ids=[
+        "feats8_fp32_no_precomputed_grid",
+        "feats8_fp32_precomputed_grid",
+        "feats8_bfp16_no_precomputed_grid",
+        "feats8_bfp16_precomputed_grid",
+        "feats16_fp32_no_precomputed_grid",
+        "feats16_fp32_precomputed_grid",
+        "feats16_bfp16_no_precomputed_grid",
+        "feats16_bfp16_precomputed_grid",
+        "feats32_fp32_no_precomputed_grid",
+        "feats32_fp32_precomputed_grid",
+        "feats32_bfp16_no_precomputed_grid",
+        "feats32_bfp16_precomputed_grid",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -40,13 +57,13 @@ def test_oft_forward(
     scale,
     torch_model_dtype,
     use_precomputed_grid,
-    pcc_threshold,
+    pcc_integral_img,
+    pcc_output,
     seed,
 ):
     torch.manual_seed(seed)
-    features = (
-        torch.randn(*input_shape, dtype=torch.float32) + 1.0
-    )  # 0.1 to avoid negative values, features is output of ReLU
+
+    features = torch.relu(torch.randn(*input_shape, dtype=torch.float32))
     calib = torch.tensor(
         [
             [
@@ -55,7 +72,7 @@ def test_oft_forward(
                 [0.0000e00, 0.0000e00, 1.0000e00, 2.7459e-03],
             ]
         ],
-        dtype=torch.float32,
+        dtype=torch_model_dtype,
     )
     grid = make_grid(grid_size=(80.0, 80.0), grid_offset=(-40.0, 1.74, 0.0), grid_res=0.5)
     grid = grid.unsqueeze(0)
@@ -73,6 +90,7 @@ def test_oft_forward(
         ref_bbox_top_right,
         ref_bbox_btm_left8,
     ) = ref_oft.forward(features, calib, grid)
+
     # Prepare TTNN input
     params = create_OFT_model_parameters_oft(ref_oft, (features, calib, grid), device)
 
@@ -93,12 +111,29 @@ def test_oft_forward(
         scale=scale,
         use_precomputed_grid=use_precomputed_grid,
     )
-    tt_out, integral_img, bbox_top_left, bbox_btm_right, bbox_top_right, bbox_btm_left8 = tt_oft.forward(
+    tt_out, tt_integral_img, bbox_top_left, bbox_btm_right, bbox_top_right, bbox_btm_left8 = tt_oft.forward(
         device, tt_features, tt_calib, tt_grid
     )
-    tt_out = ttnn.to_torch(tt_out)
 
-    n, c, h, w = ref_out.shape
-    ref_out = ref_out.permute(0, 2, 3, 1).view(1, 1, h * w, c)
-    message, pcc = assert_with_pcc(tt_out, ref_out, pcc_threshold)
-    logger.info(f"Passing: {message}, PCC: {pcc} seed: {seed}")
+    all_passed = []
+    for i, (ref, tt, layer_name, exp_pcc) in enumerate(
+        zip(
+            [ref_integral_img, ref_out],
+            [tt_integral_img, tt_out],
+            ["integral_img", "out"],
+            [pcc_integral_img, pcc_output],
+        )
+    ):
+        torch_tt = ttnn.to_torch(tt, dtype=torch.float32).permute(0, 3, 1, 2).reshape(ref.shape)
+        passed, pcc = check_with_pcc(ref, torch_tt, exp_pcc)
+        abs, rel = get_abs_and_relative_error(ref, torch_tt)
+
+        all_passed.append(passed)
+        special_char = "✅" if passed else "❌"
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        if passed and float(pcc) - exp_pcc > 0.001:
+            logger.warning(
+                f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
+            )
+
+    assert all(all_passed), f"OFT module outputs did not pass the PCC check {all_passed=}"

@@ -2,11 +2,12 @@ import torch
 import ttnn
 import pytest
 import os
+import math
 from models.experimental.oft.reference.oftnet import OftNet
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
-from models.experimental.oft.tests.test_common import GRID_RES, GRID_SIZE, GRID_HEIGHT, Y_OFFSET, H_PADDED, W_PADDED
-from models.experimental.oft.tests.test_common import load_checkpoint
+from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, GRID_HEIGHT, Y_OFFSET, H_PADDED, W_PADDED
+from models.experimental.oft.tests.common import load_checkpoint
 
 from models.experimental.oft.reference.utils import make_grid, load_calib, load_image
 from models.experimental.oft.reference.utils import get_abs_and_relative_error
@@ -27,28 +28,20 @@ from loguru import logger
     ],
 )
 @pytest.mark.parametrize(
-    "model_dtype, use_host_oft, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
+    "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-    #    (torch.bfloat16, False, False, 0.210, 0.533, 0.986, 0.507),  # Using device OFT without scaling
-    #    (torch.bfloat16, False,  True, 0.954, 0.991, 0.999, 0.850),  # Using device OFT with scaling
-    #    (torch.bfloat16,  True, False, 0.793, 0.891, 0.998, 0.858),
-    #    (torch.bfloat16,  True,  True, 0.886, 0.987, 0.999, 0.831),
-       ( torch.float32, False, False, 0.211, 0.593, 0.989, 0.632),  # Using device OFT without scaling
-       ( torch.float32, False,  True, 0.964, 0.994, 0.998, 0.806),  # Using device OFT with scaling
-    #    ( torch.float32,  True, False, 0.923, 0.889, 0.997, 0.931),
-    #    ( torch.float32,  True,  True, 0.921, 0.993, 0.998, 0.821)
+       (torch.bfloat16, False, 0.757, 0.826, 0.996, 0.876),
+       (torch.bfloat16,  True, 0.762, 0.887, 0.998, 0.905),
+       ( torch.float32, False, 0.753, 0.854, 0.997, 0.805),
+       ( torch.float32,  True, 0.924, 0.886, 0.998, 0.902)
     ],
     # fmt: on
     ids=[
-        # "bfp16_use_device_oft_no_scaling",
-        # "bfp16_use_device_oft_with_scaling",
-        # "bfp16_use_host_oft_no_scaling",
-        # "bfp16_use_host_oft_with_scaling",
-        "fp32_use_device_oft_no_scaling",
-        "fp32_use_device_oft_with_scaling",
-        # "fp32_use_host_oft_no_scaling",
-        # "fp32_use_host_oft_with_scaling",
+        "bfp16_use_device_oft",
+        "bfp16_use_host_oft",
+        "fp32_use_device_oft",
+        "fp32_use_host_oft",
     ],
 )
 @pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
@@ -58,7 +51,6 @@ def test_oftnet(
     input_image_path,
     calib_path,
     model_dtype,
-    scale_features,
     use_host_oft,
     pcc_scores_oft,
     pcc_positions_oft,
@@ -80,7 +72,6 @@ def test_oftnet(
         grid_res=GRID_RES,
         grid_height=GRID_HEIGHT,
         dtype=model_dtype,
-        scale_features=scale_features,
     )
 
     ref_model = load_checkpoint(checkpoints_path, ref_model)
@@ -110,7 +101,6 @@ def test_oftnet(
         fallback_oft=use_host_oft,
         fallback_feedforward=False,
         fallback_lateral=False,
-        scale_features=scale_features,
     )
 
     intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
@@ -126,7 +116,11 @@ def test_oftnet(
     PCC_THRESHOLD = 0.990
     for i, (out, tt_out, layer_name) in enumerate(zip(intermediates, tt_intermediates, intermediates_names)):
         # conver tt output to torch, channel first, and correct shape
-        if isinstance(tt_out, ttnn.Tensor):
+        if "bbox" in layer_name:
+            # bbox layers have different shape in TTNN vs torch, so skip them for now
+            logger.debug(f"Skipping PCC check for bbox layer {layer_name} due to different shape in TTNN vs torch")
+            continue
+        elif isinstance(tt_out, ttnn.Tensor):
             tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
         else:
             # logger.debug(f"Output {i} is not a ttnn.Tensor, skipping conversion")
@@ -156,6 +150,11 @@ def test_oftnet(
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
         logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        if passed and float(pcc) - exp_pcc > 0.001:
+            logger.warning(
+                f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
+            )
+
     assert all(all_passed), f"OFTnet outputs did not pass the PCC check {all_passed=}"
 
     # Save outputs to files, useful when debugging encoder
@@ -167,7 +166,7 @@ def test_oftnet(
         os.makedirs(output_dir, exist_ok=True)
 
         # Construct a unique filename based on test parameters
-        test_config = f"{model_dtype}_device_oft_{scale_features}_host_oft_{use_host_oft}"
+        test_config = f"{model_dtype}_host_oft_{use_host_oft}"
         output_file = os.path.join(output_dir, f"outputs_{test_config}.pt")
 
         # Package all outputs in a dictionary

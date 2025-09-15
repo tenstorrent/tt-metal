@@ -17,13 +17,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "n, in_ch, out_ch, h, w, stride, sharding, is_sliced",
     [
-        # (1, 128, 128, 80, 64, 1),
         (1, 128, 128, 48, 160, 1, "HS", True),
-        # (1, 128, 256, 64, 80, 2),
-        # (1, 128, 256, 48, 160, 2),
-        # (1, 64, 64, 96, 320, 1, "HS"),
-        # (1, 512, 256, 12, 40, 1, "BS", False),
-        # (1, 256, 256, 159, 159, 1, "HS", False),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
