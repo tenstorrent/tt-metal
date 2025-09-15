@@ -281,7 +281,7 @@ class MotifImage(nn.Module):
         def masking_wo_first_eos(token, eos):
             idx = (token != eos).sum(dim=1)
             mask = token != eos
-            arange = torch.arange(mask.size(0)).cuda()
+            arange = torch.arange(mask.size(0))
             mask[arange, idx] = True
             mask = mask.unsqueeze(-1)  # B x L x 1
             return mask
@@ -332,7 +332,7 @@ class MotifImage(nn.Module):
         zero_masking=False,
         zero_embedding_for_cfg=False,
         negative_prompt: Optional[List[str]] = None,
-        device: str = "cuda",
+        device: str = "cpu",
         rescale_cfg=-1.0,
         clip_t=[0.0, 1.0],
         use_linear_quadratic_schedule=False,
@@ -616,9 +616,7 @@ class MotifImage(nn.Module):
             intermediate_pil_images = []
             # Ensure VAE is still ready (it should be from final decoding)
             for step_latents in tqdm.tqdm(intermediate_latents, desc="Decoding intermediates"):
-                step_latents_scaled = (
-                    step_latents.to(dtype=torch.float32, device="cuda") / self.vae.config.scaling_factor
-                )
+                step_latents_scaled = step_latents.to(dtype=torch.float32) / self.vae.config.scaling_factor
                 step_image_tensors = (
                     self.vae.decode(step_latents_scaled, return_dict=False)[0] + self.vae.config.shift_factor
                 )

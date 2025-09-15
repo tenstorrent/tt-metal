@@ -35,7 +35,7 @@ def main(args: argparse.Namespace) -> None:
     model = MotifImage(config)
 
     try:
-        ema_instance = torch.load(args.model_ckpt, weights_only=False)
+        ema_instance = torch.load(args.model_ckpt, weights_only=False, map_location=torch.device("cpu"))
         ema_instance = {k: v for k, v in ema_instance.items() if "dit" in k}
     except pickle.UnpicklingError as e:
         logger.warning(f"Error loading checkpoint, trying to load via safetensors for given checkpoint: {e}")
@@ -49,7 +49,6 @@ def main(args: argparse.Namespace) -> None:
     else:
         model.load_state_dict(ema_instance)
 
-    model = model.cuda()
     model = model.to(dtype=torch.bfloat16)
     model.eval()
 

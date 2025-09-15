@@ -321,7 +321,7 @@ class MotifDiT(nn.Module):
             get_2d_sincos_pos_embed(
                 config.hidden_dim, (self.h // self.patch_size, self.w // self.patch_size), base_size=pos_emb_size
             )
-        ).to(device="cuda", dtype=torch.bfloat16)
+        ).to(dtype=torch.bfloat16)
 
         # set register tokens (https://arxiv.org/abs/2309.16588)
         if config.register_token_num > 0:
@@ -544,7 +544,7 @@ class JointAttn(nn.Module):
         if self.attn_mode == "sdpa" and ScaledDotProductAttention is not None:
             # NOTE: SDPA does not support high-resolution (long-context).
             q_len = query.size(-2)
-            masked_bias = torch.zeros((batch_size, self.num_heads, query.size(-2), key.size(-2)), device="cuda")
+            masked_bias = torch.zeros((batch_size, self.num_heads, query.size(-2), key.size(-2)))
 
             query = query.transpose(1, 2).reshape(batch_size, q_len, self.hidden_size).contiguous()
             key = key.transpose(1, 2).reshape(batch_size, q_len, self.hidden_size).contiguous()
@@ -571,7 +571,7 @@ class JointAttn(nn.Module):
 
             # NOTE (1): masking of motif flash-attention uses (`1`: un-mask, `0`: mask) and has [Batch, Seq] shape
             # NOTE (2): Q,K,V must be [Batch, Seq, Heads, Dim] and contiguous.
-            mask = torch.ones((batch_size, query.size(-3))).cuda()
+            mask = torch.ones((batch_size, query.size(-3)))
             hidden_states = MotifFlashAttention(
                 query,
                 key,
