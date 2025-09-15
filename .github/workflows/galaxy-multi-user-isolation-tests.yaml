@@ -54,14 +54,13 @@ jobs:
           mv *.whl ./docker_artifacts
       - name: Create Docker Compose file
         run: |
-          # rm -rf .github/scripts/utils/muti-user-galaxy-docker-files
           for i in [1..4]; do
             mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
             chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
           done
           cat > multi-user-dc.yaml <<EOF
           services:
-            tray-1:
+            tray:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
@@ -69,7 +68,6 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
-                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -79,6 +77,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -88,7 +87,7 @@ jobs:
                 - "/dev/tenstorrent/5:/dev/tenstorrent/5"
                 - "/dev/tenstorrent/6:/dev/tenstorrent/6"
                 - "/dev/tenstorrent/7:/dev/tenstorrent/7"
-            tray-2:
+            tray:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
@@ -96,7 +95,6 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
-                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -106,6 +104,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-2
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -115,15 +114,14 @@ jobs:
                 - "/dev/tenstorrent/13:/dev/tenstorrent/13"
                 - "/dev/tenstorrent/14:/dev/tenstorrent/14"
                 - "/dev/tenstorrent/15:/dev/tenstorrent/15"
-            tray-3:
+            tray:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+                  - /home/ubuntu/.cache/tt-metal-cache-3:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
-                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -133,6 +131,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-3
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -142,19 +141,19 @@ jobs:
                 - "/dev/tenstorrent/21:/dev/tenstorrent/21"
                 - "/dev/tenstorrent/22:/dev/tenstorrent/22"
                 - "/dev/tenstorrent/23:/dev/tenstorrent/23"
-            tray-4:
+            tray:
               image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
+                  - /home/ubuntu/.cache/tt-metal-cache-4:/app/.cache
                   - ./docker_artifacts:/app/docker_artifacts
-                  - .github/scripts/utils/muti-user-galaxy-docker-files:/app/multi-user-galaxy-docker-files
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
+                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-4
                 HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
@@ -173,22 +172,18 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
+          TRAY_PODS_DIR=".muti-user-galaxy-docker-files"
           REQUIRED_PODS=4
           TIMEOUT=300
-
+          
           rm -rf "$TRAY_PODS_DIR"
           mkdir -p "$TRAY_PODS_DIR"
 
           EPOCH_START=$(date +%s)
-          echo "start epoch: $EPOCH_START"
-          
-          for tray in tray-1 tray-2 tray-3 tray-4; do
-            TRAY_POD_FILE="$TRAY_PODS_DIR/tray-presence-$tray.txt"
-            echo "Creating $TRAY_POD_FILE"
-            touch "$TRAY_POD_FILE"
-          done
 
+          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
+          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
+          
           # wait for REQUIRED .txt files to appear (with timeout)
           while true; do
             files=( "$TRAY_PODS_DIR"/tray-presence-*.txt )
@@ -203,8 +198,6 @@ jobs:
             fi
             sleep 1
           done
-          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
 
       - name: Run the tests
         run: |
@@ -212,16 +205,13 @@ jobs:
             command=$1
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
-              cname="multi-user-$tray-1"
-              cd /app/multi-user-galaxy-docker-files || exit 1
-              testlogfile="test_output_$tray.log"
+              cname="multi-user-$tray"
               echo ">>> Running tests in $cname" 
-              docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
-              # (
-              # docker exec "$cname" bash -c "$command" \
-              # | sed "s/^/[$cname] /" 
-              # exit ${PIPESTATUS[0]}
-              # ) &         
+              (
+              docker exec "$cname" bash -c "$command" \
+              | sed "s/^/[$cname] /" 
+              exit ${PIPESTATUS[0]}
+              ) &         
               pids+=($!)
             done
 
@@ -241,13 +231,6 @@ jobs:
           # run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           echo "run the pytest"
           run_test "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
-      - name: Print test logs with folding
-        run: |
-          for logfile in logs/*.log; do
-            echo "::group::Logs for $logfile"
-            cat "$logfile"
-            echo "::endgroup::"
-          done
 
       - name: Tear down containers
         if: always()
