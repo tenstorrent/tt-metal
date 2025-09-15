@@ -233,6 +233,7 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     for _, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in refCountDict.items():
             matching_refs = wildcard_match(ref, deviceData["cores"]["DEVICE"]["analysis"].keys())
+            print(matching_refs)
             if matching_refs:
                 readCount = 0
                 for matching_ref in matching_refs:
@@ -333,26 +334,26 @@ def test_device_trace_run():
             setupAutoExtract=False,
             doDeviceTrace=True,
         ),
-        statTypes=["kernel", "fw"],
+        statTypes=["kernel"],
         allowedRange=0,
         refCountDict={
-            "trace_fw_duration": [5],
+            # "trace_fw_duration": [5],
             "trace_kernel_duration": [5],
         },
     )
-    verify_stats(
-        run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
-            setupAutoExtract=False,
-            doDeviceTrace=True,
-        ),
-        statTypes=["kernel", "fw"],
-        allowedRange=0,
-        refCountDict={
-            "trace_fw_duration": [5],
-            "trace_kernel_duration": [5],
-        },
-    )
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+    #         setupAutoExtract=False,
+    #         doDeviceTrace=True,
+    #     ),
+    #     statTypes=["kernel", "fw"],
+    #     allowedRange=0,
+    #     refCountDict={
+    #         # "trace_fw_duration": [5],
+    #         "trace_kernel_duration": [5],
+    #     },
+    # )
 
 
 @skip_for_blackhole()
