@@ -137,6 +137,33 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {}
+    tensor_return_value_t& tensor_return_value) {
+    auto update_runtime_arguments = operation_attributes.topology == ttnn::ccl::Topology::Ring
+                                        ? ring_reduce_scatter_minimal_async_helper_override_runtime_arguments
+                                        : line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        return update_runtime_arguments(
+            program,
+            shared_variables.program_artifacts.reader_kernel_ids,
+            shared_variables.program_artifacts.writer_kernel_ids,
+            shared_variables.program_artifacts.all_cores,
+            operation_attributes.num_links,
+            shared_variables.program_artifacts.num_directions_per_link,
+            shared_variables.program_artifacts.num_workers_per_direction,
+            shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
+            shared_variables.program_artifacts.num_cores_per_link,
+            shared_variables.barrier_semaphore,
+            shared_variables.multidevice_semaphores,
+            tensor_args.input_tensor,
+            tensor_return_value.at(0),
+            tensor_return_value.at(1));
+    }
 
 }  // namespace ttnn::operations::ccl
