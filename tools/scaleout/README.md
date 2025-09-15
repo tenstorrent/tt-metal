@@ -37,7 +37,7 @@ One thing to consider with how the Cabling Generator puts both the Descriptors t
 
 ### Cabling Guide
 
-The Cabling Guide is a ```.csv``` file that will be emitted by the cabling generator. It is a list of all cable connections that are part of the system. The Guide will specify the physical location of the host at each end of a connection, estimated cable length, and expected cable type.
+The Cabling Guide is a `.csv` file that will be emitted by the cabling generator. It is a list of all cable connections that are part of the system. The Guide will specify the physical location of the host at each end of a connection, estimated cable length, and expected cable type.
 
 Example:
 ![Cabling Guide Example](images/CablingGuide_ex.png)

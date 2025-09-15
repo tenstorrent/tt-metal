@@ -437,6 +437,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::CABLE_3, "3m"},
         {CableLength::CABLE_5, "5m"},
         {CableLength::UNKNOWN, "UNKNOWN"}};
+    // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
@@ -476,7 +477,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << ",";
 
             output_file << cable_length_str.at(cable_l) << ",";
-            output_file << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "QSFP_DD_AEC") << std::endl;
+            output_file << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC") << std::endl;
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << ",";
             output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << std::endl;
