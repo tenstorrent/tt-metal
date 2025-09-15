@@ -100,7 +100,7 @@ static void test_sems_across_core_types(
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = active_eth ? tt::tt_metal::Eth::RECEIVER : tt::tt_metal::Eth::IDLE,
-                    .noc = tt::tt_metal::NOC::NOC_0,
+                    .noc = static_cast<tt_metal::NOC>(dm_processor),
                     .processor = dm_processor,
                     .compile_args = compile_args,
                 });
