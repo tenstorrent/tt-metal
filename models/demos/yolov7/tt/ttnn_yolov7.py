@@ -366,7 +366,6 @@ class ttnn_yolov7:
             parameters["0"],
             act_block_h=32 * 50,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv2 = Conv(
@@ -375,7 +374,6 @@ class ttnn_yolov7:
             parameters["1"],
             act_block_h=32 * 50,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv3 = Conv(
@@ -384,7 +382,6 @@ class ttnn_yolov7:
             parameters["2"],
             act_block_h=32 * 15,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv4 = Conv(
@@ -392,7 +389,6 @@ class ttnn_yolov7:
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["3"],
             deallocate_activation=True,
-            enable_split_reader=True,
             enable_act_double_buffer=True,
             weights_dtype=ttnn.bfloat8_b,
         )
@@ -651,7 +647,6 @@ class ttnn_yolov7:
             height_sharding=False,
             enable_act_double_buffer=True,
             num_cores_nhw=64,
-            enable_split_reader=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
