@@ -11,12 +11,12 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 24
-    in_w = 24
-    in_c = 16
+    in_h = 159
+    in_w = 159
+    in_c = 48
     kernel_size = [3, 3]
     stride = [1, 1]
-    padding = [0, 0]
+    padding = [1, 1]
     dilation = [1, 1]
     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ceil_mode = False
@@ -144,6 +144,11 @@ def test_max_pool2d_with_indices(device):
     # Calculate output dimensions using the pooling formula
     ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
     ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
+
+    # print("TTNN:")
+    # print(ttnn_output_reshaped[0, :, :, 0])
+    # print("PyTorch:")
+    # print(torch_output_reshaped[0, :, :, 0])
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:

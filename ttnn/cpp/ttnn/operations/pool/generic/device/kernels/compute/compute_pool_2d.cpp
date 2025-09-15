@@ -169,9 +169,6 @@ void MAIN {
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
 
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
-
                     max_reduce_with_indices_init();
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
@@ -231,12 +228,20 @@ void MAIN {
                     tensix_sync();
                 }
 
+                tensix_sync();
+                pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
+                tensix_sync();
+
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
                     out_cb_id, 1, 0, num_out_sticks, output_faces);
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+
+                tensix_sync();
+                pack_untilize_dest_init<topk_output_tiles>(idx_tmp_cb_id, 32, 4);
+                tensix_sync();
 
                 pack_untilize_dest<
                     topk_output_tiles,
