@@ -95,7 +95,7 @@ def is_galaxy(device: Device) -> bool:
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
-    block_locations = device.idle_eth_block_locations.copy()
+    block_locations = device.idle_eth_block_locations
     # We remove idle eth blocks that are reserved for syseng use
     # These are blocks on wormhole mmio capable devices with connections to remote devices
     # If board type is galaxy, we remove idle eth blocks at locations e0,0 e0,1 e0,2 e0,3 and e0,15,
