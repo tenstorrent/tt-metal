@@ -1186,6 +1186,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         compute_defines["RMSNORM"] = "1";
     }
     // compute kernel compile time args
+    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
         gamma.has_value(),
@@ -1198,8 +1199,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,
         block_ht * block_wt,
         fp32_dest_acc_en,
+        float32_reduction,
+        legacy_rsqrt,
         num_blocks_second_stage};
-    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
         gamma.has_value(),
