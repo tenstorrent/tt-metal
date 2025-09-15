@@ -23,6 +23,10 @@ inputs:
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
+  test_run_id:
+    description: 'Run ID to use for testing (optional)'
+    required: false
+    default: '17742074131'
 
 outputs:
   total-runs:
