@@ -97,7 +97,8 @@ async function fetchFailedJobSummaries(octokit, context, runId) {
       }
     );
   } catch (e) {
-    core.warning(`Failed to fetch failed job summaries for run ${runId}: ${e.message}`);
+    // Non-fatal: some runs may have restricted logs or transient API issues; skip quietly
+    core.info(`Skipping failed job summaries for run ${runId}: ${e.message}`);
   }
   return summaries.slice(0, 5);
 }
@@ -524,7 +525,6 @@ async function run() {
     for (const config of workflowConfigs) {
       core.info(`Processing config: ${JSON.stringify(config)}`);
       for (const [name, runs] of grouped) {
-        core.info(`Checking workflow: ${name}`);
         if ((config.wkflw_name && name === config.wkflw_name) ||
             (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
           core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
@@ -647,7 +647,7 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
-          // Failed job summaries for first failing run
+          // Failed job summaries for first failing run (best-effort)
           item.failed_job_summaries = await fetchFailedJobSummaries(octokit, github.context, item.first_failed_run_id);
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
