@@ -29,10 +29,10 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const;
 
     virtual void set_build_options(JitBuildOptions& build_options) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual bool binaries_exist_on_disk(const IDevice* device) const = 0;
     virtual void read_binaries(IDevice* device) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
@@ -94,7 +94,6 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
@@ -138,7 +137,6 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
@@ -181,7 +179,6 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
