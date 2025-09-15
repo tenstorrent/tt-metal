@@ -70,8 +70,6 @@ class TransformerBlock(LightweightModule):
             dtype=dtype,
             model_config=self.model_config,
         )
-        # Mamba branch removed along with Falcon-H1-0.5B support
-        self.mamba = None
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -223,9 +221,7 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        # Apply attention input multiplier if provided by config (Falcon-H1)
-        if hasattr(self.args, "attention_in_multiplier"):
-            attn_in = ttnn.multiply(attn_in, self.args.attention_in_multiplier)
+        # Falcon3 path: no extra attention input multiplier
         # Compute Mamba branch BEFORE attention (attention may deallocate its input)
         # No Mamba branch
 
@@ -241,12 +237,10 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # Apply attention out multiplier if provided by config (Falcon-H1)
-        if hasattr(self.args, "attention_out_multiplier"):
-            attn_out = ttnn.multiply(attn_out, self.args.attention_out_multiplier)
+        # Falcon3 path: no extra attention out multiplier
 
         if self.pre_ff_norm is None:
-            # Residual connection after attention (no mamba path implemented yet)
+            # Residual connection after attention
             hidden_states = ttnn.add(
                 residual,
                 attn_out,

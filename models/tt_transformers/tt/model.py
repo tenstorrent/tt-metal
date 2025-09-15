@@ -96,17 +96,10 @@ class Transformer(LightweightModule):
             for i in tqdm(range(self.n_layers))
         ]
 
-        # Resolve final norm key dynamically (Falcon may use different top-level names)
+        # Resolve final norm key dynamically (prefer Falcon3's 'norm')
         def _resolve_final_norm_key(sd):
-            candidates = [
-                "norm",
-                "final_layernorm",
-                "ln_f",
-                "final_norm",
-            ]
-            for key in candidates:
-                if f"{key}.weight" in sd:
-                    return key
+            if "norm.weight" in sd:
+                return "norm"
             return "norm"
 
         final_norm_key = _resolve_final_norm_key(state_dict)
