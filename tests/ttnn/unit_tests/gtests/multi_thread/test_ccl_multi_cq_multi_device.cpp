@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mesh_coord.hpp"
-#include "test_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 #include <cmath>
@@ -62,9 +61,6 @@ protected:
 };
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -206,7 +202,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });
@@ -223,9 +219,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -351,7 +344,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 auto& single_mesh = single_meshes[dev_idx];
-                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the workers needs to be transferred between CQs.
+                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the
+                // workers needs to be transferred between CQs.
                 ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
@@ -406,7 +400,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });
@@ -423,9 +417,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
-    const size_t dim = 0;
-    const size_t num_links = 1;
-    constexpr auto layout = Layout::TILE;
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -475,8 +466,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
-    uint8_t op_ccl_cq_id = 0;   // device operation, ccl command queue id
-    uint8_t mem_cq_id = 1;   // read/write command queue id
+    uint8_t op_ccl_cq_id = 0;  // device operation, ccl command queue id
+    uint8_t mem_cq_id = 1;     // read/write command queue id
 
     boost::asio::thread_pool pool(devices.size());
 
@@ -605,7 +596,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });

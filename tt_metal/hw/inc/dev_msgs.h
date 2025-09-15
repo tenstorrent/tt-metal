@@ -52,6 +52,8 @@ struct profiler_msg_template_t {
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
+// Deprecated in favor of dev_mem_map.h. Keep to avoid breaking changes.
+#include "eth_l1_address_map.h"
 
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -107,28 +109,6 @@ enum dispatch_mode {
     DISPATCH_MODE_HOST,
 };
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
-enum dispatch_core_processor_masks {
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 = 1 << DISPATCH_CLASS_TENSIX_DM0,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 = 1 << DISPATCH_CLASS_TENSIX_DM1,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
-
-    DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
-    DISPATCH_CLASS_MASK_ETH_DM1 = 1 << DISPATCH_CLASS_ETH_DM1,
-};
-
 enum noc_index {
     NOC_0 = 0,
     NOC_1 = 1,
@@ -155,17 +135,12 @@ enum dispatch_enable_flags : uint8_t {
 };
 
 struct kernel_config_msg_t {
-    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
-    volatile uint8_t pad0[4];
-    volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
-
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[8];  // CODEGEN:skip
+    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
@@ -180,9 +155,14 @@ struct kernel_config_msg_t {
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    // bit i set => processor i enabled
+    volatile uint32_t enables;
+    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
+
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t enables;
+    volatile uint8_t pad3[1];              // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -243,13 +223,14 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_target;
     volatile uint8_t pad;  // CODEGEN:skip
 };
+static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
 
 // Host -> device. Populated with the information on where we want to insert delays.
 struct debug_insert_delays_msg_t {
-    volatile uint8_t read_delay_riscv_mask = 0;    // Which Riscs will delay their reads
-    volatile uint8_t write_delay_riscv_mask = 0;   // Which Riscs will delay their writes
-    volatile uint8_t atomic_delay_riscv_mask = 0;  // Which Riscs will delay their atomics
-    volatile uint8_t feedback = 0;                 // Stores the feedback about delays (used for testing)
+    volatile uint32_t read_delay_processor_mask = 0;    // Which processors will delay their reads
+    volatile uint32_t write_delay_processor_mask = 0;   // Which processors will delay their writes
+    volatile uint32_t atomic_delay_processor_mask = 0;  // Which processors will delay their atomics
+    volatile uint32_t feedback = 0;                     // Stores the feedback about delays (used for testing)
 };
 
 enum debug_sanitize_noc_return_code_enum {
@@ -281,21 +262,6 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7
-};
-
-// XXXX TODO(PGK): why why why do we not have this standardized
-enum riscv_id_t {
-    DebugBrisc = 0,
-    DebugNCrisc = 1,
-    DebugTrisc0 = 2,
-    DebugTrisc1 = 3,
-    DebugTrisc2 = 4,
-    DebugErisc = 5,
-    DebugSubordinateErisc = 6,
-    DebugIErisc = 7,
-    DebugSubordinateIErisc = 8,
-    DebugNumUniqueRiscs = 9,
-    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -354,7 +320,7 @@ struct watcher_msg_t {
 // TODO: DebugPrintMemLayout not visible by codegen
 // To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
+    DebugPrintMemLayout data[NUM_PROCESSORS_PER_CORE_TYPE];
     uint32_t pad;  // to 1024 bytes
 };
 #endif

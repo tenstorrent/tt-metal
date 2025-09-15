@@ -24,7 +24,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt::tt_metal;
 
@@ -72,6 +72,7 @@ struct L1Config {
         num_cores_height = std::min(min_dims.second, num_cores_height);
 
         // if core grid changes, we must recalculate the values that depend on it
+        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
         size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
                      num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
     }

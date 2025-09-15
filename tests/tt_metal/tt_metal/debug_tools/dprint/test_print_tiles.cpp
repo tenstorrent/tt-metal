@@ -132,10 +132,10 @@ static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                fp16b_vec[col * 32 + 0].to_float(),
-                fp16b_vec[col * 32 + 8].to_float(),
-                fp16b_vec[col * 32 + 16].to_float(),
-                fp16b_vec[col * 32 + 24].to_float());
+                static_cast<float>(fp16b_vec[col * 32 + 0]),
+                static_cast<float>(fp16b_vec[col * 32 + 8]),
+                static_cast<float>(fp16b_vec[col * 32 + 16]),
+                static_cast<float>(fp16b_vec[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp8_b) {
         std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
@@ -231,7 +231,6 @@ static void RunTest(
     Program program = Program();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     // Create an input CB with the right data format

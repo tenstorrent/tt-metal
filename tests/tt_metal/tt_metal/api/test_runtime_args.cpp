@@ -33,7 +33,7 @@
 #include <tt_stl/span.hpp>
 
 #include "device_fixture.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -517,7 +517,6 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));

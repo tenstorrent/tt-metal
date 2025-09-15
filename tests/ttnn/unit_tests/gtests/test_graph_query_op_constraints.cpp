@@ -44,7 +44,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -820,8 +820,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> padding{3, 3};
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
-
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
 
     // Run the test
     {

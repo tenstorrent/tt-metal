@@ -61,7 +61,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
-    bool enable_weights_double_buffer) {
+    bool enable_weights_double_buffer,
+    bool config_tensors_in_dram) {
     tt::tt_metal::IDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -364,8 +365,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
 
+    const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
+        .config_tensors_in_dram = config_tensors_in_dram,
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
@@ -376,13 +379,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         p_config,
         b.padded_shape(),
         {filter_h, filter_w},
+        {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
+        {dilation_h, dilation_w},
         conv_config,
         a.dtype(),
         output.dtype(),
         a.memory_config().shard_spec().value().shape,
+        output_image_width,
         has_bias,
         false,
-        skip_activation_mcast);
+        skip_activation_mcast,
+        input_channels_padded);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
@@ -390,13 +397,26 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // create sharded ttnn config tensors
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, parallel_config);
+        conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, false, a.device());
+        conv_reader_indices_tensor, parallel_config, false, a.device(), config_tensors_in_dram);
 
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
+    if (config_tensors_in_dram) {
+        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
+        // maximum possible size.
+        TT_FATAL(
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
+                conv_reader_indices_storage.get_buffer()->page_size(),
+            "CB page size {} should be greater than the config tensor page size {}",
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
+            conv_reader_indices_storage.get_buffer()->page_size());
+    } else {
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
+            conv_reader_indices_storage.get_buffer()->page_size();
+    }
 
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_reader_cores, a, output, conv_reader_indices_tensor);
@@ -485,6 +505,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index};
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer())
+            .append_to(activation_kernel_compile_args);
+    }
+
+    for (uint32_t index = 0; index < activation_kernel_compile_args.size(); index++) {
+        log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);
+    }
+
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
 

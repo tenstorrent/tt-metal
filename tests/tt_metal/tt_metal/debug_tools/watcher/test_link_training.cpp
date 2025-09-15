@@ -20,8 +20,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -56,7 +56,7 @@ static void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::Me
     virtual_core = device->ethernet_core_from_logical_core(logical_core);
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
-    auto eth_link_kernel = CreateKernel(
+    CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_eth_link_check.cpp",
         logical_core,
