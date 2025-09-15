@@ -101,8 +101,9 @@ class ttnn_SPPCSPC:
 
         x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
         x1 = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
-        x1 = ttnn.to_memory_config(x1, x1_mem_config)
-        y1 = sharded_concat([x1, x1_m1, x1_m2, x1_m3])
+        # x1 = ttnn.to_memory_config(x1, x1_mem_config)
+        # y1 = sharded_concat([x1, x1_m1, x1_m2, x1_m3])
+        y1 = concat(3, False, x1, x1_m1, x1_m2, x1_m3)
         ttnn.deallocate(x1)
         ttnn.deallocate(x1_m1)
         ttnn.deallocate(x1_m2)
@@ -294,10 +295,8 @@ class ttnn_detect:
             y_cat = ttnn.to_layout(y_cat, ttnn.ROW_MAJOR_LAYOUT)
             y_cat = ttnn.to_memory_config(y_cat, memory_config=ttnn.L1_MEMORY_CONFIG)
             y_cat = ttnn.permute(y_cat, (0, 1, 3, 4, 2))
-            print(y_cat.shape)
 
             reshaped = ttnn.reshape(y_cat, (bs, -1, self.no))
-            print(reshaped.shape)
             if i == 0:
                 z_0 = reshaped
             if i == 1:
@@ -307,7 +306,6 @@ class ttnn_detect:
 
         concatenated = concat(1, False, z_0, z_1, z_2)
         concatenated = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT)
-        print(concatenated.shape)
         out = (concatenated, x)
 
         for t in [z_0, z_1, z_2]:
@@ -515,20 +513,27 @@ class ttnn_yolov7:
             bias_dtype=ttnn.bfloat8_b,
         )
 
-        self.conv22 = Matmul(
+        # self.conv22 = Matmul(
+        #     [1, 40, 40, 512],
+        #     parameters["26"],
+        #     memory_config_type="block_sharded",
+        #     matmul_type="2d",
+        #     in0_block_w=2,
+        #     out_subblock_h=7,
+        #     out_subblock_w=1,
+        #     out_block_h=7,
+        #     out_block_w=1,
+        #     math_approx_mode=True,
+        #     weight_dtype=ttnn.bfloat8_b,
+        #     bias_dtype=ttnn.bfloat8_b,
+        # )
+
+        self.conv22 = Conv(
             [1, 40, 40, 512],
+            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["26"],
-            memory_config_type="block_sharded",
-            matmul_type="2d",
-            in0_block_w=2,
-            out_subblock_h=7,
-            out_subblock_w=1,
-            out_block_h=7,
-            out_block_w=1,
-            math_approx_mode=True,
-            weight_dtype=ttnn.bfloat8_b,
-            bias_dtype=ttnn.bfloat8_b,
         )
+
         self.conv23 = Conv(
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
@@ -937,18 +942,18 @@ class ttnn_yolov7:
         conv7 = self.conv7(self.device, conv6)
 
         conv8 = self.conv8(self.device, conv7)
-        ttnn.deallocate(conv7)
 
         conv9 = self.conv9(self.device, conv8)
 
         conv10 = self.conv10(self.device, conv9)
-        ttnn.deallocate(conv9)
 
         conv10 = sharded_concat([conv10, conv8, conv6, conv5])
 
         ttnn.deallocate(conv5)
         ttnn.deallocate(conv6)
+        ttnn.deallocate(conv7)
         ttnn.deallocate(conv8)
+        ttnn.deallocate(conv9)
 
         conv11 = self.conv11(self.device, conv10)
         ttnn.deallocate(conv10)
@@ -1005,6 +1010,9 @@ class ttnn_yolov7:
         ttnn.deallocate(conv18)
         ttnn.deallocate(conv20)
 
+        mp2_out_shard_shape = (32, 512)
+        mp2_out_core_grid = get_core_grid_from_num_cores(50)
+
         mp2 = ttnn.max_pool2d(
             input_tensor=conv21,
             batch_size=1,
@@ -1015,7 +1023,17 @@ class ttnn_yolov7:
             stride=[2, 2],
             padding=[0, 0],
             dilation=[1, 1],
+            # memory_config=mp2_out_mem,
         )
+
+        mp2_out_mem = ttnn.create_sharded_memory_config_(
+            mp2_out_shard_shape,
+            core_grid=mp2_out_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        mp2 = ttnn.reshard(mp2, mp2_out_mem)
 
         conv22 = self.conv22(self.device, mp2)
 
@@ -1036,7 +1054,6 @@ class ttnn_yolov7:
         conv27 = self.conv27(self.device, conv26)
 
         conv28 = self.conv28(self.device, conv27)
-        ttnn.deallocate(conv27)
 
         conv29 = self.conv29(self.device, conv28)
 
@@ -1048,6 +1065,7 @@ class ttnn_yolov7:
         conv31 = self.conv31(self.device, conv30)
         ttnn.deallocate(conv25)
         ttnn.deallocate(conv26)
+        ttnn.deallocate(conv27)
         ttnn.deallocate(conv28)
 
         mp3 = ttnn.max_pool2d(
@@ -1276,7 +1294,7 @@ class ttnn_yolov7:
 
         conv71 = self.conv71(self.device, conv69)
 
-        conv71 = ttnn.sharded_to_interleaved(conv71, ttnn.L1_MEMORY_CONFIG)
+        # conv71 = ttnn.sharded_to_interleaved(conv71, ttnn.L1_MEMORY_CONFIG)
         conv72 = self.conv72(self.device, conv71)
         ttnn.deallocate(mp5)
 
