@@ -174,18 +174,21 @@ std::vector<bfloat16> gold_broadcast(
 
             switch (op) {
                 case EltwiseOp::ADD: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() + broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) + static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::SUB: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() - broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) - static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::MUL: {
                     golden[i * num_cols + j] =
-                        bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_packed() & srca_fid_mask))
-                            .to_float() *
-                        bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_packed() & srcb_fid_mask)).to_float();
+                        static_cast<float>(std::bit_cast<bfloat16>(
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(src_a[i * num_cols + j]) & srca_fid_mask))) *
+                        static_cast<float>(std::bit_cast<bfloat16>(
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(broadcast_value) & srcb_fid_mask)));
                     break;
                 }
                 default: {
@@ -216,7 +219,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         log_info(tt::LogTest, "Tile shape is {{{}, {}}}", tile_height, tile_width);
     }
 
-    uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -324,10 +327,10 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         });
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 

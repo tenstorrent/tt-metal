@@ -63,7 +63,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
     // Input
     // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
