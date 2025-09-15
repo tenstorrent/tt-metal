@@ -30,6 +30,7 @@ class NodeRef;
 class MeshRef;
 class GraphRef;
 enum Policy : int;
+enum RoutingDirection : int;
 }
 
 inline namespace v1_0 {
@@ -67,6 +68,9 @@ struct ConnectionData {
     GlobalNodeId parent_instance_id;
 
     ConnectionId connection_id = generate_next_global_id();
+
+    // TODO: Remove after MGD 1.0 is deprecated
+    proto::RoutingDirection routing_direction;
 
 private:
     static ConnectionId generate_next_global_id() {
@@ -117,30 +121,34 @@ public:
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);
-        TT_FATAL(it != instances_by_name_.end(), "No instances found with name {}", name);
+        TT_FATAL(it != instances_by_name_.end(), "No instances found with name: {}", name);
         return it->second;
     }
     const std::vector<GlobalNodeId>& instances_by_type(const std::string& type) const { // includes "MESH"
         auto it = instances_by_type_.find(type);
-        TT_FATAL(it != instances_by_type_.end(), "No instances found with type {}", type);
+        TT_FATAL(it != instances_by_type_.end(), "No instances found with type: {}", type);
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_instance_id(const GlobalNodeId instance_id) const {
         auto it = connections_by_instance_id_.find(instance_id);
-        TT_FATAL(it != connections_by_instance_id_.end(), "No connections indexed for instance id {}", instance_id);
+        TT_FATAL(it != connections_by_instance_id_.end(), "No connections found for instance id: {}", instance_id);
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_type(const std::string& type) const {
         auto it = connections_by_type_.find(type);
-        TT_FATAL(it != connections_by_type_.end(), "No connections found for type {}", type);
+        TT_FATAL(it != connections_by_type_.end(), "No connections found with type: {}", type);
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
-        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
+        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id: {}", source_device_id);
         return it->second;
     }
 
+
+    // TODO: This will disappear after we move to Physical discovery
+    proto::Architecture get_arch() const;
+    uint32_t get_num_eth_ports_per_direction() const;
 
 private:
     bool backwards_compatible_;
@@ -199,6 +207,8 @@ private:
 
     // Populate Connections
     void populate_connections();
+
+    void pre_populate_connections_lookups();
 
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
