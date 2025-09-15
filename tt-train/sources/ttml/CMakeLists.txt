@@ -23,6 +23,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp

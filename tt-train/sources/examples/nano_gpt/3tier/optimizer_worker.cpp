@@ -9,11 +9,11 @@
 #include "autograd/auto_context.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "optimizers/adamw.hpp"
-#include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 

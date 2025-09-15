@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core/distributed/distributed.hpp"
+#include "distributed.hpp"
 
 using ttnn::distributed::EndpointSocketType;
 using ttnn::distributed::ISocket;

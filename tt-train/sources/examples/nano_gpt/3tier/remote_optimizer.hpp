@@ -6,8 +6,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "optimizers/optimizer_base.hpp"
-#include "socket_manager.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 

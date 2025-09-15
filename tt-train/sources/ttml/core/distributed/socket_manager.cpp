@@ -4,8 +4,6 @@
 
 #include "socket_manager.hpp"
 
-#include "tt-metalium/mesh_socket.hpp"
-
 namespace {
 
 tt::tt_metal::distributed::SocketMemoryConfig _make_socket_mem_config() {
