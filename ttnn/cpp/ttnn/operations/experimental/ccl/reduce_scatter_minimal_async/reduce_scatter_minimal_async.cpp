@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor composite_reduce_scatter(
-    ttnn::Tensor input_tensor,
+    const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -35,13 +35,10 @@ ttnn::Tensor composite_reduce_scatter(
         num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
     }
 
-    DataType input_dtype = input_tensor.dtype();
-    auto input_shape = input_tensor.logical_shape();
-
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    auto output_shape = input_shape;
+    auto output_shape = input_tensor.logical_shape();
     output_shape[scatter_dim] /= num_devices;
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
                                          (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
@@ -60,7 +57,7 @@ ttnn::Tensor composite_reduce_scatter(
     // Convert to row-major (if necessary)
     if (is_tiled_and_not_tile_aligned) {
         // If input is tiled bfloat8_b, cast up to bfloat16 prior to converting to row-major
-        if (input_dtype == DataType::BFLOAT8_B) {
+        if (input_tensor.dtype() == DataType::BFLOAT8_B) {
             all_reduced_tensor = ttnn::typecast(all_reduced_tensor, DataType::BFLOAT16);
         }
         all_reduced_tensor = ttnn::to_layout(all_reduced_tensor, Layout::ROW_MAJOR);
@@ -74,7 +71,7 @@ ttnn::Tensor composite_reduce_scatter(
     if (is_tiled_and_not_tile_aligned) {
         reduce_scatter_output_tensor = ttnn::to_layout(reduce_scatter_output_tensor, Layout::TILE);
         // If input was tiled bfloat8_b, cast back down to bfloat8_b
-        if (input_dtype == DataType::BFLOAT8_B) {
+        if (input_tensor.dtype() == DataType::BFLOAT8_B) {
             reduce_scatter_output_tensor = ttnn::typecast(reduce_scatter_output_tensor, DataType::BFLOAT8_B);
         }
     }
