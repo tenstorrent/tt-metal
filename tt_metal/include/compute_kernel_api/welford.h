@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
@@ -36,6 +38,9 @@ namespace ckernel {
  * @tparam convert_M2_to_var_on_end      True: if final_row-current_row <= 32 then LLK converts M2 (dst reg at tile
  * offset 2) to variance
  *
+ * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
+ *                        be computed using float division.
+ *
  * @param current_row     The current row index (starting from 0). Should follow 0 <= current_row <= 32 and current_row
  * <= final_row. When current_row is 0, the previous mean and m2 are ignored.
  * @param final_row       The final row index. This index is not included in the update. Should follow current_row <=
@@ -43,7 +48,8 @@ namespace ckernel {
  * @param num_skip_rows   Number of initial rows to skip in the update. Must be >= 0. Default is 0.
  *                        Setting this to a value greater than 0 skips the first num_skip_rows rows of the update.
  *                        Should follow 0 <= num_skip_rows <= 32.
- * @param reciprocal_lut_ptr       The reciprocal lookup table pointer for optimized speed
+ * @param reciprocal_lut       The optional reference to the reciprocal lookup table. If nullptr, the reciprocal will
+ *                        be computed using float division.
  *
  * @note All 32 rows of the input tile are processed by this function.
  *
@@ -55,14 +61,20 @@ template <
     uint32_t mean_dst_index,
     uint32_t m2_dst_index,
     bool reformat_dst_to_col_on_end,
-    bool convert_M2_to_var_on_end>
-ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows, uint32_t reciprocal_lut_ptr) {
+    bool convert_M2_to_var_on_end,
+    uint32_t reciprocal_size>
+ALWI void welford_tile(
+    uint32_t current_row,
+    uint32_t final_row,
+    uint32_t num_skip_rows,
+    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     MATH((llk_math_welfords_sfpu<
           input_dst_index,
           mean_dst_index,
           m2_dst_index,
           reformat_dst_to_col_on_end,
-          convert_M2_to_var_on_end>(current_row, final_row, num_skip_rows, reciprocal_lut_ptr)));
+          convert_M2_to_var_on_end,
+          reciprocal_size>(current_row, final_row, num_skip_rows, reciprocal_lut)));
 }
 
 // /**
