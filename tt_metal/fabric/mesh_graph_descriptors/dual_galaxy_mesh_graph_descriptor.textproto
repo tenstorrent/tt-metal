@@ -10,4 +10,3 @@ mesh_descriptors {
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-
