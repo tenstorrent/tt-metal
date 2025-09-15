@@ -14,7 +14,6 @@ namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
     CBRT,
-    COSH,
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,
@@ -23,7 +22,6 @@ enum class UnaryCompositeOpType {
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
-    SELU,
     GLU,
     REGLU,
     GEGLU,
@@ -39,7 +37,6 @@ enum class UnaryCompositeOpType {
     FRAC,
 };
 Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
@@ -52,11 +49,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _selu(
-    const Tensor&,
-    float scale = 1.0507,
-    float alpha = 1.67326,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
@@ -77,11 +69,6 @@ struct OpHandler;
 template <>
 struct OpHandler<UnaryCompositeOpType::CBRT> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cbrt(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::COSH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cosh(t1, mem_cfg); }
 };
 
 template <>
@@ -136,13 +123,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::NORMALIZE_HW> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
         return _normalize(t1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::SELU> {
-    static Tensor handle(const Tensor& t1, float scale, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
-        return _selu(t1, scale, alpha, mem_cfg);
     }
 };
 
