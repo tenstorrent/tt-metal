@@ -33,7 +33,11 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             break;
 
         case WhereVariant::TTS:
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+                reader_kernel = KernelName::ReaderColBcastTTS;
+                compute_kernel = KernelName::ComputeColBcastTTS;
+                writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -45,7 +49,11 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             break;
 
         case WhereVariant::TST:
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+                reader_kernel = KernelName::ReaderColBcastTST;
+                compute_kernel = KernelName::ComputeColBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTST;
                 compute_kernel = KernelName::ComputeNoBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -82,6 +90,12 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_colbcast_ttt.cpp";
+        case KernelName::ReaderColBcastTTS:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "tts_tst_reader_col_bcast.cpp";
+        case KernelName::ReaderColBcastTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "tts_tst_reader_col_bcast.cpp";
         case KernelName::ReaderRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
@@ -100,6 +114,10 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeNoBcastTSS: return fmt::format(compute, root, "where_sfpu_no_bcast_tss.cpp");
         case KernelName::ComputeColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_ttt.cpp";
+        case KernelName::ComputeColBcastTTS:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tts.cpp";
+        case KernelName::ComputeColBcastTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -186,6 +204,85 @@ std::map<std::string, std::string> make_dataflow_defines(
     return defines;
 }
 
+// 2-tensor broadcast compatibility (used by both TTS and TST variants)
+// For TTS: checks predicate vs true tensor (false is scalar)
+// For TST: checks predicate vs false tensor (true is scalar)
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape) {
+    // Check for exact match
+    if (predicate_shape == tensor_shape) {
+        return WhereBroadcastType::NONE;
+    }
+
+    bool same_width = (predicate_shape[-1] == tensor_shape[-1]);
+    bool same_height = (predicate_shape[-2] == tensor_shape[-2]);
+
+    log_debug(
+        tt::LogOp,
+        "2-tensor broadcast detection - predicate shape: {}, tensor shape: {}",
+        predicate_shape,
+        tensor_shape);
+    log_debug(tt::LogOp, "same_width: {}, same_height: {}", same_width, same_height);
+
+    // Check for outer broadcast first: if last two dimensions match exactly,
+    // it's outer broadcast (broadcasting in dimensions beyond -2)
+    if (same_height && same_width) {
+        log_debug(tt::LogOp, "Detected OUTER_BCAST for 2-tensor case");
+        return WhereBroadcastType::OUTER_BCAST;
+    }
+
+    if (!same_height && !same_width) {
+        return WhereBroadcastType::INVALID_BCAST;
+    }
+
+    // Get dimension sizes
+    auto pred_w = predicate_shape[-1];
+    auto tensor_w = tensor_shape[-1];
+    auto pred_h = predicate_shape[-2];
+    auto tensor_h = tensor_shape[-2];
+
+    if (!same_width) {
+        // Check for column broadcast patterns (width dimension differs, heights same)
+        auto max_w = std::max(pred_w, tensor_w);
+        bool pred_col_broadcasted = (pred_w == 1 && max_w > 1);
+        bool tensor_col_broadcasted = (tensor_w == 1 && max_w > 1);
+
+        // Column broadcast case: at least one tensor is broadcasting in width and heights are same
+        if ((pred_col_broadcasted || tensor_col_broadcasted) && same_height) {
+            // TTS and TST support column broadcast
+            log_debug(tt::LogOp, "2-tensor case detected column broadcast");
+            return WhereBroadcastType::COL_BCAST;
+        }
+    }
+
+    // Check for row broadcast patterns (height dimension differs)
+    if (!same_height) {
+        // Check for row broadcast patterns: at least one tensor is broadcasting in height and widths are same
+        auto max_h = std::max(pred_h, tensor_h);
+        bool pred_row_broadcasted = (pred_h == 1 && max_h > 1);
+        bool tensor_row_broadcasted = (tensor_h == 1 && max_h > 1);
+
+        log_debug(
+            tt::LogOp,
+            "2-tensor row broadcast check: pred_h={}, tensor_h={}, same_width={}, pred_row_broadcasted={}, "
+            "tensor_row_broadcasted={}",
+            pred_h,
+            tensor_h,
+            same_width,
+            pred_row_broadcasted,
+            tensor_row_broadcasted);
+
+        // Row broadcast case: at least one tensor is broadcasting in height and widths are same
+        if ((pred_row_broadcasted || tensor_row_broadcasted) && same_width) {
+            // TTS and TST do not support row broadcast - fallback to legacy
+            log_debug(tt::LogOp, "2-tensor row broadcast not supported, falling back to legacy");
+            return WhereBroadcastType::INVALID_BCAST;
+        }
+    }
+
+    // If we reach here, no valid broadcast pattern was found
+    return WhereBroadcastType::INVALID_BCAST;
+}
+
 WhereBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& true_shape, const ttnn::Shape& false_shape) {
     // Check for column broadcast pattern:
@@ -195,15 +292,14 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]) &&
-        (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
-    }
-
     bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
 
-    // Multi-dimensional ROW and COL broadcast is not supported for now
+    // Check for outer broadcast: same height and width
+    if (same_height && same_width) {
+        return WhereBroadcastType::OUTER_BCAST;
+    }
+
     if (!same_height && !same_width) {
         return WhereBroadcastType::INVALID_BCAST;
     }
@@ -243,18 +339,6 @@ WhereBroadcastType get_broadcast_type(
             (pred_h == true_h && pred_h == false_h)) {
             return WhereBroadcastType::COL_BCAST;
         }
-    }
-
-    return WhereBroadcastType::INVALID_BCAST;
-}
-
-WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape) {
-    if ((predicate_shape == b_shape)) {
-        return WhereBroadcastType::NONE;
-    }
-
-    if ((predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-2] == b_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
     }
 
     return WhereBroadcastType::INVALID_BCAST;
