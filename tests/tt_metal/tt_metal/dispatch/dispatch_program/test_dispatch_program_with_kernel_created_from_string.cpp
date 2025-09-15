@@ -105,7 +105,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
                 program,
                 kernel_src_code,
                 *active_ethernet_cores.begin(),
-                tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = dm_processor});
+                tt_metal::EthernetConfig{.noc = static_cast<tt_metal::NOC>(dm_processor), .processor = dm_processor});
             this->RunProgram(device, program);
         }
     };

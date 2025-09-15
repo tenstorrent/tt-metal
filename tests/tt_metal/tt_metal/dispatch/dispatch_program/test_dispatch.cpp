@@ -103,7 +103,7 @@ static void test_sems_across_core_types(
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = active_eth ? tt::tt_metal::Eth::RECEIVER : tt::tt_metal::Eth::IDLE,
-                    .noc = tt::tt_metal::NOC::NOC_0,
+                    .noc = static_cast<tt_metal::NOC>(dm_processor),
                     .processor = dm_processor,
                     .compile_args = compile_args,
                 });
@@ -182,6 +182,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
+                    .noc = static_cast<tt_metal::NOC>(dm_processor),
                     .processor = dm_processor,
                 });
         }
@@ -264,7 +265,9 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
             eth_core,
             tt::tt_metal::EthernetConfig{
-                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER, .processor = dm_processor});
+                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
+                .noc = static_cast<tt_metal::NOC>(dm_processor),
+                .processor = dm_processor});
     }
 
     this->RunProgram(mesh_device, workload);
@@ -349,7 +352,10 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
                 program_,
                 "tt_metal/kernels/dataflow/blank.cpp",
                 core_coord,
-                EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = NOC::NOC_0, .processor = dm_processor});
+                EthernetConfig{
+                    .eth_mode = Eth::RECEIVER,
+                    .noc = static_cast<tt_metal::NOC>(dm_processor),
+                    .processor = dm_processor});
 
             this->RunProgram(mesh_device, workload);
 
