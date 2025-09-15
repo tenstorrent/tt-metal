@@ -2112,7 +2112,18 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
+#ifdef ARCH_BLACKHOLE
+    // We must do this because in BH, inline writes spoof their inline writes
+    // by first writing the value to L1 and then sending a noc write out of that
+    // L1 location to avoid a HW bug. A result of this is that those inline write
+    // calls on BH implicitly barrier. That barrier call compares against
+    // `noc_nonposted_writes_num_issued`, which will NOT be updated if `update_counter` is false.
+    // Therefore, we must override `update_counter` to true if `posted` is false.
+    constexpr bool update_counter_in_callee = update_counter || !posted;
+#else
+    constexpr bool update_counter_in_callee = update_counter;
+#endif
+    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter_in_callee>(
         noc,
         cmd_buf,
         src_local_l1_addr,
