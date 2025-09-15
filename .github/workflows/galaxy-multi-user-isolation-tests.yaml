@@ -192,7 +192,7 @@ jobs:
 
       - name: Run Docker Compose
         run: |
-          TRAY_PODS_DIR=".muti-user-galaxy-docker-files"
+          TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
           REQUIRED_PODS=4
           TIMEOUT=300
           
