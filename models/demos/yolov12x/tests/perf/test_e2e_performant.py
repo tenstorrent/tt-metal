@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov12x.common import YOLOV12_L1_SMALL_SIZE
 from models.demos.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner
 from models.demos.yolov12x.tt.common import get_mesh_mappers
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_yolov12x_inference(

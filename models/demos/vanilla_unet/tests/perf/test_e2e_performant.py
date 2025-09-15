@@ -9,9 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE
 from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 def get_expected_times(name):

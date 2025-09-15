@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
@@ -24,7 +25,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     torch_cache_from_paged,
     torch_cache_from_transformers_single_layer,
 )
-from models.utility_functions import comp_pcc
 
 
 def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
