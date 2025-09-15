@@ -76,7 +76,6 @@ void fabric_set_route(
     uint32_t local_val;
     uint32_t forward_val;
     uint32_t end_hop = start_hop + num_hops;
-
     for (uint32_t i = start_hop; i < end_hop; i++) {
         if constexpr (mcast) {
             // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
