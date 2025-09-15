@@ -127,7 +127,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const uint32_t num_links,
     ccl::Topology topology,
     uint32_t ring_size,
-    uint32_t ring_index);
+    uint32_t ring_index,
+    std::optional<uint32_t> secondary_cluster_axis,
+    std::optional<std::vector<uint32_t>> secondary_mesh_shape);
 
 namespace operations {
 namespace experimental {
