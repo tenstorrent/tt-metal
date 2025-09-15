@@ -238,7 +238,7 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
     std::optional<std::string> output_path = std::nullopt;
-    for (size_t i = 0; i < this->expected_num_binaries(); ++i) {
+    for (int i = 0; i < this->expected_num_binaries(); ++i) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
         if (output_path.has_value()) {
@@ -251,6 +251,19 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
     const std::string build_success_marker_path =
         fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
     return std::filesystem::exists(build_success_marker_path);
+}
+
+std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
+    std::vector<std::string> file_paths;
+    auto& hal = MetalContext::instance().hal();
+    uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
+    for (int i = 0; i < this->expected_num_binaries(); i++) {
+        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device.build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
+        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_));
+    }
+    return file_paths;
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
@@ -544,16 +557,6 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
 
-std::vector<std::string> DataMovementKernel::file_paths(IDevice& device) const {
-    uint32_t tensix_core_type =
-        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
-    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device.build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    return {build_state.get_target_out_path(this->kernel_full_name_)};
-}
-
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
     TT_ASSERT(this->binaries_exist_on_disk(device));
@@ -590,16 +593,6 @@ void EthernetKernel::read_binaries(IDevice* device) {
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
 
-std::vector<std::string> EthernetKernel::file_paths(IDevice& device) const {
-    uint32_t erisc_core_type =
-        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int erisc_id = enchantum::to_underlying(this->config_.processor);
-    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device.build_id(), erisc_core_type, dm_class_idx, erisc_id);
-    return {build_state.get_target_out_path(this->kernel_full_name_)};
-}
-
 void ComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
@@ -619,21 +612,6 @@ void ComputeKernel::read_binaries(IDevice* device) {
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
-}
-
-std::vector<std::string> ComputeKernel::file_paths(IDevice& device) const {
-    std::vector<std::string> file_paths;
-    auto& hal = MetalContext::instance().hal();
-    uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    uint32_t processor_types_count =
-        hal.get_processor_types_count(this->get_kernel_programmable_core_type(), compute_class_idx);
-    for (int trisc_id = 0; trisc_id < processor_types_count; trisc_id++) {
-        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device.build_id(), tensix_core_type, compute_class_idx, trisc_id);
-        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_));
-    }
-    return file_paths;
 }
 
 bool DataMovementKernel::configure(
