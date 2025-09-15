@@ -21,6 +21,7 @@
 #include <tt-metalium/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
+#include <telemetry/telemetry_data_store.hpp>
 #include <server/websocket_server.hpp>
 
 using json = nlohmann::json;
@@ -39,6 +40,9 @@ private:
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     uint16_t port_;
+
+    // Telemetry data store
+    TelemetryDataStore telemetry_data_store_;
 
     // Telemetry data
     std::mutex snapshot_mutex_;
@@ -80,6 +84,9 @@ private:
                 continue;
             }
 
+            // Update data store from snapshot
+            telemetry_data_store_.update_from_snapshot(*snapshot);
+
             // Serialize telemetry data to JSON and send to clients
             json j = *snapshot;
             std::string message = j.dump();
@@ -94,11 +101,14 @@ private:
 
         std::cout << "WebSocket client connected (total clients: " << connections_.size() << ")" << std::endl;
 
-        // Send hello message to the new client
+        // Send full snapshot to the new client
         try {
-            ws_server_.send(hdl, "hello", websocketpp::frame::opcode::text);
+            TelemetrySnapshot full_snapshot = telemetry_data_store_.create_full_snapshot();
+            json j = full_snapshot;
+            std::string message = j.dump();
+            ws_server_.send(hdl, message, websocketpp::frame::opcode::text);
         } catch (const websocketpp::exception& e) {
-            std::cout << "Failed to send hello message: " << e.what() << std::endl;
+            std::cout << "Failed to send full snapshot to new client: " << e.what() << std::endl;
         }
     }
 

@@ -20,6 +20,9 @@ This will often be e.g. 54168. Assuming you are on e.g. `aus-glx-02` you can the
 
 # TODO
 
+- Nomenclature is getting a bit confusing. `TelemetrySnapshot` should probably just be `TelemetryUpdate` or `TelemetryUpdateMessage` because it can be both
+  a full snapshot as well as a differential update. We should rename methods such as `get_next_snapshot()` to `get_next_update()` and perhaps even go
+  so far as to rename `TelemetryDataStore` to `TelemetrySnapshot`.
 - Update to BH style telemetry:  https://github.com/tenstorrent/tt-umd/commit/1b6fc8c8fd29f9a2b32e3b879a02ab26be496e0d
 - HAL probably needs to be moved to UMD somehow, although we use the Metal one for now without creating a Metal context.
 - When factory descriptor becomes available, use that to identify chips, connections, and produce telemetry paths.
