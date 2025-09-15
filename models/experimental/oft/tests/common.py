@@ -29,6 +29,7 @@ def load_checkpoint(checkpoints_path, ref_model):
         ref_model.to(ref_model.dtype)
         logger.info(f"Converted all model weights to {ref_model.dtype}")
     else:
-        logger.warning(f"Checkpoint path {checkpoints_path} does not exist, using random weights")
+        logger.error(f"Checkpoint path {checkpoints_path} does not exist, using random weights")
+        assert False, f"Checkpoint path {checkpoints_path} does not exist"
 
     return ref_model

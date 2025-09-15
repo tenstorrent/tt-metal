@@ -13,8 +13,9 @@ from models.experimental.oft.reference.utils import (
     load_calib,
     load_image,
     make_grid,
+    visualize_score,
 )
-from models.experimental.oft.reference.utils_objects import print_object_comparison
+from models.experimental.oft.reference.utils import print_object_comparison
 from models.experimental.oft.tests.common import (
     GRID_HEIGHT,
     GRID_RES,
@@ -33,7 +34,7 @@ from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 14 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "input_image_path, calib_path",
     [
@@ -61,8 +62,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 )
 @pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
 @torch.no_grad()
-# def run_demo_inference(
-def test_oftnet(
+def test_demo_inference(
     device,
     checkpoints_path,
     input_image_path,
@@ -142,7 +142,7 @@ def test_oftnet(
     tt_grid_ = ttnn.from_torch(grid_, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # 2 Create tt OFTnet
-    tt_module = TTOftNet(
+    tt_model = TTOftNet(
         device,
         parameters,
         parameters.conv_args,
@@ -167,10 +167,9 @@ def test_oftnet(
 
     # ========================================================
     # Run ttnn inference pass
-    # intermediates, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
 
     # 4 Run tt oftnet inference pass
-    (tt_intermediates, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
+    (tt_intermediates, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_model.forward(
         device, tt_input, tt_calib, tt_grid
     )
 
@@ -187,6 +186,8 @@ def test_oftnet(
 
     # ========================================================
     # Compare results
+
+    test_id = f"{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
 
     # Check PCC on intermediates
     all_passed = True
@@ -217,7 +218,6 @@ def test_oftnet(
             fig = visualize_tensor_distributions(out, tt_out_torch, title1="Reference Integral", title2="TTNN Integral")
 
             # Create output filename with same naming pattern as other visualizations
-            test_id = f"{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
             output_file = os.path.join(output_dir, f"oft_integral_{basename}_{layer_name}_{test_id}.png")
             fig.savefig(output_file, dpi=300, bbox_inches="tight")
             logger.info(f"Saved integral tensor distribution to {output_file}")
@@ -248,16 +248,13 @@ def test_oftnet(
     input_tensor = input_tensor.to(torch.float32)
 
     # Visualize scores/heatmaps
-    # tt_scores = tt_scores.reshape(scores.shape)
-    # visualize_score(scores, tt_scores, grid_.unsqueeze(0))
-    # plt.suptitle(basename, fontsize=16)
-    # plt.tight_layout()
-    # # Create an ID from the test parameters
-    test_id = f"{'fallback_ff_' if fallback_feedforward else ''}{'fallback_lat_' if fallback_lateral else ''}{'fallback_oft_' if fallback_oft else ''}host_decoder_{use_host_decoder}"
-
-    # output_file = os.path.join(output_dir, f"oft_scores_{basename}_{test_id}.png")
-    # plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    # logger.info(f"Saved scores comparison visualization to {output_file}")
+    visualize_score(scores[None], tt_scores[None], grid)
+    plt.suptitle(f"scores {basename}", fontsize=16)
+    plt.tight_layout()
+    # Create an ID from the test parameters
+    output_file = os.path.join(output_dir, f"oft_demo_scores_{basename}_{test_id}.png")
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    logger.info(f"Saved scores comparison visualization to {output_file}")
 
     # Visualize predictions
     _, (ax1, ax2) = plt.subplots(nrows=2)
@@ -270,108 +267,16 @@ def test_oftnet(
     ax1.set_title("Ref detections")
     visualize_objects(input_tensor, calib, tt_objects, ax=ax2)
     ax2.set_title("TTNN detections")
-
     # Save the comparison plot to a file
     plt.tight_layout()
-    output_file = os.path.join(output_dir, f"oft_detection_comparison_{basename}_{test_id}.png")
+    output_file = os.path.join(output_dir, f"oft_demo_detection_{basename}_{test_id}.png")
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     logger.info(f"Saved detection comparison visualization to {output_file}")
 
-    # # Validate decoder intermediates
-    # for i, (ref, tt, name) in enumerate(zip(ref_enc_intermediates, tt_enc_intermediates, enc_names_intermediates)):
-    #     if name in ["peaks", "max_inds"]:
-    #         continue
-    #     logger.warning(f"Visualizing output {i} {name}")
-
-    #     tt = tt.reshape(ref.shape)
-
-    #     passed, pcc = check_with_pcc(ref, tt, 0.999)
-    #     abs, rel = get_abs_and_relative_error(ref, tt)
-    #     special_char = "✅" if passed else "❌"
-    #     logger.warning(f"{special_char} Output {i} {name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
-
-    #     visualize_score(ref, tt, grid.unsqueeze(0))
-    #     plt.suptitle(name, fontsize=16)
-    #     plt.tight_layout()
-    #     # Create an ID from the test parameters
-    #     output_file = f"decoder_debug_{name}.png"
-    #     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    #     logger.info(f"Saved scores comparison visualization to {output_file}")
-
-    #     # Plot the absolute difference between reference and tt tensors
-    #     plt.figure(figsize=(10, 6))
-    #     diff = torch.abs(ref - tt)[0]
-    #     plt.imshow(diff.detach().numpy().squeeze(), cmap='hot')
-    #     plt.colorbar(label='Absolute Difference')
-    #     plt.title(f'Absolute Difference for {name}')
-    #     output_diff_file = f"decoder_diff_{name}.png"
-    #     plt.savefig(output_diff_file, dpi=300, bbox_inches="tight")
-    #     plt.close()
-    #     logger.info(f"Saved absolute difference visualization to {output_diff_file}")
-
-    # print_object_comparison(ref_objects, tt_objects)
-    # # Add PCC testing for smooth and mp intermediates from tt_encoder
-    # logger.info("=== Testing PCC for encoder intermediates (smooth and mp) ===")
-    # for i, (ref, tt, name) in enumerate(zip(ref_encoder_intermediates, tt_encoder_intermediates, tt_encoder_names_intermediates)):
-    #     if name in ["peaks", "max_inds"]:
-    #         continue
-
-    #     logger.warning(f"Testing PCC for intermediate {i} {name}")
-
-    #     # Reshape tt tensor to match ref shape
-    #     tt = tt.reshape(ref.shape)
-
-    #     # Test PCC with threshold 0.999
-    #     passed, pcc = check_with_pcc(ref, tt, 0.999)
-    #     abs_err, rel_err = get_abs_and_relative_error(ref, tt)
-    #     special_char = "✅" if passed else "❌"
-    #     logger.warning(f"{special_char} Intermediate {i} {name}: {passed=}, {pcc=}, abs_err={abs_err:.3f}, rel_err={rel_err:.3f}")
-
-    #     # Visualize the intermediate results
-    #     visualize_score(ref, tt, grid.unsqueeze(0))
-    #     plt.suptitle(f"{name} - {basename}", fontsize=16)
-    #     plt.tight_layout()
-    #     output_file = os.path.join(output_dir, f"encoder_intermediate_{name}_{basename}_{test_id}.png")
-    #     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    #     logger.info(f"Saved encoder intermediate visualization to {output_file}")
-
-    #     # Plot the absolute difference between reference and tt tensors
-    #     plt.figure(figsize=(10, 6))
-    #     diff = torch.abs(ref - tt)[0]
-    #     plt.imshow(diff.detach().numpy().squeeze(), cmap='hot')
-    #     plt.colorbar(label='Absolute Difference')
-    #     plt.title(f'Absolute Difference for {name}')
-    #     output_diff_file = os.path.join(output_dir, f"encoder_diff_{name}_{basename}_{test_id}.png")
-    #     plt.savefig(output_diff_file, dpi=300, bbox_inches="tight")
-    #     plt.close()
-    #     logger.info(f"Saved encoder absolute difference visualization to {output_diff_file}")
-
     # =======================================================
-    # Compare encoder objects using shared function
+    # Compare encoder objects for debugging purposes
     logger.info("=== Comparing encoder objects ===")
     print_object_comparison(ref_objects, tt_objects)
-
-    # Save outputs to files, useful when debugging encoder
-    SAVE_OUTPUTS = False
-    if SAVE_OUTPUTS:
-        # Construct a unique filename based on test parameters
-        output_file = os.path.join(output_dir, f"encoded_outputs_{basename}_{test_id}.pt")
-
-        # Package all outputs in a dictionary
-        output_dict = {
-            "ref_scores": ref_outs[0],
-            "ref_pos_offsets": ref_outs[1],
-            "ref_dim_offsets": ref_outs[2],
-            "ref_ang_offsets": ref_outs[3],
-            "tt_scores": tt_outs[0],
-            "tt_pos_offsets": tt_outs[1],
-            "tt_dim_offsets": tt_outs[2],
-            "tt_ang_offsets": tt_outs[3],
-        }
-
-        # Save outputs to file using torch.save
-        torch.save(output_dict, output_file)
-        logger.info(f"Saved outputs to {output_file}")
 
     # =======================================================
     # Fail test based on PCC results
