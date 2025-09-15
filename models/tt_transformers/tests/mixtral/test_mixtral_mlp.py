@@ -27,9 +27,9 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
     seqlen = 32
     t3k_mesh_device.disable_and_clear_program_cache()
     dtypes = {
-        "w1": ttnn.bfloat4_b,
+        "w1": ttnn.bfloat8_b,
         "w2": ttnn.bfloat8_b,
-        "w3": ttnn.bfloat4_b,
+        "w3": ttnn.bfloat8_b,
     }
 
     model_args = ModelArgs(t3k_mesh_device)
