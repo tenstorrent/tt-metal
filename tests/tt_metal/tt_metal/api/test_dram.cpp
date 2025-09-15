@@ -309,7 +309,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
                 log_info(tt::LogTest, "Active Eth DM{} Loopback. Logical core {}", erisc_idx, active_eth_core.str());
                 dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
                     .eth_mode = Eth::RECEIVER,
-                    .noc = tt_metal::NOC::NOC_0,
+                    .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }
@@ -346,7 +346,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
                 log_info(tt::LogTest, "Single Idle Eth DM{} Loopback. Logical core {}", erisc_idx, idle_eth_core.str());
                 dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
                     .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0,
+                    .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
             }

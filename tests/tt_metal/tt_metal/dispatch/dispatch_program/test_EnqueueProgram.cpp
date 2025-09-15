@@ -254,7 +254,9 @@ void test_dummy_EnqueueProgram_with_runtime_args(
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
         tt::tt_metal::EthernetConfig{
-            .noc = tt::tt_metal::NOC::NOC_0, .processor = erisc_processor, .defines = dummy_defines0});
+            .noc = static_cast<tt_metal::NOC>(erisc_processor),
+            .processor = erisc_processor,
+            .defines = dummy_defines0});
 
     constexpr int k_NumDummyArgs = 9;
     vector<uint32_t> dummy_kernel0_args(k_NumDummyArgs);
@@ -1353,7 +1355,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
                 eth_core,
-                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1}
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1}
             );
 
             uint32_t unreserved_l1 = hal::get_erisc_l1_unreserved_base();
