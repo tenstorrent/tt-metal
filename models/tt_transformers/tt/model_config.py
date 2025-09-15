@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
@@ -34,7 +35,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
-from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"

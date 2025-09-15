@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
@@ -22,7 +23,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
-from models.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize(

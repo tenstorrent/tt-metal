@@ -12,7 +12,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from models.experimental.swin_v2.reference.patchmerging_v2 import PatchMergingV2
 from models.experimental.swin_v2.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_v2.tt.tt_swin_transformer import TtSwinTransformer

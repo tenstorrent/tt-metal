@@ -7,12 +7,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
 from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
-from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 

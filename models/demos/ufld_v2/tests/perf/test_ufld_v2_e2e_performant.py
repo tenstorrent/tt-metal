@@ -9,9 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_ufldv2_e2e(device, batch_size_per_device, model_location_generator, height=320, width=800, channels=3):
