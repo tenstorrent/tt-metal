@@ -38,7 +38,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
                const MeshDevice& mesh_device,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+               const ttnn::ccl::Topology topology,
+               const std::optional<uint32_t> secondary_cluster_axis,
+               const std::optional<std::vector<uint32_t>> secondary_mesh_shape) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -51,7 +53,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
                     mesh_device,
                     num_links,
                     memory_config,
-                    topology);
+                    topology,
+                    secondary_cluster_axis,
+                    secondary_mesh_shape);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -65,7 +69,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Linear});
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
+            py::arg("secondary_cluster_axis") = std::nullopt,
+            py::arg("secondary_mesh_shape") = std::nullopt});
 }
 
 }  // namespace

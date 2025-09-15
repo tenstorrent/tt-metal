@@ -38,6 +38,8 @@ struct NeighborPadAsync {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const uint32_t ring_size;
+    std::optional<uint32_t> secondary_cluster_axis;
+    std::optional<std::vector<uint32_t>> secondary_mesh_shape;
 
     NeighborPadAsync(
         std::vector<IDevice*> devices,
@@ -51,7 +53,9 @@ struct NeighborPadAsync {
         uint32_t num_links,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        uint32_t ring_size) :
+        uint32_t ring_size,
+        std::optional<uint32_t> secondary_cluster_axis,
+        std::optional<std::vector<uint32_t>> secondary_mesh_shape) :
         devices(std::move(devices)),
         dim(dim),
         padding_left(padding_left),
@@ -63,7 +67,9 @@ struct NeighborPadAsync {
         num_links(num_links),
         output_mem_config(output_mem_config),
         topology(topology),
-        ring_size(ring_size) {}
+        ring_size(ring_size),
+        secondary_cluster_axis(secondary_cluster_axis),
+        secondary_mesh_shape(secondary_mesh_shape) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -81,6 +87,8 @@ struct NeighborPadAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("ring_size", ring_size);
+        attrs.emplace_back("secondary_cluster_axis", secondary_cluster_axis);
+        attrs.emplace_back("secondary_mesh_shape", secondary_mesh_shape);
         return attrs;
     }
 
@@ -137,7 +145,9 @@ Tensor neighbor_pad_async(
     const MeshDevice& mesh_device,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::ccl::Topology> topology = std::nullopt);
+    const std::optional<ttnn::ccl::Topology> topology = std::nullopt,
+    const std::optional<uint32_t> secondary_cluster_axis = std::nullopt,
+    const std::optional<std::vector<uint32_t>> secondary_mesh_shape = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
