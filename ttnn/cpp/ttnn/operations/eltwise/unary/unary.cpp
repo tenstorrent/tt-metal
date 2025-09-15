@@ -287,7 +287,6 @@ Tensor Unary_chain::invoke(
 }
 
 Tensor Selu::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     float scale,
     float alpha,
@@ -296,7 +295,7 @@ Tensor Selu::invoke(
     UnaryOpType op_type = UnaryOpType::SELU;
 
     return detail::unary_impl(
-        queue_id, input_tensor, {UnaryWithParam{op_type, {scale, alpha}}}, memory_config, optional_output_tensor);
+        input_tensor, {UnaryWithParam{op_type, {scale, alpha}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Softplus::invoke(

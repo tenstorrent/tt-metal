@@ -87,8 +87,11 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
-            &ttnn::operations::core::to_device),
+        py::overload_cast<
+            const ttnn::Tensor&,
+            MeshDevice*,
+            const std::optional<MemoryConfig>&,
+            std::optional<ttnn::QueueId>>(&ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
@@ -287,19 +290,21 @@ void py_module(py::module& module) {
 
     module.def(
         "copy_host_to_device_tensor",
-        [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+        [](const ttnn::Tensor& host_tensor,
+           ttnn::Tensor& device_tensor,
+           const std::optional<QueueId>& cq_id = std::nullopt) {
             tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "copy_device_to_host_tensor",
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
            bool blocking = true,
-           QueueId cq_id = ttnn::DefaultQueueId) {
+           std::optional<ttnn::QueueId> cq_id = ttnn::DefaultQueueId) {
             tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),

@@ -94,7 +94,7 @@ public:
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -137,7 +137,7 @@ public:
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
@@ -149,7 +149,7 @@ public:
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -158,22 +158,22 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] std::vector<T> to_vector(std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     template <typename T>
-    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] T item(std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+        std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_layout(Layout target_layout) const;
 
     [[nodiscard]] Tensor pad(
         const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
-    [[nodiscard]] Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
@@ -321,7 +321,8 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+void write_tensor(
+    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

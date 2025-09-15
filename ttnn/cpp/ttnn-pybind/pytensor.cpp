@@ -84,7 +84,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const TensorLayout& tensor_layout,
     MeshDevice* device,
     const tt::tt_metal::MemoryPin& pydata_pin,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
@@ -132,7 +132,7 @@ Tensor create_tt_tensor_from_py_data(
     const TensorLayout& tensor_layout,
     MeshDevice* device,
     const tt::tt_metal::MemoryPin& pydata_pin,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
@@ -308,7 +308,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     GraphTracker::instance().track_function_start(
@@ -881,7 +881,7 @@ void pytensor_module(py::module& m_tensor) {
                           std::optional<Layout> layout,
                           const std::optional<MemoryConfig>& mem_config,
                           const std::optional<Tile>& tile,
-                          ttnn::QueueId cq_id,
+                          std::optional<ttnn::QueueId> cq_id,
                           std::optional<float> pad_value,
                           const distributed::TensorToMesh* mesh_mapper) {
                 return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
@@ -951,9 +951,10 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            [](const Tensor& self, MeshDevice* device, std::optional<const MemoryConfig>& mem_config, QueueId cq_id) {
-                return self.to_device(device, mem_config, cq_id);
-            },
+            [](const Tensor& self,
+               MeshDevice* device,
+               std::optional<const MemoryConfig>& mem_config,
+               std::optional<ttnn::QueueId> cq_id) { return self.to_device(device, mem_config, cq_id); },
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -1027,7 +1028,9 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self, bool blocking, QueueId cq_id) { return self.cpu(blocking, cq_id); },
+            [](const Tensor& self, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+                return self.cpu(blocking, cq_id);
+            },
             py::arg("blocking") = true,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             R"doc(

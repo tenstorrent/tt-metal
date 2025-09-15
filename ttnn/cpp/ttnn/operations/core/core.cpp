@@ -47,12 +47,12 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    QueueId queue_id) {
+    std::optional<QueueId> queue_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return tensor.to_device(mesh_device, mem_config, queue_id);
 }
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId queue_id) {
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, std::optional<QueueId> queue_id) {
     return tensor.cpu(blocking, queue_id);
 }
 

@@ -19,6 +19,7 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "tools/profiler/op_profiler.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <tt-metalium/device.hpp>
