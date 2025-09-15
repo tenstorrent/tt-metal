@@ -8,8 +8,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
-from models.utility_functions import _nearest_y, is_blackhole, is_blackhole_p100, is_wormhole_b0
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
+    get_conv_input_memory_config,
+    is_blackhole_p100,
+)
+from models.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -585,7 +588,9 @@ class resnet50:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
             # otherwise act block h is not big enough for the reuse
-            enable_activation_reuse=not is_wormhole_b0() or device.get_num_devices() <= 8,
+            enable_activation_reuse=(
+                not is_blackhole_p100(device) and (not is_wormhole_b0() or device.get_num_devices() <= 8)
+            ),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

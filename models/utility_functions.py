@@ -31,7 +31,6 @@ from models.common.utility_functions import (
     get_mesh_device,
     get_oom_of_float,
     is_blackhole,
-    is_blackhole_p100,
     is_close,
     is_conv_supported_on_device,
     is_e75,
