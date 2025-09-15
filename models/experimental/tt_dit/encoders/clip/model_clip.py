@@ -215,7 +215,7 @@ class CLIPEncoder:
                 dtype=seq_emb.get_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
             )
 
 
