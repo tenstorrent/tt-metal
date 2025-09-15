@@ -741,7 +741,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
         for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
             if (RiscEnabled(programmable_core_type, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
@@ -795,7 +795,7 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, logical_core.coord, logical_core.type);
-            auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_id++) {
                 if (RiscEnabled(programmable_core_type, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
@@ -1232,12 +1232,12 @@ void DPrintServer::Impl::poll_print_data() {
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
                 int risc_count = tt::tt_metal::GetNumRiscs(device_id, logical_core);
-                auto programmable_core_type = get_programmable_core_type(
+                auto programmable_core_type = llrt::get_core_type(
+                    device_id,
                     tt::tt_metal::MetalContext::instance()
                         .get_cluster()
                         .get_virtual_coordinate_from_logical_coordinates(
-                            device_id, logical_core.coord, logical_core.type),
-                    device_id);
+                            device_id, logical_core.coord, logical_core.type));
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
                     if (RiscEnabled(programmable_core_type, risc_index)) {
                         try {

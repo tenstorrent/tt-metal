@@ -25,7 +25,6 @@
 
 #include "control_plane.hpp"
 #include "core_descriptor.hpp"
-#include "debug_helpers.hpp"
 #include "dev_msgs.h"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
@@ -436,7 +435,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
-                get_riscv_name(get_programmable_core_type(virtual_core, device_id), processor_index));
+                get_riscv_name(llrt::get_core_type(device_id, virtual_core), processor_index));
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -449,9 +448,8 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            uint64_t addr =
-                hal.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
-                offsetof(watcher_msg_t, pause_status);
+            uint64_t addr = hal.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::WATCHER) +
+                            offsetof(watcher_msg_t, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
             auto pause_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
