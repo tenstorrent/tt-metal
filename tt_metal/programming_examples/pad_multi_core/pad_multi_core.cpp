@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 #endif
 
 int main() {
-    // get program/device
+    // Initialize Mesh API constructs: mesh device, command queue, workload, device range, and program
     int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -194,7 +194,7 @@ int main() {
     }
     printf("\n");
 
-    // dispatch program to device for execution
+    // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
     distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
