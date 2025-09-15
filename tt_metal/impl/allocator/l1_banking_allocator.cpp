@@ -23,7 +23,7 @@
 #include "bank_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt {

@@ -68,7 +68,6 @@ def ttnn_conv1d(
 
     conv_config = ttnn.Conv1dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        activation=activation,
         deallocate_activation=deallocate_activation,
         reallocate_halo_output=reallocate_halo,
         act_block_h_override=32,
