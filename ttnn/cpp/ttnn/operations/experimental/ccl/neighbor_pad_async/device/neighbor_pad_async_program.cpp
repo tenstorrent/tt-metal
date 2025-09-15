@@ -81,8 +81,48 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
         outer_dim_size *= input_tensor_shape[d];
     }
 
-    bool is_first_device = !backward_device.has_value();
-    bool is_last_device = !forward_device.has_value();
+    bool is_first_device = true;
+    bool is_last_device = true;
+    uint32_t forward_device_offset = 0;
+    uint32_t backward_device_offset = 0;
+
+    if (secondary_cluster_axis.has_value()) {
+        // secondary_cluster_axis==1, devices on row
+        // secondary_mesh_shape(0) == number of rows, (1) is number of cols
+        uint32_t secondary_cluster_axis_val = secondary_cluster_axis.value_or((uint32_t)0);
+        uint32_t row_index = ring_index / secondary_mesh_shape.value().at(1);
+        uint32_t col_index = ring_index % secondary_mesh_shape.value().at(1);
+        if (secondary_cluster_axis_val) {
+            // row
+            if (col_index != 0) {
+                is_first_device = false;
+                backward_device_offset = 1;
+            }
+            if (col_index != secondary_mesh_shape.value().at(1) - 1) {
+                is_last_device = false;
+                forward_device_offset = 1;
+            }
+        } else {
+            // column
+            if (row_index != 0) {
+                is_first_device = false;
+                backward_device_offset = secondary_mesh_shape.value().at(1);
+            }
+            if (row_index != (secondary_mesh_shape.value().at(0) - 1)) {
+                is_last_device = false;
+                forward_device_offset = secondary_mesh_shape.value().at(1);
+            }
+        }
+    } else {
+        is_first_device = !backward_device.has_value();
+        is_last_device = !forward_device.has_value();
+        if (!is_first_device) {
+            backward_device_offset = 1;
+        }
+        if (!is_last_device) {
+            forward_device_offset = 1;
+        }
+    }
 
     bool is_padding_zeros = padding_mode == "zeros";
 
@@ -135,40 +175,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_reserved_packet_header_config);
-
-    // Forward/Backward device index offset
-    uint32_t forward_device_offset = 0;
-    uint32_t backward_device_offset = 0;
-    if (secondary_cluster_axis.has_value()) {
-        uint32_t secondary_cluster_axis_val = secondary_cluster_axis.value_or((uint32_t)0);
-        // secondary_mesh_shape(0)==x should be columns, (1)==y is rows
-        uint32_t row_index = ring_index / secondary_mesh_shape.value().at(0);
-        uint32_t col_index = ring_index % secondary_mesh_shape.value().at(0);
-        if (secondary_cluster_axis_val) {
-            // row
-            if (col_index != 0) {
-                backward_device_offset = 1;
-            }
-            if (col_index != secondary_mesh_shape.value().at(0) - 1) {
-                forward_device_offset = 1;
-            }
-        } else {
-            // column
-            if (row_index != 0) {
-                backward_device_offset = secondary_mesh_shape.value().at(0);
-            }
-            if (row_index != (secondary_mesh_shape.value().at(1) - 1)) {
-                forward_device_offset = secondary_mesh_shape.value().at(0);
-            }
-        }
-    } else {
-        if (backward_device.has_value()) {
-            backward_device_offset = 1;
-        }
-        if (forward_device.has_value()) {
-            forward_device_offset = 1;
-        }
-    }
 
     // KERNEL CREATION
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
@@ -253,7 +259,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 virtual_core.x,                            // out_ready_sem_noc0_x
                 virtual_core.y,                            // out_ready_sem_noc0_y
                 final_semaphore.address(),                 // out_ready_sem_bank_addr (absolute address)
-                direction ? forward_device_offset : backward_device_offset};
+                direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
                 writer_rt_args.push_back(backward_device.has_value());
