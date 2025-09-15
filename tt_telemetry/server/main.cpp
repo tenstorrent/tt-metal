@@ -291,7 +291,6 @@ int main(int argc, char* argv[]) {
         cxxopts::value<bool>()->default_value("false"))(
         "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
         "ws-port", "Port for the WebSocket server", cxxopts::value<int>()->default_value("8081"))(
-        "enable-websocket", "Enable WebSocket server", cxxopts::value<bool>()->default_value("false"))(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
         cxxopts::value<std::string>())("h,help", "Print usage");
@@ -307,7 +306,6 @@ int main(int argc, char* argv[]) {
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
     int ws_port = result["ws-port"].as<int>();
-    bool enable_websocket = result["enable-websocket"].as<bool>();
     std::string metal_src_dir = "";
     if (result.count("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
@@ -335,18 +333,15 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers = {web_server_subscriber, web_server2_subscriber};
 
-    // WebSocket test client thread
+    // WebSocket server is always enabled
+    log_info(tt::LogAlways, "Starting WebSocket server on port {}", ws_port);
+    std::tie(websocket_server, websocket_subscriber) = run_web_socket_server(ws_port, metal_src_dir);
+    subscribers.push_back(websocket_subscriber);
+
+    // Start test client in its own thread
     std::thread websocket_client_thread;
-
-    if (enable_websocket) {
-        log_info(tt::LogAlways, "Starting WebSocket server on port {}", ws_port);
-        std::tie(websocket_server, websocket_subscriber) = run_web_socket_server(ws_port, metal_src_dir);
-        subscribers.push_back(websocket_subscriber);
-
-        // Start test client in its own thread
-        log_info(tt::LogAlways, "Starting WebSocket test client to connect to port {}", ws_port);
-        websocket_client_thread = std::thread(run_websocket_test_client, ws_port);
-    }
+    log_info(tt::LogAlways, "Starting WebSocket test client to connect to port {}", ws_port);
+    websocket_client_thread = std::thread(run_websocket_test_client, ws_port);
 
     if (use_mock_telemetry) {
         // Mock telemetry
@@ -362,13 +357,10 @@ int main(int argc, char* argv[]) {
     // Run until finished
     bool web_server_succeeded = web_server.get();
     bool web_server2_succeeded = web_server2.get();
-    bool websocket_succeeded = true;
-    if (enable_websocket) {
-        websocket_succeeded = websocket_server.get();
-    }
+    bool websocket_succeeded = websocket_succeeded = websocket_server.get();
 
     // Clean up WebSocket client thread
-    if (enable_websocket && websocket_client_thread.joinable()) {
+    if (websocket_client_thread.joinable()) {
         log_info(tt::LogAlways, "Waiting for WebSocket test client to finish...");
         websocket_client_thread.join();
     }
