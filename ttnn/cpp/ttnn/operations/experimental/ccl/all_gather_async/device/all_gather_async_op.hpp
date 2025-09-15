@@ -126,7 +126,6 @@ struct AllGatherAsync {
 // All Gather Variants
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* target_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -146,7 +145,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* target_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -167,7 +165,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     CoreCoord core_grid_offset = CoreCoord(0, 0));
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    IDevice* target_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,

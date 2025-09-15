@@ -153,7 +153,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
-            target_device,
             target_device_coord,
             forward_coord,
             backward_coord,

@@ -172,46 +172,20 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].device();
+    auto mesh_view = mesh_device->get_view();
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     auto target_device_coord = coord;
-    std::vector<IDevice*> devices_to_use = {};
-    if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].device()->get_view();
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
+    uint32_t target_ring_size = this->cluster_axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(this->cluster_axis.has_value(), "cluster_axis is required");
+    auto boundary_mode = topology == tt::tt_fabric::Topology::Ring
+                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
+                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    uint32_t device_index = coord[this->cluster_axis.value()];
+    std::optional<MeshCoordinate> backward_coord =
+        coord.get_neighbor(mesh_view.shape(), -1, this->cluster_axis.value(), boundary_mode);
+    std::optional<MeshCoordinate> forward_coord =
+        coord.get_neighbor(mesh_view.shape(), 1, this->cluster_axis.value(), boundary_mode);
 
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? target_ring_size - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i + 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? 0 : coord[0], (this->cluster_axis.value() == 0) ? coord[1] : 0);
-            }
-        }
-    }
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
@@ -219,7 +193,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
             return all_gather_async_llama_sharded(
                 input_tensors[0],
-                target_device,
                 target_device_coord,
                 forward_coord,
                 backward_coord,
@@ -240,7 +213,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_default is called");
             return all_gather_async_minimal_default(
                 input_tensors[0],
-                target_device,
                 target_device_coord,
                 forward_coord,
                 backward_coord,
@@ -493,7 +465,7 @@ Tensor all_gather_async(
         memory_config,
         topology,
         sub_device_id,
-        ttnn::ccl::get_active_physical_devices(input_tensor),
+        {},
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
         barrier_semaphore);
@@ -515,8 +487,6 @@ Tensor all_gather_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     return all_gather_async_impl(
         input_tensor,
         persistent_output_buffer,
@@ -526,7 +496,7 @@ Tensor all_gather_async(
         memory_config,
         topology,
         sub_device_id,
-        devices,
+        {},
         cluster_axis,
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,

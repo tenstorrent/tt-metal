@@ -133,7 +133,6 @@ void fabric_mux_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -155,7 +154,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     return all_gather_async_minimal_default_helper(
         program,
         input_tensor,
-        sender_device,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -178,7 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -359,7 +356,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     const uint32_t l1_unreserved_base_address =
-        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
@@ -677,7 +674,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
