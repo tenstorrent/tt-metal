@@ -46,6 +46,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t target_device_offset = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
@@ -62,7 +63,7 @@ void kernel_main() {
     cb_push_back(reserved_packet_header_cb_id, 1);
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    pkt_hdr->to_chip_unicast(target_device_offset);
 
     fabric_connection.open();
 
@@ -167,12 +168,12 @@ void kernel_main() {
             // Write the unicast packet
             if (direction) {
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(1);
+                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
             } else {
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(1);
+                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
             }
