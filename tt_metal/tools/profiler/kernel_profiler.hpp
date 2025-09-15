@@ -106,7 +106,7 @@ __attribute__((noinline)) void init_profiler(
     profiler_control_buffer[PROFILER_DONE] = 0;
 
     if (runCounter == 0) {
-        for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
@@ -116,7 +116,7 @@ __attribute__((noinline)) void init_profiler(
         profiler_control_buffer[NOC_Y] = my_y[0];
     }
 
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
@@ -166,7 +166,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 }
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         profiler_data_buffer[riscID].data[ID_LL] = counterValue;
     }
 }
@@ -266,7 +266,7 @@ __attribute__((noinline)) void finish_profiler() {
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocDestinationStateSaver noc_state;
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
