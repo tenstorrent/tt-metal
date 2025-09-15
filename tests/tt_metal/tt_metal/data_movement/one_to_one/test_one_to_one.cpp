@@ -120,7 +120,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToOneConfi
     // NOTE: The converted vector (uint32_t -> bfloat16) preserves the number of bytes,
     // but the number of elements is bound to change
     // l1_data_format is assumed to be bfloat16
-    size_t element_size_bytes = bfloat16::SIZEOF;
+    size_t element_size_bytes = sizeof(bfloat16);
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());

@@ -1042,7 +1042,7 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> py::object {
                 switch (self.dtype()) {
                     case DataType::FLOAT32: return py::cast(self.item<float>());
-                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT16: return py::cast(static_cast<float>(self.item<bfloat16>()));
                     case DataType::BFLOAT8_B:
                     case DataType::BFLOAT4_B: return py::cast(self.item<float>());
                     case DataType::INT32: return py::cast(self.item<int32_t>());
