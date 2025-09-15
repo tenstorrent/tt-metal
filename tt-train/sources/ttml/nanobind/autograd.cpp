@@ -16,8 +16,11 @@
 #include "autograd/graph.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "models/gpt2.hpp"
+#include "models/linear_regression.hpp"
 #include "modules/gpt_block.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/llama_block.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
@@ -140,11 +143,15 @@ void py_module_types(nb::module_& m) {
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<Graph>(m, "Graph");
     nb::class_<ModuleBase>(m, "ModuleBase");
-    nb::class_<modules::GPTBlock, ModuleBase>(m, "GPTBlock");
+    nb::class_<modules::GPTMLP, ModuleBase>(m, "GPTMLP");
     nb::class_<modules::LinearLayer, ModuleBase>(m, "LinearLayer");
+    nb::class_<modules::LlamaMLP, ModuleBase>(m, "LlamaMLP");
     nb::class_<Tensor>(m, "Tensor");
     nb::class_<AutocastTensor>(m, "AutocastTensor");
     nb::class_<AutoContext>(m, "AutoContext");
+
+    m.def("create_linear_regression_model", &ttml::models::linear_regression::create);
+    m.def("load_gpt2_model_from_safetensors", &ttml::models::gpt2::load_model_from_safetensors);
 }
 
 void py_module(nb::module_& m) {
@@ -175,18 +182,21 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_gpt_block_base = static_cast<nb::class_<modules::GPTBlock, ModuleBase>>(m.attr("GPTBlock"));
-        py_gpt_block_base.def(nb::init<uint32_t, uint32_t, float, bool>());
-        py_gpt_block_base.def("__call__", &modules::GPTBlock::operator());
+        auto py_gpt_mlp_base = static_cast<nb::class_<modules::GPTMLP, ModuleBase>>(m.attr("GPTMLP"));
+        py_gpt_mlp_base.def(nb::init<uint32_t, float>());
+        py_gpt_mlp_base.def("__call__", &modules::GPTMLP::operator());
     }
 
     {
         auto py_linear_layer_base = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-        py_linear_layer_base.def(nb::init<uint32_t, uint32_t, bool>());
-        py_linear_layer_base.def(nb::init<const TensorPtr&, const TensorPtr&>());
-        py_linear_layer_base.def(nb::init<const TensorPtr&, bool>());
-        py_linear_layer_base.def("get_weight", &modules::LinearLayer::get_weight);
+        py_linear_layer_base.def(nb::init<uint32_t, std::optional<uint32_t>, float>());
         py_linear_layer_base.def("__call__", &modules::LinearLayer::operator());
+    }
+
+    {
+        auto py_llama_mlp_base = static_cast<nb::class_<modules::LlamaMLP, ModuleBase>>(m.attr("LlamaMLP"));
+        py_llama_mlp_base.def(nb::init<uint32_t, std::optional<uint32_t>, float>());
+        py_llama_mlp_base.def("__call__", &modules::LlamaMLP::operator());
     }
 
     {
@@ -233,7 +243,7 @@ void py_module(nb::module_& m) {
     {
         auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
         py_autocast_tensor.def(nb::init<>());
-        // py_autocast_tensor.def(nb::init<const tt::tt_metal::Tensor&>());
+        // py_autocast_tensor.def(nb::init<const<ScrollWheelDown>tt::tt_metal::Tensor&>());
         py_autocast_tensor.def(nb::init<const AutocastTensor&>());
         py_autocast_tensor.def(nb::init<AutocastTensor&&>());
         py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
@@ -255,18 +265,17 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_device", &AutoContext::get_device);
         // TODO: argv's char** not supported
         // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
-        py_auto_context.def(
-            "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
-                const auto argc = args.size();
-                std::vector<const char*> argv(argc);
+        py_auto_context.def("initialize_distributed_context", [](AutoContext& auto_context, nb::args args) {
+            const auto argc = args.size();
+            std::vector<const char*> argv(argc);
 
-                for (const auto& arg : args) {
-                    argv.push_back(arg.c_str());
-                }
-                argv.push_back(nullptr);
+            for (const auto& arg : args) {
+                argv.push_back(nb::str(arg).c_str());
+            }
+            argv.push_back(nullptr);
 
-                auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
-            });
+            auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+        });
         py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
         py_auto_context.def("get_profiler", &AutoContext::get_profiler);
         py_auto_context.def("close_profiler", &AutoContext::close_profiler);
