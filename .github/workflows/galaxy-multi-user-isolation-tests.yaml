@@ -48,6 +48,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
         run: |
+          rm -rf .github/scripts/utils/muti-user-galaxy-docker-files
           for i in [1..4]; do
             mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
             chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
@@ -158,6 +159,36 @@ jobs:
 
       - name: Run Docker Compose
         run: |
+          TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
+          REQUIRED_PODS=4
+          TIMEOUT=300
+
+          mkdir -p "$TRAY_PODS_DIR"
+
+          EPOCH_START=$(date +%s)
+          echo "start epoch: $EPOCH_START"
+          
+          for tray in tray-1 tray-2 tray-3 tray-4; do
+            TRAY_POD_FILE="$TRAY_PODS_DIR/tray-presence-$tray.txt"
+            echo "Creating $TRAY_POD_FILE"
+            touch "$TRAY_POD_FILE"
+          done
+
+          # wait for REQUIRED .txt files to appear (with timeout)
+          while true; do
+            files=( "$TRAY_PODS_DIR"/tray-presence-*.txt )
+            count=${#files[@]}
+            elapsed=$(( $(date +%s) - EPOCH_START))
+            if [ "$count" -ge "$REQUIRED_PODS" ]; then
+              break
+            fi
+            if [ "$elapsed" -ge "$TIMEOUT" ]; then
+              echo "Error: Not all $REQUIRED_PODS files appeared within $TIMEOUT seconds (found $count)."
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
           USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
 
       - name: Run the tests
