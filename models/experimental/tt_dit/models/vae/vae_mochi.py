@@ -262,7 +262,7 @@ class ResBlock:
             dim_2_1,
             use_multicore=True,
         )
-        dim_2_1 = ttnn.reshape(dim_2_1, [1, 1, N * T * H, W * C])
+        dim_2_1 = ttnn.reshape(dim_2_1, [1, 1, N * T, H * W * C])
         output = ttnn.tilize_with_zero_padding(
             dim_2_1,
             use_multicore=True,
@@ -299,19 +299,27 @@ class ResBlock:
     def __call__(self, x_NTHWC):
         shapes = self.get_tensor_shapes(x_NTHWC)
         N, T, H, W, C = shapes
-        if self.parallel_config.hw_parallel.factor > 1:
+        if self.parallel_config.w_parallel.factor > 1:
             residual_tiled_NTHWC, x_tiled_NTHWC = self.sharded_reshape_tilize(x_NTHWC, shapes)
             ttnn.deallocate(x_NTHWC)
             residual_tiled_NTHWC = ttnn.reallocate(residual_tiled_NTHWC)
             all_gather_output = vae_all_gather(
                 self.ccl_manager,
                 x_tiled_NTHWC,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
                 dim=3,
                 reshape=False,
             )
             ttnn.deallocate(x_tiled_NTHWC)
-            x_tiled_NTHWC = self.sharded_reshape_untilize_tilize(all_gather_output, (N * T, 1, H * W * 2, C))
+            x_tiled_NTHWC = ttnn.reshape(
+                all_gather_output,
+                (1, 1, N * T, self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor, H, W, C),
+            )
+            x_tiled_NTHWC = ttnn.permute(x_tiled_NTHWC, (0, 1, 2, 3, 5, 4, 6, 7))
+            x_tiled_NTHWC = self.sharded_reshape_untilize_tilize(
+                x_tiled_NTHWC,
+                (N * T, 1, H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, C),
+            )
         else:
             x_tiled_NTHWC = self.reshape_tilize(x_NTHWC, shapes)
             ttnn.deallocate(x_NTHWC)
@@ -319,8 +327,8 @@ class ResBlock:
         gathered_shapes = (
             shapes[0],
             shapes[1],
-            shapes[2],
-            shapes[3] * self.parallel_config.hw_parallel.factor,
+            shapes[2] * self.parallel_config.h_parallel.factor,
+            shapes[3] * self.parallel_config.w_parallel.factor,
             shapes[4],
         )
 
@@ -329,28 +337,51 @@ class ResBlock:
         num_out_blocks = self.num_out_blocks_map[C][HW]
 
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
+
         ttnn.deallocate(x_tiled_NTHWC)
         x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
 
-        if self.parallel_config.hw_parallel.factor > 1:
-            x_NTHWC = ttnn.mesh_partition(
+        if self.parallel_config.w_parallel.factor > 1:
+            x_NTHWC = ttnn.reshape(
+                x_NTHWC, (N, T, self.parallel_config.h_parallel.factor, H, self.parallel_config.w_parallel.factor, W, C)
+            )
+            x_NTHWC = ttnn.permute(x_NTHWC, (0, 1, 2, 4, 3, 5, 6))
+            x_NTHWC = ttnn.reshape(
                 x_NTHWC,
-                3,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
-                memory_config=x_NTHWC.memory_config(),
+                (N, T, self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, H, W, C),
             )
 
-            x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
+            x_NTHWC = ttnn.mesh_partition(
+                x_NTHWC,
+                2,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
+                memory_config=x_NTHWC.memory_config(),
+            )
+            x_NTHWC = ttnn.squeeze(x_NTHWC, 0)  # Get rid of N
+            x_NTHWC = ttnn.squeeze(x_NTHWC, 1)  # Get rid of HW dim
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
                 x_NTHWC,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
                 dim=2,
                 padding_left=1,
                 padding_right=1,
                 padding_mode="replicate",
+                secondary_cluster_axis=1,
+                secondary_mesh_shape=(4, 2),
+            )
+            x_NTHWC = vae_neighbor_pad(
+                self.ccl_manager,
+                x_NTHWC,
+                cluster_axis=self.parallel_config.h_parallel.mesh_axis,
+                dim=1,
+                padding_left=1,
+                padding_right=1,
+                padding_mode="replicate",
+                secondary_cluster_axis=0,
+                secondary_mesh_shape=(4, 2),
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
@@ -358,19 +389,27 @@ class ResBlock:
         ttnn.deallocate(x_NTHWC)
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
 
-        if self.parallel_config.hw_parallel.factor > 1:
+        if self.parallel_config.w_parallel.factor > 1:
             x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize_no_deallocate(
-                x_conv1_tiled_NTHWC, (1, 1, N * T * H, W * C)
+                x_conv1_tiled_NTHWC, (1, 1, N * T, H * W * C)
             )
             ttnn.deallocate(x_conv1_NTHWC)
             x_conv1_tiled_NTHWC = vae_all_gather(
                 self.ccl_manager,
                 x_conv1_tiled_NTHWC,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
                 dim=3,
                 reshape=False,
             )
-            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize(x_conv1_tiled_NTHWC, (N * T, 1, H * W * 2, C))
+            x_conv1_tiled_NTHWC = ttnn.reshape(
+                x_conv1_tiled_NTHWC,
+                (1, 1, N * T, self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor, H, W, C),
+            )
+            x_conv1_tiled_NTHWC = ttnn.permute(x_conv1_tiled_NTHWC, (0, 1, 2, 3, 5, 4, 6, 7))
+            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize(
+                x_conv1_tiled_NTHWC,
+                (N * T, 1, H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, C),
+            )
         else:
             ttnn.deallocate(x_conv1_NTHWC)
 
@@ -383,22 +422,44 @@ class ResBlock:
         x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_tiled_NTHWC)
 
-        if self.parallel_config.hw_parallel.factor > 1:
+        if self.parallel_config.w_parallel.factor > 1:
+            x_NTHWC = ttnn.reshape(
+                x_NTHWC, (N, T, self.parallel_config.h_parallel.factor, H, self.parallel_config.w_parallel.factor, W, C)
+            )
+            x_NTHWC = ttnn.permute(x_NTHWC, (0, 1, 2, 4, 3, 5, 6))
+            x_NTHWC = ttnn.reshape(
+                x_NTHWC,
+                (N, T, self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, H, W, C),
+            )
             x_NTHWC = ttnn.mesh_partition(
                 x_NTHWC,
-                3,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
+                2,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
                 memory_config=x_NTHWC.memory_config(),
             )
-            x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
+            x_NTHWC = ttnn.squeeze(x_NTHWC, 0)  # Get rid of N
+            x_NTHWC = ttnn.squeeze(x_NTHWC, 1)  # Get rid of HW dim
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
                 x_NTHWC,
-                cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
+                cluster_axis=self.parallel_config.w_parallel.mesh_axis,
                 dim=2,
                 padding_left=1,
                 padding_right=1,
                 padding_mode="replicate",
+                secondary_cluster_axis=1,
+                secondary_mesh_shape=(4, 2),
+            )
+            x_NTHWC = vae_neighbor_pad(
+                self.ccl_manager,
+                x_NTHWC,
+                cluster_axis=self.parallel_config.h_parallel.mesh_axis,
+                dim=1,
+                padding_left=1,
+                padding_right=1,
+                padding_mode="replicate",
+                secondary_cluster_axis=0,
+                secondary_mesh_shape=(4, 2),
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
