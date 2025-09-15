@@ -288,6 +288,10 @@ void py_module(py::module& module) {
     module.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+            // Use thread-local command queue if default queue is specified
+            if (cq_id == ttnn::DefaultQueueId) {
+                cq_id = ttnn::get_current_command_queue_id_for_thread();
+            }
             tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
@@ -300,6 +304,10 @@ void py_module(py::module& module) {
            ttnn::Tensor& host_tensor,
            bool blocking = true,
            QueueId cq_id = ttnn::DefaultQueueId) {
+            // Use thread-local command queue if default queue is specified
+            if (cq_id == ttnn::DefaultQueueId) {
+                cq_id = ttnn::get_current_command_queue_id_for_thread();
+            }
             tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),

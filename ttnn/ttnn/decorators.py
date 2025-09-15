@@ -378,6 +378,8 @@ class FastOperation:
             result = self.function(*function_args, **function_kwargs)
         else:
             with command_queue(cq_id):
+                # Forward cq_id to operations that still expect explicit parameters
+                function_kwargs["cq_id"] = cq_id
                 result = self.function(*function_args, **function_kwargs)
 
         return result
