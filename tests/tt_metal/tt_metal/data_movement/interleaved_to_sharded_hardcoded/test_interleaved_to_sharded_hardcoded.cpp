@@ -43,7 +43,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
@@ -99,7 +98,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
@@ -155,7 +153,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -210,7 +207,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -266,7 +262,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -322,7 +317,6 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConf
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(

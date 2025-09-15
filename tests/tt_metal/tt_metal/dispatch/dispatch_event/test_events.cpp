@@ -151,7 +151,6 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
     const size_t num_events = 50;
     const size_t num_events_between_sync = 5;
 
@@ -184,7 +183,6 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
 TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
     const size_t num_events = 50;
     const size_t num_events_between_query = 5;
     bool event_status;

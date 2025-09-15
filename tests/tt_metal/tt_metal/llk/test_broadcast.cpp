@@ -216,7 +216,6 @@ void run_single_core_broadcast(
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
