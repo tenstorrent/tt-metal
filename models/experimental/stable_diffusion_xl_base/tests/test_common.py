@@ -180,8 +180,8 @@ def batch_encode_prompt_on_device(
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
     num_devices = ttnn_device.get_num_devices()
-    num_promts = len(prompt)
-    if use_cfg_parallel and num_promts < num_devices:
+    num_prompts = len(prompt)
+    if use_cfg_parallel and num_prompts < num_devices:
         # Pad prompts by cycling through existing ones to match num_devices
         prompt = [prompt[i % len(prompt)] for i in range(num_devices)]
 
@@ -391,7 +391,7 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    slice_to = num_promts if use_cfg_parallel else None
+    slice_to = num_prompts if use_cfg_parallel else None
     return (
         prompt_embeds[:slice_to],
         negative_prompt_embeds[:slice_to],

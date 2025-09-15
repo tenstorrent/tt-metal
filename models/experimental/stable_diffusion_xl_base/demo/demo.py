@@ -82,8 +82,8 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
     (
-        all_prompt_embeds_torch,  # tuple len = prompts/batch_size of tensors of shape (2, 77, 2048)
-        torch_add_text_embeds,  # tuple len = prompts/batch_size of tensors of shape (2, 77, 2048)
+        all_prompt_embeds_torch,
+        torch_add_text_embeds,
     ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
