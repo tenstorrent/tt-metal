@@ -1,6 +1,7 @@
 set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables_mgd2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_control_plane_logical_to_physical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
