@@ -5,13 +5,12 @@
 
 """
 Usage:
-    dump_callstacks [--full_callstack] [--gdb_callstack --port=<port>] [--active_cores]
+    dump_callstacks [--full_callstack] [--gdb_callstack] [--active_cores]
 
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
     --active_cores     Only dump callstacks for cores running kernels.
-    --port=<port>      Port to use for GDB client.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
@@ -31,7 +30,10 @@ from ttexalens.tt_exalens_lib import top_callstack, callstack
 from utils import BLUE, GREEN, ORANGE, RST
 
 import re
+import socket
 import subprocess
+import threading
+from contextlib import closing
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -272,10 +274,24 @@ def dump_callstacks(
     return result
 
 
-def start_gdb_server(port: int | None, context: Context) -> GdbServer:
+def find_available_port() -> int:
+    """
+    Find an available port for gdb_server in a thread-safe manner.
+    Returns:
+        An available port number
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("", 0))  # 0 → OS picks a free port
+        s.listen()
+        return s.getsockname()[1]
+    except:
+        # If we get here, no port was found
+        raise TTTriageError(f"No available port found.")
+
+
+def start_gdb_server(port: int, context: Context) -> GdbServer:
     """Start GDB server and return it."""
-    if port is None:
-        raise TTTriageError("Port must be specified when using GDB callstack.")
     try:
         server = ServerSocket(port)
         server.start()
@@ -291,7 +307,6 @@ def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
     active_cores = args["--active_cores"]
-    port = int(args["--port"]) if gdb_callstack else None
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
@@ -300,6 +315,7 @@ def run(args, context: Context):
     gdb_server: GdbServer | None = None
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None = None
     if gdb_callstack:
+        port = find_available_port()
         gdb_server = start_gdb_server(port, context)
         process_ids = get_process_ids(gdb_server)
 

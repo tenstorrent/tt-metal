@@ -87,7 +87,7 @@ class PerBlockCheckResult(PerDeviceCheckResult):
 
 @dataclass
 class PerCoreCheckResult(PerBlockCheckResult):
-    risc_name: str = triage_field("Core")
+    risc_name: str = triage_field("RiscV")
 
 
 def is_galaxy(device: Device) -> bool:
@@ -147,17 +147,24 @@ class RunChecks:
             for device in devices
         }
 
-    def _collect_results(self, check_result: object, result_factory: CheckResult) -> list[CheckResult]:
+    def _collect_results(
+        self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
+    ) -> list[CheckResult]:
         """Helper to collect and wrap check results consistently."""
-        results = []
         if check_result is None:
-            return results
+            return result
         if isinstance(check_result, list):
             for item in check_result:
-                results.append(result_factory(item))
+                if not isinstance(item, CheckResult):
+                    result.append(result_type(result=item, **kwargs))
+                else:
+                    result.append(item)
         else:
-            results.append(result_factory(check_result))
-        return results
+            if not isinstance(check_result, CheckResult):
+                result.append(result_type(result=check_result, **kwargs))
+            else:
+                result.append(check_result)
+        return result
 
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
@@ -165,8 +172,7 @@ class RunChecks:
         for device in self.devices:
             check_result = check(device)
             # Use the common result collection helper
-            results = self._collect_results(check_result, lambda item: PerDeviceCheckResult(device=device, result=item))
-            result.extend(results)
+            self._collect_results(result, check_result, PerDeviceCheckResult, device=device)
 
         return result if len(result) > 0 else None
 
@@ -180,32 +186,22 @@ class RunChecks:
 
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
-            per_device_results: list[PerBlockCheckResult] = []
+            result: list[PerBlockCheckResult] = []
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
                     check_result = check(location)
                     # Use the common result collection helper
-                    results = self._collect_results(
+                    self._collect_results(
+                        result,
                         check_result,
-                        lambda item: PerBlockCheckResult(device=device, location=location, result=item),
+                        PerBlockCheckResult,
+                        device=device,
+                        location=location,
                     )
-                    per_device_results.extend(results)
-            return per_device_results if len(per_device_results) > 0 else None
+            return result if len(result) > 0 else None
 
         # Reuse the device iteration from run_per_device_check
-        device_results = self.run_per_device_check(per_device_blocks_check)
-        if device_results is None:
-            return None
-
-        # Flatten the results: extract PerBlockCheckResult objects from PerDeviceCheckResult wrappers
-        block_location_results: list[PerBlockCheckResult] = []
-        for device_result in device_results:
-            if isinstance(device_result.result, list):
-                block_location_results.extend(device_result.result)
-            else:
-                block_location_results.append(device_result.result)
-
-        return block_location_results if len(block_location_results) > 0 else None
+        return self.run_per_device_check(per_device_blocks_check)
 
     def run_per_core_check(
         self,
@@ -226,7 +222,7 @@ class RunChecks:
 
         def per_block_cores_check(location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
             """Check all RISC cores for a single block location."""
-            per_block_results: list[PerCoreCheckResult] = []
+            result: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
             noc_block = location._device.get_block(location)
@@ -239,30 +235,19 @@ class RunChecks:
 
                 check_result = check(location, risc_name)
                 # Use the common result collection helper
-                results = self._collect_results(
+                self._collect_results(
+                    result,
                     check_result,
-                    lambda item: PerCoreCheckResult(
-                        device=location._device, location=location, risc_name=risc_name, result=item
-                    ),
+                    PerCoreCheckResult,
+                    device=location._device,
+                    location=location,
+                    risc_name=risc_name,
                 )
-                per_block_results.extend(results)
 
-            return per_block_results if len(per_block_results) > 0 else None
+            return result if len(result) > 0 else None
 
         # Reuse the block iteration from run_per_block_check
-        block_results = self.run_per_block_check(per_block_cores_check, block_filter)
-        if block_results is None:
-            return None
-
-        # Flatten the results: extract PerCoreCheckResult objects from PerBlockCheckResult wrappers
-        core_results: list[PerCoreCheckResult] = []
-        for block_result in block_results:
-            if isinstance(block_result.result, list):
-                core_results.extend(block_result.result)
-            else:
-                core_results.append(block_result.result)
-
-        return core_results if len(core_results) > 0 else None
+        return self.run_per_block_check(per_block_cores_check, block_filter)
 
 
 @triage_singleton
