@@ -22,12 +22,13 @@ int main() {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    // Initialize Program and Device. We are going to use the first device (0) and the first core (0, 0) on the device.
+    // Initialize mesh device (1x1), command queue, workload, device range, and program.
+    // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // And a program that represents the set of work we want to execute on the device at a single time.
+    // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
