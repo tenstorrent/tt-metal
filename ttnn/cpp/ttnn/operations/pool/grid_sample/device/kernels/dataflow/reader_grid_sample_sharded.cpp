@@ -10,6 +10,29 @@
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "../grid_sample_reader_common.hpp"
 
+ALWI void advance_grid_index(
+    uint32_t& in_grid_row_idx,
+    uint32_t& grid_stick_idx,
+    uint32_t& l1_grid_addr,
+    uint32_t& grid_points_processed,
+    uint32_t& curr_batch,
+    const uint32_t grid_batching_factor,
+    const uint32_t grid_stick_nbytes,
+    const uint32_t grid_hw,
+    const uint32_t grid_nsticks_per_core) {
+    ++in_grid_row_idx;
+    if (in_grid_row_idx == grid_batching_factor) {
+        in_grid_row_idx = 0;
+        ++grid_stick_idx;
+        l1_grid_addr += grid_stick_nbytes;
+        ++grid_points_processed;
+        if (grid_points_processed == grid_hw) {
+            grid_points_processed = 0;
+            ++curr_batch;
+        }
+    }
+}
+
 void kernel_main() {
     // Runtime arguments
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -56,15 +79,18 @@ void kernel_main() {
     uint32_t curr_batch = starting_batch;
     uint32_t grid_points_processed = global_grid_stick_start % grid_hw;
 
+    // Advance at start if needed
     if (in_grid_row_idx == grid_batching_factor) {
-        in_grid_row_idx = 0;
-        ++grid_stick_idx;
-        l1_grid_addr += grid_stick_nbytes;
-        ++grid_points_processed;
-        if (grid_points_processed == grid_hw) {
-            grid_points_processed = 0;
-            ++curr_batch;
-        }
+        advance_grid_index(
+            in_grid_row_idx,
+            grid_stick_idx,
+            l1_grid_addr,
+            grid_points_processed,
+            curr_batch,
+            grid_batching_factor,
+            grid_stick_nbytes,
+            grid_hw,
+            grid_nsticks_per_core);
     }
 
     while (grid_stick_idx < grid_nsticks_per_core) {
@@ -72,8 +98,6 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
         uint32_t batch_offset = curr_batch * input_height * input_width;
-
-        // Direct template dispatch - no branching needed
         process_grid_point<
             grid_dtype,
             use_precomputed_grid,
@@ -83,29 +107,30 @@ void kernel_main() {
             input_cb_index,
             scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
 
-        ++in_grid_row_idx;
-        if (in_grid_row_idx == grid_batching_factor) {
-            in_grid_row_idx = 0;
-            ++grid_stick_idx;
-            l1_grid_addr += grid_stick_nbytes;
-            ++grid_points_processed;
-            if (grid_points_processed == grid_hw) {
-                grid_points_processed = 0;
-                ++curr_batch;
-            }
-        }
+        // Always advance once after processing
+        advance_grid_index(
+            in_grid_row_idx,
+            grid_stick_idx,
+            l1_grid_addr,
+            grid_points_processed,
+            curr_batch,
+            grid_batching_factor,
+            grid_stick_nbytes,
+            grid_hw,
+            grid_nsticks_per_core);
+
+        // For split reader, advance one more time to skip the coordinate that the other reader will process
         if constexpr (split_reader) {
-            ++in_grid_row_idx;
-            if (in_grid_row_idx == grid_batching_factor) {
-                in_grid_row_idx = 0;
-                ++grid_stick_idx;
-                l1_grid_addr += grid_stick_nbytes;
-                ++grid_points_processed;
-                if (grid_points_processed == grid_hw) {
-                    grid_points_processed = 0;
-                    ++curr_batch;
-                }
-            }
+            advance_grid_index(
+                in_grid_row_idx,
+                grid_stick_idx,
+                l1_grid_addr,
+                grid_points_processed,
+                curr_batch,
+                grid_batching_factor,
+                grid_stick_nbytes,
+                grid_hw,
+                grid_nsticks_per_core);
         }
     }
 }
