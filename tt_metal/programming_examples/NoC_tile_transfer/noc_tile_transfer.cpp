@@ -17,10 +17,10 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 int main() {
-    // Device setup
+    // Create a 1x1 mesh device (Mesh API). For multi-device setups, create a larger mesh shape.
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
-    // Device command queue and program setup
+    // Mesh command queue and program setup
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -49,7 +49,8 @@ int main() {
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
 
-    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src_dram_buffer =
+        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // replicated per device
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Core synchronization semaphore setup
@@ -108,7 +109,7 @@ int main() {
     SetRuntimeArgs(program, core1_reader_kernel_id, core1, {core0_physical_coord.x, core0_physical_coord.y, sem_id});
     SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
 
-    // Program enqueue
+    // Program enqueue (non-blocking). Wait for completion before reading back.
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
