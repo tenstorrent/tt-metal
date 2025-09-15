@@ -81,7 +81,7 @@ void golden_matmul(
  * @param M Number of rows in matrix A and output matrix C
  * @param N Number of columns in matrix B and output matrix C
  * @param K Number of columns in matrix A and rows in matrix B
- * @param device Target device for computation
+ * @param mesh_device Target mesh device (1x1 or larger) for computation
  *
  * @note Matrix dimensions must be divisible by tile size (32x32) for this implementation
  * @note Uses circular buffers with 2 tiles for double-buffering to overlap compute and data movement
@@ -102,15 +102,14 @@ void matmul_multi_core(
         N,
         TILE_HW);
 
-    // Setup the device and command queue for multi-core execution
+    // Set up mesh command queue, workload, device range, and program for multi-core execution
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    IDevice* device = mesh_device->get_devices()[0];
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
 
     // Get the compute grid size to determine how many cores are available
-    auto core_grid = device->compute_with_storage_grid_size();
+    auto core_grid = mesh_device->compute_with_storage_grid_size();
     auto num_output_tiles_total = (M * N) / TILE_HW;
 
     // Use the split_work_to_cores utility function to distribute matrix multiplication work
@@ -131,7 +130,7 @@ void matmul_multi_core(
     const uint32_t Kt = K / TILE_WIDTH;   // Number of tiles in K dimension
     const uint32_t Nt = N / TILE_WIDTH;   // Number of tiles in N dimension
 
-    // Create DRAM Buffers for input and output vectors.
+    // Create DRAM buffers for input and output matrices (replicated per device across the mesh).
     // We allocate DRAM buffers for the input matrices and output matrix.
     // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
@@ -150,6 +149,7 @@ void matmul_multi_core(
     auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    // Each handle is a mesh-wide replicated allocation; on a unit mesh this is a single device buffer
 
     // Configure Circular Buffers
     // Circular buffers act as staging areas for data movement between DRAM and compute units.
@@ -262,6 +262,7 @@ void matmul_multi_core(
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    // Blocking read waits for completion before returning and resizes 'output' as needed
     distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 }
 
