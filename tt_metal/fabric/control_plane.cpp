@@ -1529,7 +1529,8 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     tensix_routing_l1_info_t tensix_routing_info = {};
-    tensix_routing_info.mesh_id = *mesh_id;
+    tensix_routing_info.my_mesh_id = *mesh_id;
+    tensix_routing_info.my_device_id = chip_id;
 
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();

@@ -185,12 +185,16 @@ struct __attribute__((packed)) routing_path_t {
 // 16 chips * 4 bytes = 64
 static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
 // 16 chips * 1 byte = 16
+// 0?
 static_assert(sizeof(routing_path_t<1, true>) == 16, "1D compressed routing path must be 16 bytes");
 // 256 chips * 2 bytes = 512
 static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
 struct tensix_routing_l1_info_t {
-    uint32_t mesh_id;  // Current mesh ID
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
+    //       these fabric node ids should be another struct as really commonly used data
+    uint16_t my_mesh_id;    // Current mesh ID
+    uint16_t my_device_id;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
