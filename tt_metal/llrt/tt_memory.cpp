@@ -70,7 +70,22 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     }
 }
 
-bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
+bool memory::operator==(const memory& other) const {
+    if (data_ != other.data_) {
+        log_error(
+            tt::LogMetal,
+            "Data mismatch: size {} vs {}, first mismatch at {}",
+            data_.size(),
+            other.data_.size(),
+            std::mismatch(data_.begin(), data_.end(), other.data_.begin()).first - data_.begin());
+        return false;
+    }
+    if (link_spans_ != other.link_spans_) {
+        log_error(tt::LogMetal, "Span mismatch: size {} vs {}", link_spans_.size(), other.link_spans_.size());
+        return false;
+    }
+    return true;
+}
 
 void memory::fill_from_mem_template(
     const memory& mem_template,
