@@ -25,18 +25,18 @@ class default_setup(metaclass=MergeMetaclass):
     ]
 
     timerAnalysis = {
-        # "trace_fw_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
-        #     "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
-        # },
-        # "trace_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
-        # },
+        "trace_fw_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+        },
+        "trace_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+        },
         # "trace2trace - FW": {
         #     "across": "device",
         #     "type": "adjacent",
@@ -87,64 +87,64 @@ class default_setup(metaclass=MergeMetaclass):
         #     "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
         #     "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
         # },
-        # "device_fw_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
-        # },
-        # "device_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
-        # },
-        # "device_kernel_duration_dm_start": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {
-        #         "core": "ANY",
-        #         "risc": "ANY",
-        #         "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC", "ERISC"]],
-        #     },
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
-        # },
-        # "device_brisc_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-        # },
-        # "device_ncrisc_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-        # },
-        # "device_trisc0_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-        # },
-        # "device_trisc1_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-        # },
-        # "device_trisc2_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-        # },
-        # "device_erisc_kernel_duration": {
-        #     "across": "ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
-        # },
+        "device_fw_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
+        },
+        "device_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
+        "device_kernel_duration_dm_start": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC", "ERISC"]],
+            },
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
+        "device_brisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+        "device_ncrisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+        },
+        "device_trisc0_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_trisc1_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_trisc2_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_erisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
+        },
         # "device_compute_cb_wait_front": {
         #     "across": "ops",
         #     "type": "sum",
