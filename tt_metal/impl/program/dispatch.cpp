@@ -1873,13 +1873,13 @@ void reserve_space_in_kernel_config_buffer(
     // binary writing being intertwined.  Separate out writing kernel
     // binaries into program compile/finalize.  The sync below is confusing
     // and not needed (just need a barrier on DRAM write)
-    if (program_binary_status != ProgramBinaryStatus::Committed) {
-        // Insert a stall before writing any program configs when binaries are in flight
-        dispatch_md.stall_first = true;
-        dispatch_md.stall_before_program = false;
-        // Wait on all previous workers before writing kernel binaries to workers
-        dispatch_md.sync_count = expected_num_workers_completed;
-    }
+    // if (program_binary_status != ProgramBinaryStatus::Committed) {
+    // Insert a stall before writing any program configs when binaries are in flight
+    dispatch_md.stall_first = true;
+    dispatch_md.stall_before_program = false;
+    // Wait on all previous workers before writing kernel binaries to workers
+    dispatch_md.sync_count = expected_num_workers_completed;
+    // }
 
     // Remove launch buffer from config addrs, since it's not a real core.
     dispatch_md.kernel_config_addrs = std::vector<ConfigBufferEntry>(
