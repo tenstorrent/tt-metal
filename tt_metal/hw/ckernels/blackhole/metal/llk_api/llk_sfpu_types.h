@@ -36,6 +36,7 @@ enum SfpuType {
     sine,
     cosine,
     acosh,
+    cosh,
     tan,
     relu_max,
     relu_min,

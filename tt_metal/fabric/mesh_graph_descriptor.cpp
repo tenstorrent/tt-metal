@@ -935,7 +935,6 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
         };
 
-        const auto id = data_reverse.connection_id;
         add_connection_to_fast_lookups(data_reverse, instance.type);
         connections_.emplace(data_reverse.connection_id, std::move(data_reverse));
     }
@@ -1028,8 +1027,6 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
         // Add the connection in every direction of the connection
         for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
-            const auto src_device_id = nodes[i];
-
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
@@ -1048,7 +1045,6 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
                 .routing_direction = routing_direction,
             };
 
-            const auto id = data.connection_id;
             add_connection_to_fast_lookups(data, instance.type);
             connections_.emplace(data.connection_id, std::move(data));
 

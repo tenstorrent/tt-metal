@@ -14,16 +14,12 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 #include <protobuf/mesh_graph_descriptor.pb.h>
-
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace tt::tt_fabric {
 FabricType operator|(FabricType lhs, FabricType rhs) {
@@ -310,7 +306,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
 
     // Populate with empty containers
     this->mesh_host_ranks_.clear();
-    for (const auto& mesh : all_meshes) {
+    for ([[maybe_unused]] const auto& mesh : all_meshes) {
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 

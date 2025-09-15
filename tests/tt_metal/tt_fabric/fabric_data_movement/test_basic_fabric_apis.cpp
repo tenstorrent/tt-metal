@@ -40,7 +40,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -263,7 +263,6 @@ void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = fals
             uint32_t result_offset = dst_idx * RESULT_SIZE_PER_DEVICE;
             // Compare route buffers
             bool route_buffers_match = true;
-            auto compare_bytes = is_2d_fabric ? MAX_ROUTE_BUFFER_SIZE / 2 : MAX_ROUTE_BUFFER_SIZE;
             for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
                 uint32_t actual_byte = result_data[result_offset + i];
                 uint32_t expected_byte = result_data[result_offset + MAX_ROUTE_BUFFER_SIZE + i];
