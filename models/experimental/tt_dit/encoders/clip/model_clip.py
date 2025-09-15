@@ -14,14 +14,6 @@ from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
 
 
-compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=True,
-)
-
-
 class CLIPConfig:
     """
     Configuration class to store the configuration of a `CLIPEncoder` model.
@@ -86,6 +78,13 @@ class CLIPEncoder:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
@@ -127,7 +126,7 @@ class CLIPEncoder:
             weight=self.final_layer_norm,
             bias=self.final_layer_norm_bias,
             epsilon=self.config.layer_norm_eps,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         # gather eos
@@ -144,7 +143,7 @@ class CLIPEncoder:
                 raise ValueError("projection weights are not loaded")
             text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
             projected_output = ttnn.matmul(
-                pooled_output, text_projection_transposed, compute_kernel_config=compute_kernel_config
+                pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
             )
             # sequence embedding, pooled embedding with projection
             return encoder_output, projected_output
@@ -222,6 +221,14 @@ class CLIPStack:
         parallel_config: EncoderParallelConfig,
     ) -> None:
         self.config = config
+        self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.layers = [
             CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
         ]
@@ -259,6 +266,13 @@ class CLIPEncoderLayer:
     ) -> None:
         self.config = config
         self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.layer_norm1 = None
         self.layer_norm2 = None
         self.layer_norm_eps = config.layer_norm_eps
@@ -321,7 +335,7 @@ class CLIPEncoderLayer:
             weight=self.layer_norm1,
             bias=self.layer_norm1_bias,
             epsilon=self.layer_norm_eps,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config,
         )
         attn_output = self.self_attn(hidden_states, causal_attention_mask)
         hidden_states = residual + attn_output
@@ -332,10 +346,10 @@ class CLIPEncoderLayer:
             weight=self.layer_norm2,
             bias=self.layer_norm2_bias,
             epsilon=self.layer_norm_eps,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config,
         )
         mlp_output_fractured = self.mlp(
-            hidden_states, compute_kernel_config=compute_kernel_config
+            hidden_states, compute_kernel_config=self.compute_kernel_config
         )  # fractured on columns
         hidden_states_shape = list(mlp_output_fractured.shape)
 
@@ -376,6 +390,13 @@ class CLIPAttention:
     ) -> None:
         self.config = config
         self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
@@ -429,9 +450,9 @@ class CLIPAttention:
     def __call__(self, hidden_states, causal_attention_mask):
         batch_size, seq_length, _ = hidden_states.shape
 
-        q = self.q_proj(hidden_states, compute_kernel_config=compute_kernel_config)
-        k = self.k_proj(hidden_states, compute_kernel_config=compute_kernel_config)
-        v = self.v_proj(hidden_states, compute_kernel_config=compute_kernel_config)
+        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
+        v = self.v_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
 
         q = q * self.scale
 
@@ -448,15 +469,17 @@ class CLIPAttention:
         v = ttnn.transpose(v, 1, 2)
 
         scores = ttnn.matmul(
-            q, ttnn.transpose(k, -2, -1), compute_kernel_config=compute_kernel_config
+            q, ttnn.transpose(k, -2, -1), compute_kernel_config=self.compute_kernel_config
         )  # [batch_size, num_heads, seq_length, seq_length]
 
         if causal_attention_mask is not None:
             scores = scores + causal_attention_mask
 
-        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
+        attn_weights = ttnn.softmax(
+            scores, dim=-1, compute_kernel_config=self.compute_kernel_config, numeric_stable=True
+        )
 
-        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=compute_kernel_config)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=self.compute_kernel_config)
 
         attn_output = ttnn.transpose(attn_output, 1, 2)  # [batch_size, seq_length, num_heads, head_dim]
         attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, self.embed_dim // num_devices))
@@ -477,7 +500,7 @@ class CLIPAttention:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-        dense_out = self.o_proj(attn_output, compute_kernel_config=compute_kernel_config)
+        dense_out = self.o_proj(attn_output, compute_kernel_config=self.compute_kernel_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = ttnn.experimental.all_gather_async(
