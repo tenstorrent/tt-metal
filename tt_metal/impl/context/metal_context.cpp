@@ -920,14 +920,18 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize the launch_msg ring buffer. Only entry 0 needs initialization for firmware startup.
-    // Entries 1 through N-1 are left as zeros and will be populated by the dispatcher
-    // with actual work messages during normal operation. The firmware should only process
-    // entry 0 during initialization and then wait for the dispatcher to manage subsequent entries.
+    // Initialize the launch_msg ring buffer. Entry 0 gets the proper firmware startup message.
+    // Entries 1-7 are set with DISPATCH_MODE_NONE to indicate they are not valid for processing
+    // during firmware initialization, as specified in the PR requirements.
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, {});
 
     // Entry 0: Use the proper firmware startup message
     init_launch_msg_data[0] = *launch_msg;
+
+    // Entries 1-7: Set dispatch mode to DISPATCH_MODE_NONE as they are not needed during init
+    for (int i = 1; i < launch_msg_buffer_num_entries; i++) {
+        init_launch_msg_data[i].kernel_config.mode = DISPATCH_MODE_NONE;
+    }
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
