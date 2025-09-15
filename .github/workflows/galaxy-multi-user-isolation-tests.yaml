@@ -38,14 +38,14 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp_04fa1dc5c625d88c133fcdb659c1ff035786363b_17746822328
+          name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp_be09e8c298b3920d45540bc975a77e8fd02bc920_17747488867
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-cp310-ubuntu-22.04-any-04fa1dc5c625d88c133fcdb659c1ff035786363b-17746822328
+          name: eager-dist-cp310-ubuntu-22.04-any-be09e8c298b3920d45540bc975a77e8fd02bc920-17747488867
       - name: Extract Wheel and files
         run: |
           rm -rf ./docker_artifacts
