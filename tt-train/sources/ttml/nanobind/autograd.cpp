@@ -18,6 +18,8 @@
 #include "autograd/tensor.hpp"
 #include "modules/gpt_block.hpp"
 #include "modules/linear_module.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 namespace ttml::autograd {
 
@@ -45,8 +47,8 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
 
     const auto ensure_row_major = [&impl]<typename T>(const tt::tt_metal::Tensor& t) {
         if (t.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
-            auto const rm_tensor = t.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
-            return impl.template operator()<T>(rm_tensor);
+            return impl.template operator()<T>(
+                ttnn::untilize_with_unpadding(ttnn::DefaultQueueId, t, t.logical_shape(), std::nullopt));
         }
         return impl.template operator()<T>(t);
     };
@@ -102,10 +104,11 @@ tt::tt_metal::Tensor make_metal_tensor(const nb::ndarray<>& data) {
 
         tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
         tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        tt::tt_metal::Tensor tensor = tt::tt_metal::Tensor::from_span(
-            tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
-        tensor = tensor.to_device(device, tensor_memory_config);
-        return tensor;
+        return ttnn::tilize_with_zero_padding(
+                   ttnn::DefaultQueueId,
+                   tt::tt_metal::Tensor::from_span(
+                       tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
+            .to_device(device, tensor_memory_config);
     };
 
     switch (static_cast<nb::dlpack::dtype_code>(data_type.code)) {
@@ -129,6 +132,7 @@ tt::tt_metal::Tensor make_metal_tensor(const nb::ndarray<>& data) {
 }
 
 void py_module_types(nb::module_& m) {
+    nb::export_enum<ttnn::DataType>(m);
     nb::export_enum<GradMode>(m);
     nb::export_enum<PreferredPrecision>(m);
     nb::export_enum<RunMode>(m);
@@ -144,101 +148,130 @@ void py_module_types(nb::module_& m) {
 }
 
 void py_module(nb::module_& m) {
-    auto py_graph_node = static_cast<nb::class_<GraphNode>>(m.attr("GraphNode"));
-    py_graph_node.def(nb::init<>());
-    py_graph_node.def_rw("grad_function", &GraphNode::grad_function);
+    {
+        auto py_graph_node = static_cast<nb::class_<GraphNode>>(m.attr("GraphNode"));
+        py_graph_node.def(nb::init<>());
+        py_graph_node.def_rw("grad_function", &GraphNode::grad_function);
+    }
 
-    auto py_graph = static_cast<nb::class_<Graph>>(m.attr("Graph"));
-    py_graph.def(nb::init<>());
-    py_graph.def("get_edges", &Graph::get_edges);
-    py_graph.def("get_graph_nodes", &Graph::get_graph_nodes);
-    py_graph.def("add_node", &Graph::add_node);
+    {
+        auto py_graph = static_cast<nb::class_<Graph>>(m.attr("Graph"));
+        py_graph.def(nb::init<>());
+        py_graph.def("get_edges", &Graph::get_edges);
+        py_graph.def("get_graph_nodes", &Graph::get_graph_nodes);
+        py_graph.def("add_node", &Graph::add_node);
+    }
 
-    auto py_module_base = static_cast<nb::class_<ModuleBase>>(m.attr("ModuleBase"));
-    py_module_base.def(nb::init<>());
-    py_module_base.def(nb::init<const ModuleBase&>());
-    py_module_base.def(nb::init<ModuleBase&&>());
-    py_module_base.def("get_name", &ModuleBase::get_name);
-    py_module_base.def("parameters", &ModuleBase::parameters);
-    py_module_base.def("train", &ModuleBase::train);
-    py_module_base.def("eval", &ModuleBase::eval);
-    py_module_base.def("set_run_mode", &ModuleBase::set_run_mode);
+    {
+        auto py_module_base = static_cast<nb::class_<ModuleBase>>(m.attr("ModuleBase"));
+        py_module_base.def(nb::init<>());
+        py_module_base.def(nb::init<const ModuleBase&>());
+        py_module_base.def(nb::init<ModuleBase&&>());
+        py_module_base.def("get_name", &ModuleBase::get_name);
+        py_module_base.def("parameters", &ModuleBase::parameters);
+        py_module_base.def("train", &ModuleBase::train);
+        py_module_base.def("eval", &ModuleBase::eval);
+        py_module_base.def("set_run_mode", &ModuleBase::set_run_mode);
+    }
 
-    auto py_gpt_block_base = static_cast<nb::class_<modules::GPTBlock, ModuleBase>>(m.attr("GPTBlock"));
-    py_gpt_block_base.def(nb::init<uint32_t, uint32_t, float, bool>());
-    py_gpt_block_base.def("__call__", &modules::GPTBlock::operator());
+    {
+        auto py_gpt_block_base = static_cast<nb::class_<modules::GPTBlock, ModuleBase>>(m.attr("GPTBlock"));
+        py_gpt_block_base.def(nb::init<uint32_t, uint32_t, float, bool>());
+        py_gpt_block_base.def("__call__", &modules::GPTBlock::operator());
+    }
 
-    auto py_linear_layer_base = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-    py_linear_layer_base.def(nb::init<uint32_t, uint32_t, bool>());
-    py_linear_layer_base.def(nb::init<const TensorPtr&, const TensorPtr&>());
-    py_linear_layer_base.def(nb::init<const TensorPtr&, bool>());
-    py_linear_layer_base.def("get_weight", &modules::LinearLayer::get_weight);
-    py_linear_layer_base.def("__call__", &modules::LinearLayer::operator());
+    {
+        auto py_linear_layer_base = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
+        py_linear_layer_base.def(nb::init<uint32_t, uint32_t, bool>());
+        py_linear_layer_base.def(nb::init<const TensorPtr&, const TensorPtr&>());
+        py_linear_layer_base.def(nb::init<const TensorPtr&, bool>());
+        py_linear_layer_base.def("get_weight", &modules::LinearLayer::get_weight);
+        py_linear_layer_base.def("__call__", &modules::LinearLayer::operator());
+    }
 
-    auto py_tensor = static_cast<nb::class_<Tensor>>(m.attr("Tensor"));
-    py_tensor.def(nb::init<const Tensor&>());
-    py_tensor.def(nb::init<Tensor&&>());
-    // py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
-    py_tensor.def("set_value", &Tensor::set_value);
-    py_tensor.def("set_grad", &Tensor::set_grad);
-    py_tensor.def("set_node", &Tensor::set_node);
-    py_tensor.def("clean_node", &Tensor::clean_node);
-    py_tensor.def("add_grad", &Tensor::add_grad);
-    py_tensor.def("set_requires_grad", &Tensor::set_requires_grad);
-    py_tensor.def("get_value", &Tensor::get_value);
-    py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_));
-    py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad));
-    py_tensor.def("get_requires_grad", &Tensor::get_requires_grad);
-    py_tensor.def("get_node", &Tensor::get_node);
-    py_tensor.def("get_shape", &Tensor::get_shape);
-    py_tensor.def("get_rank", &Tensor::get_rank);
-    py_tensor.def("backward", &Tensor::backward);
-    py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
-
-    auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
-    py_autocast_tensor.def(nb::init<>());
-    // py_autocast_tensor.def(nb::init<const tt::tt_metal::Tensor&>());
-    py_autocast_tensor.def(nb::init<const AutocastTensor&>());
-    py_autocast_tensor.def(nb::init<AutocastTensor&&>());
-    // py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
-    // py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
-    py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& numpy_tensor) {
-        autocast_tensor.set_tensor(make_metal_tensor(numpy_tensor));
-    });
-    py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
-        return make_numpy_tensor(autocast_tensor.get_tensor(PreferredPrecision::FULL));
-    });
-
-    auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
-    py_auto_context.def_static("get_instance", &AutoContext::get_instance);
-    py_auto_context.def("get_generator", &AutoContext::get_generator);
-    py_auto_context.def("set_generator", &AutoContext::set_generator);
-    py_auto_context.def("set_seed", &AutoContext::set_seed);
-    py_auto_context.def("get_seed", &AutoContext::get_seed);
-    py_auto_context.def("add_backward_node", &AutoContext::add_backward_node);
-    py_auto_context.def("reset_graph", &AutoContext::reset_graph);
-    py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode);
-    py_auto_context.def("open_device", &AutoContext::open_device);
-    py_auto_context.def("close_device", &AutoContext::close_device);
-    py_auto_context.def("get_device", &AutoContext::get_device);
-    // TODO: argv's char** not supported
-    // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
-    py_auto_context.def(
-        "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
-            const auto argc = args.size();
-            std::vector<const char*> argv(argc);
-
-            for (const auto& arg : args) {
-                argv.push_back(arg.c_str());
-            }
-            argv.push_back(nullptr);
-
-            auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+    {
+        auto py_tensor = static_cast<nb::class_<Tensor>>(m.attr("Tensor"));
+        py_tensor.def(nb::init<>());
+        py_tensor.def(nb::init<const Tensor&>());
+        py_tensor.def(nb::init<Tensor&&>());
+        py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def("set_value", &Tensor::set_value);
+        py_tensor.def("set_grad", &Tensor::set_grad);
+        py_tensor.def("set_node", &Tensor::set_node);
+        py_tensor.def("clean_node", &Tensor::clean_node);
+        py_tensor.def("add_grad", &Tensor::add_grad);
+        py_tensor.def("set_requires_grad", &Tensor::set_requires_grad);
+        py_tensor.def("get_value", &Tensor::get_value);
+        py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_));
+        py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad));
+        py_tensor.def("get_requires_grad", &Tensor::get_requires_grad);
+        py_tensor.def("get_node", &Tensor::get_node);
+        py_tensor.def("get_shape", &Tensor::get_shape);
+        py_tensor.def("get_rank", &Tensor::get_rank);
+        py_tensor.def("backward", &Tensor::backward);
+        py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
+        py_tensor.def("from_numpy", [](Tensor& tensor, const nb::ndarray<>& numpy_tensor) {
+            tensor.set_value(make_metal_tensor(numpy_tensor));
         });
-    py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
-    py_auto_context.def("get_profiler", &AutoContext::get_profiler);
-    py_auto_context.def("close_profiler", &AutoContext::close_profiler);
-    py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources);
+        py_tensor.def("to_numpy", [](const Tensor& tensor) {
+            return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL));
+        });
+        py_tensor.def("to_string", [](const Tensor& tensor) {
+            return tensor.get_value(PreferredPrecision::FULL).write_to_string();
+        });
+        py_tensor.def("shape", [](const Tensor& tensor) {
+            const tt::tt_metal::Shape& shape = tensor.get_value(PreferredPrecision::FULL).logical_shape();
+            nb::list ret;
+            for (auto it = shape.cbegin(); it != shape.cend(); ++it) {
+                ret.append(*it);
+            }
+            return ret;
+        });
+        py_tensor.def("dtype", [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).dtype(); });
+    }
+
+    {
+        auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
+        py_autocast_tensor.def(nb::init<>());
+        // py_autocast_tensor.def(nb::init<const tt::tt_metal::Tensor&>());
+        py_autocast_tensor.def(nb::init<const AutocastTensor&>());
+        py_autocast_tensor.def(nb::init<AutocastTensor&&>());
+        py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
+        py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
+    }
+
+    {
+        auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
+        py_auto_context.def_static("get_instance", &AutoContext::get_instance);
+        py_auto_context.def("get_generator", &AutoContext::get_generator);
+        py_auto_context.def("set_generator", &AutoContext::set_generator);
+        py_auto_context.def("set_seed", &AutoContext::set_seed);
+        py_auto_context.def("get_seed", &AutoContext::get_seed);
+        py_auto_context.def("add_backward_node", &AutoContext::add_backward_node);
+        py_auto_context.def("reset_graph", &AutoContext::reset_graph);
+        py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode);
+        py_auto_context.def("open_device", &AutoContext::open_device);
+        py_auto_context.def("close_device", &AutoContext::close_device);
+        py_auto_context.def("get_device", &AutoContext::get_device);
+        // TODO: argv's char** not supported
+        // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
+        py_auto_context.def(
+            "initialize_distributed_context", [](AutoContext& auto_context, const std::vector<std::string>& args) {
+                const auto argc = args.size();
+                std::vector<const char*> argv(argc);
+
+                for (const auto& arg : args) {
+                    argv.push_back(arg.c_str());
+                }
+                argv.push_back(nullptr);
+
+                auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+            });
+        py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
+        py_auto_context.def("get_profiler", &AutoContext::get_profiler);
+        py_auto_context.def("close_profiler", &AutoContext::close_profiler);
+        py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources);
+    }
 }
 
 }  // namespace ttml::autograd
