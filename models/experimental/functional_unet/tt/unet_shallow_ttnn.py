@@ -176,7 +176,6 @@ class UNetConv2D:
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
             ),
-            enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
             activation=activation,
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
