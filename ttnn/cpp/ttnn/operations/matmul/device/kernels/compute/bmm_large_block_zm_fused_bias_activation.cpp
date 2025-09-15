@@ -118,6 +118,31 @@ void MAIN {
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
+#ifdef PACKER_L1_ACC
+    PACK(DPRINT << "PACKER_L1_ACC IS TRUE" << ENDL());
+#else
+    PACK(DPRINT << "PACKER_L1_ACC IS FALSE" << ENDL());
+#endif
+#ifdef FUSE_BIAS
+    PACK(DPRINT << "FUSE_BIAS IS TRUE" << ENDL());
+#else
+    PACK(DPRINT << "FUSE_BIAS IS FALSE" << ENDL());
+#endif
+#ifdef SFPU_OP_INIT_ACTIVATION
+    PACK(DPRINT << "SFPU_OP_INIT_ACTIVATION IS TRUE" << ENDL());
+#else
+    PACK(DPRINT << "SFPU_OP_INIT_ACTIVATION IS FALSE" << ENDL());
+#endif
+#ifdef PACK_RELU
+    PACK(DPRINT << "PACK_RELU IS TRUE" << ENDL());
+#else
+    PACK(DPRINT << "PACK_RELU IS FALSE" << ENDL());
+#endif
+#ifdef FP32_DEST_ACC_EN
+    PACK(DPRINT << "FP32_DEST_ACC_EN IS TRUE" << ENDL());
+#else
+    PACK(DPRINT << "FP32_DEST_ACC_EN IS FALSE" << ENDL());
+#endif
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
