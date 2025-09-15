@@ -59,9 +59,6 @@ class Yolov11Conv2D:
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
             enable_weights_double_buffer=True,
-            # core_grid=ttnn.CoreRangeSet({
-            #     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))
-            # }),
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
@@ -118,6 +115,7 @@ class Yolov11Conv2D:
         hw = output_height * output_width
         if x.shape[2] != hw:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            # x = ttnn.to_layout(x,ttnn.ROW_MAJOR_LAYOUT)
             x = x[:, :, :hw, :]
         return x
 
@@ -126,9 +124,6 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
     in_shard_width = input_tensors[0].shape[-1]
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    print("wbfweyr", shard_height, in_shard_width)
-    # aligned_shard_height = roundup32(shard_height)
-    # aligned_shard_width = roundup32(in_shard_width)
     input_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, in_shard_width),
         core_grid=shard_grid,
