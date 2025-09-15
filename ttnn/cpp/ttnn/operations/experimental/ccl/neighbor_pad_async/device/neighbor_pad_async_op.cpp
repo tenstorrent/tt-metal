@@ -52,17 +52,42 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
     uint32_t target_ring_size = devices_to_use.size();
 
+    // secondary_cluster_axis
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < target_ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+            if (this->secondary_cluster_axis.has_value()) {
+                uint32_t secondary_cluster_axis = this->secondary_cluster_axis.value();
+                // secondary_mesh_shape(0)==x should be columns, (1)==y is rows
+                uint32_t row_index = i / this->secondary_mesh_shape.value().at(0);
+                uint32_t col_index = i % this->secondary_mesh_shape.value().at(0);
+                if (secondary_cluster_axis) {
+                    // row
+                    if (col_index != 0) {
+                        backward_device = devices_to_use.at(i - 1);
+                    }
+                    if (col_index != this->secondary_mesh_shape.value().at(0) - 1) {
+                        forward_device = devices_to_use.at(i + 1);
+                    }
+                } else {
+                    // column
+                    if (row_index != 0) {
+                        backward_device = devices_to_use.at(i - this->secondary_mesh_shape.value().at(0));
+                    }
+                    if (row_index != this->secondary_mesh_shape.value().at(1) - 1) {
+                        forward_device = devices_to_use.at(i + this->secondary_mesh_shape.value().at(0));
+                    }
+                }
+            } else {
+                if (i != 0) {
+                    backward_device = devices_to_use.at(i - 1);
+                }
+                if (i != target_ring_size - 1) {
+                    forward_device = devices_to_use.at(i + 1);
+                }
             }
         }
     }
@@ -126,7 +151,9 @@ Tensor neighbor_pad_async_impl(
     const std::vector<IDevice*>& devices,
     const std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology) {
+    const std::optional<ttnn::ccl::Topology> topology,
+    const std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "neighbor_pad_async op is only supported for Fast Dispatch");
@@ -155,7 +182,9 @@ Tensor neighbor_pad_async_impl(
                    num_preferred_links.value_or(1),
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
-                   num_devices),
+                   num_devices,
+                   secondary_cluster_axis,
+                   secondary_mesh_shape),
                {input_tensor},
                {},
                {})
@@ -175,7 +204,9 @@ Tensor neighbor_pad_async(
     const MeshDevice& mesh_device,
     const std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology) {
+    const std::optional<ttnn::ccl::Topology> topology,
+    const std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     return neighbor_pad_async_impl(
@@ -191,7 +222,9 @@ Tensor neighbor_pad_async(
         devices,
         num_preferred_links,
         memory_config,
-        topology);
+        topology,
+        secondary_cluster_axis,
+        secondary_mesh_shape);
 }
 
 }  // namespace ccl
