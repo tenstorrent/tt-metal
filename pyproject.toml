@@ -51,7 +51,7 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.setuptools_scm]
-tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+)(?:-rc(?P<rc>\d+))?$'
+tag_regex = '^(?:v)?(?P<base>\d+\.\d+\.\d+)(?:-(?:(?:rc(?P<rc>\d+))|(?:dev(?:(?P<devdate>\d{8})|(?P<devn>\d+)))))?$'
 
 git_describe_command = [
   "git","describe","--dirty","--tags","--long",
