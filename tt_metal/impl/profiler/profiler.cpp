@@ -1714,6 +1714,206 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 #endif
 }
 
+void runAnalysesForDeviceMarkers(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
+#if defined(TRACY_ENABLE)
+    log_info(tt::LogMetal, "Running analyses for device markers");
+    std::vector<AnalysisConfig> analysis_configs = {
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE FIRMWARE TRACE DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::CORE_AGG,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_FW}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::CORE_AGG,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_FW}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE KERNEL TRACE DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::CORE_AGG,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::CORE_AGG,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE KERNEL FIRST TO LAST START DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE FIRMWARE DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_FW}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_FW}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE KERNEL DURATION DM START",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::BRISC | AnalysisRisc::NCRISC | AnalysisRisc::ERISC,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords =
+                        {tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL,
+                         tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL,
+                         tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRiscAny,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE BRISC KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::BRISC,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::BRISC,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE NCRISC KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::NCRISC,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::NCRISC,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE TRISC_0 KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_0,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_0,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE TRISC_1 KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_1,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_1,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE TRISC_2 KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_2,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::TRISC_2,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL}},
+        },
+        AnalysisConfig{
+            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
+            .dimension = AnalysisDimension::OP,
+            .analysis_name = "DEVICE ERISC KERNEL DURATION",
+            .start_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::ERISC,
+                    .marker_type = AnalysisMarkerType::ZONE_START,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL}},
+            .end_config =
+                AnalysisStartEndConfig{
+                    .risc = AnalysisRisc::ERISC,
+                    .marker_type = AnalysisMarkerType::ZONE_END,
+                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL}},
+        }};
+
+    for (const auto& analysis_config : analysis_configs) {
+        const std::unique_ptr<AnalysisResults> analysis_results =
+            generateAnalysisForDeviceMarkers(analysis_config, device_markers);
+
+        writeAnalysisResultsToCSV(
+            {analysis_results.get()},
+            {{"DEVICE KERNEL FIRST START", "DEVICE KERNEL LAST START", "DEVICE KERNEL FIRST TO LAST START"}});
+    }
+#endif
+}
+
 void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -1751,27 +1951,19 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
-    auto result = parse_timeseries_markers(
-        AnalysisConfig{
-            .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
-            .result_type = AnalysisResultType::DURATION,
-            .dimension = AnalysisDimension::OP,
-            .start_config =
-                AnalysisStartEndConfig{
-                    .risc = AnalysisRiscAny,
-                    .marker_type = AnalysisMarkerType::ZONE_START,
-                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
-            .end_config =
-                AnalysisStartEndConfig{
-                    .risc = AnalysisRiscAny,
-                    .marker_type = AnalysisMarkerType::ZONE_START,
-                    .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::_KERNEL}},
-        },
-        device_markers_vec);
+    runAnalysesForDeviceMarkers(device_markers_vec);
 
-    for (auto& [runtime_id, durations] : result) {
-        log_info(tt::LogMetal, "Runtime ID: {}, Duration: {}", runtime_id, durations[2]);
-    }
+    // for (auto& [runtime_id, durations] :
+    // dynamic_cast<DurationAnalysisResults&>(*analysis_results).results_per_runtime_id) {
+    //     const DurationAnalysisResults::SingleResult& result = durations;
+    //     log_info(
+    //         tt::LogMetal,
+    //         "Runtime ID: {}, Start: {}, End: {}, Duration: {}",
+    //         runtime_id,
+    //         result.start_timestamp,
+    //         result.end_timestamp,
+    //         result.duration);
+    // }
 
     pushTracyDeviceResults(device_markers_vec);
 
