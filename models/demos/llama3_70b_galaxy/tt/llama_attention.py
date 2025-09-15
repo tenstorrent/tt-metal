@@ -404,7 +404,6 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
-        # if not self.qk_norm:
         (
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
@@ -417,27 +416,6 @@ class TtLlamaAttention(LightweightModule):
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-        # else:
-        #     breakpoint()
-        #     qkv_fused_rs = self.tt_ccl.line_reduce_scatter(
-        #         xqkv_fused_sharded,
-        #         cluster_axis=1,
-        #         num_links=self.model_config["GALAXY_NUM_LINKS"],
-        #         dim=3,
-        #         memory_config=ttnn.MemoryConfig(
-        #             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #             ttnn.BufferType.L1,
-        #             ttnn.ShardSpec(
-        #                 sub_core_grids,
-        #                 [
-        #                     32,
-        #                     384,
-        #                 ],
-        #                 ttnn.ShardOrientation.ROW_MAJOR,
-        #             ),
-        #         ),
-        #     )
-        #     breakpoint()
 
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
