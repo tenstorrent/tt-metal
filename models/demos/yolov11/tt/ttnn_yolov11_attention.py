@@ -10,7 +10,7 @@ class TtnnAttention:
     def __init__(self, device, parameter, conv_pt):
         self.qkv = TtnnConv(device, parameter.qkv, conv_pt.qkv, enable_act=False)
         self.proj = TtnnConv(device, parameter.proj, conv_pt.proj, enable_act=False)
-        self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False)  # ,reshard=True,core_count=64)
+        self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False, reshard=True)  # ,core_count=64)
         self.num_heads = 2
         self.key_dim = 32
         self.head_dim = 64
