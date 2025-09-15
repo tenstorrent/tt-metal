@@ -18,20 +18,28 @@ def p(x, a="x"):
 
 
 class TtnnC3k2:
-    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False, core_count=None):
+    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False):
         self.is_bk_enabled = is_bk_enabled
         self.parameter = parameter
         self.cv1_a = TtnnConv(
-            device, parameter.cv1, conv_pt.cv1.a, reshard=reshard, split_weights=True, core_count=None
+            device,
+            parameter.cv1,
+            conv_pt.cv1.a,
+            reshard=reshard,
+            split_weights=True,
         )  # matmul
         self.cv1_b = TtnnConv(
-            device, parameter.cv1, conv_pt.cv1.b, reshard=reshard, split_weights=True, core_count=None
+            device,
+            parameter.cv1,
+            conv_pt.cv1.b,
+            reshard=reshard,
+            split_weights=True,
         )  # matmul
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # matmul
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # need resahrd as input is in RM
         if is_bk_enabled:
-            self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0], core_count=core_count)
+            self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
         else:
-            self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0], core_count=core_count)
+            self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0])
 
     def __call__(self, device, x, use_shard_concat=True, tile_shape=32):
         print("c3k2 wt bias for cv1", self.cv1_a.conv.weight.shape, self.cv1_a.conv.bias.shape)

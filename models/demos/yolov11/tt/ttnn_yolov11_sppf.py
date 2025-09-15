@@ -17,6 +17,17 @@ class TtnnSPPF:
         if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x1 = x
+        print("before pool", x.shape, x.memory_config())
+        core_grid_64 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})  # 8x8 = 64 cores
+        sharded_memory_config_64cores = ttnn.create_sharded_memory_config(
+            shape=x.shape,
+            core_grid=core_grid_64,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, sharded_memory_config_64cores)
+        print("after pool", x.shape, x.memory_config())
         m1 = ttnn.max_pool2d(
             x,
             batch_size=self.parameter.cv2.conv.batch_size,
