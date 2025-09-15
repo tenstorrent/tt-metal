@@ -77,7 +77,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1
+                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
                 - "/dev/tenstorrent/1:/dev/tenstorrent/1"
@@ -104,7 +104,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-2
+                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-2
               devices:
                 - "/dev/tenstorrent/8:/dev/tenstorrent/8"
                 - "/dev/tenstorrent/9:/dev/tenstorrent/9"
@@ -131,7 +131,7 @@ jobs:
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-3
+                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-3
               devices:
                 - "/dev/tenstorrent/16:/dev/tenstorrent/16"
                 - "/dev/tenstorrent/17:/dev/tenstorrent/17"
@@ -153,12 +153,12 @@ jobs:
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
               environment:
-                TT_MULTI_USER_GALAXY:/app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-4
                 HOME: /app
                 LD_LIBRARY_PATH: /app/tt-metal/build/lib
                 PYTHONPATH: /app/tt-metal
                 TT_METAL_HOME: /app/tt-metal
                 TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-4
               devices:
                 - "/dev/tenstorrent/24:/dev/tenstorrent/24"
                 - "/dev/tenstorrent/25:/dev/tenstorrent/25"
@@ -171,7 +171,6 @@ jobs:
           EOF
 
       - name: Run Docker Compose
-        shell: /usr/bin/bash -e {0}
         run: |
           TRAY_PODS_DIR=".muti-user-galaxy-docker-files"
           REQUIRED_PODS=4
