@@ -7,12 +7,10 @@
 void kernel_main() {
     // Read parameters from the kernel arguments
     uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    uint32_t in1_addr = get_arg_val<uint32_t>(1);
-    uint32_t n_tiles = get_arg_val<uint32_t>(2);
+    uint32_t n_tiles = get_arg_val<uint32_t>(1);
 
     // The circular buffers to read the tiles into
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
@@ -26,25 +24,20 @@ void kernel_main() {
     // easy.
     constexpr auto in0_args = TensorAccessorArgs<0>();
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
 
     // Loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
         // First make sure there is space in the circular buffers to be written to.
-        cb_reserve_back(cb_in0, 1);
-        cb_reserve_back(cb_in1, 1);  // wait until we have 1 free slot. This blocks if the
+        cb_reserve_back(cb_in0, 1);  // wait until we have 1 free slot. This blocks if the
                                      // other kernels cannot consume the tiles fast enough.
                                      // Deciding how large the buffer should be is a tradeoff.
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        uint32_t cb_in1_addr = get_write_ptr(cb_in1);
         noc_async_read_tile(i, in0, cb_in0_addr);  // read the tile into the circular buffer
-        noc_async_read_tile(i, in1, cb_in1_addr);  // We can overlap async reads and writes
+                                                   // We can overlap async reads and writes
                                                    // to reduce the data movement overhead.
 
         noc_async_read_barrier();  // Wait until tile reads are done
-        cb_push_back(cb_in0, 1);
-        cb_push_back(cb_in1, 1);  // mark the tiles as ready. From this point forward kernels
-                                  // calling `cb_wait_front` will see this tile
+        cb_push_back(cb_in0, 1);   // mark the tiles as ready. From this point forward kernels
+                                   // calling `cb_wait_front` will see this tile
     }
 }

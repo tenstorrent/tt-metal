@@ -57,7 +57,6 @@ int main(int argc, char** argv) {
                                                     // the NoC transfer APIs to work.
             .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
         auto src0_dram_buffer = CreateBuffer(config);
-        auto src1_dram_buffer = CreateBuffer(config);
         auto dst_dram_buffer = CreateBuffer(config);
 
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
@@ -68,13 +67,9 @@ int main(int argc, char** argv) {
             val = bfloat16(distribution(rng));
         }
 
-        // ... and src1 is a vector of bfloat16 values initialized to -1.0f.
-        constexpr float val_to_add = -1.0f;
-        std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
         // Upload the data from host to the device.
         EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
-        EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -92,11 +87,6 @@ int main(int argc, char** argv) {
                                                                               // the page size to the tile size (and thus
                                                                               // total_size / page_size = tiles_per is the number of
                                                                               // entries in the circular buffer)
-        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,
-            /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, tile_size_bytes));
         tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
         CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,
@@ -113,7 +103,6 @@ int main(int argc, char** argv) {
         // back to DRAM.
         std::vector<uint32_t> reader_compile_time_args;
         TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp",
@@ -136,7 +125,7 @@ int main(int argc, char** argv) {
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), n_tiles});
         SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
@@ -157,7 +146,14 @@ int main(int argc, char** argv) {
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
-            const float expected = a_data[i].to_float() + val_to_add;
+            auto smoothstep = [](float edge0, float edge1, float x) {
+                // Scale, bias and saturate x to 0..1 range
+                x = (x - edge0) / (edge1 - edge0);
+                x = std::clamp(x, 0.0f, 1.0f);
+                // Evaluate polynomial
+                return x * x * (3 - 2 * x);
+            };
+            const float expected = smoothstep(0.0f, 1.0f, a_data[i].to_float());
             const float actual = result_vec[i].to_float();
 
             if (std::abs(expected - actual) > eps) {
