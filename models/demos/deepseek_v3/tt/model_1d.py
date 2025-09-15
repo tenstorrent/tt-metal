@@ -4,13 +4,13 @@
 from pathlib import Path
 from typing import Any, Sequence
 
-import numpy as np
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
+from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
@@ -45,20 +45,37 @@ class Model1D(SharedStateAddOn, AbstractModule):
         ), "Number of non-MoE blocks cannot be greater than the total number of blocks."
         (state_dict,) = state_dicts
 
-        _, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
+        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
             mesh_device.shape[0], hf_config.first_k_dense_replace
-        )  # [num_meta_layers, num_rows]
-
-        mlp_decoder_block_state_dicts = np.array(
-            [
-                (
-                    sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
-                    if layer_idx < hf_config.first_k_dense_replace
-                    else None
-                )
-                for layer_idx in range(mlp_meta_layer_indices.numel())
-            ]
         )
+
+        mlp_decoder_block_state_dicts = [
+            [
+                sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
+                if not is_padding and -1 < layer_idx < hf_config.first_k_dense_replace
+                else None
+                for is_padding, layer_idx in zip(is_padding_layer, meta_layer_list)
+            ]
+            for is_padding_layer, meta_layer_list in zip(mlp_is_padding_layer, mlp_meta_layer_indices)
+        ]
+
+        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
+
+        moe_decoder_block_state_dicts = [
+            [
+                sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
+                if (
+                    not is_padding
+                    and layer_idx >= hf_config.first_k_dense_replace
+                    and -1 < layer_idx < hf_config.num_hidden_layers
+                )
+                else None
+                for is_padding, layer_idx in zip(is_padding_layer, meta_layer_list)
+            ]
+            for is_padding_layer, meta_layer_list in zip(moe_is_padding_layer, moe_meta_layer_indices)
+        ]
 
         return {
             "embedding": Embedding1D.convert_weights(
@@ -67,11 +84,20 @@ class Model1D(SharedStateAddOn, AbstractModule):
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
                     hf_config,
-                    mlp_decoder_block_state_dicts[layer_indices].tolist(),
+                    mlp_decoder_block_state_dicts[meta_layer_idx],
                     output_path / f"mlp_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx, layer_indices in enumerate(mlp_meta_layer_indices)
+                for meta_layer_idx in range(len(mlp_meta_layer_indices))
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.convert_weights(
+                    hf_config,
+                    moe_decoder_block_state_dicts[meta_layer_idx],
+                    output_path / f"moe_decoder_block_{meta_layer_idx}",
+                    mesh_device,
+                )
+                for meta_layer_idx in range(len(moe_meta_layer_indices))
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
@@ -86,21 +112,41 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def get_meta_layer_mapping(
-        cls, mesh_rows: int, start_layer_idx: int, end_layer_idx: int | None = None
+        cls, num_rows: int, start_layer_idx: int, end_layer_idx: int | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Distribute a number of layers accross metalayers in a mesh.
-        Returns 2 tensors of shape (# meta layers, mesh_rows). The first tensor describes whether a given layer
-        should be a padding layer. The second tensor describes the index of a given layer. Layer indices range between [start_layer_idx, end_layer_idx).
+        """Distribute `num_layers` evenly across `num_rows`, returning a
+        list of rows where each element is either a layer index or -1
+        (if padding is needed to fill the structure). The result is
+        transposed such that each inner list corresponds to a layer
+        position across all rows.
+
+        Returns:
+            A tuple (pad_map, mapping) where:
+            - pad_map: A list of lists of shape [num_meta_layers][num_rows], where
+            each element is a boolean indicating if that position is padding (True) or a valid layer index (False).
+            - mapping: A list of lists of shape [num_meta_layers][num_rows], where
+            each element is an int (layer index) or None (padding).
         """
+
         if end_layer_idx is None:
             end_layer_idx = start_layer_idx
             start_layer_idx = 0
-        assert mesh_rows > 0, "Number of rows in a mesh is greater than zero."
-        assert end_layer_idx >= start_layer_idx, "End layer index must be greater than start layer index."
+        num_layers = end_layer_idx - start_layer_idx
 
-        num_meta_layers = ttnn.core.divup(end_layer_idx - start_layer_idx, mesh_rows)
-        layer_indices = torch.arange(num_meta_layers * mesh_rows).reshape(num_meta_layers, mesh_rows) + start_layer_idx
-        return layer_indices >= end_layer_idx, layer_indices
+        if num_rows <= 0:
+            raise ValueError("Number of rows must be greater than zero.")
+        if num_layers < 0:
+            raise ValueError("Number of layers cannot be negative.")
+        num_meta_layers = ttnn.core.divup(num_layers, num_rows)
+        total_slots = num_meta_layers * num_rows
+
+        # Create a flat list of layers, padding with -1
+        padded_layers = list(range(start_layer_idx, start_layer_idx + num_layers)) + [-1] * (total_slots - num_layers)
+
+        # Reshape into [num_rows, num_meta_layers]
+        mapping = torch.tensor(padded_layers).reshape(num_rows, num_meta_layers).T
+
+        return mapping == -1, mapping
 
     @classmethod
     def prefill_model_config(
@@ -124,10 +170,29 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ModelDecodeConfig:
         """Create the model configuration for decode mode."""
         norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        mlp_is_padding_layer, _ = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
+        moe_is_padding_layer, _ = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
 
         return {
             "embedding": Embedding1D.decode_model_config(hf_config, mesh_device),
-            "mlp_decoder_block": [DecoderBlock.decode_model_config(hf_config, mesh_device)],
+            "mlp_decoder_block": [
+                DecoderBlock.decode_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in mlp_is_padding_layer
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.decode_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in moe_is_padding_layer
+            ],
             "transfer_row": {"topology": ttnn.Topology.Linear},
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
@@ -140,12 +205,32 @@ class Model1D(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
+        mlp_is_padding_layer, _ = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
+        moe_is_padding_layer, _ = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
+
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mlp_decoder_block": [DecoderBlock.create_shared_state(hf_config, mesh_device)],
             "num_rows": mesh_device.shape[0],
             "num_mlp_layers": hf_config.first_k_dense_replace,
             "num_moe_layers": hf_config.num_hidden_layers - hf_config.first_k_dense_replace,
+            "mlp_decoder_block": [
+                DecoderBlock.create_shared_state(
+                    hf_config,
+                    mesh_device,
+                    tuple(is_padding_layer.tolist()),
+                )
+                for is_padding_layer in mlp_is_padding_layer
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.create_shared_state(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in moe_is_padding_layer
+            ],
         }
 
     @classmethod
@@ -165,13 +250,16 @@ class Model1D(SharedStateAddOn, AbstractModule):
         )
         mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
             mesh_device.shape[0], hf_config.first_k_dense_replace
-        )  # [num_meta_layers, num_rows]
+        )
         if mla_caches is not None:
             mla_cache_shape = mla_caches[0].shape
             mla_caches = torch.stack(
                 mla_caches + (torch.zeros(mla_cache_shape),) * (mlp_meta_layer_indices.numel() - len(mla_caches))
             )
 
+        moe_is_padding_layer, _ = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
         return {
             "embedding": Embedding1D.create_state(hf_config, mesh_device, ccl),
             "mlp_decoder_block": [
@@ -184,6 +272,16 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     mla_caches[layer_indices] if mla_caches is not None else None,
                 )
                 for is_padding_layer, layer_indices in zip(mlp_is_padding_layer, mlp_meta_layer_indices)
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.create_state(
+                    hf_config,
+                    paged_config,
+                    mesh_device,
+                    ccl,
+                    tuple(is_padding_layer.tolist()),
+                )
+                for is_padding_layer in moe_is_padding_layer
             ],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "lm_head": LMHead.create_state(hf_config, mesh_device, ccl),
@@ -255,6 +353,35 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     position_idxs,
                     row_idx,
                     cfg["mlp_decoder_block"][meta_layer_idx],
+                    rope_tensors,
+                    page_tables[layer_idx],
+                )
+                x_hidden.append(x_next)
+
+                ttnn.deallocate(x)
+                x = ttnn.clone(x_next)
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        # Stage 2: MOE Decoder Block
+        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        )
+
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x_next = MoEDecoderBlock.forward_decode(
+                    x,
+                    position_idxs,
+                    row_idx,
+                    cfg["moe_decoder_block"][meta_layer_idx],
                     rope_tensors,
                     page_tables[layer_idx],
                 )
