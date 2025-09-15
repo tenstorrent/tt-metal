@@ -37,7 +37,7 @@ private:
     std::string metal_home_;
 
     // Telemetry data store
-    std::unique_ptr<TelemetryDataStore> telemetry_data_store_;
+    TelemetryDataStore telemetry_data_store_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -50,7 +50,7 @@ private:
         }
 
         // Construct snapshot from current data using data store
-        TelemetrySnapshot full_snapshot = telemetry_data_store_->create_full_snapshot();
+        TelemetrySnapshot full_snapshot = telemetry_data_store_.create_full_snapshot();
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
 
@@ -82,7 +82,7 @@ private:
     }
 
     void update_telemetry_state_from_snapshot(std::shared_ptr<TelemetrySnapshot> snapshot) {
-        telemetry_data_store_->update_from_snapshot(*snapshot);
+        telemetry_data_store_.update_from_snapshot(*snapshot);
     }
 
     void send_snapshot_to_clients(std::shared_ptr<TelemetrySnapshot> snapshot) {
@@ -154,8 +154,7 @@ private:
     }
 
 public:
-    WebServer(const std::string& metal_home = "") :
-        started_at_(std::chrono::steady_clock::now()), telemetry_data_store_(std::make_unique<TelemetryDataStore>()) {
+    WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
         if (!metal_home.empty()) {
             metal_home_ = metal_home;
         } else {
