@@ -166,7 +166,7 @@ def convert_enum_strings_to_values(data):
 
 def deserialize_vector_structured(test_vector):
     """
-    Deserialize a test vector that was serialized for PostgreSQL storage.
+    Deserialize a test vector from a human-readable JSON to TTNN enums
     """
     param_names = test_vector.keys()
     test_vector = [deserialize_structured(test_vector[elem]) for elem in test_vector]
