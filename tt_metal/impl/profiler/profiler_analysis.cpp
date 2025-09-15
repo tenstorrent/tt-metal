@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <type_traits>
+#include <fstream>
 
 #include "assert.hpp"
 #include "profiler_analysis.hpp"
+#include "profiler_paths.hpp"
 
 namespace tt {
 
@@ -41,7 +43,7 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
-std::unordered_map<std::uint32_t, std::vector<uint64_t>> parse_duration(
+DurationAnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
@@ -50,61 +52,135 @@ std::unordered_map<std::uint32_t, std::vector<uint64_t>> parse_duration(
         return {};
     }
 
-    std::unordered_map<std::uint32_t, std::vector<uint64_t>> durations_per_runtime_id;
+    DurationAnalysisResults duration_analysis_results;
+    std::unordered_map<uint64_t, DurationAnalysisResults::SingleResult> results_per_runtime_id;
 
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         if (matches_start_end_config(marker, analysis_config.start_config)) {
-            if (durations_per_runtime_id.find(marker.runtime_host_id) == durations_per_runtime_id.end()) {
-                durations_per_runtime_id[marker.runtime_host_id] = {marker.timestamp, 0, 0};
+            if (results_per_runtime_id.find(marker.runtime_host_id) == results_per_runtime_id.end()) {
+                results_per_runtime_id[marker.runtime_host_id].start_timestamp = marker.timestamp;
+                results_per_runtime_id[marker.runtime_host_id].start_marker = marker_ref.get();
             }
-            // durations_per_runtime_id[marker.runtime_host_id][0] =
-            //     std::min(durations_per_runtime_id[marker.runtime_host_id][0], marker.timestamp);
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
-            TT_ASSERT(durations_per_runtime_id.find(marker.runtime_host_id) != durations_per_runtime_id.end());
-            durations_per_runtime_id[marker.runtime_host_id][1] = marker.timestamp;
-            // durations_per_runtime_id[marker.runtime_host_id][1] =
-            //     std::max(durations_per_runtime_id[marker.runtime_host_id][1], marker.timestamp);
+            TT_ASSERT(results_per_runtime_id.find(marker.runtime_host_id) != results_per_runtime_id.end());
+            results_per_runtime_id[marker.runtime_host_id].end_timestamp = marker.timestamp;
+            results_per_runtime_id[marker.runtime_host_id].end_marker = marker_ref.get();
         }
     }
 
-    // uint64_t end_timestamp = 0;
-    // for (auto it = markers.rbegin(); it != markers.rend(); ++it) {
-    //     const tracy::TTDeviceMarker& marker = it->get();
-    //     if (matches_start_end_config(marker, analysis_config.end_config)) {
-    //         end_timestamp = marker.timestamp;
-    //         break;
-    //     }
-    // }
-
-    for (auto& [runtime_id, durations] : durations_per_runtime_id) {
-        const uint64_t start_timestamp = durations[0];
-        const uint64_t end_timestamp = durations[1];
-
-        TT_ASSERT(start_timestamp < end_timestamp);
-        const uint64_t duration = end_timestamp - start_timestamp;
-        durations[2] = duration;
-
-        log_info(tt::LogMetal, "Runtime ID: {}, Duration: {}", runtime_id, duration);
+    for (auto& [runtime_id, result] : results_per_runtime_id) {
+        TT_ASSERT(result.start_timestamp < result.end_timestamp);
+        result.duration = result.end_timestamp - result.start_timestamp;
+        duration_analysis_results.addResultsForRuntimeId(runtime_id, result);
     }
 
-    return durations_per_runtime_id;
+    return duration_analysis_results;
 }
 
-std::unordered_map<std::uint32_t, std::vector<uint64_t>> parse_timeseries_markers(
+std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
     const AnalysisConfig& analysis_config,
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& timeseries_markers) {
-    TT_ASSERT(std::is_sorted(timeseries_markers.begin(), timeseries_markers.end(), [](const auto& a, const auto& b) {
-        return a.get() < b.get();
-    }));
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
+    TT_ASSERT(std::is_sorted(
+        device_markers.begin(), device_markers.end(), [](const auto& a, const auto& b) { return a.get() < b.get(); }));
     TT_FATAL(analysis_config.dimension == AnalysisDimension::OP, "Analysis config dimension must be across ops");
 
-    switch (analysis_config.result_type) {
-        case AnalysisResultType::DURATION: return parse_duration(analysis_config, timeseries_markers);
-        default: TT_THROW("Invalid analysis result type");
+    switch (analysis_config.type) {
+        case AnalysisType::OP_FIRST_TO_LAST_MARKER:
+            return std::make_unique<DurationAnalysisResults>(parse_duration(analysis_config, device_markers));
+        default: TT_THROW("Invalid analysis type");
     }
 }
+
+void writeAnalysisResultsToCSV(
+    const std::vector<const AnalysisResults*>& analysis_results,
+    const std::vector<std::vector<std::string>>& analysis_results_header_names) {
+    TT_ASSERT(analysis_results.size() == analysis_results_header_names.size());
+
+    std::string header_string = "GLOBAL CALL COUNT,DEVICE ID,OP NAME";
+
+    uint32_t header_idx = 0;
+    for (const AnalysisResults* analysis_result : analysis_results) {
+        TT_ASSERT(analysis_result->getNumFieldsPerResult() == analysis_results_header_names[header_idx].size());
+
+        for (const std::string& header : analysis_results_header_names[header_idx]) {
+            header_string += "," + header;
+        }
+        header_idx++;
+    }
+
+    std::map<uint64_t, std::string> results_string_per_runtime_id;
+    for (const AnalysisResults* analysis_result : analysis_results) {
+        for (const uint64_t runtime_id : analysis_result->getRuntimeIds()) {
+            if (results_string_per_runtime_id.find(runtime_id) == results_string_per_runtime_id.end()) {
+                const AnalysisResults::RuntimeIdMetaData& meta_data =
+                    analysis_result->getMetaDataForRuntimeId(runtime_id);
+                results_string_per_runtime_id[runtime_id] =
+                    std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," + meta_data.op_name;
+            }
+
+            // if (results_string_per_runtime_id.find(runtime_id) != results_string_per_runtime_id.end()) {
+            //     results_string_per_runtime_id[runtime_id] += ",";
+            // }
+
+            results_string_per_runtime_id[runtime_id] +=
+                "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
+        }
+    }
+
+    log_info(tt::LogMetal, "Writing analysis results to CSV");
+
+    std::filesystem::create_directories(get_profiler_reports_dir());
+
+    std::ofstream log_file_ofs;
+    if (std::filesystem::exists(PROFILER_OPS_PERF_RESULTS_LOG)) {
+        log_info(tt::LogMetal, "Appending to existing file {}", PROFILER_OPS_PERF_RESULTS_LOG);
+        log_file_ofs.open(PROFILER_OPS_PERF_RESULTS_LOG, std::ios_base::app);
+    } else {
+        log_info(tt::LogMetal, "Creating new file at {}", PROFILER_OPS_PERF_RESULTS_LOG);
+        log_file_ofs.open(PROFILER_OPS_PERF_RESULTS_LOG);
+        log_file_ofs << header_string << std::endl;
+    }
+
+    if (!log_file_ofs.is_open()) {
+        log_error(tt::LogMetal, "Failed to open file {} for writing", PROFILER_OPS_PERF_RESULTS_LOG);
+        return;
+    }
+
+    log_info(tt::LogMetal, "Writing {} results to CSV", results_string_per_runtime_id.size());
+
+    for (const auto& [_, results_string] : results_string_per_runtime_id) {
+        log_file_ofs << results_string << std::endl;
+    }
+
+    log_file_ofs.flush();
+    log_file_ofs.close();
+
+    log_info(tt::LogMetal, "Successfully wrote analysis results to {}", PROFILER_OPS_PERF_RESULTS_LOG);
+}
+
+// std::vector<std::string> get_duration_headers(const AnalysisConfig& analysis_config){
+//     TT_ASSERT(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
+
+//     std::vector<std::string> headers;
+
+//     if (analysis_config.)
+
+//     if (analysis_config.start_config.marker_type == AnalysisMarkerType::ZONE_START &&
+//         analysis_config.end_config.marker_type == AnalysisMarkerType::ZONE_END) {
+//         headers.push_back("DURATION");
+//     }
+
+//     return headers;
+// }
+
+// std::vector<std::string> get_headers_for_analysis_config(const AnalysisConfig& analysis_config){
+//     switch (analysis_config.result_type) {
+//         case AnalysisResultType::DURATION: return get_duration_headers(analysis_config);
+//         default: TT_THROW("Invalid analysis result type");
+//     }
+// }
 }  // namespace tt_metal
 
 }  // namespace tt
