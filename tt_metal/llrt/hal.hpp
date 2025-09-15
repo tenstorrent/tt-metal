@@ -397,13 +397,10 @@ public:
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
-    template <typename T = DeviceAddr>
-    T get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalDramMemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalDramMemAddrType addr_type) const;
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
@@ -521,16 +518,6 @@ inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1
     return this->core_info_[index].get_dev_addr<T>(addr_type);
 }
 
-template <typename T>
-inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const {
-    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
-    TT_FATAL(
-        !(get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX &&
-          addr_type == HalL1MemAddrType::UNRESERVED),
-        "Attempting to read addr of unreserved memory");
-    return this->core_info_[programmable_core_type_index].get_dev_addr<T>(addr_type);
-}
-
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
@@ -543,11 +530,10 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
     return this->core_info_[index].get_dev_size(addr_type);
 }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
+inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
-    return reinterpret_cast<T>(this->dram_bases_[index]);
+    return this->dram_bases_[index];
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
