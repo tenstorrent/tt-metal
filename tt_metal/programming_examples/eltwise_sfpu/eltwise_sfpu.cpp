@@ -33,7 +33,7 @@ int main() {
         // uploading/downloading data to/from the device, and executing programs.
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
-        // same kernel at a give time. Metalium allows you to run different kernels on different cores
+        // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
@@ -49,14 +49,16 @@ int main() {
         // Allocate DRAM buffers for the input and output data.
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = tile_size_bytes, .buffer_type = tt_metal::BufferType::DRAM};
-        distributed::ReplicatedBufferConfig buffer_config{.size = tile_size_bytes * n_tiles};
+        distributed::ReplicatedBufferConfig buffer_config{
+            .size = tile_size_bytes * n_tiles};  // Replicated across the mesh (unit mesh ⇒ single device)
 
-        // Allocate a input and output buffer on DRAM. We will perform an unary operation on the input buffer and write
-        // the result
+        // Allocate an input and output buffer on DRAM. We will perform a unary operation on the input buffer and write
+        // the result.
         std::shared_ptr<distributed::MeshBuffer> src0_dram_buffer =
             distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
         std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
             distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        // Each handle refers to the per-device allocation; on a 1x1 mesh it's a single device buffer.
 
         // Allocate 2 circular buffers for input and output.
         constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -116,7 +118,7 @@ int main() {
         // setting kerenel args) in this case
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
 
-        // setup the runtime arguments for the kernels.
+        // Set up the runtime arguments for the kernels.
         SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
         SetRuntimeArgs(
             program,
@@ -129,12 +131,12 @@ int main() {
 
         SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), n_tiles});
 
-        // execute the program and wait for it to finish
+        // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading results.
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
-        // Read the result and compare to our expected result
+        // Read the result (from shard at mesh coordinate {0,0} on a unit mesh) and compare to our expected result.
         std::vector<bfloat16> result_vec;
         distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 
@@ -152,6 +154,7 @@ int main() {
             }
         }
 
+        // Finally, close the device.
         pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
