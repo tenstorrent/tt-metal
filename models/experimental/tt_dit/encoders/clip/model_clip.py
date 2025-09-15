@@ -192,7 +192,6 @@ class CLIPEncoder:
         ccl_manager: CCLManager,
     ) -> ttnn.Tensor:
         if ccl_manager is not None:
-            # parallel case - get tensors from first device
             ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
             seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
 
@@ -206,7 +205,6 @@ class CLIPEncoder:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
         else:
-            # non-parallel case - concatenate across mesh
             ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
             seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
 
