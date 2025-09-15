@@ -36,41 +36,49 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 0 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 1 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 2 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 3 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 4 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 5 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 6 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 7 } }
     channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
   }
 }
 
