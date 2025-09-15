@@ -28,7 +28,7 @@
  * @param dst_index_in1  Index of the second input tile in Dst registers (not CB index!)
  * @param dst_index_out  Index of the output tile in Dst registers (not CB index!)
  */
-inline add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
+inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
     // SFPU Tile Organization:
     // Each tile in Dst registers is divided into four 16x16 faces.
     // n_vector_in_face = 32 as there are 32 SIMD lanes per tile
@@ -101,7 +101,7 @@ inline add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1,
 inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
     // LLK wrapper that calls add_tile_face for each face in the tiles.
     // Parameters: (custom_function, input1_dst_idx, input2_dst_idx, output_dst_idx)
-    _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_dst0);
+    _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0);
 }
 
 #endif

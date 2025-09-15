@@ -75,7 +75,7 @@ install(
         shard_data_rm
         NoC_tile_transfer
         sfpu_eltwise_chain
-        custom_sfpu_kernel_add
+        custom_sfpi_add
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
