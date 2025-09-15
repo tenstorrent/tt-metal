@@ -28,7 +28,7 @@ jobs:
           { name: "t3k_ccl_2d_tests", arch: wormhole_b0, cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml pytest -n auto tests/nightly/t3000/2d_ccl, timeout: 10, owner_id: U013121KDH9}, # Austin Ho
           { name: "t3k_ccl_legacy_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl_legacy, timeout: 180, owner_id: U05ACKAJTHS}, # Naif Tarafdar
           { name: "t3k_fabric_unit_tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 180, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          { name: "t3k_dispatch_unit_tests", arch: wormhole_b0, cmd: build/test/tt_metal/unit_tests_dispatch --gtest_filter="Large*.DRAMReadback/*", timeout: 15, owner_id: U07R05K4WGJ}, # John Bauman
+          { name: "t3k_dispatch_unit_tests", arch: wormhole_b0, cmd: build/test/tt_metal/unit_tests_dispatch --gtest_filter="Large*.NIGHTLY_DRAMReadback/*", timeout: 15, owner_id: U07R05K4WGJ}, # John Bauman
         ]
 
     name: ${{ matrix.test-group.name }}
