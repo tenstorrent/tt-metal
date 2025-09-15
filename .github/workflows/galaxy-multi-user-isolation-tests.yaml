@@ -61,7 +61,7 @@ jobs:
           cat > multi-user-dc.yaml <<EOF
           services:
             tray-1:
-              image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:339a22f363ab2750837c81672cee4f1ac813d6ef
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               container_name: tray-1
@@ -88,7 +88,7 @@ jobs:
                 - "/dev/tenstorrent/6:/dev/tenstorrent/6"
                 - "/dev/tenstorrent/7:/dev/tenstorrent/7"
             tray-2:
-              image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:339a22f363ab2750837c81672cee4f1ac813d6ef
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               container_name: tray-2
@@ -115,7 +115,7 @@ jobs:
                 - "/dev/tenstorrent/14:/dev/tenstorrent/14"
                 - "/dev/tenstorrent/15:/dev/tenstorrent/15"
             tray-3:
-              image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:339a22f363ab2750837c81672cee4f1ac813d6ef
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               container_name: tray-3
@@ -142,7 +142,7 @@ jobs:
                 - "/dev/tenstorrent/22:/dev/tenstorrent/22"
                 - "/dev/tenstorrent/23:/dev/tenstorrent/23"
             tray-4:
-              image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:339a22f363ab2750837c81672cee4f1ac813d6ef
+              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
               stdin_open: true
               tty: true
               container_name: tray-4
