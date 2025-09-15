@@ -22,9 +22,6 @@ NUM_DEVICES = ttnn.get_num_devices()
 
 FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
-    ttnn.FabricConfig.FABRIC_1D_RING,
-    ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 parameters = {

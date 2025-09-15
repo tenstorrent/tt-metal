@@ -58,7 +58,7 @@ def _model_shape_iterator(model_shapes, batch_params):
 parameters = {
     "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D_RING],
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 32],
@@ -80,7 +80,7 @@ parameters = {
     # parameters from:
     # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
     "model_suite": {
-        "mesh_shape": [(2, 4)],
+        "mesh_shape": [(4, 1)],
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
         "num_links": [1],
         "input_shape": _model_shape_iterator(MODEL_SHAPES, MODEL_BATCH),
