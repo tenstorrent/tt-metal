@@ -192,6 +192,12 @@ int main() {
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // Handle unused buffer entries initialized with DISPATCH_MODE_NONE
+                // These entries should be skipped without processing
+                launch_msg_address->kernel_config.enables = 0;
+                // Move to the next entry in the ring buffer
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
     }

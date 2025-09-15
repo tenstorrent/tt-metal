@@ -143,6 +143,12 @@ void __attribute__((noinline)) Application(void) {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer
+            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // Handle unused buffer entries initialized with DISPATCH_MODE_NONE
+                // These entries should be skipped without processing
+                launch_msg_address->kernel_config.enables = 0;
+                // Move to the next entry in the ring buffer
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
 
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
