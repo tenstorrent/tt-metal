@@ -518,7 +518,6 @@ class Efficientnetb0:
 
         x = x * ttnn.sigmoid_accurate(x)
 
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.global_avg_pool2d(x)
 
