@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 #include <iostream>
 #include <optional>
+#include <sstream>
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
@@ -25,7 +26,33 @@
 #include <telemetry/telemetry_provider.hpp>
 #include <server/web_server.hpp>
 #include <server/websocket_server.hpp>
-#include <server/websocket_test_client.hpp>
+
+/**************************************************************************************************
+ Utility Functions
+**************************************************************************************************/
+
+/**
+ * Split a comma-separated string into a vector of trimmed strings.
+ * @param input The comma-separated string to split
+ * @return Vector of individual strings with whitespace trimmed
+ */
+std::vector<std::string> split_comma_separated(const std::string& input) {
+    std::vector<std::string> result;
+    std::stringstream ss(input);
+    std::string item;
+
+    while (std::getline(ss, item, ',')) {
+        // Trim whitespace from both ends
+        size_t start = item.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) {
+            continue;  // Skip empty strings
+        }
+        size_t end = item.find_last_not_of(" \t\r\n");
+        result.push_back(item.substr(start, end - start + 1));
+    }
+
+    return result;
+}
 
 /**************************************************************************************************
  Main
@@ -142,6 +169,10 @@ int main(int argc, char* argv[]) {
         cxxopts::value<bool>()->default_value("false"))(
         "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
         "ws-port", "Port for the WebSocket server", cxxopts::value<int>()->default_value("8081"))(
+        "aggregate-from",
+        "Comma-separated list of WebSocket endpoints to aggregate telemetry from (e.g., "
+        "ws://server1:8081,ws://server2:8081)",
+        cxxopts::value<std::string>())(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
         cxxopts::value<std::string>())("h,help", "Print usage");
@@ -160,6 +191,13 @@ int main(int argc, char* argv[]) {
     std::string metal_src_dir = "";
     if (result.count("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
+    }
+
+    // Parse aggregate-from endpoints
+    std::vector<std::string> aggregate_endpoints;
+    if (result.count("aggregate-from")) {
+        std::string endpoints_str = result["aggregate-from"].as<std::string>();
+        aggregate_endpoints = split_comma_separated(endpoints_str);
     }
 
     if (print_link_health) {
@@ -189,11 +227,6 @@ int main(int argc, char* argv[]) {
     std::tie(websocket_server, websocket_subscriber) = run_web_socket_server(ws_port, metal_src_dir);
     subscribers.push_back(websocket_subscriber);
 
-    // Start test client in its own thread
-    std::thread websocket_client_thread;
-    log_info(tt::LogAlways, "Starting WebSocket test client to connect to port {}", ws_port);
-    websocket_client_thread = std::thread(run_websocket_test_client, ws_port);
-
     if (use_mock_telemetry) {
         // Mock telemetry
         log_info(tt::LogAlways, "Using mock telemetry data");
@@ -202,19 +235,13 @@ int main(int argc, char* argv[]) {
     } else {
         // Real telemetry
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_provider(subscribers);
+        run_telemetry_provider(subscribers, aggregate_endpoints);
     }
 
     // Run until finished
     bool web_server_succeeded = web_server.get();
     bool web_server2_succeeded = web_server2.get();
     bool websocket_succeeded = websocket_succeeded = websocket_server.get();
-
-    // Clean up WebSocket client thread
-    if (websocket_client_thread.joinable()) {
-        log_info(tt::LogAlways, "Waiting for WebSocket test client to finish...");
-        websocket_client_thread.join();
-    }
 
     if (!web_server_succeeded || !web_server2_succeeded || !websocket_succeeded) {
         return 1;

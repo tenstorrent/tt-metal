@@ -268,7 +268,12 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     log_info(tt::LogAlways, "Telemetry thread stopped");
 }
 
-void run_telemetry_provider(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
+void run_telemetry_provider(
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
+    const std::vector<std::string>& aggregate_endpoints) {
+    // For now, do nothing with aggregate_endpoints
+    (void)aggregate_endpoints;  // Suppress unused parameter warning
+
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
