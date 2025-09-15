@@ -328,9 +328,15 @@ Tensor FoldOperation::invoke(
         auto input_height = input_tensor.logical_shape()[1];
         auto input_width = input_tensor.logical_shape()[2];
         auto in_channels = input_tensor.logical_shape()[3];
+        auto fold_input_tensor = input_tensor;
+        if (in_channels % 32 == 0 && fold_input_tensor.layout() == Layout::TILE) {
+            // Convert to row-major layout for 32-channel aligned tensors to leverage faster untilize+RM fold path
+            fold_input_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+        }
+
         auto output_tensor =
-            ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
-        if (input_tensor.layout() == Layout::TILE) {
+            ttnn::prim::fold(queue_id, fold_input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        if (fold_input_tensor.layout() == Layout::TILE) {
             return ttnn::reshape(
                 output_tensor,
                 ttnn::Shape(
