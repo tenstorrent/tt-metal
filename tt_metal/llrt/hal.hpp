@@ -167,8 +167,7 @@ public:
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory) {}
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
@@ -178,11 +177,10 @@ public:
     const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
-template <typename T>
-inline T HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
+inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
-    return reinterpret_cast<T>(this->mem_map_bases_[index]);
+    return this->mem_map_bases_[index];
 }
 
 inline uint32_t HalCoreInfoType::get_dev_size(HalL1MemAddrType addr_type) const {
@@ -395,8 +393,7 @@ public:
     // This value can be found in the ELF file.
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
@@ -508,14 +505,13 @@ inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_typ
 
 inline CoreType Hal::get_core_type(uint32_t core_type_index) const { return core_info_[core_type_index].core_type_; }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
         "Attempting to read addr of unreserved memory");
-    return this->core_info_[index].get_dev_addr<T>(addr_type);
+    return this->core_info_[index].get_dev_addr(addr_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
