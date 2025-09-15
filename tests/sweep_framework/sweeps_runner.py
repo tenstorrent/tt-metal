@@ -564,6 +564,8 @@ def run_sweeps(
     module_suite_test_count = {}  # module_name -> {suite_name: count}
     max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
+    # Track test status counts across the entire run (only meaningful for non-dry runs)
+    status_counts = {}
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
@@ -607,6 +609,17 @@ def run_sweeps(
 
                 # Export results
                 if not config.dry_run and results:
+                    if config.summary:
+                        # Aggregate status counts for summary
+                        for res in results:
+                            st = res.get("status")
+                            if st is not None:
+                                key = getattr(st, "name", None)
+                                if key is None:
+                                    val = getattr(st, "value", None)
+                                    key = str(val) if val is not None else str(st)
+                                status_counts[key] = status_counts.get(key, 0) + 1
+
                     run_context = {
                         "run_id": run_id,
                         "test_start_time": suite_start_time,
@@ -643,6 +656,11 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+                # Status breakdown across all executed tests
+                if status_counts:
+                    logger.info("\n=== TEST STATUS COUNTS ===")
+                    for status_name in sorted(status_counts.keys()):
+                        logger.info(f"{status_name}: {status_counts[status_name]}")
 
             # Detailed breakdown by module and suite
             if module_suite_test_count:
