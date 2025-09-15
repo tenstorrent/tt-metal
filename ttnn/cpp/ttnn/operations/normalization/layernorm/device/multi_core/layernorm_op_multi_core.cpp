@@ -296,8 +296,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
 
