@@ -153,7 +153,7 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
+    sfpi_inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
         constexpr uint32_t n_vector_in_face = 32;
 
         // Calculate base indices for each tile in the Dst register array.
@@ -173,14 +173,14 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
     }
 
     // LLK wrapper
-    inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
+    sfpi_inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
         _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_dst0);
     }
 
     #endif // TRISC_MATH
 
     // High-level API function
-    inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
+    void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
         MATH(my_add_tile_internal(idx_dst0, idx_dst1, idx_out0));
     }
 
