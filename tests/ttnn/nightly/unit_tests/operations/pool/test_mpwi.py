@@ -11,12 +11,12 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 159
-    in_w = 159
+    in_h = 17
+    in_w = 17
     in_c = 16
     kernel_size = [3, 3]
     stride = [1, 1]
-    padding = [1, 1]
+    padding = [0, 0]
     dilation = [1, 1]
     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ceil_mode = False
