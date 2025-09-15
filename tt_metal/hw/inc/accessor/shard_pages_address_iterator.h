@@ -33,8 +33,16 @@ public:
 
     // Constructor that initializes the iterator at a starting position
     ShardPagesAddressIterator(
-        const Accessor& accessor, uint32_t shard_id = 0, uint32_t start_page_offset = 0, uint8_t noc = noc_index) :
-        accessor(accessor), current_page_id_in_shard(start_page_offset), current_shard_id(shard_id), noc(noc) {
+        const Accessor& accessor,
+        uint32_t shard_id = 0,
+        uint32_t start_page_offset = 0,
+        uint32_t end_page_offset = 0,
+        uint8_t noc = noc_index) :
+        accessor(accessor),
+        current_page_id_in_shard(start_page_offset),
+        end_page_id_in_shard(end_page_offset),
+        current_shard_id(shard_id),
+        noc(noc) {
         PageMapping current_page_mapping{
             .bank_id = shard_id % accessor.dspec().num_banks(),
             .bank_page_offset =
@@ -59,15 +67,15 @@ public:
 
     // Arithmetic operators
     ShardPagesAddressIterator& operator++() {
-        if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+        if (current_page_id_in_shard >= end_page_id_in_shard) {
             return *this;  // End iterator
         }
 
         do {
             current_noc_addr += accessor.page_size;
             current_page_id_in_shard++;
-            if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
-                current_page_id_in_shard = accessor.dspec().shard_volume();
+            if (current_page_id_in_shard >= end_page_id_in_shard) {
+                current_page_id_in_shard = end_page_id_in_shard;
                 break;
             }
         } while (!update_local_global_page_coord());
@@ -83,15 +91,15 @@ public:
 
     ShardPagesAddressIterator& operator+=(difference_type steps) {
         ASSERT(steps >= 0);
-        if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+        if (current_page_id_in_shard >= end_page_id_in_shard) {
             return *this;  // End iterator
         }
 
         do {
             current_noc_addr += steps * accessor.page_size;
             current_page_id_in_shard += steps;
-            if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
-                current_page_id_in_shard = accessor.dspec().shard_volume();
+            if (current_page_id_in_shard >= end_page_id_in_shard) {
+                current_page_id_in_shard = end_page_id_in_shard;
                 break;
             }
         } while (!update_local_global_page_coord(steps));
@@ -133,6 +141,7 @@ public:
 private:
     const Accessor& accessor;
     uint32_t current_page_id_in_shard = 0;
+    uint32_t end_page_id_in_shard = 0;
     uint32_t current_shard_id = 0;
     uint64_t current_noc_addr = 0;
     uint8_t noc = noc_index;
@@ -144,7 +153,7 @@ private:
     mutable Page current_page{0, 0, 0};
 
     void update_current_page() {
-        if (current_page_id_in_shard < accessor.dspec().shard_volume()) {
+        if (current_page_id_in_shard < end_page_id_in_shard) {
             current_page = Page(current_noc_addr, page_id(), current_shard_id);
         }
     }
@@ -241,10 +250,12 @@ public:
         noc_(noc) {}
 
     iterator begin() const {
-        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, start_page_offset_, noc_);
+        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, start_page_offset_, end_page_offset_, noc_);
     }
 
-    iterator end() const { return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, end_page_offset_, noc_); }
+    iterator end() const {
+        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, end_page_offset_, end_page_offset_, noc_);
+    }
 
     const_iterator cbegin() const { return begin(); }
     const_iterator cend() const { return end(); }
