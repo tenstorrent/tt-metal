@@ -90,7 +90,7 @@ jobs:
           device_perf_model_name: "yolov10x"
           commands: |
             pytest models/demos/yolov10x/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: stable_diffusion tests
@@ -110,7 +110,7 @@ jobs:
           commands: |
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
             pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vgg tests
@@ -130,7 +130,7 @@ jobs:
           commands: |
             pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
             pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: squeezebert tests
@@ -139,7 +139,7 @@ jobs:
           device_perf_model_name: "squeezebert"
           commands: |
             pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: roberta tests
@@ -156,8 +156,8 @@ jobs:
         with:
           device_perf_model_name: "resnet50"
           commands: |
-            pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: ufld_v2 tests
@@ -166,7 +166,7 @@ jobs:
           device_perf_model_name: "ufld_v2"
           commands: |
             pytest models/demos/ufld_v2/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: sentence_bert tests
@@ -175,7 +175,7 @@ jobs:
           device_perf_model_name: "sentence_bert"
           commands: |
             pytest models/demos/sentence_bert/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: functional_unet tests
@@ -202,7 +202,7 @@ jobs:
           device_perf_model_name: "metal_BERT_large_11"
           commands: |
             # pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov4 tests
@@ -241,7 +241,7 @@ jobs:
           device_perf_model_name: "yolov7"
           commands: |
             pytest models/demos/yolov7/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vit tests
@@ -259,7 +259,7 @@ jobs:
           device_perf_model_name: "yolov6l"
           commands: |
             pytest models/demos/yolov6l/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov9c tests
@@ -268,7 +268,7 @@ jobs:
           device_perf_model_name: "yolov9c"
           commands: |
             pytest models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vanilla_unet tests
@@ -304,7 +304,7 @@ jobs:
           device_perf_model_name: "yolov5x"
           commands: |
             pytest models/experimental/yolov5x/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vovnet tests
@@ -313,7 +313,7 @@ jobs:
           device_perf_model_name: "VoVNet"
           commands: |
             pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov12x tests
@@ -331,7 +331,7 @@ jobs:
           device_perf_model_name: "efficientnetb0"
           commands: |
             pytest models/experimental/efficientnetb0/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
