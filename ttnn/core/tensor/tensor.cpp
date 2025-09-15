@@ -638,11 +638,9 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    if (auto mesh_device = dst.device()) {
-        memcpy(mesh_device->mesh_command_queue(), dst, src, region);
-    } else {
-        memcpy(dst.device()->command_queue(), dst, src, region);
-    }
+    auto mesh_device = dst.device();
+    TT_FATAL(mesh_device, "dst must be a mesh tensor");
+    memcpy(mesh_device->mesh_command_queue(), dst, src, region);
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
