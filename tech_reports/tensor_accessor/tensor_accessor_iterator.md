@@ -40,7 +40,7 @@ auto pages_dst = tensor_accessor_dst.pages();
 auto page_dst = pages_dst.begin();
 for (const auto& page_src : pages_src) {
     noc_async_read(page_src.noc_addr(), page_dst->noc_addr(), page_size);
-    noc_async_writes_flushed();
+    noc_async_read_barrier();
     ++page_dst;
 }
 
@@ -50,7 +50,7 @@ auto pages_dst = tensor_accessor_dst.pages(/*start_page_id=*/0, /*end_page_id=*/
 auto page_dst = pages_dst.begin();
 for (const auto& page_src : pages_src) {
     noc_async_read(page_src.noc_addr(), page_dst->noc_addr(), page_size);
-    noc_async_writes_flushed();
+    noc_async_read_barrier();
     ++page_dst;
 }
 
@@ -128,7 +128,7 @@ for (uint32_t i = 0; i < num_shards; ++i) {
     auto page_dst = shard_pages_dst.begin();
     for (const auto& page_src : shard_pages_src) {
         noc_async_read(page_src.noc_addr(), page_dst->noc_addr(), page_size);
-        noc_async_writes_flushed();
+        noc_async_read_barrier();
         ++page_dst;
     }
 }
@@ -143,7 +143,7 @@ for (uint32_t i = 0; i < num_shards; ++i) {
     auto page_dst = shard_pages_dst.begin();
     for (const auto& page_src : shard_pages_src) {
         noc_async_read(page_src.noc_addr(), page_dst->noc_addr(), page_size);
-        noc_async_writes_flushed();
+        noc_async_read_barrier();
         ++page_dst;
     }
 }

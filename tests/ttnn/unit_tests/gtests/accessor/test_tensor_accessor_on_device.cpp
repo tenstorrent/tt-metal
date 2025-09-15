@@ -140,7 +140,10 @@ struct CopyParams {
 
 template <typename T>
 static void test_multi_core_copy(
-    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& kernel_path) {
+    const CopyParams& params,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::string& kernel_path,
+    const std::map<std::string, std::string>& defines = {}) {
     MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
 
@@ -173,6 +176,7 @@ static void test_multi_core_copy(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = compile_time_args,
+            .defines = defines,
         });
 
     for (size_t core_idx = 0; core_idx < num_cores; ++core_idx) {
@@ -203,7 +207,10 @@ static void test_multi_core_copy(
 
 template <typename T>
 static void test_multi_core_interleaved_copy(
-    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const CoreRangeSet& cores) {
+    const CopyParams& params,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const CoreRangeSet& cores,
+    const std::map<std::string, std::string>& defines = {}) {
     // Create interleaved memory config
     MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
     TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
@@ -255,6 +262,7 @@ static void test_multi_core_interleaved_copy(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args,
+            .defines = defines,
         });
 
     KernelHandle writer_kernel_id = CreateKernel(
@@ -265,6 +273,7 @@ static void test_multi_core_interleaved_copy(
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = writer_compile_time_args,
+            .defines = defines,
         });
 
     // Set runtime args for each core
@@ -653,6 +662,24 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
     }
 }
 
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep) {
+    const auto& params = GetParam();
+
+    const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_multi_core_copy<uint8_t>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::UINT16:
+            test_multi_core_copy<uint16_t>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::BFLOAT16:
+            test_multi_core_copy<bfloat16>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
 TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
     const auto& params = GetParam();
 
@@ -690,6 +717,28 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
         case DataType::UINT8: test_multi_core_interleaved_copy<uint8_t>(params, mesh_device_.get(), cores); break;
         case DataType::UINT16: test_multi_core_interleaved_copy<uint16_t>(params, mesh_device_.get(), cores); break;
         case DataType::BFLOAT16: test_multi_core_interleaved_copy<bfloat16>(params, mesh_device_.get(), cores); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPagesBigStep) {
+    const auto& params = GetParam();
+
+    // Use all available cores for multi-core testing
+    auto device = mesh_device_->get_devices().at(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_multi_core_interleaved_copy<uint8_t>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::UINT16:
+            test_multi_core_interleaved_copy<uint16_t>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::BFLOAT16:
+            test_multi_core_interleaved_copy<bfloat16>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
         default: TT_THROW("Unsupported data type");
     }
 }

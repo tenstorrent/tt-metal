@@ -22,15 +22,30 @@ void kernel_main() {
 
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
 
+    auto process_pages = [&](const auto& page) {
+        cb_reserve_back(cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        noc_async_read(page.noc_addr(), l1_write_addr, page_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_id, 1);
+    };
+
+#ifdef BIG_STEP
+    for (uint32_t start_offset = 0; start_offset < BIG_STEP; ++start_offset) {
+        auto pages = tensor_accessor_src.pages(start_page_id + start_offset, end_page_id);
+        auto page = pages.begin();
+        for (; page != pages.end(); page += BIG_STEP) {
+            // DPRINT << "write " << page->page_id() << " to " << page->noc_addr() << ENDL();
+            process_pages(*page);
+        }
+    }
+
+#else
     // Iterate over the assigned page range for this core
     auto pages = tensor_accessor_src.pages(start_page_id, end_page_id);
     for (const auto& page : pages) {
-        cb_reserve_back(cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-
-        noc_async_read(page.noc_addr(), l1_write_addr, page_size);
-        noc_async_read_barrier();
-
-        cb_push_back(cb_id, 1);
+        // DPRINT << "write " << page.page_id() << " to " << page.noc_addr() << ENDL();
+        process_pages(page);
     }
+#endif
 }

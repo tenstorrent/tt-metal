@@ -272,9 +272,12 @@ public:
     PagesAddressIteratorInterleaved(
         const Accessor& accessor, uint32_t start_page_id, uint32_t end_page_id, uint8_t noc) :
         accessor(accessor), current_page_id(start_page_id), end_page_id_(end_page_id), noc(noc) {
-        if (current_page_id < end_page_id_) {
-            update_current_page();
+        // If start_page_id is beyond end_page_id, create an end iterator
+        if (current_page_id >= end_page_id_) {
+            current_page_id = end_page_id_;
+            return;
         }
+        update_current_page();
     }
 
     // Getters
