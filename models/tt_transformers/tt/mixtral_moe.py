@@ -139,7 +139,7 @@ class TtMoeLayer(LightweightModule):
         seq_len = results_11BH.shape[-2]
 
         if seq_len >= 2048 and mode == "decode":  # Reshape back to intended shape
-            results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.model_args.dim])
+            results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.args.dim])
 
         # All gather
         output = tt_all_reduce(
