@@ -153,8 +153,8 @@ int main(int argc, char** argv) {
                 // Evaluate polynomial
                 return x * x * (3 - 2 * x);
             };
-            const float expected = smoothstep(0.0f, 1.0f, a_data[i].to_float());
-            const float actual = result_vec[i].to_float();
+            const float expected = smoothstep(0.0f, 1.0f, static_cast<float>(a_data[i]));
+            const float actual = static_cast<float>(result_vec[i]);
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;
