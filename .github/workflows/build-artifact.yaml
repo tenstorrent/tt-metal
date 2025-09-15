@@ -390,6 +390,8 @@ jobs:
             echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"
           fi
+          echo "SETUPTOOLS_SCM_DEBUG=1" >> $GITHUB_ENV
+          echo "CIBW_BUILD_VERBOSITY=3" >> $GITHUB_ENV
 
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
