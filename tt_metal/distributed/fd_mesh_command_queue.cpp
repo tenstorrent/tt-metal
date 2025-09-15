@@ -45,7 +45,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
@@ -718,7 +718,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    while (thread_exception_state_.load() == false) {
+    while (!thread_exception_state_.load()) {
         try {
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);

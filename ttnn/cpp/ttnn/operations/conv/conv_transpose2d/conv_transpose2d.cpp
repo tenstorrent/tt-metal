@@ -208,6 +208,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -290,8 +291,7 @@ Result conv_transpose2d(
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
-        conv_config.full_inner_dim,
-        conv_config.enable_split_reader);
+        conv_config.full_inner_dim);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }

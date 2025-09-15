@@ -53,9 +53,8 @@
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 
@@ -658,9 +657,9 @@ void InitDeviceProfiler(IDevice* device) {
         if (profiler_state_manager->device_profiler_map.find(device_id) ==
             profiler_state_manager->device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                profiler_state_manager->device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
+                profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
             } else {
-                profiler_state_manager->device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
+                profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
             }
         }
 
@@ -820,6 +819,7 @@ void ProcessDeviceProfilerResults(
     if (getDeviceProfilerState()) {
         const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
             tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
         auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
         TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
@@ -835,11 +835,7 @@ void ProcessDeviceProfilerResults(
         }
 
         if (dumpDeviceProfilerDataMidRun(state)) {
-            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
-            profiler.pushTracyDeviceResults(device_markers_vec);
-            profiler.dumpDeviceResults();
-            profiler.device_markers_per_core_risc_map.clear();
+            profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
         }
     }
 #endif
@@ -962,9 +958,10 @@ void ReadMeshDeviceProfilerResults(
     if (getDeviceProfilerState()) {
         TT_ASSERT(mesh_device.is_initialized());
 
+        const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+            tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
         if (useFastDispatch(&mesh_device)) {
-            const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-                tt::tt_metal::MetalContext::instance().profiler_state_manager();
             for (IDevice* device : mesh_device.get_devices()) {
                 auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
                 TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());

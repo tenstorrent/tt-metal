@@ -51,7 +51,9 @@ run_tg_tests() {
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
-    pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "tg_cfg2_sp4_tp4" ; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"

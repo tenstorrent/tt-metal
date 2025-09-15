@@ -34,9 +34,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -359,7 +359,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Create and enqueue mesh workloads
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::MeshCoordinate zero_coord =
             tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device_ptr->shape().dims());
         tt::tt_metal::distributed::MeshCoordinateRange device_range =
@@ -371,12 +371,12 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Wait for completion
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::Finish(mesh_device_ptr->mesh_command_queue());
     }
 
     // Read profiler results
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::detail::ReadDeviceProfilerResults(mesh_device_ptr->get_devices()[0]);
     }
 }
