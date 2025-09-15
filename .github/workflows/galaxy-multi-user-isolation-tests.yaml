@@ -68,7 +68,6 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
-                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -96,7 +95,6 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
-                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -124,7 +122,6 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-3:/app/.cache
-                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
@@ -152,7 +149,6 @@ jobs:
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-4:/app/.cache
-                  - ./docker_artifacts:/app/docker_artifacts
               entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
               user: "\${USER_ID}:\${GROUP_ID}"
               working_dir: /app/tt-metal
