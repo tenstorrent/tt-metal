@@ -171,6 +171,7 @@ jobs:
           EOF
 
       - name: Run Docker Compose
+        shell: /usr/bin/bash -e {0}
         run: |
           TRAY_PODS_DIR=".muti-user-galaxy-docker-files"
           REQUIRED_PODS=4
@@ -181,7 +182,6 @@ jobs:
 
           EPOCH_START=$(date +%s)
 
-          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
           USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
           
           # wait for REQUIRED .txt files to appear (with timeout)
@@ -199,14 +199,17 @@ jobs:
             sleep 1
           done
 
+          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
+
       - name: Run the tests
         run: |
           run_test() {
-            command=$1
+            testname="$1"
+            command="$2"
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray"
-              echo ">>> Running tests in $cname" 
+              echo ">>> Running $testname in $cname" 
               (
               docker exec "$cname" bash -c "$command" \
               | sed "s/^/[$cname] /" 
@@ -228,9 +231,8 @@ jobs:
           }
 
           export -f run_test
-          # run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
-          echo "run the pytest"
-          run_test "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+          # run_test "test_system_health" "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
+          run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
 
       - name: Tear down containers
         if: always()
