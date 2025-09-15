@@ -51,6 +51,27 @@ async function fetchPRInfo(github, context, commitSha) {
 }
 
 /**
+ * Fetch commit author info for a commit SHA.
+ * Returns GitHub login (if associated), author display name, and profile URL (if available).
+ */
+async function fetchCommitAuthor(octokit, context, commitSha) {
+  try {
+    const { data } = await octokit.rest.repos.getCommit({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      ref: commitSha,
+    });
+    const login = data.author?.login;
+    const htmlUrl = data.author?.html_url;
+    const name = data.commit?.author?.name;
+    return { login, name, htmlUrl };
+  } catch (e) {
+    core.warning(`Could not fetch commit author for ${commitSha}: ${e.message}`);
+    return { login: undefined, name: undefined, htmlUrl: undefined };
+  }
+}
+
+/**
  * Calculates statistics for a set of workflow runs.
  *
  * @param {Array<object>} runs - Array of workflow run objects
@@ -551,6 +572,11 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
+          // Commit author enrichment
+          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
@@ -560,6 +586,9 @@ async function run() {
             changeRef.first_failed_head_sha = item.first_failed_head_sha;
             changeRef.first_failed_head_short = item.first_failed_head_short;
             changeRef.no_success_in_window = item.no_success_in_window;
+            changeRef.first_failed_author_login = item.first_failed_author_login;
+            changeRef.first_failed_author_name = item.first_failed_author_name;
+            changeRef.first_failed_author_url = item.first_failed_author_url;
           }
         }
       } catch (e) {
@@ -579,6 +608,10 @@ async function run() {
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           item.no_success_in_window = !!res.noSuccessInWindow;
+          const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+          item.first_failed_author_login = author.login;
+          item.first_failed_author_name = author.name;
+          item.first_failed_author_url = author.htmlUrl;
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -589,6 +622,9 @@ async function run() {
           changeRef.first_failed_head_sha = item.first_failed_head_sha;
           changeRef.first_failed_head_short = item.first_failed_head_short;
           changeRef.no_success_in_window = item.no_success_in_window;
+          changeRef.first_failed_author_login = item.first_failed_author_login;
+          changeRef.first_failed_author_name = item.first_failed_author_name;
+          changeRef.first_failed_author_url = item.first_failed_author_url;
         }
       }
       catch (e) {
@@ -615,10 +651,13 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            const author = it.first_failed_author_login
+              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
           }
           return base;
         });
@@ -633,10 +672,13 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            const author = it.first_failed_author_login
+              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             if (it.no_success_in_window) {
-              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+              return `${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
             }
-            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`;
+            return `${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`;
           }
           return base;
         });
