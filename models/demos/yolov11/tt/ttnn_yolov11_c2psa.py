@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors
 from models.demos.yolov11.tt.ttnn_yolov11_psa import TtnnPSABlock
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnC2PSA:
     def __init__(self, device, parameter, conv_pt):
@@ -18,6 +25,8 @@ class TtnnC2PSA:
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         a, b = x[:, :, :, : int(self.out_channel_0 / 2)], x[:, :, :, int(self.out_channel_0 / 2) :]
+        if use_signpost:
+            signpost(header="psablock")
         x = self.psablock(device, b)
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)

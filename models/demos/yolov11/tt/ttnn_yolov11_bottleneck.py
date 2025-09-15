@@ -14,17 +14,21 @@ def p(x, a="x"):
 
 
 class TtnnBottleneck:
-    def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=True)  # core_count=64
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # core_count=64
+    def __init__(self, device, parameter, conv_pt, core_count=None):
+        self.cv1 = TtnnConv(
+            device, parameter.cv1, conv_pt.cv1, reshard=True, core_count=core_count
+        )  # core_count=64 and resahrd at foward
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True, core_count=core_count)  # core_count=64
 
     def __call__(self, device, x, tile_shape=32):
         input = x
         x = self.cv1(device, x)
         x = self.cv2(device, x)
-        p(x, "x")
-        p(input, "input is")
-        # input = ttnn.reshard(input,x.memory_config())
+        # p(x, "x")
+        # p(input, "input is")
+        # if(input.memory_config()!=x.memory_config()):
+        #     print("it is execcc")
+        #     input = ttnn.reshard(input,x.memory_config())
         x = ttnn.add(input, x, memory_config=x.memory_config())
         # if x.shape[3] < tile_shape:
         #     input = ttnn.to_layout(input, layout=ttnn.TILE_LAYOUT)

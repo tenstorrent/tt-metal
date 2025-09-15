@@ -28,10 +28,12 @@ class TtnnYoloV11:
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=True)
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3])
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=True)
-        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5])
+        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], reshard=True, core_count=64)
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
-        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
-        self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
+        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7], reshard=True, core_count=64)
+        self.c3k2_4 = TtnnC3k2(
+            device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False, core_count=None
+        )  # fps drops, corecoubt is increaed
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
         self.c3k2_5 = TtnnC3k2(device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=True, reshard=True)
@@ -76,7 +78,9 @@ class TtnnYoloV11:
         x6 = x
         if use_signpost:
             signpost(header="CONV6")
+        print("conv6 in", x.memory_config())
         x = self.conv6(self.device, x)
+        print("conv6 out", x.memory_config())
         if use_signpost:
             signpost(header="c3k2_4")
         x = self.c3k2_4(self.device, x)
@@ -86,6 +90,8 @@ class TtnnYoloV11:
         if use_signpost:
             signpost(header="C2PSA")
         x = self.c2psa(self.device, x)
+        if use_signpost:
+            signpost(header="C2PSA end")
         x10 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
