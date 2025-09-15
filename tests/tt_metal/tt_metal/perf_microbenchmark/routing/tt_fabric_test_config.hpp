@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
@@ -105,6 +105,12 @@ static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
     {"Mux", FabricTensixConfig::MUX},
 });
 
+static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_mapper({
+    {"STRICT_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
+    {"RELAXED_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE},
+    {"DYNAMIC_RECONFIGURATION_SETUP_MODE", FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -113,6 +119,8 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"one_to_all", HighLevelTrafficPattern::OneToAll},
+    {"all_to_one", HighLevelTrafficPattern::AllToOne},
+    {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -571,6 +579,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
         fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
     }
 
+    if (fabric_setup_yaml["fabric_reliability_mode"]) {
+        auto reliability_mode_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_reliability_mode"]);
+        fabric_setup.fabric_reliability_mode =
+            detail::fabric_reliability_mode_mapper.from_string(reliability_mode_str, "FabricReliabilityMode");
+    } else {
+        log_info(tt::LogTest, "No fabric reliability mode specified, defaulting to STRICT_SYSTEM_HEALTH_SETUP_MODE");
+        fabric_setup.fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    }
+
     if (fabric_setup_yaml["num_links"]) {
         fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
     } else {
@@ -666,9 +683,9 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
             return test_config.fabric_setup.routing_type == r_type;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
-                return test_config.benchmark_mode == true;
+                return test_config.benchmark_mode;
             } else if (filter_value == "false") {
-                return test_config.benchmark_mode == false;
+                return !test_config.benchmark_mode;
             } else {
                 log_info(
                     tt::LogTest,
@@ -678,9 +695,9 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
             }
         } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
             if (filter_value == "true") {
-                return test_config.global_sync == true;
+                return test_config.global_sync;
             } else if (filter_value == "false") {
-                return test_config.global_sync == false;
+                return !test_config.global_sync;
             } else {
                 log_info(
                     tt::LogTest,
@@ -1327,7 +1344,18 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                max_iterations = std::max(max_iterations, p.iterations.value_or(1));
+                if (p.iterations.has_value()) {
+                    max_iterations = std::max(max_iterations, p.iterations.value());
+                } else if (p.type == "all_to_one") {
+                    // Dynamically calculate iterations for all_to_one patterns based on number of devices
+                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
+                    max_iterations = std::max(max_iterations, num_devices);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for all_to_one pattern in test '{}'",
+                        num_devices,
+                        p_config.name);
+                }
             }
         }
 
@@ -1631,6 +1659,10 @@ private:
                 } else {
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
+            } else if (pattern.type == "all_to_one") {
+                expand_all_to_one_unicast(test, defaults, iteration_idx);
+            } else if (pattern.type == "all_to_one_random") {
+                expand_all_to_one_random_unicast(test, defaults);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1671,6 +1703,22 @@ private:
         } else {
             add_senders_from_pairs(test, all_pairs, base_pattern);
         }
+    }
+
+    void expand_all_to_one_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
+        if (!filtered_pairs.empty()) {
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        }
+    }
+
+    void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1837,7 +1885,7 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns)};
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
@@ -2182,6 +2230,9 @@ private:
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
+    static std::string to_string(FabricReliabilityMode mode) {
+        return detail::fabric_reliability_mode_mapper.to_string(mode, "FabricReliabilityMode");
+    }
 
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
@@ -2355,6 +2406,10 @@ private:
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.fabric_reliability_mode.has_value()) {
+            out << YAML::Key << "fabric_reliability_mode";
+            out << YAML::Value << to_string(config.fabric_reliability_mode.value());
         }
         if (config.topology == Topology::Torus && config.torus_config.has_value()) {
             out << YAML::Key << "torus_config";

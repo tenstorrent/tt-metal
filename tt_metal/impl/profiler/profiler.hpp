@@ -20,12 +20,12 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
+#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
@@ -78,6 +78,9 @@ private:
     // Device frequency
     int device_core_frequency{};
 
+    // Thread pool used for processing data when dumping results
+    std::shared_ptr<ThreadPool> thread_pool{};
+
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
 
@@ -91,7 +94,7 @@ private:
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
-    std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
+    std::unordered_map<std::pair<chip_id_t, CoreCoord>, TracyTTCtx, pair_hash<chip_id_t, CoreCoord>>
         device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device
@@ -99,9 +102,6 @@ private:
 
     // Per-core sync info used to make tracy context
     std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
-
-    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
 
     // Storage for all core's control buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
@@ -174,8 +174,21 @@ private:
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
-    // Get tracy context for the core
-    void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
+    // Dump device results to files
+    void writeDeviceResultsToFiles() const;
+
+    // Push device results to tracy
+    void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
+    // Initialize tracy contexts that haven't been initialized yet
+    void initializeMissingTracyContexts(bool blocking = true);
+
+    // Update tracy contexts
+    void updateTracyContexts(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
+    // Update tracy context for the core
+    void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
 
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
@@ -185,7 +198,7 @@ public:
 
     DeviceProfiler() = delete;
 
-    ~DeviceProfiler();
+    ~DeviceProfiler() = default;
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
@@ -235,14 +248,14 @@ public:
 
     void dumpClusterCoordinates() const;
 
-    // Dump device results to files
-    void dumpDeviceResults() const;
-
-    // Push device results to tracy
-    void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+    // Dump device results to files and tracy
+    void dumpDeviceResults(bool is_mid_run_dump = false);
 
     // Update sync info for this device
     void setSyncInfo(const SyncInfo& sync_info);
+
+    // Destroy tracy contexts
+    void destroyTracyContexts();
 
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
@@ -254,17 +267,6 @@ public:
 
     bool isLastFDReadDone() const;
 };
-
-// Merges markers from each (physical core, risc type) group into a single sorted vector. The markers in each group
-// should already be sorted.
-//
-// IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
-// device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
-// Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
-// while these references are in use, as this could invalidate the references and cause undefined behavior.
-std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map);
 
 bool useFastDispatch(IDevice* device);
 

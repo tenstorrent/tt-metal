@@ -30,10 +30,9 @@
 #include "metal_soc_descriptor.h"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 
@@ -257,8 +256,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     size_t len;
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
-        s = s.substr(0, s.length() - 1);            // Strip newline
-        int k_id = stoi(s.substr(0, s.find(":")));  // Format is {k_id}: {kernel}
+        s = s.substr(0, s.length() - 1);  // Strip newline
         kernel_names_.push_back(s.substr(s.find(":") + 2));
     }
 }
