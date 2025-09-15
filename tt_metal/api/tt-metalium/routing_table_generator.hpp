@@ -12,7 +12,7 @@
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 
@@ -38,7 +38,7 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 class RoutingTableGenerator {
 public:
-    explicit RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file);
+    explicit RoutingTableGenerator(const std::string& mesh_graph_desc_file);
     ~RoutingTableGenerator() = default;
 
     void dump_to_yaml();

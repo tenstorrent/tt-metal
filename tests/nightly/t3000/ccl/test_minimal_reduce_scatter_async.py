@@ -38,6 +38,7 @@ def run_reduce_scatter_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    verify_output=True,
 ):
     torch.manual_seed(0)
 
@@ -90,17 +91,18 @@ def run_reduce_scatter_impl(
     ]
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(rs_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(rs_output_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_rs,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
 
     logger.info("Done creating persistent buffers")
 
@@ -213,19 +215,20 @@ def run_reduce_scatter_impl(
 
             logger.info(f"Done iteration {i}")
 
-    for i in range(num_iters):
-        tt_rs_out = tt_reduce_scatter_output_list[i]
-        torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
+    if verify_output:
+        for i in range(num_iters):
+            tt_rs_out = tt_reduce_scatter_output_list[i]
+            torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
 
-        torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
+            torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
 
-        if ones_tensor:
-            eq, output = comp_equal(tt_rs_out, torch_rs_out)
-        else:
-            eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+            if ones_tensor:
+                eq, output = comp_equal(tt_rs_out, torch_rs_out)
+            else:
+                eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
-        logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED ag: {output}"
+            logger.info(f"{output}, iteration {i}")
+            assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
@@ -528,8 +531,8 @@ def test_reduce_scatter_async_training_shapes(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -654,8 +657,8 @@ def test_reduce_scatter_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -764,8 +767,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],

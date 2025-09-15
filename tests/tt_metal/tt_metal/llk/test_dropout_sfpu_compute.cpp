@@ -68,8 +68,8 @@ bool check_dropout(
     int vec_size = src_vec.size();
     int zero_count = 0;
     for (int i = 0; i < vec_size; i++) {
-        auto srcf = src_vec[i].to_float();
-        auto resf = result_vec[i].to_float();
+        auto srcf = static_cast<float>(src_vec[i]);
+        auto resf = static_cast<float>(result_vec[i]);
         if (resf == 0.0f) {
             zero_count++;
         } else if (!is_close(resf, srcf * scale_factor)) {

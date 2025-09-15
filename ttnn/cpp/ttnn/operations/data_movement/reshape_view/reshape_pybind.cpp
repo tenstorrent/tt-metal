@@ -94,7 +94,7 @@ void py_bind_reshape_view(pybind11::module& module) {
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.arange(4, dtype=torch.bfloat16), device=device)
             >>> output = ttnn.reshape(tensor, (1, 1, 2, 2))
 
         )doc");

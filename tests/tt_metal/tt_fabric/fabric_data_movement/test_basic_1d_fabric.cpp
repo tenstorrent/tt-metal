@@ -36,7 +36,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

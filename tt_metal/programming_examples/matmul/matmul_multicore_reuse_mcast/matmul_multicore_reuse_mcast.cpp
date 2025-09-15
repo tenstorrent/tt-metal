@@ -43,7 +43,7 @@ void golden_matmul(
             idx_b = j;
             c_f = 0;
             for (int k_m = 0; k_m < K; k_m++) {
-                float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
+                float_tmp = static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
                 c_f += float_tmp;
                 idx_a += 1;
                 idx_b += N;

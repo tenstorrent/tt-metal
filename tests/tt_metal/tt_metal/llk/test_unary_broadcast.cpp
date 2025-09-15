@@ -37,7 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
@@ -139,7 +139,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             std::vector<float> tempfp32v;
             tempfp32v.resize(vBroadcast.size());
             for (int i = 0; i < vBroadcast.size(); i++) {
-                tempfp32v[i] = vBroadcast[i].to_float();
+                tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
             tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
         } else {

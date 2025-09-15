@@ -266,11 +266,11 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f / 32.0f,
         1.0f / 32.0f,
-        byte_size / bfloat16::SIZEOF,
+        byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     // Setup the weights such that final result is the original input.
 
@@ -415,11 +415,11 @@ bool single_block_matmul(
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, in0_byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -427,7 +427,7 @@ bool single_block_matmul(
     auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
@@ -592,11 +592,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, in0_byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -604,7 +604,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////

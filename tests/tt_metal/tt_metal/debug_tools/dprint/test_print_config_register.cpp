@@ -22,7 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {

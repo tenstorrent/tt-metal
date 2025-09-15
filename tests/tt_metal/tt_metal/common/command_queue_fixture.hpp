@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
@@ -13,7 +13,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
