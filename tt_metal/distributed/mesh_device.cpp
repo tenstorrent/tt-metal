@@ -834,6 +834,12 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
 }
 
+MeshTraceId MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id) {
+    auto trace_id = MeshTrace::next_id();
+    this->begin_mesh_trace(cq_id, trace_id);
+    return trace_id;
+}
+
 void MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id) {
     uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
