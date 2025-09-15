@@ -274,6 +274,10 @@ def dump_callstacks(
     return result
 
 
+# Global lock for thread-safe port finding
+_port_lock = threading.Lock()
+
+
 def find_available_port() -> int:
     """
     Find an available port for gdb_server in a thread-safe manner.
@@ -281,13 +285,13 @@ def find_available_port() -> int:
         An available port number
     """
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("", 0))  # 0 → OS picks a free port
-        s.listen()
-        return s.getsockname()[1]
-    except:
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+            s.bind(("", 0))  # 0 → OS picks a free port
+            s.listen()
+            return s.getsockname()[1]
+    except (socket.error, OSError) as e:
         # If we get here, no port was found
-        raise TTTriageError(f"No available port found.")
+        raise TTTriageError(f"No available port found: {e}")
 
 
 def start_gdb_server(port: int, context: Context) -> GdbServer:
@@ -315,8 +319,10 @@ def run(args, context: Context):
     gdb_server: GdbServer | None = None
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None = None
     if gdb_callstack:
-        port = find_available_port()
-        gdb_server = start_gdb_server(port, context)
+        # Locking thread until we start gdb server on available port
+        with _port_lock:
+            port = find_available_port()
+            gdb_server = start_gdb_server(port, context)
         process_ids = get_process_ids(gdb_server)
 
     callstacks_data = run_checks.run_per_core_check(
