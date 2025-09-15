@@ -382,7 +382,7 @@ conv_op_l1_usage calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
