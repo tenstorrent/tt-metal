@@ -5,6 +5,8 @@ from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import JobStatus
+from infra.data_collection.pydantic_models import Step
+
 
 INFRA_TESTS_DIR = pathlib.Path(__file__).parent.parent
 
@@ -339,3 +341,44 @@ def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment):
             assert job.job_success is False
             # check that there are failing cpp tests stored in the pydantic testcase list
             assert len([x for x in job.tests if not x.success]) == 2
+
+
+def test_create_with_steps():
+    workflow_outputs_dir = (
+        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/"
+    ).resolve()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir=workflow_outputs_dir,
+        github_runner_environment={"github_event_name": "push"},
+        github_pipeline_json_filename=str(workflow_outputs_dir / "workflow.json"),
+        github_jobs_json_filename=str(workflow_outputs_dir / "workflow_jobs.json"),
+    )
+
+    assert len(pipeline.jobs) > 0
+
+    found_job_with_steps = False
+
+    for job in pipeline.jobs:
+        assert isinstance(job.steps, list)
+
+        if len(job.steps) == 0:
+            print(f" WARNING: Job {job.github_job_id} has empty steps list.")
+            continue
+
+        found_job_with_steps = True
+        print(f"\n Job '{job.name}' has {len(job.steps)} steps:")
+        for step in job.steps:
+            print(f" - {step.name}: {step.status}, {step.conclusion}, {step.started_at}, {step.completed_at}")
+
+        assert all(step.status in {None, "queued", "in_progress", "completed"} for step in job.steps)
+        assert all(step.conclusion in {
+            None, "success", "skipped", "failure", "cancelled",
+            "timed_out", "neutral", "action_required", "startup_failure", "stale"
+        } for step in job.steps)
+
+    if not found_job_with_steps:
+        print(" No job with non-empty steps found.")
+
+
+
