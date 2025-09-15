@@ -193,11 +193,11 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         device_coord);
                     if (device_coord[1] <= num_cols_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
+                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (2 * iter + 5));
                         }
                     } else {
                         for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(dst_vec[i].to_float(), (iter + 2) * (iter + 3));
+                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (iter + 2) * (iter + 3));
                         }
                     }
                 }

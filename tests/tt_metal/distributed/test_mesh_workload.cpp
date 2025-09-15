@@ -495,11 +495,11 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     device_coord);
                 if (device_coord[1] <= num_cols_in_workload - 1) {
                     for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), 5);
+                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
                     }
                 } else {
                     for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), 6);
+                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 6);
                     }
                 }
             }
@@ -612,7 +612,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                         if (i >= 512) {
                             ref_val = std::pow(2, 2 * ((iter % 2) + 1));
                         }
-                        EXPECT_EQ(dst_vec[i].to_float(), ref_val);
+                        EXPECT_EQ(static_cast<float>(dst_vec[i]), ref_val);
                     }
                 }
             }

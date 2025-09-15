@@ -162,7 +162,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        bytes_per_transaction / bfloat16::SIZEOF,
+        bytes_per_transaction / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     vector<uint32_t> packed_golden = packed_input;

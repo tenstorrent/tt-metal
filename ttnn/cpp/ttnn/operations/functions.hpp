@@ -54,11 +54,7 @@ static Tensor index_trilu(
         for (int32_t y = 0; y < padded_shape[penultimate]; y++) {
             for (int32_t x = 0; x < padded_shape[ultimate]; x++) {
                 int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
-                if constexpr (std::is_same_v<T, ::bfloat16>) {
-                    output_buffer[index + y * padded_shape[ultimate] + x] = T(static_cast<float>(value));
-                } else {
-                    output_buffer[index + y * padded_shape[ultimate] + x] = static_cast<T>(value);
-                }
+                output_buffer[index + y * padded_shape[ultimate] + x] = static_cast<T>(value);
             }  // dim X
         }  // dim Y
         index += offset;
@@ -466,8 +462,8 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
-        auto rand_value =
-            std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
+        auto rand_value = std::bind(
+            std::uniform_real_distribution<float>(static_cast<float>(low), static_cast<float>(high)), RANDOM_GENERATOR);
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
@@ -503,7 +499,7 @@ inline bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
 
 template <typename... Args>
 static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
-    return nearly_equal(a.to_float(), b.to_float(), args...);
+    return nearly_equal(static_cast<float>(a), static_cast<float>(b), args...);
 }
 }  // namespace detail
 

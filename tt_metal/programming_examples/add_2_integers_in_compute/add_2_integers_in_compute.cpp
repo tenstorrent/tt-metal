@@ -136,9 +136,10 @@ int main() {
     // compare the results with the expected values.
     bool success = true;
     for (size_t i = 0; i < n_elements_per_tile; ++i) {
-        float expected = src0_vec[i].to_float() + src1_vec[i].to_float();
-        if (std::abs(expected - result_vec[i].to_float()) > 3e-1f) {
-            fmt::print(stderr, "Mismatch at index {}: expected {}, got {}\n", i, expected, result_vec[i].to_float());
+        float expected = static_cast<float>(src0_vec[i]) + static_cast<float>(src1_vec[i]);
+        if (std::abs(expected - static_cast<float>(result_vec[i])) > 3e-1f) {
+            fmt::print(
+                stderr, "Mismatch at index {}: expected {}, got {}\n", i, expected, static_cast<float>(result_vec[i]));
             success = false;
         }
     }

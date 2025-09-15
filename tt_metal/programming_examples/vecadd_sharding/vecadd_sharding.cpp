@@ -231,7 +231,12 @@ int main(int argc, char** argv) {
         fmt::print("Core {}:\n", core_idx);
         for (int index = 0; index < print_per_core; index++) {
             const auto i = core_offset + index;
-            fmt::print("index {}: {} + {} = {}\n", i, a_data[i].to_float(), b_data[i].to_float(), c_data[i].to_float());
+            fmt::print(
+                "index {}: {} + {} = {}\n",
+                i,
+                static_cast<float>(a_data[i]),
+                static_cast<float>(b_data[i]),
+                static_cast<float>(c_data[i]));
         }
         std::cout << std::endl;
         core_idx++;
@@ -240,9 +245,10 @@ int main(int argc, char** argv) {
     // Verify the results
     bool pass = true;
     for (size_t i = 0; i < c_data.size(); i++) {
-        float expected = a_data[i].to_float() + b_data[i].to_float();
-        if (std::abs(c_data[i].to_float() - expected) > 0.2f) {  // Allow some error due to BFP16 precision
-            fmt::print(stderr, "Mismatch at index {}: expected {}, got {}\n", i, expected, c_data[i].to_float());
+        float expected = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+        if (std::abs(static_cast<float>(c_data[i]) - expected) > 0.2f) {  // Allow some error due to BFP16 precision
+            fmt::print(
+                stderr, "Mismatch at index {}: expected {}, got {}\n", i, expected, static_cast<float>(c_data[i]));
             pass = false;
         }
     }
