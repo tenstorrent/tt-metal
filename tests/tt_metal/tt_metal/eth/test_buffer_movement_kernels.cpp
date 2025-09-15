@@ -32,6 +32,7 @@
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "hal.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -294,11 +295,16 @@ bool chip_to_chip_interleaved_buffer_transfer(
     std::vector<uint32_t> receiver_compile_args = {(uint32_t)output_is_dram};
     tt_metal::TensorAccessorArgs(output_buffer).append_to(receiver_compile_args);
 
+    tt_metal::EthernetConfig receiver_config{.noc = tt_metal::NOC::NOC_1, .compile_args = receiver_compile_args};
+    if (hal::get_arch() == ARCH::BLACKHOLE) {
+        receiver_config.processor = DataMovementProcessor::RISCV_1;
+    }
+
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = receiver_compile_args});
+        receiver_config);
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
