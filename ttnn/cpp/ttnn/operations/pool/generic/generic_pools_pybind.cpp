@@ -138,7 +138,6 @@ void bind_max_pool2d_operation(py::module& module) {
                 } else {
                     return py::cast(std::get<ttnn::Tensor>(result));
                 }
-
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),

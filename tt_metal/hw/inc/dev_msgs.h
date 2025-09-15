@@ -109,19 +109,6 @@ enum dispatch_mode {
     DISPATCH_MODE_HOST,
 };
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 enum noc_index {
     NOC_0 = 0,
     NOC_1 = 1,
@@ -153,8 +140,7 @@ struct kernel_config_msg_t {
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[8];  // CODEGEN:skip
+    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
