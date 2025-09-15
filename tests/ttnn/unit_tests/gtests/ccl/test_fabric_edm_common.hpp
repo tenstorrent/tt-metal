@@ -390,7 +390,6 @@ bool RunPipelinedWorkersTest(
     MeshFabric1DFixture test_fixture;
     auto full_mesh_device = test_fixture.mesh_device_;
 
-    IDevice* device = full_mesh_device->get_device(MeshCoordinate(0, 0));
     std::shared_ptr<distributed::MeshDevice> mesh_device =
         full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
 
