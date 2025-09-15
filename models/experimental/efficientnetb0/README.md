@@ -35,7 +35,7 @@ EfficientNet-B0 is a lightweight and efficient convolutional neural network arch
 
 #### Multi Device (DP=2, N300)
 
-- For `224x224`, end-2-end perf is `146` FPS :
+- For `224x224`, end-2-end perf is `250` FPS :
 
   ```sh
   pytest models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
