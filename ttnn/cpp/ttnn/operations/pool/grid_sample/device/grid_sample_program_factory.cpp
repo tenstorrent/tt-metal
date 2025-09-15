@@ -19,10 +19,10 @@
 namespace ttnn::operations::grid_sample {
 
 // Constants
-constexpr uint32_t MAX_TILES_PER_REDUCTION = 8, buffering_factor = 2, reduction_size = 4;
-constexpr uint32_t max_rows_for_reduction = 16;  // Height of one face (always 16)
-constexpr bool one_scalar_per_core = false;
-constexpr uint32_t dummy_cb_id = 32;
+constexpr uint32_t MAX_TILES_PER_REDUCTION = 8, BUFFERING_FACTOR = 2, REDUCTION_SIZE = 4;
+constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;  // Height of one face (always 16)
+constexpr bool ONE_SCALAR_PER_CORE = false;
+constexpr uint32_t DUMMY_CB_ID = 32;
 
 // Split reader configuration - change this single flag to enable/disable split reader
 constexpr bool enable_split_reader = false;
@@ -112,31 +112,31 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
     const auto [input_cb_index_0, input_cb_handle_0] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, input_cb_page_size, buffering_factor, input_cb_data_format);
+        cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
 
-    uint32_t input_cb_index_1 = dummy_cb_id;
+    uint32_t input_cb_index_1 = DUMMY_CB_ID;
     tt::tt_metal::CBHandle input_cb_handle_1 = 0;
     if (is_sharded && enable_split_reader) {
         std::tie(input_cb_index_1, input_cb_handle_1) = tt::tt_metal::create_cb(
-            cb_idx++, program, all_cores, input_cb_page_size, buffering_factor, input_cb_data_format);
+            cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
     }
 
     const uint32_t scalar_cb_page_size =
         is_sharded ? tt::tt_metal::detail::TileSize(input_cb_data_format) : tile_size(input_cb_data_format);
     const auto [scalar_cb_index_0, scalar_cb_handle_0] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, scalar_cb_page_size, buffering_factor, input_cb_data_format);
+        cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
 
-    uint32_t scalar_cb_index_1 = dummy_cb_id;
+    uint32_t scalar_cb_index_1 = DUMMY_CB_ID;
     tt::tt_metal::CBHandle scalar_cb_handle_1 = 0;
     if (is_sharded && enable_split_reader) {
         std::tie(scalar_cb_index_1, scalar_cb_handle_1) = tt::tt_metal::create_cb(
-            cb_idx++, program, all_cores, scalar_cb_page_size, buffering_factor, input_cb_data_format);
+            cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
     }
 
     const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_pages =
-        is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * buffering_factor;
+        is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         cb_idx++,
         program,
@@ -233,28 +233,28 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         // Compute kernel compile-time arguments
         std::vector<uint32_t> compute_compile_time_args = {
-            in_ntiles_c,             // ct_arg[0]: in_ntiles_c
-            reduction_size,          // ct_arg[1]: reduction_size
-            enable_split_reader,     // ct_arg[2]: enable_split_reader
-            total_interpolations,    // ct_arg[3]: total_interpolations
-            channels_per_shard,      // ct_arg[4]: channels_per_shard
-            in_nblocks_c,            // ct_arg[5]: in_nblocks_c
-            max_rows_for_reduction,  // ct_arg[6]: max_rows_for_reduction
-            input_cb_index_0,        // ct_arg[7]: input_cb_index_0
-            input_cb_index_1,        // ct_arg[8]: input_cb_index_1
-            dummy_cb_id,             // ct_arg[9]: unused
-            dummy_cb_id,             // ct_arg[10]: unused
-            scalar_cb_index_0,       // ct_arg[11]: scalar_cb_index_0
-            scalar_cb_index_1,       // ct_arg[12]: scalar_cb_index_1
-            dummy_cb_id,             // ct_arg[13]: unused
-            dummy_cb_id,             // ct_arg[14]: unused
-            output_cb_index,         // ct_arg[15]: output_cb_index
-            dummy_cb_id,             // ct_arg[16]: unused
-            one_scalar_per_core,     // ct_arg[17]: one_scalar_per_core
-            false,                   // ct_arg[18]: unused
-            pre_tilize_cb_id,        // ct_arg[19]: pre_tilize_cb_id
+            in_ntiles_c,                      // ct_arg[0]: in_ntiles_c
+            REDUCTION_SIZE,                   // ct_arg[1]: REDUCTION_SIZE
+            enable_split_reader,              // ct_arg[2]: enable_split_reader
+            total_interpolations,             // ct_arg[3]: total_interpolations
+            channels_per_shard,               // ct_arg[4]: channels_per_shard
+            in_nblocks_c,                     // ct_arg[5]: in_nblocks_c
+            MAX_ROWS_FOR_REDUCTION,           // ct_arg[6]: MAX_ROWS_FOR_REDUCTION
+            input_cb_index_0,                 // ct_arg[7]: input_cb_index_0
+            input_cb_index_1,                 // ct_arg[8]: input_cb_index_1
+            DUMMY_CB_ID,                      // ct_arg[9]: unused
+            DUMMY_CB_ID,                      // ct_arg[10]: unused
+            scalar_cb_index_0,                // ct_arg[11]: scalar_cb_index_0
+            scalar_cb_index_1,                // ct_arg[12]: scalar_cb_index_1
+            DUMMY_CB_ID,                      // ct_arg[13]: unused
+            DUMMY_CB_ID,                      // ct_arg[14]: unused
+            output_cb_index,                  // ct_arg[15]: output_cb_index
+            DUMMY_CB_ID,                      // ct_arg[16]: unused
+            ONE_SCALAR_PER_CORE,              // ct_arg[17]: ONE_SCALAR_PER_CORE
+            false,                            // ct_arg[18]: unused
+            pre_tilize_cb_id,                 // ct_arg[19]: pre_tilize_cb_id
             is_output_tiled ? 1U : 0U,        // ct_arg[20]: is_output_tiled
-            is_output_block_format ? 1U : 0U    // ct_arg[21]: is_output_block_format
+            is_output_block_format ? 1U : 0U  // ct_arg[21]: is_output_block_format
         };
 
         return tt::tt_metal::CreateKernel(

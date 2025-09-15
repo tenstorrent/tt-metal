@@ -185,21 +185,26 @@ ALWI void read_four_corner_inputs(
 }
 
 // Process single grid point - common logic for both interleaved and sharded
-template <uint32_t grid_dtype, bool use_precomputed_grid, typename TensorAccessor, typename GridPtrType>
-ALWI void process_grid_point(
-    GridPtrType grid_ptr,
-    uint32_t grid_idx,
-    const TensorAccessor& input_tensor_accessor,
-    uint32_t batch_offset,
+template <
+    uint32_t grid_dtype,
+    bool use_precomputed_grid,
     uint32_t input_height,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
-    float height_scale,
-    float height_offset,
-    float width_scale,
-    float width_offset,
     uint32_t input_cb_index,
-    uint32_t scalar_cb_index) {
+    uint32_t scalar_cb_index,
+    typename TensorAccessor,
+    typename GridPtrType>
+ALWI void process_grid_point(
+    GridPtrType grid_ptr, uint32_t grid_idx, const TensorAccessor& input_tensor_accessor, uint32_t batch_offset) {
+    // Compute scaling factors as constexpr
+    constexpr float input_height_f = float(input_height);
+    constexpr float input_width_f = float(input_width);
+    constexpr float height_scale = input_height_f * 0.5f;
+    constexpr float height_offset = height_scale - 0.5f;
+    constexpr float width_scale = input_width_f * 0.5f;
+    constexpr float width_offset = width_scale - 0.5f;
+
     int32_t h0, h1, w0, w1;
     uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
 

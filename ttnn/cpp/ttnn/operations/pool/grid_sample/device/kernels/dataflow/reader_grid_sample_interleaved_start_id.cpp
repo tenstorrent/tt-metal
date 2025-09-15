@@ -36,15 +36,6 @@ void kernel_main() {
 
     const uint32_t end_id = start_page_id + num_pages;
 
-    constexpr float input_height_f = float(input_height);
-    constexpr float input_width_f = float(input_width);
-
-    constexpr float height_scale = input_height_f * 0.5f;
-    constexpr float height_offset = height_scale - 0.5f;
-
-    constexpr float width_scale = input_width_f * 0.5f;
-    constexpr float width_offset = width_scale - 0.5f;
-
     /*
     In the case of grid sampling, we need to account for the fact that the grid coordinates may fall outside the bounds
     of the input image. Since the padding mode is zero, we would simply set the weights for the appropriate sticks to
@@ -77,72 +68,15 @@ void kernel_main() {
 
         // Inner loop: process grid_batches coordinate sets within this spatial position
         for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
-            // Template dispatch based on grid data type and precomputed grid mode
-            if constexpr (grid_dtype == DTYPE_FLOAT32) {
-                if constexpr (use_precomputed_grid) {
-                    process_grid_point<DTYPE_FLOAT32, true>(
-                        grid_ptr,
-                        grid_idx,
-                        input_tensor_accessor,
-                        batch_offset,
-                        input_height,
-                        input_width,
-                        input_stick_nbytes,
-                        height_scale,
-                        height_offset,
-                        width_scale,
-                        width_offset,
-                        input_cb_index,
-                        scalar_cb_index);
-                } else {
-                    process_grid_point<DTYPE_FLOAT32, false>(
-                        grid_ptr,
-                        grid_idx,
-                        input_tensor_accessor,
-                        batch_offset,
-                        input_height,
-                        input_width,
-                        input_stick_nbytes,
-                        height_scale,
-                        height_offset,
-                        width_scale,
-                        width_offset,
-                        input_cb_index,
-                        scalar_cb_index);
-                }
-            } else {  // DTYPE_BFLOAT16
-                if constexpr (use_precomputed_grid) {
-                    process_grid_point<DTYPE_BFLOAT16, true>(
-                        grid_ptr,
-                        grid_idx,
-                        input_tensor_accessor,
-                        batch_offset,
-                        input_height,
-                        input_width,
-                        input_stick_nbytes,
-                        height_scale,
-                        height_offset,
-                        width_scale,
-                        width_offset,
-                        input_cb_index,
-                        scalar_cb_index);
-                } else {
-                    process_grid_point<DTYPE_BFLOAT16, false>(
-                        grid_ptr,
-                        grid_idx,
-                        input_tensor_accessor,
-                        batch_offset,
-                        input_height,
-                        input_width,
-                        input_stick_nbytes,
-                        height_scale,
-                        height_offset,
-                        width_scale,
-                        width_offset,
-                        input_cb_index,
-                        scalar_cb_index);
-                }
-            }
+            // Direct template dispatch - no branching needed
+            process_grid_point<
+                grid_dtype,
+                use_precomputed_grid,
+                input_height,
+                input_width,
+                input_stick_nbytes,
+                input_cb_index,
+                scalar_cb_index>(grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
         }
 
         // Update batch tracking (avoid division in loop)

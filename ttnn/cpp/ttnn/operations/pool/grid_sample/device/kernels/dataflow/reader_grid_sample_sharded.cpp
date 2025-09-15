@@ -39,14 +39,6 @@ void kernel_main() {
     // All grid points in one grid stick are in the same batch
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
-    // Grid coordinates scaling factors (for standard grid mode)
-    constexpr float input_height_f = float(input_height);
-    constexpr float input_width_f = float(input_width);
-    constexpr float height_scale = input_height_f * 0.5f;
-    constexpr float height_offset = height_scale - 0.5f;
-    constexpr float width_scale = input_width_f * 0.5f;
-    constexpr float width_offset = width_scale - 0.5f;
-
     // Zero out input CB to handle invalid coordinates properly
     zero_out_tiles<input_cb_index>();
 
@@ -81,72 +73,15 @@ void kernel_main() {
 
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        // Template dispatch based on grid data type and precomputed grid mode
-        if constexpr (grid_dtype == DTYPE_FLOAT32) {
-            if constexpr (use_precomputed_grid) {
-                process_grid_point<DTYPE_FLOAT32, true>(
-                    grid_stick_ptr,
-                    in_grid_row_idx,
-                    input_tensor_accessor,
-                    batch_offset,
-                    input_height,
-                    input_width,
-                    input_stick_nbytes,
-                    height_scale,
-                    height_offset,
-                    width_scale,
-                    width_offset,
-                    input_cb_index,
-                    scalar_cb_index);
-            } else {
-                process_grid_point<DTYPE_FLOAT32, false>(
-                    grid_stick_ptr,
-                    in_grid_row_idx,
-                    input_tensor_accessor,
-                    batch_offset,
-                    input_height,
-                    input_width,
-                    input_stick_nbytes,
-                    height_scale,
-                    height_offset,
-                    width_scale,
-                    width_offset,
-                    input_cb_index,
-                    scalar_cb_index);
-            }
-        } else {  // DTYPE_BFLOAT16
-            if constexpr (use_precomputed_grid) {
-                process_grid_point<DTYPE_BFLOAT16, true>(
-                    grid_stick_ptr,
-                    in_grid_row_idx,
-                    input_tensor_accessor,
-                    batch_offset,
-                    input_height,
-                    input_width,
-                    input_stick_nbytes,
-                    height_scale,
-                    height_offset,
-                    width_scale,
-                    width_offset,
-                    input_cb_index,
-                    scalar_cb_index);
-            } else {
-                process_grid_point<DTYPE_BFLOAT16, false>(
-                    grid_stick_ptr,
-                    in_grid_row_idx,
-                    input_tensor_accessor,
-                    batch_offset,
-                    input_height,
-                    input_width,
-                    input_stick_nbytes,
-                    height_scale,
-                    height_offset,
-                    width_scale,
-                    width_offset,
-                    input_cb_index,
-                    scalar_cb_index);
-            }
-        }
+        // Direct template dispatch - no branching needed
+        process_grid_point<
+            grid_dtype,
+            use_precomputed_grid,
+            input_height,
+            input_width,
+            input_stick_nbytes,
+            input_cb_index,
+            scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
 
         ++in_grid_row_idx;
         if (in_grid_row_idx == grid_batching_factor) {

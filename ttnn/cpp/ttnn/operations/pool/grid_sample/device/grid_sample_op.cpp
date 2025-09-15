@@ -113,44 +113,6 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
             output_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must have INTERLEAVED or HEIGHT_SHARDED memory layout");
 
-    // If input is height sharded, validate sharding configuration
-    if (input_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(input_tensor.is_sharded(), "Input tensor must be properly sharded");
-        auto shard_spec = input_tensor.shard_spec().value();
-
-        // Height sharding should distribute along the height dimension
-        // For NHWC format, this means the N*H*W dimension should be sharded
-        uint32_t total_height =
-            input_tensor.logical_shape()[0] * input_tensor.logical_shape()[1] * input_tensor.logical_shape()[2];
-        uint32_t total_width = input_tensor.logical_shape()[-1];
-
-        TT_FATAL(
-            shard_spec.shape[1] >= total_width,
-            "Height sharded input tensor with shape {} must preserve full width dimension {} in shard spec, but got "
-            "shard width {}",
-            input_tensor.logical_shape(),
-            total_width,
-            shard_spec.shape[1]);
-    }
-
-    // If grid is height sharded, validate sharding configuration
-    if (grid_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(grid_tensor.is_sharded(), "Grid tensor must be properly sharded");
-        auto grid_shard_spec = grid_tensor.shard_spec().value();
-
-        // Grid height sharding should distribute along the N*H_out*W_out dimension
-        uint32_t grid_total_height =
-            grid_tensor.logical_shape()[0] * grid_tensor.logical_shape()[1] * grid_tensor.logical_shape()[2];
-        uint32_t grid_total_width = grid_tensor.logical_shape()[-1];
-
-        TT_FATAL(
-            grid_shard_spec.shape[1] >= grid_total_width,
-            "Height sharded grid tensor with shape {} must preserve full width dimension {} in shard spec, but got "
-            "shard width {}",
-            grid_tensor.logical_shape(),
-            grid_total_width,
-            grid_shard_spec.shape[1]);
-    }
     TT_FATAL(
         input_tensor.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
         "Input tensor last dimension must be divisible by TILE_WIDTH ({}), but got {} in padded shape {}",
@@ -242,9 +204,6 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
 
         output_memory_config = MemoryConfig(output_memory_layout, output_buffer_type, output_shard_spec);
     }
-
-    // Calculate padded shape following pool operation pattern
-    // Grid sample doesn't support input padding, so we only pad for memory alignment
 
     const auto& grid_padded_shape = grid_tensor.padded_shape();
     const auto& input_padded_shape = input_tensor.padded_shape();
