@@ -67,6 +67,7 @@ target_sources(
         server/main.cpp
         telemetry/telemetry_provider.cpp
         telemetry/metric.cpp
+        telemetry/telemetry_data_store.cpp
         server/web_server.cpp
         server/websocket_server.cpp
         telemetry/ethernet/chip_identifier.cpp
