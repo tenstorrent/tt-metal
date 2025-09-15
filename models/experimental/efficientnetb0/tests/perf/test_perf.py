@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import (
+from models.common.utility_functions import (
     run_for_wormhole_b0,
 )
 
