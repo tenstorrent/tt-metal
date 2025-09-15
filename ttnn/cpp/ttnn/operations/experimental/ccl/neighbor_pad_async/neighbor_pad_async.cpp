@@ -25,7 +25,9 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const MeshDevice& mesh_device,
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::ccl::Topology> topology) {
+    std::optional<ttnn::ccl::Topology> topology,
+    std::optional<uint32_t> secondary_cluster_axis,
+    std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
     return ttnn::operations::experimental::ccl::neighbor_pad_async(
         input_tensors,
         dim,
@@ -38,7 +40,9 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         mesh_device,
         num_preferred_links,
         memory_config,
-        topology);
+        topology,
+        secondary_cluster_axis,
+        secondary_mesh_shape);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
