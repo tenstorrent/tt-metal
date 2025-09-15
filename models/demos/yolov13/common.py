@@ -153,7 +153,7 @@ def load_torch_model(model_location_generator=None):
         model = YOLO(file_path)
         # Get the actual PyTorch model from YOLO
         state_dict = {k.replace("model.", "", 1): v for k, v in model.state_dict().items()}
-        torch_model.load_state_dict(state_dict, strict=False)
+        torch_model.load_state_dict(state_dict)
         torch_model.eval()
 
         return torch_model

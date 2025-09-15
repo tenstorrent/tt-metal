@@ -8,14 +8,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import functional as f
+from ultralytics.utils.tal import dist2bbox
 
-# Flash attention imports (optional)
-try:
-    from flash_attn import flash_attn_func
+USE_FLASH_ATTN = False
 
-    USE_FLASH_ATTN = True
-except ImportError:
-    USE_FLASH_ATTN = False
+
+def make_anchors(feats, strides, grid_cell_offset=0.5):
+    """Generate anchors from features."""
+    anchor_points, stride_tensor = [], []
+    assert feats is not None
+    dtype, device = feats[0].dtype, feats[0].device
+    for i, stride in enumerate(strides):
+        h, w = feats[i].shape[2:] if isinstance(feats, list) else (int(feats[i][0]), int(feats[i][1]))
+        sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
+        sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+        sy, sx = torch.meshgrid(sy, sx)
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
+    return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -402,23 +412,16 @@ class DownsampleConv(nn.Module):
 
 
 class Concat(nn.Module):
-    def __init__(self):
+    """Concatenate a list of tensors along dimension."""
+
+    def __init__(self, dimension=1):
+        """Concatenates a list of tensors along a specified dimension."""
         super().__init__()
+        self.d = dimension
 
     def forward(self, x):
-        if isinstance(x, (list, tuple)):
-            # Handle different spatial dimensions by resizing to match the first tensor
-            if len(x) > 1:
-                target_size = x[0].shape[2:]  # Get H, W from first tensor
-                resized_tensors = []
-                for tensor in x:
-                    if tensor.shape[2:] != target_size:
-                        tensor = F.interpolate(tensor, size=target_size, mode="nearest")
-                    resized_tensors.append(tensor)
-                x = torch.cat(resized_tensors, dim=1)
-            else:
-                x = x[0]
-        return x
+        """Forward pass for the YOLOv8 mask Proto module."""
+        return torch.cat(x, self.d)
 
 
 class C3AH(nn.Module):
@@ -626,6 +629,8 @@ class DWConv(Conv):
 
 
 class Detect(nn.Module):
+    """YOLO Detect head for detection models."""
+
     dynamic = False  # force grid reconstruction
     export = False  # export mode
     format = None  # export format
@@ -637,6 +642,7 @@ class Detect(nn.Module):
     legacy = False  # backward compatibility for v3/v5/v8/v9 models
 
     def __init__(self, nc=80, ch=()):
+        """Initializes the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
@@ -666,6 +672,7 @@ class Detect(nn.Module):
             self.one2one_cv3 = copy.deepcopy(self.cv3)
 
     def forward(self, x):
+        """Concatenates and returns predicted bounding boxes and class probabilities."""
         if self.end2end:
             return self.forward_end2end(x)
 
@@ -677,6 +684,16 @@ class Detect(nn.Module):
         return y if self.export else (y, x)
 
     def forward_end2end(self, x):
+        """
+        Performs forward pass of the v10Detect module.
+
+        Args:
+            x (tensor): Input tensor.
+
+        Returns:
+            (dict, tensor): If not in training mode, returns a dictionary containing the outputs of both one2many and one2one detections.
+                           If in training mode, returns a dictionary containing the outputs of one2many and one2one detections separately.
+        """
         x_detach = [xi.detach() for xi in x]
         one2one = [
             torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i](x_detach[i])), 1) for i in range(self.nl)
@@ -691,6 +708,7 @@ class Detect(nn.Module):
         return y if self.export else (y, {"one2many": x, "one2one": one2one})
 
     def _inference(self, x):
+        """Decode predicted bounding boxes and class probabilities based on multiple-level feature maps."""
         # Inference path
         shape = x[0].shape  # BCHW
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
@@ -723,6 +741,7 @@ class Detect(nn.Module):
         return torch.cat((dbox, cls.sigmoid()), 1)
 
     def bias_init(self):
+        """Initialize Detect() biases, WARNING: requires stride availability."""
         m = self  # self.model[-1]  # Detect() module
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
         # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
@@ -734,6 +753,34 @@ class Detect(nn.Module):
                 a[-1].bias.data[:] = 1.0  # box
                 b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
 
+    def decode_bboxes(self, bboxes, anchors, xywh=True):
+        """Decode bounding boxes."""
+        return dist2bbox(bboxes, anchors, xywh=xywh and (not self.end2end), dim=1)
+
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        """
+        Post-processes YOLO model predictions.
+
+        Args:
+            preds (torch.Tensor): Raw predictions with shape (batch_size, num_anchors, 4 + nc) with last dimension
+                format [x, y, w, h, class_probs].
+            max_det (int): Maximum detections per image.
+            nc (int, optional): Number of classes. Default: 80.
+
+        Returns:
+            (torch.Tensor): Processed predictions with shape (batch_size, min(max_det, num_anchors), 6) and last
+                dimension format [x, y, w, h, max_class_prob, class_index].
+        """
+        batch_size, anchors, _ = preds.shape  # i.e. shape(16,8400,84)
+        boxes, scores = preds.split([4, nc], dim=-1)
+        index = scores.amax(dim=-1).topk(min(max_det, anchors))[1].unsqueeze(-1)
+        boxes = boxes.gather(dim=1, index=index.repeat(1, 1, 4))
+        scores = scores.gather(dim=1, index=index.repeat(1, 1, nc))
+        scores, index = scores.flatten(1).topk(min(max_det, anchors))
+        i = torch.arange(batch_size)[..., None]  # batch indices
+        return torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
+
 
 class YoloV13(nn.Module):
     def __init__(self):
@@ -741,15 +788,14 @@ class YoloV13(nn.Module):
         self.model = nn.Sequential(
             Conv(3, 96, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1)),  # 0
             Conv(96, 192, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=2),  # 1
-            # 2
-            DSC3k2(192, 384, n=2, expasion_ratio=0.25, dsc3k=True),  # channel_in  # channel_out
+            DSC3k2(192, 384, n=2, expasion_ratio=0.25, dsc3k=True),  # 2
             Conv(384, 384, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=4),  # 3
             DSC3k2(384, 768, n=2, expasion_ratio=0.25, dsc3k=True),  # 4
             DsConv(768, 768, kernel_size=3, stride=2),  # 5
-            A2C2f(768, 768, n=4, mlp_ratio=1.5),  # 6
+            A2C2f(768, 768, n=4, mlp_ratio=1.5, residual=True),  # 6
             DsConv(768, 768, kernel_size=3, stride=2),  # 7
-            A2C2f(768, 768, n=4, mlp_ratio=1.5),  # 8
-            HyperACE(768, 768, n=2, dsc3k=True, channel_adjust=False, num_hyperedges=12),  # 9
+            A2C2f(768, 768, n=4, mlp_ratio=1.5, residual=True),  # 8
+            HyperACE(768, 768, n=2, dsc3k=True, shortcut=True, num_hyperedges=12, channel_adjust=False),  # 9
             Upsample(scale_factor=2.0, mode="nearest"),  # 10
             DownsampleConv(),  # 11
             FullPAD_Tunnel(),  # 12
@@ -768,30 +814,7 @@ class YoloV13(nn.Module):
             Concat(),  # 25
             DSC3k2(1152, 768, n=2, dsc3k=True),  # 26
             FullPAD_Tunnel(),  # 27
-            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28
-            Concat(),  # 29
-            DSC3k2(1536, 768, n=2, dsc3k=True),  # 30
-            FullPAD_Tunnel(),  # 31
-            HyperACE(768, 768, n=2, dsc3k=True),  # 9
-            Upsample(scale_factor=2.0, mode="nearest"),  # 10
-            DownsampleConv(),  # 11
-            FullPAD_Tunnel(),  # 12
-            FullPAD_Tunnel(),  # 13
-            FullPAD_Tunnel(),  # 14
-            Upsample(scale_factor=2.0, mode="nearest"),  # 15
-            Concat(),  # 16
-            DSC3k2(1536, 768, n=2, dsc3k=True),  # 17
-            FullPAD_Tunnel(),  # 18
-            Upsample(scale_factor=2.0, mode="nearest"),  # 19
-            Concat(),  # 20
-            DSC3k2(1536, 768, n=2, dsc3k=True),  # 21
-            Conv(768, 384, kernel_size=1, stride=1),  # 22
-            FullPAD_Tunnel(),  # 23
-            Conv(384, 384, kernel_size=3, stride=2, padding=1),  # 24
-            Concat(),  # 25
-            DSC3k2(1152, 768, n=2, dsc3k=True),  # 26
-            FullPAD_Tunnel(),  # 27
-            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28
+            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28 - Keep as 768->768
             Concat(),  # 29
             DSC3k2(1536, 768, n=2, dsc3k=True),  # 30
             FullPAD_Tunnel(),  # 31
@@ -800,48 +823,55 @@ class YoloV13(nn.Module):
 
     def forward(self, x):
         # Backbone
-        x = self.model[0](x)  # Conv: 3->96
-        x = self.model[1](x)  # Conv: 96->192
-        x = self.model[2](x)  # DSC3k2: 192->384
-        x = self.model[3](x)  # Conv: 384->384
-        x = self.model[4](x)  # DSC3k2: 384->768
-        x4 = x  # Save for later concatenation
-        x = self.model[5](x)  # DsConv: 768->768
-        x = self.model[6](x)  # A2C2f: 768->768
-        x6 = x  # Save for later concatenation
-        x = self.model[7](x)  # DsConv: 768->768
-        x = self.model[8](x)  # A2C2f: 768->768
-        x = self.model[9](x)  # HyperACE: 768->768
-        x = self.model[10](x)  # Upsample
-        x10 = x  # Save for later concatenation
-        x = self.model[11](x)  # DownsampleConv
-
-        # Neck - FPN
-        x = self.model[12](x)  # FullPAD_Tunnel
-        x = self.model[13](x)  # FullPAD_Tunnel
-        x = self.model[14](x)  # FullPAD_Tunnel
-        x = self.model[15](x)  # Upsample
-        x = self.model[16]([x, x4])  # Concat
-        x = self.model[17](x)  # DSC3k2: 1536->768
-        x16 = x  # Save for later concatenation
-        x = self.model[18](x)  # FullPAD_Tunnel
-        x = self.model[19](x)  # Upsample
-        x = self.model[20]([x, x10])  # Concat
-        x = self.model[21](x)  # DSC3k2: 1536->768
-        x19 = x  # Save for later concatenation
-        x = self.model[22](x)  # Conv: 768->384
-        x22 = x  # Save for later concatenation
-
+        x = self.model[0](x)
+        x = self.model[1](x)
+        x = self.model[2](x)
+        x = self.model[3](x)
+        x = self.model[4](x)
+        x4 = x
+        x = self.model[5](x)
+        x = self.model[6](x)
+        x6 = x
+        x = self.model[7](x)
+        x = self.model[8](x)
+        x8 = x
         # Head
-        x = self.model[23](x)  # FullPAD_Tunnel
-        x = self.model[24](x)  # Conv: 384->384
-        x = self.model[25]([x, x19])  # Concat
-        x = self.model[26](x)  # DSC3k2: 1152->768
-        x = self.model[27](x)  # FullPAD_Tunnel
-        x = self.model[28](x)  # Conv: 768->768
-        x = self.model[29]([x, x16])  # Concat
-        x = self.model[30](x)  # DSC3k2: 1536->768
-        x = self.model[31](x)  # FullPAD_Tunnel
-        x = self.model[32](x)  # Detect
+        x = self.model[9]([x4, x6, x8])
+        x9 = x
+        x = self.model[10](x)
+        x10 = x
+        x = self.model[11](x9)
+        x11 = x
+        x = self.model[12]([x6, x9])
+        x12 = x
+        x = self.model[13]([x4, x10])
+        x13 = x
+        x = self.model[14]([x8, x11])
+        x14 = x
+        x = self.model[15](x)
+        x = self.model[16]([x, x12])
+        x = self.model[17](x)
+        x17 = x
+        x = self.model[18]([x, x9])
+        x18 = x
+        x = self.model[19](x17)
+        x = self.model[20]([x, x13])
+        x = self.model[21](x)
+        x21 = x
+        x = self.model[22](x10)
+        x22 = x
+        x = self.model[23]([x21, x22])
+        x23 = x
+        x = self.model[24](x)
+        x = self.model[25]([x, x18])
+        x = self.model[26](x)
+        x26 = x
+        x = self.model[27]([x, x9])
+        x27 = x
+        x = self.model[28](x26)
+        x = self.model[29]([x, x14])
+        x = self.model[30](x)
+        x = self.model[31]([x, x11])
+        x = self.model[32]([x23, x27, x])
 
         return x
