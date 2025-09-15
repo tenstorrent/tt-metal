@@ -220,7 +220,8 @@ async function fetchFailedJobSummaries(octokit, context, runId) {
       }
     );
   } catch (e) {
-    core.warning(`Failed to fetch failed job summaries for run ${runId}: ${e.message}`);
+    // Non-fatal: some runs may have restricted logs or transient API issues; skip quietly
+    core.info(`Skipping failed job summaries for run ${runId}: ${e.message}`);
   }
   return summaries.slice(0, 5);
 }
@@ -820,7 +821,7 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
-          // Failed job summaries for first failing run
+          // Failed job summaries for first failing run (best-effort)
           item.failed_job_summaries = await fetchFailedJobSummaries(octokit, github.context, item.first_failed_run_id);
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
