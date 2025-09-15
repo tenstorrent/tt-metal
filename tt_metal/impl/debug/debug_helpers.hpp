@@ -71,24 +71,6 @@ inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_c
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
-inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
-    if (core.type == CoreType::ETH) {
-        auto logical_active_eths =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
-        CoreCoord logical_eth(core.coord.x, core.coord.y);
-        if (logical_active_eths.contains(logical_eth)) {
-            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        } else {
-            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
-        }
-    } else {
-        return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX);
-    }
-}
-
 inline std::string_view get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";
