@@ -30,20 +30,23 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
-    if constexpr (sync) {
-        cb_wait_front(cb_id_out0, 1);
-    }
     {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             for (uint32_t p = 0; p < num_pages; p++) {
+                if constexpr (sync) {
+                    cb_wait_front(cb_id_out0, 1);
+                }
                 uint64_t noc_addr = s.get_noc_addr(p);
                 noc_async_write(l1_read_addr + p * page_size_bytes, noc_addr, page_size_bytes);
+                if constexpr (sync) {
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_id_out0, 1);
+                }
             }
         }
-        noc_async_write_barrier();
-    }
-    if constexpr (sync) {
-        cb_pop_front(cb_id_out0, 1);
+        if constexpr (!sync) {
+            noc_async_write_barrier();
+        }
     }
 }
