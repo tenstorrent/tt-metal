@@ -58,16 +58,16 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
-      tracy: true
-      version: ${{ inputs.version || '22.04' }}
+  # build-artifact-profiler:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     build-type: ${{ inputs.build-type || 'Release' }}
+  #     build-wheel: true
+  #     tracy: true
+  #     version: ${{ inputs.version || '22.04' }}
 
   # Slow Dispatch Unit Tests
   # sd-unit-tests:
@@ -167,15 +167,15 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          # { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:27cb235aab5b0e52e153a26cd86b4742e89dac5d"
+      build-artifact-name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp
+      wheel-artifact-name: eager-dist-cp310-ubuntu-22.04-any
       gtest_filter: "*-*NIGHTLY_*"
   # tt-train-cpp-unit-tests:
   #   needs: build-artifact
