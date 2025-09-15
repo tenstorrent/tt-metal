@@ -393,11 +393,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t idx_tmp_cb_id = 32;
     uint32_t right_inc_tmp_cb_id = 32;
     uint32_t down_left_wrap_inc_tmp_cb_id = 32;
+    uint32_t sync_cb_id = 32;
     uint32_t right_inc = 0;
     uint32_t down_left_wrap_inc = 0;
     if (return_indices) {
         const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
         const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
+
+        sync_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(sync_cb_id, program, all_cores, 2, 1, params.index_format);
 
         in_idx_cb_id_0 = next_cb_index++;
         tt::tt_metal::create_cb(
@@ -611,7 +615,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         down_left_wrap_inc,             // 21
         in_w_padded,                    // 22
         kernel_w,                       // 23
-        pad_l};                         // 24
+        pad_l,                          // 24
+        sync_cb_id};                    // 25
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

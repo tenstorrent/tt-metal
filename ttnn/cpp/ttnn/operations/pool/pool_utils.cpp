@@ -238,12 +238,14 @@ uint32_t calculate_L1_usage(
     uint32_t in_idx_cb_config_0_size = 0;
     uint32_t in_idx_cb_config_1_size = 0;
     uint32_t idx_tmp_cb_size = 0;
+    uint32_t sync_cb_size = 0;
     if (return_indices) {
         uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
         in_idx_cb_config_0_size = in_cb_npages * in_idx_cb_pagesize;
         if (params.split_reader) {
             in_idx_cb_config_1_size = in_cb_npages * in_idx_cb_pagesize;
         }
+        sync_cb_size = params.index_nbytes;
 
         // Add tile temporary CBs for return_indices
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
@@ -266,7 +268,7 @@ uint32_t calculate_L1_usage(
     }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           in_idx_cb_config_0_size + in_idx_cb_config_1_size + 3 * idx_tmp_cb_size +
+           in_idx_cb_config_0_size + in_idx_cb_config_1_size + 3 * idx_tmp_cb_size + sync_cb_size +
            sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
 }
 

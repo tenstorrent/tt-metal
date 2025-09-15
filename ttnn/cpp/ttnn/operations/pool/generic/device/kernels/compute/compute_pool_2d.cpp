@@ -57,6 +57,7 @@ void MAIN {
     constexpr uint32_t in_w_padded = get_compile_time_arg_val(22);
     constexpr uint32_t kernel_w = get_compile_time_arg_val(23);
     constexpr uint32_t pad_l = get_compile_time_arg_val(24);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(25);
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -125,6 +126,7 @@ void MAIN {
 
         cb_wait_front(right_inc_tmp_cb_id, 1);
         cb_wait_front(down_left_wrap_inc_tmp_cb_id, 1);
+        cb_wait_front(idx_tmp_cb_id, 1);
     }
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
@@ -155,8 +157,6 @@ void MAIN {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
-                    cb_wait_front(idx_tmp_cb_id, 1);
-
                     // UNPACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
                     // UNPACK(tt::compute::common::print_full_tile(right_inc_tmp_cb_id));
                     tilize_init_short_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id, topk_output_tiles);
@@ -199,8 +199,6 @@ void MAIN {
                     add_int_tile_init();
                     add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
 
-                    cb_pop_front(idx_tmp_cb_id, 1);
-
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -240,8 +238,6 @@ void MAIN {
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
 
-                cb_reserve_back(idx_tmp_cb_id, output_faces);
-
                 pack_untilize_dest<
                     topk_output_tiles,
                     topk_output_tiles,
@@ -251,7 +247,14 @@ void MAIN {
                     index_scratch_out_dst_idx>(
                     idx_tmp_cb_id, 1, 0, 32, 4);  // write back to the idx tmp cb to be used in the next iteration
 
-                cb_push_back(idx_tmp_cb_id, output_faces);
+                // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
+                // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK tilizes
+                // them again,
+                // TODO why does tensix_sync not achieve this?
+                cb_push_back(sync_cb_id, 1);
+                cb_reserve_back(sync_cb_id, 1);
+                cb_wait_front(sync_cb_id, 1);
+                cb_pop_front(sync_cb_id, 1);
 
                 if constexpr (pack_untilize_reinit) {
                     tensix_sync();
