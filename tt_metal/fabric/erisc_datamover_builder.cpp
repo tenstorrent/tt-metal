@@ -1276,7 +1276,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
-    ASSERT(this->get_configured_risc_count() == 1, "Configured risc count must be 1");
+    TT_FATAL(this->get_configured_risc_count() == 1, "Configured risc count must be 1");
 
     const std::vector<uint32_t> main_args = {
         num_sender_channels,
