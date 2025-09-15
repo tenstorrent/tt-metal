@@ -12,7 +12,7 @@ class TtnnUFLDV2Conv2D:
         conv,
         conv_pth,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -46,7 +46,6 @@ class TtnnUFLDV2Conv2D:
             deallocate_activation=dealloc_act,
             enable_act_double_buffer=True if is_blk else False,
             enable_weights_double_buffer=True if is_blk else False,
-            enable_split_reader=True if not is_blk else False,
             reshard_if_not_optimal=True,
             activation=activation,
         )

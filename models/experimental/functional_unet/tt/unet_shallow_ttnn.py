@@ -134,7 +134,7 @@ class UNetConv2D:
         conv,
         bn=None,
         device=None,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
@@ -176,12 +176,12 @@ class UNetConv2D:
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
             ),
-            enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
             activation=activation,
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
             enable_weights_double_buffer=True,
+            enable_activation_reuse=(conv.enable_activation_reuse if "enable_activation_reuse" in conv else False),
         )
 
         if override_core_grid is not None:
@@ -508,7 +508,7 @@ class UNet:
         self.output_layer = UNetConv2D(
             parameters.output_layer,
             device=device,
-            activation="",
+            activation=None,
             mesh_mapper=mesh_mapper,
             activation_dtype=ttnn.bfloat16,
         )
