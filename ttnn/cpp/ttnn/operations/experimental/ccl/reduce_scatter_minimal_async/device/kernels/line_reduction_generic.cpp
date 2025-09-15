@@ -19,6 +19,8 @@ void MAIN {
     constexpr uint32_t num_batches = get_compile_time_arg_val(6);
     constexpr uint32_t num_links = get_compile_time_arg_val(7);
     constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(8);
+    constexpr uint32_t dim = get_compile_time_arg_val(9);
+    constexpr uint32_t num_pages_per_slice = get_compile_time_arg_val(10);
 
     uint32_t arg_idx = 0;
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
@@ -30,6 +32,7 @@ void MAIN {
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
+    uint32_t running_batch_tile_offset = 0;
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
             // Initialize binary operations - use the same constants consistently
@@ -42,7 +45,17 @@ void MAIN {
                 cb_reserve_back(output_cb, tile_granularity);
                 acquire_dst();
                 for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
-                    add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
+                    if constexpr (dim == 3) {
+                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
+                    } else {
+                        uint32_t global_tile_index = tiles_read + packet_id * tile_granularity + tile_id;
+                        uint32_t batch_tile_index = global_tile_index - running_batch_tile_offset;
+                        uint32_t slice_index = batch_tile_index / (num_pages_per_slice / ring_size);
+                        uint32_t tile_index_in_slice = batch_tile_index % (num_pages_per_slice / ring_size);
+                        uint32_t intermediate_tile_index =
+                            slice_index * (num_pages_per_slice / ring_size) + tile_index_in_slice;
+                        add_tiles(input_cb_id, intermediate_cb, tile_id, intermediate_tile_index, tile_id);
+                    }
                     pack_tile(tile_id, output_cb);
                 }
                 release_dst();

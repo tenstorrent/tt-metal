@@ -44,24 +44,26 @@ constexpr bool do_final_reduction = get_compile_time_arg_val(16);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
+constexpr bool dim = get_compile_time_arg_val(20);
+constexpr uint32_t num_pages_per_slice = get_compile_time_arg_val(21);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(31);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(32);
+constexpr bool is_termination_master = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(23);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(24);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(28);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(30);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(31);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(32);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(33);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(34);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<33>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<35>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<33 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<35 + ccl_routing_utils::num_line_unicast_args>();
 
 constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
 constexpr uint32_t intermediate_num_pages = batch_num_pages * num_batches;
@@ -71,6 +73,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    DPRINT << "DIM: " << (uint32_t)dim << "\n";
+    DPRINT << "NUM PAGES PER SLICE: " << (uint32_t)num_pages_per_slice << "\n";
 
     DPRINT << "device id: " << (uint32_t)my_chip_id << "\n";
     DPRINT << "is_forward: " << (uint32_t)is_forward << "\n";
@@ -257,14 +261,27 @@ void kernel_main() {
             constexpr uint32_t cb_output_id = is_first_device_in_direction ? cb_reader_output_id : cb_compute_output_id;
 
             uint32_t stride_Wt = input_tensor_Wt;
-            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
-            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
+            uint32_t pages_per_slice_per_worker;
+            if constexpr (dim == 3) {
+                pages_per_slice_per_worker = input_tensor_Wt / ring_size;
+            } else {
+                pages_per_slice_per_worker = num_pages_per_slice / ring_size;
+            }
+            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % pages_per_slice_per_worker;
+            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / pages_per_slice_per_worker * stride_Wt;
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
 
             DPRINT << "tiles read: " << (uint32_t)tiles_read << " tiles to read: " << (uint32_t)tiles_to_read << "\n";
 
-            uint32_t input_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * slice_Wt;
+            uint32_t input_tile_id_start;
+            if constexpr (dim == 3) {
+                input_tile_id_start =
+                    intermediate_full_offset + batch_offset + slice_idx * (input_tensor_Wt / ring_size);
+            } else {
+                input_tile_id_start =
+                    intermediate_full_offset + batch_offset + slice_idx * (num_pages_per_slice / ring_size);
+            }
             DPRINT << "input_tile_id_start: " << (uint32_t)input_tile_id_start << "\n";
 
             // Write to remote intermediate buffer
@@ -282,7 +299,7 @@ void kernel_main() {
                     DPRINT << "first tile id: " << (uint32_t)first_tile_id << "\n";
 
                     pages_read_in_row++;
-                    if (pages_read_in_row >= slice_Wt) {
+                    if (pages_read_in_row >= pages_per_slice_per_worker) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
@@ -300,7 +317,7 @@ void kernel_main() {
                         DPRINT << "second tile id: " << (uint32_t)second_tile_id << "\n";
 
                         pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
+                        if (pages_read_in_row >= pages_per_slice_per_worker) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }

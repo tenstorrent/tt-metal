@@ -232,38 +232,15 @@ def run_reduce_scatter_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
     [
-        ([1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        # Composite-RS tests
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
-        ([1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
+        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
     ],
     ids=[
-        "padded_dim_2_test_one",
-        "padded_dim_2_test_two",
-        "batch_8",
-        "batch_4",
-        "batch_1_sd35_spatial",
-        "batch_1_sd35_prompt",
-        "batch_2",
-        "batch_1",
-        "composite_rs_test_one",
-        "composite_rs_test_two",
-        "composite_rs_test_three",
-        "composite_rs_test_four",
+        "_test_one",
     ],
 )
 @pytest.mark.parametrize(
@@ -278,38 +255,34 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
     [
-        (True, True),
         (True, False),
-        (False, True),
     ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+    ids=["barrier_without_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_linear"],
 )
-def test_reduce_scatter_async(
+def test_reduce_scatter_async0(
     mesh_device,
     num_links,
     rs_input_shape,

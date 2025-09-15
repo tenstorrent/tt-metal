@@ -36,12 +36,16 @@ constexpr bool do_final_reduction = get_compile_time_arg_val(16);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
+constexpr uint32_t dim = get_compile_time_arg_val(20);
+constexpr uint32_t num_pages_per_slice = get_compile_time_arg_val(21);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
 
+    DPRINT << "DIM: " << (uint32_t)dim << "\n";
+    DPRINT << "NUM PAGES PER SLICE: " << (uint32_t)num_pages_per_slice << "\n";
     DPRINT << "device id: " << (uint32_t)my_chip_id << "\n";
     DPRINT << "is_forward: " << (uint32_t)is_forward << "\n";
     DPRINT << "is_first_device_in_direction: " << (uint32_t)is_first_device_in_direction << "\n";
@@ -61,7 +65,7 @@ void kernel_main() {
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 22;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -176,13 +180,24 @@ void kernel_main() {
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
             DPRINT << "Processing slice idx: " << (uint32_t)slice_idx << "\n";
             chunk_count = 0;
-            uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
-            uint32_t intermediate_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * slice_Wt;
+            uint32_t input_tile_id_start;
+            uint32_t pages_per_slice_per_worker;
+            if constexpr (dim == 3) {
+                input_tile_id_start = slice_idx * (input_tensor_Wt / ring_size) + batch_offset;
+                pages_per_slice_per_worker = input_tensor_Wt / ring_size;
+            } else {
+                input_tile_id_start = (slice_idx * num_pages_per_slice / ring_size) + batch_offset;
+                pages_per_slice_per_worker = num_pages_per_slice / ring_size;
+            }
+            uint32_t intermediate_tile_id_start =
+                intermediate_full_offset + batch_offset + slice_idx * (input_tensor_Wt / ring_size);
             uint32_t stride_Wt = input_tensor_Wt;
-            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
-            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
-            uint32_t intermediate_pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
-            uint32_t intermediate_row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
+            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % pages_per_slice_per_worker;
+            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / pages_per_slice_per_worker * stride_Wt;
+            uint32_t intermediate_pages_read_in_row =
+                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size);
+            uint32_t intermediate_row_offset =
+                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) * stride_Wt;
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
 
@@ -202,7 +217,7 @@ void kernel_main() {
                         noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
                         l1_write_addr += input_tensor_page_size;
                         pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
+                        if (pages_read_in_row >= pages_per_slice_per_worker) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
@@ -229,7 +244,7 @@ void kernel_main() {
                         noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
                         l1_write_addr += input_tensor_page_size;
                         pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
+                        if (pages_read_in_row >= pages_per_slice_per_worker) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
@@ -255,7 +270,7 @@ void kernel_main() {
                         noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
                         l1_write_addr += input_tensor_page_size;
                         intermediate_pages_read_in_row++;
-                        if (intermediate_pages_read_in_row >= slice_Wt) {
+                        if (intermediate_pages_read_in_row >= (input_tensor_Wt / ring_size)) {
                             intermediate_row_offset += stride_Wt;
                             intermediate_pages_read_in_row = 0;
                         }
@@ -293,9 +308,14 @@ void kernel_main() {
             uint32_t slice_idx = my_chip_id;
             uint32_t intermediate_slice_idx = my_chip_id;
 
-            uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
+            uint32_t input_tile_id_start;
+            if constexpr (dim == 3) {
+                input_tile_id_start = slice_idx * (input_tensor_Wt / ring_size) + batch_offset;
+            } else {
+                input_tile_id_start = (slice_idx * num_pages_per_slice / ring_size) + batch_offset;
+            }
             uint32_t intermediate_tile_id_start =
-                intermediate_full_offset + batch_offset + intermediate_slice_idx * slice_Wt;
+                intermediate_full_offset + batch_offset + intermediate_slice_idx * (input_tensor_Wt / ring_size);
             uint32_t stride_Wt = input_tensor_Wt;
             uint32_t intermediate_stride_Wt = input_tensor_Wt;
             uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;

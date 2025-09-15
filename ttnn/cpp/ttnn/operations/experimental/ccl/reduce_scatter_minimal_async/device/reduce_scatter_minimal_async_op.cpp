@@ -22,7 +22,7 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         page_size % input_tensors[0].buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
-    TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
+    // TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
