@@ -4644,8 +4644,7 @@ def test_conv2d_activation_reuse(
     )
 
 
-@skip_for_blackhole()
-@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("enable_activation_reuse", [False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
