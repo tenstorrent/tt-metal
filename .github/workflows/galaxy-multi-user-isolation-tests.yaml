@@ -13,16 +13,16 @@ on:
         type: boolean
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
+  # build-artifact:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     version: 22.04
+  #     build-wheel: true
   galaxy-multi-user-isolation-tests:
-    needs: build-artifact
+    # needs: build-artifact
     runs-on:
       # A physical, multi-host WH 6U that's in service
       - topology-6u
@@ -34,24 +34,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # - name: ⬇️ Download Build
+      #   uses: actions/download-artifact@v4
+      #   timeout-minutes: 10
+      #   with:
+      #     name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # - name: Extract files
+      #   run: tar -xvf ttm_any.tar
+      # - name: ⬇️ Download Wheel
+      #   uses: actions/download-artifact@v4
+      #   timeout-minutes: 10
+      #   with:
+      #     name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Extract Wheel and files
         run: |
           rm -rf ./docker_artifacts
           mkdir -p ./docker_artifacts
+          # tar -xvf ttm_any.tar -C ./docker_artifacts
+          # mv *.whl ./docker_artifacts
+      - name: Download zip artifact
+        run: |
+          curl -L -o ./ttm_any.zip "https://productionresultssa16.blob.core.windows.net/actions-results/128b6a62-fb15-41f9-a7c7-09a5d2d7a6b4/workflow-job-run-5a6d0d13-846c-59b7-b177-9fb656a3bca6/artifacts/dbd0b57361f69948fd8336d4abaaffe2d21d700f69a587b298d72f8d3e286d81.zip"
+      - name: Download wheel artifact
+        run: |
+          curl -L -o ./ttm_wheel.zip "https://productionresultssa16.blob.core.windows.net/actions-results/128b6a62-fb15-41f9-a7c7-09a5d2d7a6b4/workflow-job-run-5a6d0d13-846c-59b7-b177-9fb656a3bca6/artifacts/dbd0b57361f69948fd8336d4abaaffe2d21d700f69a587b298d72f8d3e286d81.zip"
+      - name: Extract zip artifact
+        run: unzip ./ttm_wheel.zip -d ./docker_artifacts
+      - name: Extract zip artifact
+        run: |
+          unzip ./ttm_any.zip -d ./docker_artifacts
           tar -xvf ttm_any.tar -C ./docker_artifacts
           mv *.whl ./docker_artifacts
+
+
+
       - name: Create Docker Compose file
         run: |
           for i in [1..4]; do
