@@ -198,12 +198,16 @@ jobs:
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
               cname="multi-user-$tray-1"
+              TRAY_PODS_DIR=".github/scripts/utils/muti-user-galaxy-docker-files"
+              cd TRAY_PODS_DIR
+              testlogfile="test_output_$tray.log"
               echo ">>> Running tests in $cname" 
-              (
-              docker exec "$cname" bash -c "$command" \
-              | sed "s/^/[$cname] /" 
-              exit ${PIPESTATUS[0]}
-              ) &         
+              docker exec "$cname" bash -c "$command" > "$testlogfile" 2>&1 &
+              # (
+              # docker exec "$cname" bash -c "$command" \
+              # | sed "s/^/[$cname] /" 
+              # exit ${PIPESTATUS[0]}
+              # ) &         
               pids+=($!)
             done
 
@@ -223,6 +227,13 @@ jobs:
           # run_test "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           echo "run the pytest"
           run_test "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+      - name: Print test logs with folding
+        run: |
+          for logfile in logs/*.log; do
+            echo "::group::Logs for $logfile"
+            cat "$logfile"
+            echo "::endgroup::"
+          done
 
       - name: Tear down containers
         if: always()
