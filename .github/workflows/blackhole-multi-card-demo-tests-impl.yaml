@@ -142,7 +142,7 @@ jobs:
           fi
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ !cancelled() }}
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -158,7 +158,7 @@ jobs:
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
