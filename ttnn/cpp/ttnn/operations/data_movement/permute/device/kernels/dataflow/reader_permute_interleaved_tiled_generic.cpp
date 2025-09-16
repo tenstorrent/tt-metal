@@ -25,35 +25,35 @@ void kernel_main() {
     // 1) Compile-time arguments
     // ------------------------------------------------------------------------
 
-    constexpr uint32_t RANK = get_compile_time_arg_val(0);
+    constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
     // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t element_size = get_compile_time_arg_val(2);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(3);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(4);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t x_dim_index_in_input = get_compile_time_arg_val(7);
-    constexpr uint32_t X = get_compile_time_arg_val(8);
-    constexpr uint32_t W = get_compile_time_arg_val(9);
-    constexpr uint32_t H = get_compile_time_arg_val(10);
-    constexpr uint32_t X_p = get_compile_time_arg_val(11);
-    constexpr uint32_t W_p = get_compile_time_arg_val(12);
-    constexpr uint32_t H_p = get_compile_time_arg_val(13);
-    constexpr uint32_t H_t = get_compile_time_arg_val(14);
-    constexpr uint32_t W_t = get_compile_time_arg_val(15);
-    constexpr uint32_t final_tile_real_w = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_faces_w = get_compile_time_arg_val(17);
-    constexpr uint32_t xw_blocks = get_compile_time_arg_val(18);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(20);
-    constexpr uint32_t num_writes = get_compile_time_arg_val(21);
-    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(22);
-    constexpr bool needs_x_padding = static_cast<bool>(get_compile_time_arg_val(23));
-    constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(24));
-    constexpr uint32_t rows_per_x = get_compile_time_arg_val(25);
-    constexpr uint32_t misalignment = get_compile_time_arg_val(26);
-    constexpr uint32_t read_alignment = get_compile_time_arg_val(27);
-    constexpr auto src_args = TensorAccessorArgs<28>();
+    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
+    constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
+    constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
+    constexpr uint32_t x_dim_index_in_input = get_named_compile_time_arg_val("x_dim_index_in_input");
+    constexpr uint32_t X = get_named_compile_time_arg_val("X");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    constexpr uint32_t X_p = get_named_compile_time_arg_val("X_p");
+    constexpr uint32_t W_p = get_named_compile_time_arg_val("W_p");
+    constexpr uint32_t H_p = get_named_compile_time_arg_val("H_p");
+    constexpr uint32_t H_t = get_named_compile_time_arg_val("H_t");
+    constexpr uint32_t W_t = get_named_compile_time_arg_val("W_t");
+    constexpr uint32_t final_tile_real_w = get_named_compile_time_arg_val("final_tile_real_w");
+    constexpr uint32_t final_tile_real_faces_w = get_named_compile_time_arg_val("final_tile_real_faces_w");
+    constexpr uint32_t xw_blocks = get_named_compile_time_arg_val("xw_blocks");
+    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
+    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
+    constexpr uint32_t num_writes = get_named_compile_time_arg_val("num_writes");
+    constexpr uint32_t padding_val_packed = get_named_compile_time_arg_val("padding_val_packed");
+    constexpr bool needs_x_padding = static_cast<bool>(get_named_compile_time_arg_val("needs_x_padding"));
+    constexpr bool needs_y_padding = static_cast<bool>(get_named_compile_time_arg_val("needs_y_padding"));
+    constexpr uint32_t rows_per_x = get_named_compile_time_arg_val("rows_per_x");
+    constexpr uint32_t misalignment = get_named_compile_time_arg_val("misalignment");
+    constexpr uint32_t read_alignment = get_named_compile_time_arg_val("read_alignment");
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)

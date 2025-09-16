@@ -11,16 +11,16 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t num_writes = get_compile_time_arg_val(0);
-    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(1);
-    constexpr uint32_t needs_padding = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t swap_hw = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t H = get_compile_time_arg_val(4);
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t accumulated_outer_dims = get_compile_time_arg_val(6);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(7);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(8);
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr uint32_t num_writes = get_named_compile_time_arg_val("num_writes");
+    constexpr uint32_t padding_val_packed = get_named_compile_time_arg_val("padding_val_packed");
+    constexpr uint32_t needs_padding = get_named_compile_time_arg_val("needs_padding") == 1;
+    constexpr uint32_t swap_hw = get_named_compile_time_arg_val("swap_hw") == 1;
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t accumulated_outer_dims = get_named_compile_time_arg_val("accumulated_outer_dims");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t H_p = tt::data_movement::common::round_up<H, TILE_HEIGHT>();
     constexpr uint32_t W_p = tt::data_movement::common::round_up<W, TILE_WIDTH>();
