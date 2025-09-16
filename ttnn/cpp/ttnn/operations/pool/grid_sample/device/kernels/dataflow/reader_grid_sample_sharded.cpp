@@ -6,9 +6,13 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
-#include "debug/dprint.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "../grid_sample_reader_common.hpp"
+
+#define PRINT_AND_PROFILE 0
+#if PRINT_AND_PROFILE
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "debug/dprint.h"
+#endif
 
 ALWI void advance_grid_index(
     uint32_t& in_grid_row_idx,
