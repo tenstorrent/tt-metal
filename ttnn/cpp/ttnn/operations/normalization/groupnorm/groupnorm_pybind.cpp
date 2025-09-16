@@ -33,18 +33,18 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 This implementation is slightly different, in that it forms the groups using the tensor's last dimension.
                 Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], where C is the dimension along which the groups are formed.
 
-                TTNN provides several functions to help with the preparation of the inputs to this op.
+                TTNN provides utility functions to help prepare this op's inputs.
                     - When using sharded input tensors, :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size` can provide the appropriate memory configuration and grid size.
                     - :func:`ttnn.create_group_norm_input_mask` creates the appropriate input mask for a given tensor dimension and group size.
                     - :func:`ttnn.create_group_norm_weight_bias_rm` converts the weight and bias tensors into appropriately padded and tiled inputs
 
-                See the sharded example in this documentation for more details on how to properly supply the inputs for this op in conjunction with these functions.
+                See the sharded example in this document for more details on how to properly prepare the op's inputs using these functions.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
 
             Keyword args:
-                num_groups (int): Number of groups to split the tensor into.
+                num_groups (int): Number of groups to split the tensor's channels into.
                 epsilon (float): Defaults to 1e-12.
                 input_mask (ttnn.Tensor, optional): Defaults to `None`. When processing the inputs, the mask is used to only look at the elements of the current group.
                 weight (ttnn.Tensor, optional): Defaults to `None`.
@@ -111,23 +111,23 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             Example (Sharded Input):
                 .. code-block:: python
 
-                    N, C, H, W = 1, 64, 32, 1
+                     N, C, H, W = 1, 64, 32, 1
                     num_groups = 2
 
-                    # Generate random inputs and reference output
+                    # Prepare random inputs
                     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
                     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
                     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
 
+                    # Generate random inputs and prepare reference output
                     torch_output_tensor = torch.nn.functional.group_norm(
                         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
                     )
 
-                    # Permute to match the format TTNN will output the tensor in
+                    # Permute the torch output to match the TTNN format, so they can be compared
                     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
                     #Prepare TTNN input
-
                     # Determine how to shard the input tensor
                     sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
                         device = device,
@@ -138,7 +138,6 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                         is_row_major = True
                     )
 
-                    # Convert the input tensor to a sharded TTNN tensor
                     input_tensor = ttnn.from_torch(
                         torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C),
                         dtype=ttnn.DataType.BFLOAT16,
@@ -148,7 +147,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     )
 
                     # Input mask - this is needed for each group to be able to select the correct elements of the input tensor
-                    # Generally, it will have dimensions of [1, num_groups, 32, 32*block_wt]
+                    # In general, it will have dimensions of [1, num_groups, 32, 32*block_wt]
 
                     # In this example, C=64 and num_groups=2, so each group is 32 channels (i.e. one tile) wide
                     # As a result, the input_mask_tensor is a [1, 2, 32, 32] tensor where every value is 1
@@ -157,8 +156,11 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     # As a result, the input_mask_tensor would be a [1, 4, 32, 32] tensor that selects either the first or second half of the tile
                     # e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0
                     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
-
-                    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, 1) # Supply 1 for height sharded
+                    input_mask_tensor = ttnn.create_group_norm_input_mask(
+                        num_channels=C,
+                        num_groups=num_groups,
+                        num_cores_across_channel=1 # As explained in the Limitations, supply 1 for height sharded input tensors
+                    )
 
                     input_mask_tensor = ttnn.from_torch(
                         input_mask_tensor,
@@ -168,11 +170,11 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
 
-                    # Prepare gamma and beta for TTNN. Traditionally, these are just 1D tensors of size [C], which isn't compatible with tile based processing
+                    # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
                     # First they will zero padded if needed (does not apply to this example)
                     # Then reshaped to be [1, 1, tiles_per_core_total, 32], which in this case will be [1, 1, 2, 32]
 
-                    # Note that we are height sharding the input tensor, so we set num_cores_x = 1, as explained in the Limitations
+                    # As with the input mask, we supply a core count of 1 for height sharded input tensors
                     gamma = ttnn.create_group_norm_weight_bias_rm(input_tensor =torch_weight, num_channels = C, num_cores_x = 1)
                     beta = ttnn.create_group_norm_weight_bias_rm(input_tensor =torch_bias, num_channels = C, num_cores_x = 1)
 
