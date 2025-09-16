@@ -25,6 +25,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -300,20 +301,14 @@ std::string Kernel::compute_hash() const {
         tt::utils::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
     }
 
-    size_t named_names_hash_value = 0;
-    size_t named_values_hash_value = 0;
-    for (const auto& [name, value] : this->named_compile_time_args_) {
-        tt::utils::hash_combine(named_names_hash_value, std::hash<std::string>{}(name));
-        tt::utils::hash_combine(named_values_hash_value, std::hash<std::uint32_t>{}(value));
-    }
+    size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
 
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
         define_hash_value,
-        named_names_hash_value,
-        named_values_hash_value,
+        named_args_hash_value,
         this->config_hash());
 }
 
