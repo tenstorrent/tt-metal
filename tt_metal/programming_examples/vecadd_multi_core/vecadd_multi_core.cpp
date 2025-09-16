@@ -265,9 +265,9 @@ int main(int argc, char** argv) {
             fmt::print(
                 "Index {}: {} + {} = {}\n",
                 start_idx + i,
-                a_data[start_idx + i].to_float(),
-                b_data[start_idx + i].to_float(),
-                c_data[start_idx + i].to_float());
+                static_cast<float>(a_data[start_idx + i]),
+                static_cast<float>(b_data[start_idx + i]),
+                static_cast<float>(c_data[start_idx + i]));
         }
         fmt::print("\n");
     }
@@ -275,14 +275,14 @@ int main(int argc, char** argv) {
     // Check if the results match the expected values.
     bool pass = true;
     for (size_t i = 0; i < c_data.size(); i++) {
-        float expected = a_data[i].to_float() + b_data[i].to_float();
-        if (std::abs(c_data[i].to_float() - expected) > 0.3f) {  // Allow some tolerance due to BFP16 precision
+        float expected = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+        if (std::abs(static_cast<float>(c_data[i]) - expected) > 0.3f) {  // Allow some tolerance due to BFP16 precision
             fmt::print(
                 "Mismatch at index {}: {} + {} = {}, expected {}\n",
                 i,
-                a_data[i].to_float(),
-                b_data[i].to_float(),
-                c_data[i].to_float(),
+                static_cast<float>(a_data[i]),
+                static_cast<float>(b_data[i]),
+                static_cast<float>(c_data[i]),
                 expected);
             pass = false;
         }
