@@ -217,13 +217,14 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, **m
     ],
     ids=["s768", "s512", "s256", "s128", "m768", "m512", "m256", "m128", "l768", "l512", "l256", "l128"],
 )
+@pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
 @vae_device_config
-def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
+def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links):
     """Test complete forward pass of TtResBlock."""
     block_args = resblock_args.copy()
     block_args["channels"] = C
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     h_parallel_factor = 4
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
