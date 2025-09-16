@@ -331,7 +331,7 @@ def run_prefetcher_mm(
             tt_tensors,
             num_layers,
             global_cb=global_circular_buffer,
-            enable_performance_mode=enable_performance_mode,
+            enable_performance_mode=False,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 

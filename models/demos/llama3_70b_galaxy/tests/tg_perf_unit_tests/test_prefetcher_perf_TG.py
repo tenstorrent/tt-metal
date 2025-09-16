@@ -9,8 +9,8 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 from tests.ttnn.unit_tests.operations.test_prefetcher_TG import (
-    LLAMA_INPUT_SHAPES,
-    LLAMA_INPUT_DTYPES,
+    QWEN_INPUT_SHAPES,
+    QWEN_INPUT_DTYPES,
 )
 
 THRESHOLD = 2  # 2 GB/s
@@ -58,7 +58,8 @@ def test_dram_prefetcher_perf(
 
     # Calculate the effective bandwidth
     # Calculate the total bytes transferred
-    total_bytes = [calculate_bytes(shape, dtype) for shape, dtype in zip(LLAMA_INPUT_SHAPES, LLAMA_INPUT_DTYPES)]
+    total_bytes = [calculate_bytes(shape, dtype) for shape, dtype in zip(QWEN_INPUT_SHAPES, QWEN_INPUT_DTYPES)]
+    # total_bytes = [calculate_bytes(shape, dtype) for shape, dtype in zip(LLAMA_INPUT_SHAPES, LLAMA_INPUT_DTYPES)]
     total_bytes = sum(total_bytes)
     effective_bw = total_bytes / measured_duration_ns  # GB/s
 
@@ -69,7 +70,8 @@ def test_dram_prefetcher_perf(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"dram_prefetcher",
-        ml_model_name="llama70b-tg",
+        # ml_model_name="llama70b-tg",
+        ml_model_name="qwen32b-tg",
     )
 
     assert (
