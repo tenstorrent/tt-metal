@@ -390,8 +390,6 @@ jobs:
             echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"
           fi
-          echo "SETUPTOOLS_SCM_DEBUG=1" >> $GITHUB_ENV
-          echo "CIBW_BUILD_VERBOSITY=3" >> $GITHUB_ENV
 
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
@@ -399,8 +397,6 @@ jobs:
           CIBW_BUILD: "cp${{ steps.set_python_version.outputs.python_version == '3.10' && '310' || '312' }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
-          SETUPTOOLS_SCM_DEBUG: 1
-          CIBW_BUILD_VERBOSITY: 3
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
