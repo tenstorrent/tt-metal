@@ -113,33 +113,15 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    print(f"Version info: {version}\nMetal build config: {metal_build_config}\n")
-    # Avoid assertions that crash the backend
+    # Safety net
     if version is None:
         return "0.0.0.dev0"
 
     if getattr(version, "exact", False):
-        base = _base_release_str(version)
+        # Exact tag (release/rc/dev*) already normalized by packaging
+        return version.version.public
 
-        # RC tags parsed as pre=('rc', N)
-        pre = getattr(version, "pre", None)
-        print(f"Pre-release info: {pre}")
-        if pre and pre[0] == "rc":
-            return f"{base}-rc{pre[1]}"
-
-        # Nightly/dev tags: vX.Y.Z-devYYYYMMDD or vX.Y.Z-devN
-        tag = getattr(version, "tag", "") or ""
-        print(f"Tag info: {tag}")
-        if "-dev" in tag:
-            dev = tag.rsplit("-dev", 1)[-1]
-            # Normalize to PEP 440: '.dev<digits>'
-            return f"{base}.dev{dev}"
-
-        # Plain release tag
-        return base
-
-    # Untagged commit -> let setuptools_scm produce '.devN'
-    # (Don't emit '.dev{distance}' yourself.)
+    # Untagged commit → let setuptools_scm choose X.Y.Z.devN
     return _guess_next_dev(version)
 
 
