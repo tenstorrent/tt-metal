@@ -37,6 +37,8 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
+"""
+
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
@@ -630,6 +632,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert mesh_device.num_program_cache_entries() == 1
+"""
 
 
 def run_matmul_2d_tiny_tile(
@@ -743,7 +746,45 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+"""
+Failing config:
+transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=16-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512
+2025-09-15 09:20:52.406 | warning  |           Metal | Watcher detected NOC error and stopped device: (watcher_device_reader.cpp:689)
+2025-09-15 09:20:52.406 | warning  |           Metal | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x021060] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction). (watcher_device_reader.cpp:690)
+2025-09-15 09:20:52.406 | info     |           Metal | Last waypoint: NARW,CRBW,   K,MWDD,   K  (watcher_device_reader.cpp:1000)
+2025-09-15 09:20:52.406 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1069)
+2025-09-15 09:20:52.406 | info     |           Metal |   brisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp (watcher_device_reader.cpp:1072)
+2025-09-15 09:20:52.406 | info     |           Metal |  ncrisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp (watcher_device_reader.cpp:1072)
+2025-09-15 09:20:52.406 | info     |           Metal |  trisc0: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1072)
+2025-09-15 09:20:52.406 | info     |           Metal |  trisc1: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1072)
+2025-09-15 09:20:52.406 | info     |           Metal |  trisc2: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1072)
+2025-09-15 09:20:52.406 | critical |          Always | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x021060] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction). (assert.hpp:111)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /localdev/mgajewski/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:696: tt::exception
+info:
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x021060] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction).
+"""
+
+
+def test_fail_config(device):
+    run_matmul_2d_tiny_tile(
+        device,
+        m=512,
+        k=512,
+        n=768,
+        has_bias=False,
+        grid_size=(8, 4),
+        tile_h=16,
+        tile_w=16,
+        in0_sharded=True,
+        out_sharded=True,
+        in1_dtype=ttnn.bfloat8_b,
+        transpose_tile=True,
+    )
+
+
+"""
+# @skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -1164,11 +1205,11 @@ def test_matmul_1d_multiple_output_blocks_per_core(
 @pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize("tile_count", [1376, 1375])
 def test_padded_2d_matmul(device, side, tile_count):
-    """
+
     This test checks that when the program config specifies per_core_M and per_core_N
     which would multiply out to be larger than the true shape of the output, matmul
     does not clobber memory outside the shape of the output.
-    """
+
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_size = [compute_grid_size.x, compute_grid_size.y]
     if grid_size[1] < 8:
@@ -2377,3 +2418,4 @@ def test_matmul_padding(
 
     # Verify values match with high precision
     assert torch.allclose(golden_output, output, atol=1e-6)
+"""

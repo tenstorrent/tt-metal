@@ -104,7 +104,7 @@ process_mcast_in0_program_and_create_override_variables(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     using tt::tt_metal::num_cores_to_corerangeset;
-
+    std::cout << "process_mcast_in0_program_and_create_override_variables" << std::endl;
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
@@ -958,7 +958,7 @@ process_mcast_in1_program_and_create_override_variables(
     bool untilize_out) {
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
-
+    std::cout << "process_mcast_in1_program_and_create_override_variables" << std::endl;
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;

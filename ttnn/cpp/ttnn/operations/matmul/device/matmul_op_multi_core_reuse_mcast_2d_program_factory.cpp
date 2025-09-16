@@ -62,7 +62,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     using tt::tt_metal::TensorMemoryLayout;
-
+    // TODO: Lands here
+    std::cout << "2. create_program_mcast_in0_in1" << std::endl;
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
@@ -84,7 +85,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    std::cout << "in1_data_format: " << in1_data_format << std::endl;
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    std::cout << "in1_single_tile_size: " << in1_single_tile_size << std::endl;
+    std::cout << "in1_tile.get_tile_hw(): " << in1_tile.get_tile_hw() << std::endl;
+    std::cout << "in1_tile.get_height(): " << in1_tile.get_height() << std::endl;
+    std::cout << "in1_tile.get_width(): " << in1_tile.get_width() << std::endl;
+    std::cout << "in1_tile.get_num_faces(): " << in1_tile.get_num_faces() << std::endl;
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
@@ -757,7 +764,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in0_CB_size / in0_single_tile_size,
         in0_CB_size);
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;  // TODO: HERE config!!!
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
@@ -1112,9 +1119,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         worker_core_stride = per_core_N_storage - storage_core_stride;
 
                         mm_in1_sender_writer_args.push_back(
-                            storage_core_stride * in1_single_tile_size);  // dram_tensor_start_offset
+                            (storage_core_stride * in1_single_tile_size + 31) & ~31);  // dram_tensor_start_offset
+                        std::cout << "SHARDING! " << std::endl;
                         mm_in1_sender_writer_args.push_back(
-                            worker_core_stride * in1_single_tile_size);          // per_core_N_dram_bytes
+                            (storage_core_stride * in1_single_tile_size + 31) & ~31);  // per_core_N_dram_bytes
                         mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
 
                         log_debug(
@@ -1396,7 +1404,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     auto in1_tile_shape = in1_tile.get_tile_shape();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
-
+    std::cout << "1. matmul_multi_core_reuse_mcast_2d_optimized_" << std::endl;
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
@@ -1574,7 +1582,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool untilize_out) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
-
+    std::cout << "0. matmul_multi_core_reuse_mcast_2d_optimized" << std::endl;
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program,
         a,
@@ -1611,7 +1619,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     MatmulMultiCoreReuseMultiCastProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config);
-
+    std::cout << "matmul_multi_core_reuse_mcast_2d_optimized_helper" << std::endl;
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program,
         a,
