@@ -3568,7 +3568,11 @@ def test_conv2d_vae_sdxl(
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = 1
-    slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
+    if slice_type is None:
+        slice_config = None
+        use_dram = False
+    else:
+        slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
     if slice_config is None:
         use_dram = False
     else:
