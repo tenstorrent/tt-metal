@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(

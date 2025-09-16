@@ -7,7 +7,7 @@ import pytest
 
 import numpy as np
 import ttnn
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from ttnn.device import Arch
 
 

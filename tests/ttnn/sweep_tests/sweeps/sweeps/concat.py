@@ -8,7 +8,7 @@ import torch
 import ttnn
 import random
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 def dtype_to_rounding_mode(dtype):

@@ -6,7 +6,7 @@ import ttnn
 import torch
 import pytest
 import transformers
-from models.utility_functions import torch_random, is_grayskull
+from models.common.utility_functions import torch_random, is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert

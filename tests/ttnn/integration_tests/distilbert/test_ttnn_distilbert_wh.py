@@ -14,7 +14,7 @@ from transformers import (
 from transformers import AutoTokenizer
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import is_wormhole_b0, skip_for_grayskull
 
 
 @skip_for_grayskull()

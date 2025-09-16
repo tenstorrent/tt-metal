@@ -9,8 +9,8 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import skip_for_grayskull
+from models.common.utility_functions import is_grayskull
 
 
 def run_copy_test(N, C, H, W, layout, device):

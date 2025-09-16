@@ -10,7 +10,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops, pytorch_ops
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import tt2torch_tensor
 
 
 def run_clamp_bw(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, scalar, device):

@@ -8,7 +8,7 @@ import ttnn
 import numpy as np
 from loguru import logger
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Not tested / built for Blackhole")

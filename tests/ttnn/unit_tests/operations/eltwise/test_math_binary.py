@@ -10,7 +10,7 @@ import ttnn
 import random
 from math import pi
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 def run_math_binary_test(device, h, w, ttnn_function, pcc=0.9999):

@@ -6,7 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     skip_for_grayskull,
 )
