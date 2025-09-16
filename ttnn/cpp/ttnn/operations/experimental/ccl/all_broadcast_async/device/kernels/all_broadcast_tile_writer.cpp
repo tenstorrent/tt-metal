@@ -137,20 +137,41 @@ void kernel_main() {
     while (tile_id < tile_id_end) {
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
+
+        uint32_t num_pages_read = 0;
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
+        while (num_pages_read < num_pages_to_read) {
+            // scatter-write currently only supports up to 2 distinct addresses
+            uint32_t num_pages_for_current_packet = std::min<uint32_t>(num_pages_to_read - num_pages_read, 2);
+            if (num_pages_for_current_packet == 1) {
+                write_and_advance_local_read_address_for_fabric_write(
+                    tile_id,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
 
-        for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            write_and_advance_local_read_address_for_fabric_write(
-                tile_id,
-                tensor0_addrgen,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                tensor0_page_size);
-            tile_id++;
+                tile_id++;
+                num_pages_read++;
+            } else if (num_pages_for_current_packet == 2) {
+                scatter_write_and_advance_local_read_address_for_fabric_write(
+                    tile_id,
+                    tile_id + 1,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
+
+                tile_id += 2;
+                num_pages_read += 2;
+            } else {
+                ASSERT(false);
+            }
         }
-
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
 

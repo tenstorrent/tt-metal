@@ -84,7 +84,39 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 }
 
 template <typename AddrGenType>
+FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric_write(
+    uint32_t first_id,
+    uint32_t second_id,
+    AddrGenType addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    size_t& l1_read_addr,
+    uint32_t payload_size_bytes,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    noc_async_write(l1_read_addr, addrgen.get_noc_addr(first_id, offset0), payload_size_bytes);
+    noc_async_write(l1_read_addr + payload_size_bytes, addrgen.get_noc_addr(second_id, offset1), payload_size_bytes);
 
+    if (fabric_connection.has_forward_connection()) {
+        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+            payload_size_bytes, pkt_hdr_forward, first_id, second_id, addrgen, offset0, offset1);
+        perform_payload_send(
+            fabric_connection.get_forward_connection(), l1_read_addr, payload_size_bytes * 2, pkt_hdr_forward);
+    }
+
+    if (fabric_connection.has_backward_connection()) {
+        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+            payload_size_bytes, pkt_hdr_backward, first_id, second_id, addrgen, offset0, offset1);
+        perform_payload_send(
+            fabric_connection.get_backward_connection(), l1_read_addr, payload_size_bytes * 2, pkt_hdr_backward);
+    }
+
+    noc_async_writes_flushed();
+    l1_read_addr += payload_size_bytes * 2;
+}
+
+template <typename AddrGenType>
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint32_t dest_id,
     AddrGenType addrgen,
@@ -94,9 +126,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint32_t offset = 0) {
-    const size_t payload_l1_address = l1_read_addr;
-
-    noc_async_write(payload_l1_address, addrgen.get_noc_addr(dest_id, offset), payload_size_bytes);
+    noc_async_write(l1_read_addr, addrgen.get_noc_addr(dest_id, offset), payload_size_bytes);
 
     if (fabric_connection.has_forward_connection()) {
         tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr_forward, dest_id, addrgen, offset);
@@ -111,7 +141,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     }
 
     noc_async_writes_flushed();
-
     l1_read_addr += payload_size_bytes;
 }
 
