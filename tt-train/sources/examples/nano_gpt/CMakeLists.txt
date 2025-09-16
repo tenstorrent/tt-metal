@@ -21,11 +21,11 @@ set(AGGREGATOR_SOURCES
 )
 
 add_executable(nano_gpt ${MAIN_SOURCES})
-target_link_libraries(nano_gpt PRIVATE ttml execinfo)
+target_link_libraries(nano_gpt PRIVATE ttml)
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
-target_link_libraries(nano_gpt_aggregator PRIVATE ttml execinfo)
+target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
-target_link_libraries(nano_gpt_optimizer PRIVATE ttml execinfo)
+target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
 
 target_compile_definitions(
     nano_gpt
@@ -61,4 +61,15 @@ if(NOT EXISTS "${SHAKESPEARE_FILE}")
     )
 else()
     message(STATUS "Shakespeare text file already exists at ${SHAKESPEARE_FILE}, skipping download.")
+endif()
+
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(nano_gpt PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(nano_gpt_aggregator PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(nano_gpt_optimizer PRIVATE ${EXECINFO_LIB})
+  endif()
 endif()

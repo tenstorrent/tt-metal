@@ -16,7 +16,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
-target_link_libraries(fault_tolerance PRIVATE test_metal_common_libs execinfo)
+target_link_libraries(fault_tolerance PRIVATE test_metal_common_libs)
 
 # Target for all STL tests regardless of duration
 add_executable(fault_tolerance_tests)
@@ -26,4 +26,14 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
-target_link_libraries(fault_tolerance_tests PRIVATE TT::Metalium::Test::Distributed::FaultTolerance execinfo)
+target_link_libraries(fault_tolerance_tests PRIVATE TT::Metalium::Test::Distributed::FaultTolerance)
+
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(fault_tolerance PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(fault_tolerance_tests PRIVATE ${EXECINFO_LIB})
+  endif()
+endif()

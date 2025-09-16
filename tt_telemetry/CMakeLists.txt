@@ -22,7 +22,6 @@ target_link_libraries(
         fmt::fmt-header-only
         Boost::algorithm
         Taskflow::Taskflow
-	execinfo
     # We use some TT::Metalium headers but do not need to link the library in
     # httplib will be linked directly to the executable
 )
@@ -61,3 +60,13 @@ target_link_libraries(
         httplib::httplib # Link httplib only to the server executable
         cxxopts::cxxopts
 )
+
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(tt_telemetry_server PRIVATE ${EXECINFO_LIB})
+	target_link_libraries(telemetry_libs PRIVATE ${EXECINFO_LIB})
+  endif()
+endif()

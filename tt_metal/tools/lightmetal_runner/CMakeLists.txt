@@ -5,7 +5,6 @@ target_link_libraries(
         Metalium::Metal
         TT::STL
         FlatBuffers::FlatBuffers
-	execinfo
 )
 target_include_directories(
     lightmetal_runner
@@ -22,5 +21,14 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(lightmetal_runner PRIVATE  ${EXECINFO_LIB})
+  endif()
+endif()
 
 target_precompile_headers(lightmetal_runner REUSE_FROM TT::CommonPCH)

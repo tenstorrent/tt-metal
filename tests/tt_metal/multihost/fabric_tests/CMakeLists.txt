@@ -21,7 +21,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
 
-target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs execinfo)
+target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs)
 
 # Create separate object library for mesh socket components
 add_library(mesh_socket_components OBJECT)
@@ -48,7 +48,6 @@ target_link_libraries(
     PRIVATE
         test_metal_common_libs
         yaml-cpp
-	execinfo
 )
 
 add_executable(multi_host_fabric_tests)
@@ -60,7 +59,7 @@ set_target_properties(
 )
 
 # Link the object library to the executable
-target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric execinfo)
+target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric)
 
 # Create separate executable for mesh socket tests
 add_executable(test_mesh_socket_main mesh_socket_test_main.cpp)
@@ -78,8 +77,19 @@ target_link_libraries(
         mesh_socket_components
         test_metal_common_libs
         yaml-cpp
-	execinfo
 )
+
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(multi_host_fabric_tests PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(test_mesh_socket_main PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(multi_host_fabric PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(mesh_socket_components PRIVATE ${EXECINFO_LIB})
+  endif()
+endif()
 
 target_include_directories(
     test_mesh_socket_main

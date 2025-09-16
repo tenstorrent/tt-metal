@@ -11,7 +11,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
-target_link_libraries(multi_host PRIVATE test_metal_common_libs execinfo)
+target_link_libraries(multi_host PRIVATE test_metal_common_libs)
 
 # Target for all STL tests regardless of duration
 add_executable(multi_host_tests)
@@ -21,4 +21,14 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
-target_link_libraries(multi_host_tests PRIVATE TT::Metalium::Test::Distributed::Multihost execinfo)
+target_link_libraries(multi_host_tests PRIVATE TT::Metalium::Test::Distributed::Multihost)
+check_function_exists(backtrace HAVE_BACKTRACE)
+
+if(NOT HAVE_BACKTRACE)
+  find_library(EXECINFO_LIB execinfo)
+  if(EXECINFO_LIB)
+    target_link_libraries(multi_host PRIVATE ${EXECINFO_LIB})
+    target_link_libraries(multi_host_tests PRIVATE ${EXECINFO_LIB})
+  endif()
+endif()
+

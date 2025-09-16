@@ -19,8 +19,15 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             test_common_libs
             benchmark::benchmark
             Python3::Python
-	    execinfo
     )
+    check_function_exists(backtrace HAVE_BACKTRACE)
+    if(NOT HAVE_BACKTRACE)
+    	find_library(EXECINFO_LIB execinfo)
+		if(EXECINFO_LIB)
+			target_link_libraries(${TEST_TARGET} PUBLIC ${EXECINFO_LIB})
+		endif()
+    endif()
+
     target_include_directories(
         ${TEST_TARGET}
         BEFORE
