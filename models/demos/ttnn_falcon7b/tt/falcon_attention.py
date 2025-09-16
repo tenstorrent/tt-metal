@@ -6,7 +6,7 @@ import math
 from typing import Optional, Tuple
 
 import ttnn
-from models.utility_functions import is_wormhole_b0, nearest_32
+from models.common.utility_functions import is_wormhole_b0, nearest_32
 
 from .falcon_rotary_embedding import TtFalconRotaryEmbedding
 

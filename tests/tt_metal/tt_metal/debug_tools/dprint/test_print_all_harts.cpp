@@ -186,7 +186,7 @@ Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
 
 void RunTest(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& golden_output) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
@@ -311,7 +311,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(PrintAllHartsFixture, TensixTestPrint) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, GetParam().golden_output);
             },
             mesh_device);

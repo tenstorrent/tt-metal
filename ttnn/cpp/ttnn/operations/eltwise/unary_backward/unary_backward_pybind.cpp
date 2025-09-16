@@ -789,7 +789,7 @@ void bind_unary_backward_rdiv(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
