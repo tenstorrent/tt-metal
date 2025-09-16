@@ -241,29 +241,28 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             barrier_core.x,                                  // barrier_sem_noc0_x
             barrier_core.y                                   // barrier_sem_noc0_y
         };
-        writer_rt_args.push_back((int)forward_device.has_value() + (int)backward_device.has_value());
+        auto num_connections = (int)forward_device.has_value() + (int)backward_device.has_value();
+        writer_rt_args.push_back(num_connections);
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
+        const auto sender_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+        dst_nodes.reserve(num_connections);
         if (forward_device.has_value()) {
-            writer_rt_args.push_back(0);  // fwd tag
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
             const auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+            dst_nodes.push_back(forward_device_fabric_node_id);
         }
         if (backward_device.has_value()) {
-            writer_rt_args.push_back(1);  // bwd tag
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
             const auto backward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+            dst_nodes.push_back(backward_device_fabric_node_id);
         }
+
+        append_routing_plane_connection_manager_rt_args(
+            sender_fabric_node_id, dst_nodes, program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
