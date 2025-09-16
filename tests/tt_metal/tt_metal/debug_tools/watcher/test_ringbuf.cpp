@@ -41,7 +41,7 @@ namespace {
 
 void RunTest(
     MeshWatcherFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     HalProcessorIdentifier processor) {
     // Set up program
     distributed::MeshWorkload workload;
@@ -138,7 +138,7 @@ using enum HalProcessorClassType;
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, DM, 0});
             },
             mesh_device);
@@ -148,7 +148,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, DM, 1});
             },
             mesh_device);
@@ -158,7 +158,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 0});
             },
             mesh_device);
@@ -168,7 +168,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 1});
             },
             mesh_device);
@@ -178,7 +178,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 2});
             },
             mesh_device);
@@ -188,7 +188,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferErisc) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {ACTIVE_ETH, DM, 0});
             },
             mesh_device);
@@ -202,7 +202,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
     }
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
             },
             mesh_device);

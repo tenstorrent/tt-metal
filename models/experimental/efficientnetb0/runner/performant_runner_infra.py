@@ -11,7 +11,7 @@ from models.experimental.efficientnetb0.tt.model_preprocessing import (
 )
 from models.experimental.efficientnetb0.tt import efficientnetb0 as ttnn_efficientnetb0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
+from models.common.utility_functions import (
     divup,
     is_wormhole_b0,
 )
