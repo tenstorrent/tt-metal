@@ -80,6 +80,9 @@ TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
 
 TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    // TODO: Remove this after getting cluster descriptors
+    tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file(
+        "6u_dual_cluster_desc.yaml");
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], MeshId{4});
