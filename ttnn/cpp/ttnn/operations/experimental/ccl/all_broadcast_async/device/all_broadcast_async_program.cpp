@@ -77,8 +77,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
-    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
@@ -158,6 +156,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_targets_forward,   // num_targets_forward_direction
             num_targets_backward,  // num_targets_backward_direction
         };
+    }
+    std::vector<uint32_t> mcast_forward_args(2, 0);
+    std::vector<uint32_t> mcast_backward_args(2, 0);
+    if (forward_device.has_value()) {
+        mcast_forward_args[0] = 1;
+        mcast_forward_args[1] = num_targets_forward;
+    }
+    if (backward_device.has_value()) {
+        mcast_backward_args[0] = 1;
+        mcast_backward_args[1] = num_targets_backward;
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
@@ -262,7 +270,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         }
 
         append_routing_plane_connection_manager_rt_args(
-            sender_fabric_node_id, dst_nodes, program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+            sender_fabric_node_id, dst_nodes, {link}, program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 

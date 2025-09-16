@@ -28,12 +28,12 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(1);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(3);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(4);
-constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<5>();
-constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<5 + ccl_routing_utils::num_line_multicast_args>();
+constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(5);
+constexpr uint32_t range_hops_forward = get_compile_time_arg_val(6);
+constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(7);
+constexpr uint32_t range_hops_backward = get_compile_time_arg_val(8);
 
-inline constexpr uint32_t sharded_args_start_idx = 5 + 2 * ccl_routing_utils::num_line_multicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 9;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -84,16 +84,12 @@ void kernel_main() {
 #else
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
-    // auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
 #endif
     uint8_t starts[] = {
-        static_cast<uint8_t>(forward_multicast_route_info.start_distance_in_hops),
-        static_cast<uint8_t>(backward_multicast_route_info.start_distance_in_hops)};
-    uint8_t ranges[] = {
-        static_cast<uint8_t>(forward_multicast_route_info.range_hops),
-        static_cast<uint8_t>(backward_multicast_route_info.range_hops)};
+        static_cast<uint8_t>(start_distance_in_hops_forward), static_cast<uint8_t>(start_distance_in_hops_backward)};
+    uint8_t ranges[] = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
     if (ranges[0] == 0) {
         starts[0] = starts[1];
         ranges[0] = ranges[1];
