@@ -7,6 +7,13 @@ from models.demos.yolov10x.tt.cib import TtnnCIB
 from models.demos.yolov10x.tt.common import Conv, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnC2fCIB:
     def __init__(self, shortcut=True, n=3, device=None, parameters=None, conv_pt=None):
@@ -38,6 +45,8 @@ class TtnnC2fCIB:
         ]
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="TtnnC2fCIB Start")
         cv1 = self.cv1(input_tensor)
         if cv1.is_sharded():
             cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
@@ -55,5 +64,6 @@ class TtnnC2fCIB:
 
         output = self.cv2(out)
         deallocate_tensors(*y)
-
+        if use_signpost:
+            signpost(header="TtnnC2fCIB End")
         return output

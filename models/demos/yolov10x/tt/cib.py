@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.yolov10x.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnCIB:
     def __init__(self, shortcut=True, device=None, parameters=None, conv_pt=None):
@@ -50,6 +57,8 @@ class TtnnCIB:
         )
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="TtnnCIB Start")
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         inputs = input_tensor
         conv0_out = self.conv0(input_tensor)
@@ -62,4 +71,6 @@ class TtnnCIB:
         conv4_out = self.conv4(conv3_out)
 
         output = ttnn.add(inputs, conv4_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if use_signpost:
+            signpost(header="TtnnCIB End")
         return output

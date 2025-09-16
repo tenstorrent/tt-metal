@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.yolov10x.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnSCDown:
     def __init__(self, device=None, parameters=None, conv_pt=None):
@@ -28,9 +35,13 @@ class TtnnSCDown:
         )
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="TtnnSCDown Start")
         cv1 = self.cv1(input_tensor)
         cv1 = ttnn.sharded_to_interleaved(
             cv1, ttnn.L1_MEMORY_CONFIG
         )  # needed since cv2 uses block_sharding and input is in height sharding
         output = self.cv2(cv1)
+        if use_signpost:
+            signpost(header="TtnnSCDown End")
         return output

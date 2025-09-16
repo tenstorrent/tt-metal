@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov10x.tt.bottleneck import TtnnBottleNeck
 from models.demos.yolov10x.tt.common import Conv, deallocate_tensors
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnC2f:
     def __init__(self, shortcut=True, n=3, device=None, parameters=None, conv_pt=None):
@@ -27,6 +34,8 @@ class TtnnC2f:
         ]
 
     def __call__(self, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG):
+        if use_signpost:
+            signpost(header="TtnnC2f Start")
         cv1 = self.cv1(input_tensor)
         cv1 = ttnn.to_memory_config(cv1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x1 = cv1[:, :, :, : cv1.shape[-1] // 2]
@@ -43,5 +52,6 @@ class TtnnC2f:
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.cv2(out)
-
+        if use_signpost:
+            signpost(header="TtnnC2f End")
         return output
