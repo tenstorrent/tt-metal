@@ -235,7 +235,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
       const p = path.join(dir, ent.name);
       if (ent.isDirectory()) {
         stack.push(p);
-      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log'))) {
+      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
         try {
           const content = fs.readFileSync(p, 'utf8');
           const lines = content.split(/\r?\n/);
@@ -272,10 +272,17 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
             }
           }
 
-          // Pass 2: capture standalone error lines not already included (skip blanks)
+          // Pass 2: capture standalone error lines not already included (skip blanks), include 1 following context line if present
           for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
             if (!used.has(k) && lines[k].trim() !== '' && errorLineRegex.test(lines[k])) {
-              const snippet = lines[k].trim();
+              const block = [lines[k].trim()];
+              // include immediate next non-blank line (if not info/backtrace)
+              let nxt = k + 1;
+              while (nxt < lines.length && lines[nxt].trim() === '') nxt++;
+              if (nxt < lines.length && !infoRegex.test(lines[nxt]) && !backtraceRegex.test(lines[nxt])) {
+                block.push(lines[nxt].trim());
+              }
+              const snippet = block.join('\n');
               collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
             }
           }
@@ -860,6 +867,14 @@ async function run() {
       .filter(r => r.head_branch === 'main')
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
+    // Helper to get up to N most-recent failing runs (excluding successes) from a run list
+    const getRecentFailingRuns = (runs, limit = 5) => {
+      return runs
+        .filter(r => r.head_branch === 'main' && r.conclusion !== 'success')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, limit);
+    };
+
     // Enrich regressions with first failing run within the window
     for (const item of regressedDetails) {
       try {
@@ -884,7 +899,22 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run (best-effort)
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 3);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          // Repeated errors across recent failing runs
+          const failingRuns = getRecentFailingRuns(filteredGrouped.get(item.name) || [], 5);
+          const counts = new Map();
+          for (const fr of failingRuns) {
+            const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
+            for (const sn of snippets) {
+              const key = sn; // raw string key; could normalize whitespace if needed
+              counts.set(key, (counts.get(key) || 0) + 1);
+            }
+          }
+          item.repeated_errors = Array.from(counts.entries())
+            .filter(([_, c]) => c >= 2)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([snippet, count]) => ({ snippet, count }));
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
@@ -900,6 +930,7 @@ async function run() {
               first_failed_author_url: item.first_failed_author_url,
               commits_between: item.commits_between || [],
               error_snippets: item.error_snippets || [],
+              repeated_errors: item.repeated_errors || [],
             });
           }
         }
@@ -932,7 +963,20 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run in window
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 3);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          const failingRuns = getRecentFailingRuns(filteredGrouped.get(item.name) || [], 5);
+          const counts = new Map();
+          for (const fr of failingRuns) {
+            const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
+            for (const sn of snippets) {
+              counts.set(sn, (counts.get(sn) || 0) + 1);
+            }
+          }
+          item.repeated_errors = Array.from(counts.entries())
+            .filter(([_, c]) => c >= 2)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([snippet, count]) => ({ snippet, count }));
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -949,6 +993,7 @@ async function run() {
             first_failed_author_url: item.first_failed_author_url,
             commits_between: item.commits_between || [],
             error_snippets: item.error_snippets || [],
+            repeated_errors: item.repeated_errors || [],
           });
         }
       }
@@ -985,8 +1030,13 @@ async function run() {
               const errLines = it.error_snippets.map(snip => `    - "${snip.replace(/`/g, '\\`')}"`);
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
             }
+            let repeatedList = '';
+            if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
+              const repLines = it.repeated_errors.map(e => `    - (${e.count}×) "${e.snippet.replace(/`/g, '\\`')}"`);
+              repeatedList = ['', '  - Repeated errors across failed runs:', ...repLines].join('\n');
+            }
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
@@ -997,7 +1047,7 @@ async function run() {
               });
               commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
             }
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
@@ -1018,8 +1068,13 @@ async function run() {
               const errLines = it.error_snippets.map(snip => `    - "${snip.replace(/`/g, '\\`')}"`);
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
             }
+            let repeatedList = '';
+            if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
+              const repLines = it.repeated_errors.map(e => `    - (${e.count}×) "${e.snippet.replace(/`/g, '\\`')}"`);
+              repeatedList = ['', '  - Repeated errors across failed runs:', ...repLines].join('\n');
+            }
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
@@ -1030,7 +1085,7 @@ async function run() {
               });
               commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
             }
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
