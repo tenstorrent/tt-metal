@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // clang-format off
@@ -276,10 +275,8 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         index_g_offset = 0;
         row_offset = num_cols_per_group;
-        DPRINT << "Batch: " << b << " out of " << num_batches << ENDL();
 
         for (uint32_t m = 0; m < num_groups; ++m) {
-            DPRINT << "Group: " << m << " out of " << num_groups << ENDL();
             // The following loop is for the 2 passes of input tensor required for GroupNorm
             // First Pass: Calculates average and variance value
             // Second Pass: Calculates final value
@@ -316,7 +313,6 @@ void kernel_main() {
                         }
                     }
                     cb_push_back(cb_in0, out_block_hw_normal);
-                    DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
 #endif
                     if (cur_read_iteration == 1) {
                         const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
@@ -355,22 +351,7 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_read_ptr + single_tile_size_bytes);
 
-                    // Print local means
-                    DPRINT << "local means: ";
-                    for (uint32_t j = 0; j < 32 * 2; j += 2) {
-                        DPRINT << BF16(p_local_means[j]) << " ";
-                    }
-                    DPRINT << ENDL();
-
-                    // Print local vars
-                    DPRINT << "local vars: ";
-                    for (uint32_t j = 0; j < 32 * 2; j += 2) {
-                        DPRINT << BF16(p_local_vars[j]) << " ";
-                    }
-                    DPRINT << ENDL();
-
                     auto local_result = combine_welford_stats<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
-                    DPRINT << "local combined mean: " << BF16(local_result.mean) << " local combined var: " << BF16(local_result.variance) << " local combined count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
                     auto global_means_ptr = get_write_ptr(cb_ex_global);
@@ -398,21 +379,8 @@ void kernel_main() {
                         noc_async_read_barrier();
                     }
 
-                    DPRINT << "global means: ";
-                    for (uint32_t j = 0; j < num_mcast_cores * 16; j+=16) {
-                        DPRINT << BF16(p_global_means[j]) << " ";
-                    }
-                    DPRINT << ENDL();
-
-                    DPRINT << "global vars: ";
-                    for (uint32_t j = 0; j < num_mcast_cores * 16; j+=16) {
-                        DPRINT << BF16(p_global_vars[j]) << " ";
-                    }
-                    DPRINT << ENDL();
-
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
                     auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
-                    DPRINT << "global combined mean: " << BF16(global_result.mean) << " global combined var: " << BF16(global_result.variance) << " global combined count: " << global_result.count << ENDL();
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;
@@ -514,5 +482,4 @@ void kernel_main() {
         cb_pop_front(cb_repack_out, per_core_N);
     }
 #endif
-    DPRINT << "Kernel finished" << ENDL();
 }

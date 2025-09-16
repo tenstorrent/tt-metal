@@ -21,8 +21,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -246,7 +244,6 @@ void MAIN {
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
-        DPRINT << "Batch: " << b << " out of " << batch << ENDL();
         index_g_offset = 0;
 
         row_offset = num_cols_per_group;
@@ -257,7 +254,6 @@ void MAIN {
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
-            DPRINT << "Group: " << g << " out of " << group << ENDL();
             // Start Welford's Calculation
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
@@ -271,7 +267,6 @@ void MAIN {
 
             uint32_t custom_ctr = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -287,11 +282,9 @@ void MAIN {
                 index_h_offset = 0;
 
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    DPRINT << "welford: i: " << i << " out of " << out_block_h_actual << ENDL();
                     curr_xy_limit += num_channels_per_group;
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        DPRINT << "welford: j: " << j << " out of " << num_subblocks_w << ENDL();
                         // Run Welford's algorithm
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
@@ -306,9 +299,7 @@ void MAIN {
                             // Print all args to welford
                             // Check if this is the first tile in the row and set tile_offset accordingly
                             auto this_tile_offset = (j + w) ? 0 : tile_offset;
-                            // DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
-                            //    << this_tile_offset << ENDL();
-                            welford_tile<0, 1, 2, false, false, reciprocal_size>(
+                            welford_tile<dst0, 1, 2, false, reciprocal_size>(
                                 curr_xy_coord, curr_xy_limit, this_tile_offset, *p_reciprocal);
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                         }
@@ -323,9 +314,7 @@ void MAIN {
 #endif
             }
 
-            DPRINT << "welford_M2_to_var args: " << curr_xy_limit << " " << ENDL();
-            welford_M2_to_var<0, 1, 2, reciprocal_size>(curr_xy_limit, *p_reciprocal);  // Convert M2 to variance
-            // dprint_tensix_dest_reg(1);
+            welford_M2_to_var<1, 2, reciprocal_size>(curr_xy_limit, *p_reciprocal);  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;

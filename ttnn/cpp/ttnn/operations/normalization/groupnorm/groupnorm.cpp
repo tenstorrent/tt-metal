@@ -91,19 +91,11 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
     const auto arch = input_tensor.device()->arch();
-    const auto default_math_fidelity = MathFidelity::HiFi4;
-    const auto default_approx_mode = true;
-    const auto default_fp32_acc = false;
-    const auto default_l1_acc = false;
-    const auto default_dst_full_sync_en = false;
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch,
-        compute_kernel_config,
-        default_math_fidelity,
-        default_approx_mode,
-        default_fp32_acc,
-        default_l1_acc,
-        default_dst_full_sync_en);
+    const auto math_fidelity = MathFidelity::HiFi4;
+    const auto approx_mode = true;
+    const auto fp32_acc = use_welford;
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
     if (input_tensor.is_sharded()) {
         const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {

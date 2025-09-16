@@ -378,28 +378,20 @@ def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
         Row major tensor with reciprocal values
     """
     import torch
-    import math
 
     num_virtual_cols = dram_group_norm_virtual_columns(core_grid, C, num_groups)
     num_virtual_rows = (core_grid.x // num_virtual_cols) * core_grid.y
 
-    # Calculate total height in tiles
-    total_H = N * H * W
-    Ht = math.ceil(total_H / ttnn.TILE_SIZE)  # Height in tiles
-
-    # # Calculate per-core dimensions for Group 1 (baseline)
-    per_core_M_group_1 = total_H // num_virtual_rows
-    per_core_Mt_group_1 = per_core_M_group_1 // ttnn.TILE_SIZE
-    per_core_C = C // num_virtual_cols
-
     # Calculate batch distribution
-    row_cores_per_group = 1 if N >= num_virtual_rows else num_virtual_rows // N
+    num_virtual_rows_per_group = 1 if N >= num_virtual_rows else num_virtual_rows // N
     num_channels_per_group = C // num_groups
+    num_height_tiles_per_group = math.ceil(H * W / ttnn.TILE_SIZE)
 
-    num_reciprocals = math.ceil(num_channels_per_group * H * W / row_cores_per_group)
+    num_reciprocals_per_group = num_channels_per_group * num_height_tiles_per_group
+    num_reciprocals_per_core = num_reciprocals_per_group // num_virtual_rows_per_group
 
     # Create reciprocal values: 1/1, 1/2, 1/3, ..., 1/max_n
-    reciprocals_tensor = 1.0 / torch.arange(1, num_reciprocals + 1, dtype=torch.float32)
+    reciprocals_tensor = 1.0 / torch.arange(1, num_reciprocals_per_core + 1, dtype=torch.float32)
 
     # Repeat the reciprocals tensor for each core so they all have identical copies
     return reciprocals_tensor.repeat(core_grid.x * core_grid.y, 1)

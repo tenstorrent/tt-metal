@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(18);
     constexpr uint32_t block_hw = get_compile_time_arg_val(19);
 
-    constexpr uint32_t is_welford = get_compile_time_arg_val(20) > 0;
+    constexpr uint32_t use_welford = get_compile_time_arg_val(20) > 0;
     constexpr uint32_t page_size = get_compile_time_arg_val(21);
 
     constexpr auto out_args = TensorAccessorArgs<22>();
@@ -118,13 +118,13 @@ void kernel_main() {
             cb_push_back(cb_input_mask, block_w);
 
             if (i == 0 and b == 0) {
-                if constexpr (!is_welford) {
+                if constexpr (!use_welford) {
                     constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
                     const uint32_t scalar_w = get_arg_val<uint32_t>(1);
                     generate_reduce_scaler(cb_in_2, scalar_w);
                 }
 
-                if constexpr (!is_welford && is_mcast_sender) {
+                if constexpr (!use_welford && is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
                     const uint32_t scalar_c = get_arg_val<uint32_t>(0);
                     generate_reduce_scaler(cb_in_4, scalar_c);

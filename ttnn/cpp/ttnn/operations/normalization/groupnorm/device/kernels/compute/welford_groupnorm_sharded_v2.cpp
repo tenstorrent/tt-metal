@@ -202,7 +202,7 @@ void MAIN {
                         transpose_wh_init_short(cb_in0);
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
-                        welford_tile<0, 1, 2, false, false, 0>(
+                        welford_tile<dst0, 1, 2, false, 0>(
                             curr_xy_coord, curr_xy_limit, this_tile_offset, empty_reciprocal_lut);
                         curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                     }
@@ -210,7 +210,7 @@ void MAIN {
                 }
                 index_h_offset += per_core_N;
             }
-            welford_M2_to_var<0, 1, 2, 0>(curr_xy_limit, empty_reciprocal_lut);  // Convert M2 to variance
+            welford_M2_to_var<1, 2, 0>(curr_xy_limit, empty_reciprocal_lut);  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + channels_per_group) % TILE_WIDTH;

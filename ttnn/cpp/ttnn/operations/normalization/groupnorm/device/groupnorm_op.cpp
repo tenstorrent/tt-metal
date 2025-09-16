@@ -19,8 +19,11 @@ namespace ttnn::operations::normalization {
 void GroupNorm::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    TT_FATAL(input_tensors.size() == 1, "Must have exactly 1 input tensor, got {} tensors", input_tensors.size());
     TT_FATAL(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 5, "Must have between 1 to 6 input tensors");
+        optional_input_tensors.size() <= 5,
+        "Must have at most 5 optional input tensors (for a total of 1 to 6 input tensors), got {} optional tensors",
+        optional_input_tensors.size());
     auto& a = input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);

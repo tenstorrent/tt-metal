@@ -5,8 +5,8 @@
 #pragma once
 
 #include "llk_sfpu_types.h"
-#include "llk_math_welfords_sfpu_params.h"
 #include "llk_math_welfords_sfpu.h"
+#include "llk_math_welfords_sfpu_params.h"
 
 namespace ckernel {
 

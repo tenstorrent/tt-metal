@@ -20,6 +20,8 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
+
 namespace ttnn::operations::normalization {
 
 namespace {
@@ -416,7 +418,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
-    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
+    // In welford, we both store mean and var here, so double the size
+    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
     // output buffer size
@@ -1173,7 +1176,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // Mode is 0 for legacy groupnorm, 1 for welford groupnorm, 2 for groupnorm with reciprocals
-    uint32_t groupnorm_mode = (reciprocals.has_value() ? 2 : use_welford ? 1 : 0);
+    // In welford, we store both mean and var here, so double the size
+    uint32_t groupnorm_mode = static_cast<uint32_t>(
+        reciprocals.has_value() ? GroupNormMode::WELFORD_RECIPROCALS
+        : use_welford           ? GroupNormMode::WELFORD_NATIVE
+                                : GroupNormMode::LEGACY);
     uint32_t num_reciprocals = reciprocals.has_value() ? reciprocals.value().shard_spec().value().numel() : 0;
 
     // convert data format
@@ -2282,7 +2289,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
             tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
                 .set_page_size(ex2_cb_partial_index, single_tile_size);
-        auto cb_ex2_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     }
     // ex_external
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
@@ -2310,7 +2317,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
                 .set_page_size(ex2_global_cb_index, single_tile_size)
                 .set_page_size(ex2_cb_index, single_tile_size);
-        auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
     }
     // ex2pe
     uint32_t cb_ex2pe_index;
