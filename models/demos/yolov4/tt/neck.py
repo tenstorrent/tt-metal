@@ -163,6 +163,8 @@ class TtNeck:
         output_tensor_pool_in = output_tensor
         if output_tensor_pool_in.memory_config().is_sharded():
             output_tensor_pool_in = ttnn.sharded_to_interleaved(output_tensor_pool_in, ttnn.L1_MEMORY_CONFIG)
+        if output_tensor_pool_in.memory_config().is_sharded():
+            output_tensor_pool_in = ttnn.sharded_to_interleaved(output_tensor_pool_in, ttnn.L1_MEMORY_CONFIG)
         pool_1 = ttnn.max_pool2d(
             input_tensor=output_tensor_pool_in,
             batch_size=self.conv_args.p1.batch_size,
@@ -212,8 +214,7 @@ class TtNeck:
 
         pool_all = ttnn.concat([pool_3, pool_2, pool_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         pool_all = ttnn.to_layout(pool_all, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
-        if self.parameters.resolution[0] == 320:
-            pool_all = ttnn.add(pool_all, 0.0, dtype=ttnn.bfloat8_b)
+        pool_all = ttnn.add(pool_all, 0.0, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(pool_3)
         ttnn.deallocate(pool_2)
         ttnn.deallocate(pool_1)
@@ -310,8 +311,8 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        if self.parameters.resolution[0] == 320:
-            output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
+
+        output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -428,8 +429,7 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        if self.parameters.resolution[0] == 320:
-            output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
+        output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
