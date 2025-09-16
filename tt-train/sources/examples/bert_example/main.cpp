@@ -27,21 +27,20 @@ int main() {
     // Create BERT model
     auto bert_model = models::bert::create(config);
 
-    // Example input (batch_size=1, sequence_length=32 for proper alignment)
-    // Padding to 32 for tensor alignment requirements
-    std::vector<uint32_t> input_ids_data(32, 0);  // Initialize with padding
-    input_ids_data[0] = 101;                      // [CLS]
-    input_ids_data[1] = 2023;                     // this
-    input_ids_data[2] = 2003;                     // is
-    input_ids_data[3] = 1037;                     // a
-    input_ids_data[4] = 2742;                     // test
-    input_ids_data[5] = 102;                      // [SEP]
+    // Example input (batch_size=1, sequence_length=128 to match config)
+    std::vector<uint32_t> input_ids_data(128, 0);  // Initialize with padding
+    input_ids_data[0] = 101;                       // [CLS]
+    input_ids_data[1] = 2023;                      // this
+    input_ids_data[2] = 2003;                      // is
+    input_ids_data[3] = 1037;                      // a
+    input_ids_data[4] = 2742;                      // test
+    input_ids_data[5] = 102;                       // [SEP]
     // Rest are padding (0s)
 
-    std::vector<uint32_t> token_type_ids_data(32, 0);  // All sentence A
+    std::vector<uint32_t> token_type_ids_data(128, 0);  // All sentence A
 
     // Attention mask: 1 for real tokens, 0 for padding
-    std::vector<float> attention_mask_data(32, 0.0F);
+    std::vector<float> attention_mask_data(128, 0.0F);
     for (int i = 0; i < 6; ++i) {
         attention_mask_data[i] = 1.0F;  // Mark first 6 tokens as real
     }
@@ -52,15 +51,15 @@ int main() {
     // Convert input_ids to float for embedding lookup (framework expectation)
     std::vector<float> input_ids_float(input_ids_data.begin(), input_ids_data.end());
     auto input_ids = autograd::create_tensor(core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        input_ids_float, ttnn::Shape{1, 1, 1, 32}, device, ttnn::Layout::ROW_MAJOR));
+        input_ids_float, ttnn::Shape{1, 1, 1, 128}, device, ttnn::Layout::ROW_MAJOR));
 
     // Token type IDs also as float
     std::vector<float> token_type_ids_float(token_type_ids_data.begin(), token_type_ids_data.end());
     auto token_type_ids = autograd::create_tensor(core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        token_type_ids_float, ttnn::Shape{1, 1, 1, 32}, device, ttnn::Layout::ROW_MAJOR));
+        token_type_ids_float, ttnn::Shape{1, 1, 1, 128}, device, ttnn::Layout::ROW_MAJOR));
 
     auto attention_mask = autograd::create_tensor(
-        core::from_vector<float, ttnn::DataType::BFLOAT16>(attention_mask_data, ttnn::Shape{1, 1, 1, 32}, device));
+        core::from_vector<float, ttnn::DataType::BFLOAT16>(attention_mask_data, ttnn::Shape{1, 1, 1, 128}, device));
 
     // Run forward pass
     bert_model->eval();  // Set to eval mode for inference (train mode for training)
