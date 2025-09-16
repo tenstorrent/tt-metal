@@ -10,7 +10,7 @@ class TtnnSPPF:
     def __init__(self, device, parameter, conv_pt):
         self.parameter = parameter
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True, core_count=None)
 
     def __call__(self, device, x, use_sharded_concat=True):
         x = self.cv1(device, x)
@@ -65,6 +65,7 @@ class TtnnSPPF:
             y = sharded_concat([x1, m1, m2, m3], to_interleaved=False)
         else:
             y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = reshard_if_possible(x)
         x = self.cv2(device, y)
         deallocate_tensors(x1, m1, m2, m3)
         return x

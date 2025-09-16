@@ -4,8 +4,7 @@
 
 
 import ttnn
-from models.common.utility_functions import roundup32
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
+from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, reshard_if_possible, sharded_concat
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K
 
@@ -76,21 +75,21 @@ class TtnnC3k2:
             y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.concat((cv1_a, cv1_b, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         p(x, "concat out is")
-        if x.is_sharded():  # this improves device perf, but drops e2e perf
-            print("BEFORE IS", x.memory_config().shard_spec.shape)
-            aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
-                x.memory_config().shard_spec.shape[1]
-            )
-            print("after IS", aligned_h, aligned_w)
-            resharded_memory_config = ttnn.create_sharded_memory_config(
-                shape=(aligned_h, aligned_w),
-                core_grid=x.memory_config().shard_spec.grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=x.memory_config().shard_spec.orientation,
-                use_height_and_width_as_shard_shape=True,
-            )
-            x = ttnn.to_memory_config(x, resharded_memory_config)
-            p(x, "concat out after reshard is")
+        x = reshard_if_possible(x)
+        # if x.is_sharded() and (x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0):
+        #     print("BEFORE IS", x.memory_config().shard_spec.shape)
+        #     aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
+        #         x.memory_config().shard_spec.shape[1]
+        #     )
+        #     print("after IS", aligned_h, aligned_w)
+        #     resharded_memory_config = ttnn.create_sharded_memory_config(
+        #         shape=(aligned_h, aligned_w),
+        #         core_grid=x.memory_config().shard_spec.grid,
+        #         strategy=ttnn.ShardStrategy.HEIGHT,
+        #         orientation=x.memory_config().shard_spec.orientation,
+        #         use_height_and_width_as_shard_shape=True,
+        #     )
+        #     x = ttnn.to_memory_config(x, resharded_memory_config)
 
         x = self.cv2(device, x)
         deallocate_tensors(cv1_a, cv1_b, y3)
