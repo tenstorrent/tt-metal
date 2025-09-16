@@ -1,8 +1,6 @@
 #include "deit_encoder.h"
 #include <stdexcept>
 
-namespace deit_cpp {
-
 TtDeiTEncoder::TtDeiTEncoder(
     const DeiTConfig& config,
     std::shared_ptr<ttnn::MeshDevice> device,
@@ -14,7 +12,7 @@ TtDeiTEncoder::TtDeiTEncoder(
     layers.reserve(config.num_hidden_layers);
     
     for (int i = 0; i < config.num_hidden_layers; ++i) {
-        std::string layer_address = base_address + ".layer." + std::to_string(i);
+        std::string layer_address = base_address + ".layer." + std::to_string(i) + ".";
         layers.push_back(
             std::make_unique<TtDeiTLayer>(config, device, state_dict, layer_address)
         );
@@ -89,5 +87,3 @@ TtDeiTEncoder::forward(
         all_self_attentions
     );
 }
-
-} // namespace deit_cpp
