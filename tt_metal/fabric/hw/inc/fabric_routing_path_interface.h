@@ -17,6 +17,7 @@ inline bool routing_path_t<1, false>::decode_route_to_buffer(
         for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
             out_route_buffer[i] = 0;
         }
+        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
         return false;
     }
 
@@ -55,6 +56,7 @@ inline bool routing_path_t<2, true>::decode_route_to_buffer(
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // invalid chip
         route_ptr[0] = 0;
+        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
         return false;
     }
 
@@ -142,6 +144,7 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
     if (hops >= routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
         // invalid chip or Noop to self
         *route_ptr = 0;
+        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
         return false;
     }
 
