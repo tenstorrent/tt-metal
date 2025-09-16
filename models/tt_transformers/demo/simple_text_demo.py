@@ -631,6 +631,9 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+    # DEBUG: Intentional failure for CI debugging
+    assert False, "This test is intentionally failing for CI debugging purposes"
+
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
