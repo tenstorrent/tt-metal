@@ -89,7 +89,7 @@ void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_r
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::BRISC;
         cluster.assert_risc_reset_at_core(virtual_core, reset_val);
     } else {
-        tt::umd::RiscType reset_val = tt::umd::RiscType::TRISC0;
+        tt::umd::RiscType reset_val = tt::umd::RiscType::ERISC1;
         cluster.deassert_risc_reset_at_core(virtual_core, reset_val);
     }
 }
