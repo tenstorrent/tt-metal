@@ -82,7 +82,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    auto this_device = mesh_device->get_device(send_coord);
     const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
 
     const auto [num_hops, dst_is_forward, next_fabric_id] =

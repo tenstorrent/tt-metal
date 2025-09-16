@@ -71,7 +71,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     CreateCircularBuffer(program, all_cores, cb_receiver_config);
 
     const auto& topology = operation_attributes.topology;
-    auto this_device = mesh_device->get_device(receive_coord);
     const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
     const auto [num_hops, sender_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
