@@ -39,7 +39,7 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files #maybe I dont need this step
+      - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
@@ -53,24 +53,28 @@ jobs:
             chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
           done
           cat > multi-user-dc.yaml <<EOF
+          x-base: &default
+            image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+            stdin_open: true
+            tty: true
+            entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
+            user: "\${USER_ID}:\${GROUP_ID}"
+            working_dir: /app/tt-metal
+            environment:
+              HOME: /app
+              LD_LIBRARY_PATH: /app/tt-metal/build/lib
+              PYTHONPATH: /app/tt-metal
+              TT_METAL_HOME: /app/tt-metal
+              TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+
           services:
             tray-1:
-              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              stdin_open: true
-              tty: true
+              <<: *default
               container_name: tray-1
               volumes:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
-              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
-              user: "\${USER_ID}:\${GROUP_ID}"
-              working_dir: /app/tt-metal
               environment:
-                HOME: /app
-                LD_LIBRARY_PATH: /app/tt-metal/build/lib
-                PYTHONPATH: /app/tt-metal
-                TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
                 TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1.txt
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
