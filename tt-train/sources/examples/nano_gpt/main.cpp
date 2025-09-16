@@ -661,6 +661,13 @@ int main(int argc, char **argv) {
                             tokens, sequence_length, tokenizer_path);
                     },
                     text);
+            } else if (tokenizer_type == "tiktoken") {
+                return std::visit(
+                    [&](const auto &tokens) {
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::TikTokenTokenizer>(
+                            tokens, sequence_length, tokenizer_path);
+                    },
+                    text);
             } else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }

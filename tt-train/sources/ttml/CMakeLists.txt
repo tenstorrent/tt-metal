@@ -161,6 +161,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tiktoken_tokenizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tiktoken_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp

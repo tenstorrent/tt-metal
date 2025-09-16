@@ -42,6 +42,26 @@ create_in_memory_token_dataset<tokenizers::BPETokenizer>(
     return {InMemoryTokenDataset(tokens, seq_length), std::move(tokenizer)};
 }
 
+template <>
+std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
+create_in_memory_token_dataset<tokenizers::TikTokenTokenizer>(
+    const std::string &text, uint32_t seq_length, const std::string &model_path) {
+    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::TikTokenTokenizer>(model_path);
+
+    const std::vector<uint32_t> tokenized_text = tokenizer->encode(text);
+
+    return {InMemoryTokenDataset(tokenized_text, seq_length), std::move(tokenizer)};
+}
+
+template <>
+std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
+create_in_memory_token_dataset<tokenizers::TikTokenTokenizer>(
+    const std::vector<uint32_t> &tokens, uint32_t seq_length, const std::string &model_path) {
+    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::TikTokenTokenizer>(model_path);
+
+    return {InMemoryTokenDataset(tokens, seq_length), std::move(tokenizer)};
+}
+
 std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
     std::ifstream file(file_path);
     if (!file.is_open()) {
