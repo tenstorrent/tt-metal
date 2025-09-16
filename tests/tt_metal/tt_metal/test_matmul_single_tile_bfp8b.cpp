@@ -32,6 +32,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -140,7 +141,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> activations = create_random_vector_of_bfp8(
+        std::vector<uint32_t> activations = test_utils::create_random_vector_of_bfp8(
             dram_buffer_size,
             /*is_exp_a=*/false,
             100,
@@ -152,7 +153,8 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 32; i++) {
             vec.at(i * 32 + i) = (float)1;
         }
-        std::vector<uint32_t> weights = pack_fp32_vec_as_bfp8_tiles(vec, /*row_major_input=*/true, /*is_exp_a=*/false);
+        std::vector<uint32_t> weights =
+            pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);
 
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 

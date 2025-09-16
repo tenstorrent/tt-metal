@@ -8,6 +8,7 @@ from models.demos.yolov4.tt.common import Conv
 
 class Down5:
     def __init__(self, device, parameters, conv_args) -> None:
+        self.parameters = parameters
         self.conv1 = Conv(
             device,
             conv_args.c1,
@@ -122,6 +123,9 @@ class Down5:
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor_left = ttnn.sharded_to_interleaved(output_tensor_left, ttnn.L1_MEMORY_CONFIG)
+        # if self.parameters.resolution[0] == 640:
+        #     output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
+        #     output_tensor_left = ttnn.add(output_tensor_left, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat([output_tensor, output_tensor_left], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(output_tensor_left)
 

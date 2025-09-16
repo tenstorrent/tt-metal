@@ -85,8 +85,7 @@ int main(int argc, char* argv[]) {
 
         flush_erisc_icache();
 
-        uint32_t kernel_config_base =
-            firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM1);
+        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
         my_relative_x_ =
             my_logical_x_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_x;
         my_relative_y_ =

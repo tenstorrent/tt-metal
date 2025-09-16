@@ -18,7 +18,7 @@ class TtnnSPPF:
             device,
             parameters.cv1.conv,
             self.conv_pt.cv1.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
@@ -27,7 +27,7 @@ class TtnnSPPF:
             device,
             parameters.cv2.conv,
             self.conv_pt.cv2.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=True,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )

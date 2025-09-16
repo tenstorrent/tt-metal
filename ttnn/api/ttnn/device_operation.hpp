@@ -158,7 +158,7 @@ inline void log_operation(
     log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 
     log_debug(tt::LogOp, "Attributes:");
-    for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for ([[maybe_unused]] const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
         log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 

@@ -49,7 +49,7 @@ def main():
         weights: dict,
         weight_str: str,
         bias_str: str,
-        activation_str: str,
+        activation: ttnn.UnaryWithParam,
         device: ttnn.Device,
         log_first_sample: bool = False,
     ) -> ttnn.Tensor:
@@ -62,7 +62,7 @@ def main():
             weights: Dictionary containing model weights and biases.
             weight_str: Key name for convolution weights in the weights dict.
             bias_str: Key name for convolution biases in the weights dict.
-            activation_str: Activation function name (e.g., 'relu') to apply after conv.
+            activation: Activation function as UnaryWithParam to apply after conv.
             device: Target TT device to execute the operations on.
             log_first_sample: Whether to log detailed info (used for debugging first sample).
         Returns:
@@ -79,7 +79,10 @@ def main():
         conv_padding = (1, 1)
 
         # Set up TT-NN convolution configuration including activation function
-        conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, activation=activation_str)
+        conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            activation=activation,
+        )
 
         # Optional detailed logging for the first sample (shape, config, etc.)
         if log_first_sample:
@@ -182,7 +185,7 @@ def main():
             weights,
             "conv1.weight",
             "conv1.bias",
-            "relu",
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             device,
             log_first_sample=log_this,
         )
@@ -195,7 +198,7 @@ def main():
             weights,
             "conv2.weight",
             "conv2.bias",
-            "relu",
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             device,
             log_first_sample=log_this,
         )

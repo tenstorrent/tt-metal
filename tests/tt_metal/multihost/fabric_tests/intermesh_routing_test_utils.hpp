@@ -8,7 +8,7 @@
 #include <map>
 
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace tt::tt_fabric {

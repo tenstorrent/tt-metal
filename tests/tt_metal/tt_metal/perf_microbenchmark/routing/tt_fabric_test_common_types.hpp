@@ -12,9 +12,10 @@
 #include <cstdint>
 
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -92,6 +93,8 @@ enum class RoutingType {
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
+    AllToOne,
+    AllToOneRandom,
     FullDeviceRandomPairing,
     UnidirectionalLinear,
     FullRing,
@@ -103,6 +106,7 @@ struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
@@ -129,6 +133,7 @@ struct ParsedTestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
+    uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
 
 struct TestConfig {
@@ -240,9 +245,8 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
-    PhysicalMeshConfig() {
-        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        eth_coord_mapping = {};
+    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+        // Default path to the mesh descriptor.
     }
 };
 

@@ -60,10 +60,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
-    const InterleavedPow2AddrGen<true> s0 = {
-        .bank_base_address = in0_tensor_addr,
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent};
+    constexpr auto in0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         // Operand 0

@@ -7,7 +7,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
 #include <filesystem>
 #include <functional>

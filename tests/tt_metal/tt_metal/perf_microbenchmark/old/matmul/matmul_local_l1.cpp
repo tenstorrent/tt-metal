@@ -40,6 +40,8 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #define LAUNCH
 
@@ -170,7 +172,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Inputs Setup
@@ -249,7 +251,8 @@ int main(int argc, char** argv) {
                 auto activations_tile_layout =
                     convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-                pass &= tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, activations);
+                pass &=
+                    tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
                 auto identity_tilized = tilize_swizzled(weights_slice, Kt * 32, per_core_Nt * 32);
@@ -257,7 +260,8 @@ int main(int argc, char** argv) {
                     convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
-                pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
+                pass &= tt_metal::detail::WriteToDeviceL1(
+                    device->get_devices()[0], core, weights_addr, weights_tile_transposed);
                 TT_FATAL(pass, "Error");
             }
         }
@@ -312,12 +316,16 @@ int main(int argc, char** argv) {
 
         std::chrono::duration<double, std::nano> duration{};
         // took from run_operation.cpp
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
         auto start = std::chrono::high_resolution_clock::now();
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::detail::ReadDeviceProfilerResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
@@ -343,7 +351,7 @@ int main(int argc, char** argv) {
 
                     std::vector<uint32_t> result_vec;
                     tt_metal::detail::ReadFromDeviceL1(
-                        device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
+                        device->get_devices()[0], core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto result_flat_layout =
                         convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
@@ -365,7 +373,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
 
     } catch (const std::exception& e) {
         pass = false;

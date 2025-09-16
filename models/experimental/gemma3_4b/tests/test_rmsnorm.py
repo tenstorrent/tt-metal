@@ -14,9 +14,9 @@ import ttnn
 from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.experimental.gemma3_4b.tests.references import reference_transformer
 
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -66,7 +66,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
 
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
-    reference_model = tt_model_args.reference_transformer(wrap=False)  # Gemma3 Entire Model
+    reference_model = reference_transformer(tt_model_args, wrap=False)  # Gemma3 Entire Model
     reference_model = reference_model.model.get_submodule(torch_layer_name)
 
     state_dict_prefix = ""

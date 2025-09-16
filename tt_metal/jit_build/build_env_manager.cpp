@@ -25,7 +25,7 @@
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include "dispatch/system_memory_manager.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -148,10 +148,8 @@ std::vector<JitBuildState> create_build_state(
     build_states.reserve(num_build_states);
 
     // Loop through programmable core types and their processor classes/types.
-    uint32_t index = 0;
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        auto core_type = *enchantum::index_to_enum<HalProgrammableCoreType>(programmable_core);
         uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             JitBuiltStateConfig config{
@@ -165,9 +163,6 @@ std::vector<JitBuildState> create_build_state(
                 .dispatch_message_addr = dispatch_message_addr,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
-            auto compute_proc_class = enchantum::cast<HalProcessorClassType>(processor_class);
-            bool is_compute_processor =
-                compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
                 if (programmable_core == static_cast<uint32_t>(HalProgrammableCoreType::TENSIX) &&

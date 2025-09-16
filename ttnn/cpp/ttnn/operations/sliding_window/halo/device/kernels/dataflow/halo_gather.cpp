@@ -262,6 +262,30 @@ void kernel_main() {
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr bool enable_blocking = !skip_untilize;
 
+#ifdef CONFIG_TENSOR_IN_DRAM
+    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(19);
+    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(20);
+    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(21);
+    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(22);
+
+    constexpr auto padding_config_tensor_args = TensorAccessorArgs<23>();
+    constexpr auto gather_config_tensor_args = TensorAccessorArgs<24>();
+
+    const auto padding_config_accessor =
+        TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);
+    const auto gather_config_accessor =
+        TensorAccessor(gather_config_tensor_args, gather_config_dram_addr, gather_config_page_size);
+
+    uint32_t config_read_index = get_arg_val<uint32_t>(0);
+
+    uint64_t padding_src_noc_addr = get_noc_addr(config_read_index, padding_config_accessor);
+    uint64_t gather_src_noc_addr = get_noc_addr(config_read_index, gather_config_accessor);
+
+    noc_async_read(padding_src_noc_addr, get_write_ptr(padding_config_cb_id), padding_config_page_size);
+    noc_async_read(gather_src_noc_addr, get_write_ptr(gather_config_cb_id), gather_config_page_size);
+    noc_async_read_barrier();
+#endif
+
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
 

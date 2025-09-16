@@ -63,18 +63,12 @@ Tensor where_impl(
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
 inline bool typecast_predicate(const Tensor& predicate, const Tensor& t_true, const Tensor& t_false) {
-    if (!is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
-        is_floating_point(t_false.dtype())) {
-        return true;
-    }
-    return false;
+    return !is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
+           is_floating_point(t_false.dtype());
 }
 
 inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
-    if (!is_floating_point(predicate.dtype()) && is_floating_point(b.dtype())) {
-        return true;
-    }
-    return false;
+    return !is_floating_point(predicate.dtype()) && is_floating_point(b.dtype());
 }
 
 }  // namespace ternary_utils
@@ -132,7 +126,12 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
             }
-            if (ternary_utils::have_same_shape(t_true, predicate)) {
+
+            // Check if shapes are broadcast-compatible for TTS using broadcast detection
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTS");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
@@ -153,7 +152,10 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
             }
-            if (ternary_utils::have_same_shape(predicate, t_false)) {
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TST");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())

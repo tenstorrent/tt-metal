@@ -8,10 +8,10 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler
 
 try:
     from tracy import signpost

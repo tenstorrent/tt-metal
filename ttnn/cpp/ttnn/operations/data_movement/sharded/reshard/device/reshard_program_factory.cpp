@@ -401,7 +401,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
         uint32_t valid_pages = input_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =
@@ -424,7 +423,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
         uint32_t valid_pages = output_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =

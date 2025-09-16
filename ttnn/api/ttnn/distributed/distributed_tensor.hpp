@@ -44,8 +44,6 @@ public:
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
 
-    tt::tt_metal::DistributedTensorConfig config() const;
-
 private:
     class Impl;
 

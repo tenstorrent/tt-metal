@@ -35,10 +35,10 @@ void kernel_main() {
             noc_async_write_tile(tile_id, s, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;
-            noc_async_write_barrier();
         }
         l1_read_addr += padded_width_diff;
         row_start_tile_id += output_width_tiles;
     }
+    noc_async_write_barrier();
     cb_pop_front(cb_id_out, block_num_tiles);
 }

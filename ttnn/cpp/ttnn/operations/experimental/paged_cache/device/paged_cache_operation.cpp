@@ -400,7 +400,7 @@ operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
-        this->op_type, input_tensors, optional_input_tensors);
+        this->op_type, input_tensors, optional_input_tensors, this->mesh_coords);
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache

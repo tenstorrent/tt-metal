@@ -343,6 +343,46 @@ https://gist.github.com/dgomezTT/ad5af9cf42f245a9a220458f431919c4
 
 Please note that we have over 300.000 lines in the json file, so we just included a few in the gist.
 
+### How to trace a hanging operation?
+Sometimes there might be cases where an operation hangs and the arguments can be quite handy to troubleshoot the issue or even adding extra coverage.
+We have added the following configuration
+
+```
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=30
+```
+
+This environment variable will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
+
+
+Here is an example of how to use all this:
+```
+def test_graph_capture_with_hang_device_operation(device):
+    # Create input tensor
+    tt_input = ttnn.empty(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    try:
+        ttnn.prim.test_hang_device_operation(tt_input)
+        # this allows the device to throw the exception inside the try block
+        ttnn._ttnn.device.synchronize_device(device)
+    except Exception as e:
+        print("Exception captured")
+        captured_graph = ttnn.graph.end_graph_capture()
+        print(captured_graph)
+        assert "TIMEOUT" in str(e)
+```
+
+
+In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
+The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
+Please never use this operation in production code, it is only for testing purposes.
 
 ### What is next for this tool?
 - Supporting more operations

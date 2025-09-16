@@ -1,8 +1,10 @@
 rank_bindings:
   - rank: 0
     mesh_id: 0
+    mesh_host_rank: 0
 
   - rank: 1
-    mesh_id: 1
+    mesh_id: 0
+    mesh_host_rank: 1
 
 mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml"

@@ -200,10 +200,8 @@ void LayerNorm::validate(
                 uint32_t Mt = M / TILE_WIDTH;
                 uint32_t Kt = K / TILE_WIDTH;
                 // block
-                uint32_t block_w = program_config.block_w * TILE_WIDTH;
                 uint32_t block_h = program_config.block_h * TILE_HEIGHT;
                 const auto shard_spec = a.shard_spec().value();
-                uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -398,7 +396,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                 TT_FATAL(
                     a.is_sharded(),
                     "ERROR - LayerNormShardedMultiCoreProgramConfig is used with non-sharded input. Please use "
-                    "LayerNormMultiCoreProgramConfig, or shard the tensors.");
+                    "LayerNormDefaultProgramConfig, or shard the tensors.");
 
                 return layernorm_multi_core_sharded(
                     a,
@@ -414,14 +412,27 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.subblock_w,
                     program_config.block_h,
                     program_config.block_w,
+                    program_config.legacy_reduction,
+                    program_config.legacy_rsqrt,
                     this->compute_kernel_config);
-            } else {
+            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 TT_FATAL(
                     !a.is_sharded(),
-                    "ERROR - LayerNormMultiCoreProgramConfig is being used with sharded input. Please use "
+                    "ERROR - LayerNormDefaultProgramConfig is being used with sharded input. Please use "
                     "LayerNormShardedMultiCoreProgramConfig, or interleave the tensors.");
                 return layernorm_multi_core(
-                    a, b, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
+                    a,
+                    b,
+                    gamma,
+                    beta,
+                    output_tensor,
+                    this->norm_type,
+                    this->eps,
+                    program_config.legacy_reduction,
+                    program_config.legacy_rsqrt,
+                    this->compute_kernel_config);
+            } else {
+                TT_THROW("Unsupported program config");
             }
         },
         this->program_config);

@@ -5,13 +5,12 @@
 
 """
 Usage:
-    dump_callstacks [--full_callstack] [--gdb_callstack --port=<port>] [--active_cores]
+    dump_callstacks [--full_callstack] [--gdb_callstack] [--active_cores]
 
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
     --active_cores     Only dump callstacks for cores running kernels.
-    --port=<port>      Port to use for GDB client.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
@@ -19,22 +18,25 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
+from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from check_per_block_location import run as get_check_per_block_location
+from elfs_cache import run as get_elfs_cache, ElfsCache
+from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.device import Device
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
-from ttexalens.tt_exalens_lib import top_callstack, callstack, parse_elf
+from ttexalens.tt_exalens_lib import top_callstack, callstack
 from utils import BLUE, GREEN, ORANGE, RST
 
 import re
+import socket
 import subprocess
+import threading
+from contextlib import closing
 
 script_config = ScriptConfig(
-    depends=["check_per_block_location", "dispatcher_data"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
 
@@ -172,17 +174,13 @@ def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
     dispatcher_core_data: DispatcherCoreData,
-    elfs_cache: dict[str, ParsedElfFile],
+    elfs_cache: ElfsCache,
     full_callstack: bool,
 ) -> list[CallstackEntry]:
     context = location._device._context
-    if dispatcher_core_data.firmware_path not in elfs_cache:
-        elfs_cache[dispatcher_core_data.firmware_path] = parse_elf(dispatcher_core_data.firmware_path, context)
     elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
-        if dispatcher_core_data.kernel_path not in elfs_cache:
-            elfs_cache[dispatcher_core_data.kernel_path] = parse_elf(dispatcher_core_data.kernel_path, context)
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
@@ -190,7 +188,6 @@ def get_callstack(
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             return top_callstack(pc, elfs, offsets, context)
         else:
-            device_id = location._device._id
             return callstack(location, elfs, offsets, risc_name)
     except:
         return []
@@ -218,8 +215,6 @@ def format_callstack(callstack: list[CallstackEntry]) -> str:
 
 @dataclass
 class DumpCallstacksData:
-    location: OnChipCoordinate = triage_field("Loc")
-    risc_name: str = triage_field("Proc")
     dispatcher_core_data: DispatcherCoreData = recurse_field()
     pc: int | None = triage_field("PC", hex_serializer)
     kernel_callstack: list[CallstackEntry] = triage_field("Kernel Callstack", format_callstack)
@@ -227,96 +222,127 @@ class DumpCallstacksData:
 
 def dump_callstacks(
     location: OnChipCoordinate,
+    risc_name: str,
     dispatcher_data: DispatcherData,
-    context: Context,
+    elfs_cache: ElfsCache,
     full_callstack: bool,
     gdb_callstack: bool,
     active_cores: bool,
-    port: int | None,
-) -> list[DumpCallstacksData]:
-    if not hasattr(dump_callstacks, "elfs_cache"):
-        dump_callstacks.elfs_cache: dict[str, ParsedElfFile] = {}
-    if not hasattr(dump_callstacks, "gdb_server"):
-        dump_callstacks.gdb_server: GdbServer | None = None
-
-    result: list[DumpCallstacksData] = []
-
-    if gdb_callstack and dump_callstacks.gdb_server is None:
-        if port is None:
-            raise TTTriageError("Port must be specified when using GDB callstack.")
-        try:
-            server = ServerSocket(port)
-            server.start()
-            dump_callstacks.gdb_server = GdbServer(context, server)
-            dump_callstacks.gdb_server.start()
-        except Exception as e:
-            raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
-        # Get mapping form risc location and name to process id
-        process_ids = get_process_ids(dump_callstacks.gdb_server)
+    gdb_server: GdbServer | None,
+    process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
+) -> DumpCallstacksData | None:
+    result: DumpCallstacksData | None = None
 
     try:
-        noc_block = location._device.get_block(location)
+        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+        if active_cores and dispatcher_core_data.go_message != "GO":
+            return result
+        if gdb_callstack:
+            risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+            if risc_debug.is_in_reset():
+                return result
 
-        for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-            if active_cores and dispatcher_core_data.go_message != "GO":
-                continue
-            if gdb_callstack:
-                if risc_name == "ncrisc":
-                    # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                    callstack = [CallstackEntry()]
-                else:
-                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
-                # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-                if len(callstack) > 0 and callstack[0].pc is None:
-                    try:
-                        callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-                    except:
-                        pass
+            if risc_name == "ncrisc":
+                # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
+                callstack = [CallstackEntry()]
             else:
-                callstack = get_callstack(
-                    location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
+                callstack = get_gdb_callstack(
+                    location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                 )
-                result.append(
-                    DumpCallstacksData(
-                        location=location,
-                        risc_name=risc_name,
-                        dispatcher_core_data=dispatcher_core_data,
-                        pc=callstack[0].pc if len(callstack) > 0 else None,
-                        kernel_callstack=callstack,
-                    )
-                )
+            # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+            if len(callstack) > 0 and callstack[0].pc is None:
+                try:
+                    callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                except:
+                    pass
+        else:
+            callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
 
-    except:
+        result = DumpCallstacksData(
+            dispatcher_core_data=dispatcher_core_data,
+            pc=callstack[0].pc if len(callstack) > 0 else None,
+            kernel_callstack=callstack,
+        )
+
+    except Exception as e:
+        log_check(
+            False,
+            f"{ORANGE}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{RST}",
+        )
         return result
 
     return result
+
+
+# Global lock for thread-safe port finding
+_port_lock = threading.Lock()
+
+
+def find_available_port() -> int:
+    """
+    Find an available port for gdb_server in a thread-safe manner.
+    Returns:
+        An available port number
+    """
+    try:
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+            s.bind(("", 0))  # 0 → OS picks a free port
+            s.listen()
+            return s.getsockname()[1]
+    except (socket.error, OSError) as e:
+        # If we get here, no port was found
+        raise TTTriageError(f"No available port found: {e}")
+
+
+def start_gdb_server(port: int, context: Context) -> GdbServer:
+    """Start GDB server and return it."""
+    try:
+        server = ServerSocket(port)
+        server.start()
+        gdb_server = GdbServer(context, server)
+        gdb_server.start()
+    except Exception as e:
+        raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
+
+    return gdb_server
 
 
 def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
     active_cores = args["--active_cores"]
-    port = int(args["--port"]) if gdb_callstack else None
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
-    check_per_block_location = get_check_per_block_location(args, context)
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    elfs_cache = get_elfs_cache(args, context)
+    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    callstacks_data = check_per_block_location.run_check(
-        lambda location: dump_callstacks(
+
+    gdb_server: GdbServer | None = None
+    process_ids: dict[OnChipCoordinate, dict[str, int]] | None = None
+    if gdb_callstack:
+        # Locking thread until we start gdb server on available port
+        with _port_lock:
+            port = find_available_port()
+            gdb_server = start_gdb_server(port, context)
+        process_ids = get_process_ids(gdb_server)
+
+    callstacks_data = run_checks.run_per_core_check(
+        lambda location, risc_name: dump_callstacks(
             location,
+            risc_name,
             dispatcher_data,
-            context,
+            elfs_cache,
             full_callstack,
             gdb_callstack,
             active_cores,
-            port,
+            gdb_server,
+            process_ids,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
     # After all callstacks are dumped, stop GDB server if it was started
-    if dump_callstacks.gdb_server is not None:
-        dump_callstacks.gdb_server.stop()
+    if gdb_server is not None:
+        gdb_server.stop()
 
     return callstacks_data
 

@@ -72,11 +72,10 @@ private:
 };
 
 template <typename T>
-HostBuffer::HostBuffer(std::shared_ptr<std::vector<T>> data) {
+HostBuffer::HostBuffer(std::shared_ptr<std::vector<T>> data) : type_info_(&typeid(T)) {
     const size_t size_bytes = data->size() * sizeof(T);
     view_ = tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
-    type_info_ = &typeid(T);
 }
 
 template <typename T>

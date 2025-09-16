@@ -48,6 +48,7 @@ class RopeScalingType(str, Enum):
     LINEAR = "linear"
     YARN = "yarn"
     LLAMA3 = "llama3"
+    PHI3 = "longrope"
     DEFAULT = "default"
 
 
@@ -57,7 +58,7 @@ class RopeScaling(BaseModel):
     rope_type: RopeScalingType = Field(
         validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
     )
-    factor: Optional[float]
+    factor: Optional[float] = None
     original_max_position_embeddings: Optional[int] = None
 
 
@@ -83,7 +84,17 @@ class RopeScalingYarn(RopeScaling):
     mscale_all_dim: Optional[float] = 0.0
 
 
-def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
+class RopeScalingPhi3(RopeScaling):
+    """RoPE scaling configuration for Phi3."""
+
+    # Phi3-specific parameters
+    long_factor: Optional[list]
+    short_factor: Optional[list]
+
+
+def rope_scaling_model_factory(
+    rope_scaling_params: dict, original_max_context_len: Optional[int] = None
+) -> RopeScaling:
     rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
     if rope_scaling_type == RopeScalingType.LINEAR:
         return RopeScalingLinear(**rope_scaling_params)
@@ -91,6 +102,8 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.PHI3:
+        return RopeScalingPhi3(original_max_position_embeddings=original_max_context_len, **rope_scaling_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
@@ -377,7 +390,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -390,7 +403,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type="llama3")
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)

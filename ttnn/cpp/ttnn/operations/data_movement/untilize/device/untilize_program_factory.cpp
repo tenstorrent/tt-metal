@@ -927,17 +927,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
     }
 
-    // TODO (#23449): This memory calculation is a) outdated/inaccurate and needs to be fixed and b) needs
-    // to be moved up a few layers as the available memory may be different upon a program cache hit
-
-    // Determine how much L1 space we can use for input and output CBs,
-    // ensuring that we don't intrude into other L1 storage space
-    uint32_t max_l1_size =
-        device->l1_size_per_core() / 2 - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-
-    // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
-    uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);
-
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
     auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, a);

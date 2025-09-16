@@ -14,7 +14,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric::mesh_socket_tests {

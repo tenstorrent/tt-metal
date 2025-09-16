@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
 
 namespace ttnn {
 namespace operations::transformer {
@@ -14,7 +14,7 @@ namespace operations::transformer {
 template <bool in_place>
 struct ExecuteAttentionSoftmax {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,
         const ttnn::operations::normalization::SoftmaxProgramConfig& program_config =

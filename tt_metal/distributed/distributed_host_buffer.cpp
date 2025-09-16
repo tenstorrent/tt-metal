@@ -123,6 +123,7 @@ DistributedHostBuffer DistributedHostBuffer::transform(
 
     // Transform one HostBuffer per shard group
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& [key, group] : shard_group_indices) {
             HostBuffer out = fn(shards[group.front()]->buffer);
             for (size_t i : group) {

@@ -26,6 +26,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -101,7 +105,7 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
@@ -124,6 +128,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}

@@ -17,8 +17,6 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(
         page_size % input_tensors[0].buffer()->alignment() == 0,
@@ -50,7 +48,6 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor0 = input_tensors[0];
-    const auto& input_tensor1 = input_tensors[1];
 
     auto intermediate_shape = input_tensor0.padded_shape();
     intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_params.ring_size;
@@ -197,8 +194,6 @@ tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
     auto intermediate_dtype = input_tensors[1].dtype();
     auto intermediate_memory_config = input_tensors[1].memory_config();
 
-    uint32_t semaphore_address =
-        this->all_gather_params.semaphore.address();  // semaphore address is not used in the hash operation
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsync>(
         this->all_gather_params.dim,
         this->all_gather_params.num_links,

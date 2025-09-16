@@ -146,12 +146,10 @@ int main(int argc, char* argv[]) {
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
 
-        rta_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                  launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
-        crta_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                  launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+        rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                            launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset);
+        crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                             launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

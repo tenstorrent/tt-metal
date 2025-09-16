@@ -15,13 +15,8 @@ void kernel_main() {
     constexpr uint32_t cb_id = 0;
     constexpr bool is_dram = true;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id);
-    const DataFormat data_format = get_dataformat(cb_id);
-
-    const InterleavedAddrGenFast<is_dram> s = {
-        .bank_base_address = input_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format,
-    };
+    constexpr auto s_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(s_args, input_addr, single_tile_size_bytes);
 
     uint32_t block_size = num_cb_tiles;
     cb_reserve_back(cb_id, num_cb_tiles);

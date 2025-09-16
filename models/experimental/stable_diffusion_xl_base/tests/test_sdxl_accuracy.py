@@ -13,7 +13,7 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
 import json
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
 
 test_demo.__test__ = False
@@ -31,6 +31,10 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 @pytest.mark.parametrize(
     "guidance_scale",
     ((8.0),),
+)
+@pytest.mark.parametrize(
+    "negative_prompt",
+    (("normal quality, low quality, worst quality, low res, blurry, nsfw, nude"),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -69,6 +73,7 @@ def test_accuracy_sdxl(
     coco_statistics_path,
     evaluation_range,
     guidance_scale,
+    negative_prompt,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -84,6 +89,7 @@ def test_accuracy_sdxl(
         mesh_device,
         is_ci_env,
         prompts,
+        negative_prompt,
         num_inference_steps,
         vae_on_device,
         encoders_on_device,
@@ -124,6 +130,8 @@ def test_accuracy_sdxl(
             "num_inference_steps": num_inference_steps,
             "start_from": start_from,
             "num_prompts": num_prompts,
+            "negative_prompt": negative_prompt,
+            "guidance_scale": guidance_scale,
             "model_name": "sdxl",
         },
         "benchmarks_summary": [

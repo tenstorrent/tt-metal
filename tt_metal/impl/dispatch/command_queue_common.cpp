@@ -7,7 +7,7 @@
 
 #include "impl/context/metal_context.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

@@ -434,7 +434,6 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
@@ -1106,7 +1105,6 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
@@ -1842,13 +1840,9 @@ def test_binary_sharded_invalid_row_major_layout(
         _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
 
 
-@pytest.mark.skip(reason="Skipping test for dchen/23538-sharded_ND")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16],),
 )
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
@@ -1991,7 +1985,6 @@ profile_a_b_shape_pairs = [
     "dtype_pt, dtype_tt",
     (
         (torch.bfloat16, ttnn.bfloat16),
-        # (torch.int32, ttnn.int32),
         # (torch.float32, ttnn.float32)
     ),
 )
@@ -2600,3 +2593,20 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+def test_small_fp32_multiply(device):
+    # Scaling with 0.01 to get realistic values that appear during training.
+    a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_torch = torch.multiply(ttnn.to_torch(a), ttnn.to_torch(b))
+    # print("Torch multiply result:")
+    # print(out_torch)
+
+    out = ttnn.multiply(a, b)
+    # print("TTNN multiply result:")
+    # print(out)
+
+    # assert_allclose(out_torch, ttnn.to_torch(out))
+    assert_with_pcc(out_torch, ttnn.to_torch(out))

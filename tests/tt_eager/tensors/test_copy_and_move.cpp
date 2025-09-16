@@ -22,7 +22,6 @@
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -220,7 +219,6 @@ void test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
 
     // dev tensor allocate, deallocate, reallocate same address DRAM
     Tensor dev_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device, dram_mem_config);
-    uint32_t address_a = dev_a.buffer()->address();
     device->close();
     dev_a.deallocate();
 }

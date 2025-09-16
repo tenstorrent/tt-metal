@@ -6,6 +6,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -71,19 +72,28 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .set_page_size(output_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src0_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_buf).append_to(reader_compile_time_args);
     auto binary_reader_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -260,13 +270,13 @@ int main() {
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
     for (int i = 0; i < add_dst_vec.size(); i++) {
-        pass &= (add_dst_vec[i].to_float() == workload_0_src0_val + workload_0_src1_val);
+        pass &= (static_cast<float>(add_dst_vec[i]) == workload_0_src0_val + workload_0_src1_val);
     }
     for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
         if (i < mul_sub_dst_vec.size() / 2) {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val * workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val * workload_1_src1_val);
         } else {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val - workload_1_src1_val);
         }
     }
     ReleaseTrace(mesh_device.get(), trace_id);

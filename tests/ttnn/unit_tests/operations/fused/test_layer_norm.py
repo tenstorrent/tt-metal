@@ -120,22 +120,12 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
+@pytest.mark.parametrize("h", [1024, 2080])
+@pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("d_type", [torch.bfloat16, torch.float32])
 def test_large_layer_norm(device, h, w, d_type):
     torch.manual_seed(0)
 
-    base_row = torch.arange(w, dtype=torch.float64).unsqueeze(0)  # shape: [1, 4096]
-
-    # Create a column vector with exponents from 0 to rows-1
-    exponents = torch.arange(h, dtype=torch.float64).unsqueeze(1)  # shape: [2048, 1]
-
-    # Compute the multipliers as powers of 10 (10^0, 10^1, ..., 10^(rows-1))
-    multipliers = 10**exponents  # shape: [2048, 1]
-
-    # Multiply the multipliers with the base_row using broadcasting.
-    # Each row becomes 10 times the previous row.
-    tensor = multipliers * base_row  # shape: [2048, 4096]
     torch_input_tensor = torch.rand((h, w), dtype=d_type)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
@@ -145,7 +135,7 @@ def test_large_layer_norm(device, h, w, d_type):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
@@ -193,7 +183,9 @@ def test_large_layer_norm_with_weight(device, h, w):
 
 
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
-def test_large_layer_norm_with_bias(device, h, w):
+@pytest.mark.parametrize("legacy_reduction", [True, False])
+@pytest.mark.parametrize("legacy_rsqrt", [True, False])
+def test_large_layer_norm_with_bias(device, h, w, legacy_reduction, legacy_rsqrt):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -204,6 +196,14 @@ def test_large_layer_norm_with_bias(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
+    config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=legacy_reduction, legacy_rsqrt=legacy_rsqrt)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
     output_tensor = ttnn.layer_norm(input_tensor, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)

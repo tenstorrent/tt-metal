@@ -16,10 +16,6 @@
 #include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
 
-namespace tt {
-enum class ARCH;
-}  // namespace tt
-
 namespace tt::tt_metal {
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;

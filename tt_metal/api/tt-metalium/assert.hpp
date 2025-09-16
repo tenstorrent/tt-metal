@@ -33,6 +33,7 @@ std::ostream& operator<<(std::ostream& os, tt::OStreamJoin<A, B> const& join) {
 
 namespace tt::assert {
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 static std::string demangle(const char* str) {
     size_t size = 0;
     int status = 0;
@@ -47,6 +48,7 @@ static std::string demangle(const char* str) {
     }
     return str;
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 // https://www.fatalerrors.org/a/backtrace-function-and-assert-assertion-macro-encapsulation.html
 
@@ -56,23 +58,25 @@ static std::string demangle(const char* str) {
  * @param[in] size Maximum number of return layers
  * @param[in] skip Skip the number of layers at the top of the stack
  */
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     std::vector<std::string> bt;
     void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
-    if (strings == NULL) {
+    if (strings == nullptr) {
         std::cout << "backtrace_symbols error." << std::endl;
         return bt;
     }
     for (size_t i = skip; i < s; ++i) {
         bt.push_back(demangle(strings[i]));
     }
-    free(strings);
-    free(array);
+    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
+    free(array);    // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
 
     return bt;
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 /**
  * @brief String to get current stack information
@@ -161,7 +165,10 @@ void tt_assert(
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)
 #endif
 #else
-#define TT_ASSERT(condition, ...)
+#define TT_ASSERT(condition, ...) \
+    do {                          \
+        (void)(condition);        \
+    } while (0)  // this was done to avoid the compiler flagging unused variables when building Release
 #endif
 
 #ifndef TT_THROW

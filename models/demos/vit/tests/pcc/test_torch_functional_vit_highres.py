@@ -9,8 +9,8 @@ import torch
 import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vit.reference import torch_functional_vit
-from models.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py

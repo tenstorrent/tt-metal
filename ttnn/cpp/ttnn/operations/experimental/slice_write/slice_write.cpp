@@ -18,23 +18,18 @@
 
 namespace ttnn::operations::experimental {
 
-// Specialization for uint32_t and N=4
-template <>
-ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
+ttnn::Tensor SliceWriteOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
-    const std::array<uint32_t, 4>& begins,
-    const std::array<uint32_t, 4>& ends,
-    const std::array<uint32_t, 4>& step) {
+    const ttnn::SmallVector<uint32_t>& begins,
+    const ttnn::SmallVector<uint32_t>& ends,
+    const ttnn::SmallVector<uint32_t>& step) {
     const auto& logical_input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
 
-    TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
-    TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
-
-    bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
+    bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
     TT_FATAL(no_step, "Slice Write does not support strides");
 
@@ -48,23 +43,28 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const bool tiled = input.layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
-    std::array<uint32_t, 4> actual_shape_vec{};
-    std::array<uint32_t, 4> padded_shape_vec{};
-    const std::array<uint32_t, 4> padded_ends =
-        tiled ? std::array<uint32_t, 4>(
-                    {ends[0],
-                     ends[1],
-                     std::max(tt::round_up(ends[2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT),
-                     std::max(tt::round_up(ends[3], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH)})
-              : ends;
+    ttnn::SmallVector<uint32_t> padded_ends = ends;
+    if (tiled && ends.size() >= 2) {
+        // Only pad the last two dimensions for tiled layout
+        size_t rank = ends.size();
+        padded_ends[rank - 2] =
+            std::max(tt::round_up(ends[rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
+        padded_ends[rank - 1] =
+            std::max(tt::round_up(ends[rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
+    }
+    ttnn::SmallVector<uint32_t> actual_shape_vec;
+    ttnn::SmallVector<uint32_t> padded_shape_vec;
+    actual_shape_vec.reserve(ends.size());
+    padded_shape_vec.reserve(ends.size());
+
     bool empty = false;
-    for (int i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < ends.size(); ++i) {
         TT_FATAL(ends[i] >= begins[i], "End {} must be greater than or equal to start {}", ends[i], begins[i]);
         uint32_t offset = step[i] - begins[i] - 1;
         uint32_t dim_size = (ends[i] + offset) / step[i];
         empty |= dim_size == 0;
-        actual_shape_vec[i] = dim_size;
-        padded_shape_vec[i] = std::max((padded_ends[i] + offset) / step[i], 1u);
+        actual_shape_vec.push_back(dim_size);
+        padded_shape_vec.push_back(std::max((padded_ends[i] + offset) / step[i], 1u));
     }
     ttnn::Shape actual_shape(actual_shape_vec);
     ttnn::Shape padded_shape(padded_shape_vec);
@@ -92,7 +92,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         }
 
     } else {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < input.logical_shape().rank(); i++) {
             TT_FATAL(
                 actual_shape[i] == input.logical_shape()[i],
                 "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "

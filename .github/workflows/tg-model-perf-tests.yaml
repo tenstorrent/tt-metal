@@ -19,7 +19,7 @@ jobs:
   tg-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-model-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}

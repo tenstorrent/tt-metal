@@ -11,7 +11,7 @@ from transformers import BertForQuestionAnswering
 import ttnn
 from models.experimental.bert.fused_ops.add_and_norm import AddAndNorm
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

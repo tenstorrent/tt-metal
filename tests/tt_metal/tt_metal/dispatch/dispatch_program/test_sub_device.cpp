@@ -47,6 +47,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
 
+// Access to internal API: ProgramImpl::validate_circular_buffer_region
+#include "tt_metal/impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
@@ -83,13 +86,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
             .set_page_size(src0_cb_index, hal::get_l1_alignment());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
-    program.allocate_circular_buffers(mesh_device.get());
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
-    program.allocate_circular_buffers(mesh_device.get());
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     distributed::DeviceLocalBufferConfig local_config_2 = {
@@ -100,10 +103,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     };
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
+    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
-    program.allocate_circular_buffers(mesh_device.get());
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {

@@ -40,7 +40,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -192,6 +192,7 @@ void run_single_core_tilize_program(
 
     std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
@@ -308,7 +309,7 @@ void run_single_core_tilize_program(
         golden.resize(golden.size() * 2);
         for (auto i = 0; i < golden_unpacked.size(); i++) {
             // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
-            golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
+            golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
     }
 

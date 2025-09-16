@@ -28,6 +28,8 @@
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
+
 namespace ttsl {
 
 template <typename T>
@@ -1578,3 +1580,5 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

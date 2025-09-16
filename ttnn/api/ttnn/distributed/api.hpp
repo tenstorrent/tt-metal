@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed {

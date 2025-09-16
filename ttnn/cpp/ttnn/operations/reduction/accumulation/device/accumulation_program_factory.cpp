@@ -85,8 +85,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles);
     create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles);
 
-    const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
-    const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     std::map<std::string, std::string> defines_kernel_args = {};
     if (is_integer_format(dst_cb_data_format)) {
         // Used to switch to add_tile_int32() instead of add_tiles()

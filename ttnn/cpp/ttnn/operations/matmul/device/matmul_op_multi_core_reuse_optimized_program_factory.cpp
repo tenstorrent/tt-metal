@@ -148,21 +148,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     // TODO: This contains same information as above; refactor this?
     uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
 
     // Assume all of core_range is used (ie. num_evenly_divided_output_blocks > 0)
     TT_FATAL(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-    uint32_t num_cores_c = core_range.x;
-    uint32_t num_cores_r = core_range.y;
 
     // Compile time args
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)in0_last_ktile_w,
     };
@@ -214,7 +206,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         num_blocks_per_core_group_1,  // batch
         out_block_tiles,
 
-        untilize_out};
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
+    };
 
     std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
@@ -233,7 +227,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Create compute kernel
-    auto mm_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         core_group_1,
@@ -264,8 +258,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             num_blocks_per_core_group_2,  // batch
             out_block_tiles,
 
-            untilize_out};
-        auto mm_kernel_group_2_id = tt_metal::CreateKernel(
+            untilize_out,  // untilize_out
+            false          // get_batch_from_reader
+        };
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
             core_group_2,
@@ -321,7 +317,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
     } else {
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
@@ -401,8 +397,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        uint32_t core_idx_x = core.x;
-        uint32_t core_idx_y = core.y;
         uint32_t num_output_blocks_per_core =
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
@@ -514,9 +508,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
 
     tt_metal::IDevice* device = a.device();
 
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -541,12 +532,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
     // Get large matmul params
 
-    uint32_t num_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
     CoreCoord core_range = compute_with_storage_grid_size;
 
     ////////////////////////////////////////////////////////////////////////////

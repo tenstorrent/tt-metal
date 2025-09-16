@@ -6,12 +6,12 @@
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE
 from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 
 def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_command_queues, trace):
@@ -132,7 +132,7 @@ def test_run_yolov8x_performant(
         device,
         batch_size_per_device,
         model_location_generator,
-        expected_inference_throughput=47.5,
+        expected_inference_throughput=62,
     )
 
 
@@ -157,5 +157,5 @@ def test_run_yolov8x_performant_dp(
         mesh_device,
         batch_size_per_device,
         model_location_generator,
-        expected_inference_throughput=95,
+        expected_inference_throughput=121,
     )

@@ -13,8 +13,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/arch.hpp>
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;
@@ -81,15 +81,6 @@ TEST(CclHelpers, EriscDatamoverConfig_GetSemaphoresBaseAddress_GT_0) {
 }
 
 TEST(CclHelpers, EriscDatamoverConfig_GetBuffersBaseAddress_GT_0) {
-    ttnn::ccl::EriscDatamoverConfig config;
-    for (std::size_t i = 0; i < 8; i++) {
-        ASSERT_TRUE(
-            config.get_buffers_base_address(i) >= (config.get_edm_handshake_address() + config.handshake_location_size +
-                                                   config.edm_receiver_first_level_ack_source_word_size));
-    }
-}
-
-TEST(CclHelpers, EriscDatamoverConfig_ComputeBufferSize_GT_0) {
     ttnn::ccl::EriscDatamoverConfig config;
     for (std::size_t i = 0; i < 8; i++) {
         ASSERT_TRUE(

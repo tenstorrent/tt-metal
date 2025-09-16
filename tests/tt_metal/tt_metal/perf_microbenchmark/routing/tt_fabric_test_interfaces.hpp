@@ -77,6 +77,8 @@ public:
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const = 0;
     virtual bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const = 0;
     virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const = 0;
+    virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_one_unicast_pairs(
+        uint32_t device_idx) const = 0;
     virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(
         std::mt19937& gen) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(

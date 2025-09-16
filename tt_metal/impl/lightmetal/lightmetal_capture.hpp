@@ -21,7 +21,7 @@ struct TraceDescriptorByTraceId;
 
 // Forward decl for trace_buffer.hpp
 namespace tt::tt_metal {
-class TraceDescriptor;
+struct TraceDescriptor;
 }
 
 namespace tt::tt_metal {

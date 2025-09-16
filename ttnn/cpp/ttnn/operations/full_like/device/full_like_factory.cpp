@@ -93,7 +93,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         }
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, TILE_HW, single_tile_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(

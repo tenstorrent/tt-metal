@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_segformer_trace_2cqs_inference(

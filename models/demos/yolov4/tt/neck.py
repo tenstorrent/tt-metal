@@ -5,8 +5,8 @@
 import math
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.yolov4.tt.common import Conv
-from models.utility_functions import is_blackhole
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
@@ -161,7 +161,8 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_pool_in = output_tensor
-
+        if output_tensor_pool_in.memory_config().is_sharded():
+            output_tensor_pool_in = ttnn.sharded_to_interleaved(output_tensor_pool_in, ttnn.L1_MEMORY_CONFIG)
         pool_1 = ttnn.max_pool2d(
             input_tensor=output_tensor_pool_in,
             batch_size=self.conv_args.p1.batch_size,
@@ -172,6 +173,8 @@ class TtNeck:
             stride=[self.conv_args.p1.stride, self.conv_args.p1.stride],
             padding=[self.conv_args.p1.padding, self.conv_args.p1.padding],
             dilation=[self.conv_args.p1.dilation, self.conv_args.p1.dilation],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         pool_2 = ttnn.max_pool2d(
             input_tensor=output_tensor_pool_in,
@@ -183,6 +186,8 @@ class TtNeck:
             stride=[self.conv_args.p2.stride, self.conv_args.p2.stride],
             padding=[self.conv_args.p2.padding, self.conv_args.p2.padding],
             dilation=[self.conv_args.p2.dilation, self.conv_args.p2.dilation],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         pool_3 = ttnn.max_pool2d(
             input_tensor=output_tensor_pool_in,
@@ -194,14 +199,21 @@ class TtNeck:
             stride=[self.conv_args.p3.stride, self.conv_args.p3.stride],
             padding=[self.conv_args.p3.padding, self.conv_args.p3.padding],
             dilation=[self.conv_args.p3.dilation, self.conv_args.p3.dilation],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
-        pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
-        pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
-        pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
+        if pool_1.memory_config().is_sharded():
+            pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
+        if pool_2.memory_config().is_sharded():
+            pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
+        if pool_3.memory_config().is_sharded():
+            pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
 
         pool_all = ttnn.concat([pool_3, pool_2, pool_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         pool_all = ttnn.to_layout(pool_all, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        if self.parameters.resolution[0] == 320:
+            pool_all = ttnn.add(pool_all, 0.0, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(pool_3)
         ttnn.deallocate(pool_2)
         ttnn.deallocate(pool_1)
@@ -298,7 +310,8 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-
+        if self.parameters.resolution[0] == 320:
+            output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -415,6 +428,8 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        if self.parameters.resolution[0] == 320:
+            output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )

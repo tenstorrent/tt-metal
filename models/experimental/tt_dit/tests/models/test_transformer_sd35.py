@@ -49,6 +49,7 @@ def test_sd35_transformer_block(
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    model_location_generator,
 ) -> None:
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16
@@ -64,8 +65,11 @@ def test_sd35_transformer_block(
     use_dual_attention = False
 
     # Create Torch model
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-large", model_subdir="StableDiffusion_35_Large"
+    )
     parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
+        model_name, subfolder="transformer", torch_dtype=torch_dtype
     )
     torch_model = parent_torch_model.transformer_blocks[0]
     torch_model.eval()

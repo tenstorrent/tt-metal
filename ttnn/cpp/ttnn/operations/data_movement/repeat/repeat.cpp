@@ -111,7 +111,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
         ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
         working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
-        working_repetition_vector = std::move(repetition_vector);
+        working_repetition_vector = repetition_vector;
     }
     // torch actually throws an error if the repetition rank is smaller than the tensor rank but it seems reasonable to
     // handle it
@@ -121,7 +121,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     }
 
     else {
-        working_repetition_vector = std::move(repetition_vector);
+        working_repetition_vector = repetition_vector;
     }
 
     TT_ASSERT(working_tensor.logical_volume() == tensor.logical_volume());

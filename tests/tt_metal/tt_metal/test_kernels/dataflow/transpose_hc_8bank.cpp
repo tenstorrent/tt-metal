@@ -36,10 +36,8 @@ void kernel_main() {
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const InterleavedPow2AddrGen<true> s0 = {
-        .bank_base_address = src0_addr,
-
-        .log_base_2_of_page_size = 11};
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(src_args, src0_addr, 2048);
 
     uint64_t batch_addr = src0_addr;
     for (uint32_t n = 0; n < N; n++) {

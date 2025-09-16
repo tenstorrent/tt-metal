@@ -165,15 +165,14 @@ bool vecadd_multi_core(
         const auto core_offset = core * (tile_size + tiles_per_core);
         for (int index = 0; index < data_per_core; index++) {
             const auto i = core_offset + index;
-            float golden = a_data[i].to_float() + b_data[i].to_float();
-            pass &= tt::test_utils::is_close<float>(golden, c_data[i].to_float(), 0.015f);
+            float golden = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+            pass &= tt::test_utils::is_close<float>(golden, static_cast<float>(c_data[i]), 0.015f);
         }
     }
 
     return pass;
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
-
 
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
     GTEST_SKIP();

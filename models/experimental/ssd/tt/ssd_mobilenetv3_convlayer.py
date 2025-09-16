@@ -7,7 +7,7 @@ import torch.nn as nn
 import ttnn
 
 import tt_lib.fallback_ops as fallback_ops
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.experimental.ssd.ssd_utils import create_batchnorm
@@ -29,7 +29,6 @@ class TtMobileNetV3ConvLayer(nn.Module):
         bias: bool = False,
         dilation: int = 1,
         use_activation: Union[bool, str] = False,
-        activation="",
         state_dict=None,
         base_address="",
         device=None,

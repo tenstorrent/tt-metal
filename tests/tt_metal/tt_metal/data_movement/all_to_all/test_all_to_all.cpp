@@ -162,7 +162,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        bytes_per_transaction / bfloat16::SIZEOF,
+        bytes_per_transaction / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     vector<uint32_t> packed_golden = packed_input;
@@ -359,7 +359,6 @@ void custom_test(
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
     auto device = mesh_device->get_device(0);
-    NOC noc_id = NOC::NOC_0;
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =

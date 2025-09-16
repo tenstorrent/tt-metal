@@ -14,8 +14,9 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.mmp import TtGemma3MultiModalProjector
+from models.experimental.gemma3_4b.tests.references import reference_vision_multi_modal
 
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -51,7 +52,7 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
-    reference_model = tt_model_args.reference_vision_multi_modal()
+    reference_model = reference_vision_multi_modal(tt_model_args)
 
     # create input tensor for multi_modal_projector layer
     patches_per_image = 64

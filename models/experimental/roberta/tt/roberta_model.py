@@ -13,7 +13,7 @@ import ttnn
 from models.experimental.roberta.tt.roberta_encoder import TtRobertaEncoder
 from models.experimental.roberta.tt.roberta_pooler import TtRobertaPooler
 from models.experimental.roberta.tt.roberta_embeddings import PytorchEmbeddings
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
