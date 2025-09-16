@@ -213,9 +213,6 @@ void run_single_core_broadcast(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
@@ -239,7 +236,7 @@ void run_single_core_broadcast(
         tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
             .set_page_size(0, single_tile_size)
             .set_tile_dims(0, tile_dims);
-    tt_metal::CreateCircularBuffer(program_, core, l1_src_a_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
     auto src_b_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
@@ -247,7 +244,7 @@ void run_single_core_broadcast(
         tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
             .set_page_size(1, single_tile_size)
             .set_tile_dims(1, tile_dims);
-    tt_metal::CreateCircularBuffer(program_, core, l1_src_b_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
@@ -255,7 +252,7 @@ void run_single_core_broadcast(
         tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, single_tile_size)
             .set_tile_dims(16, tile_dims);
-    tt_metal::CreateCircularBuffer(program_, core, l1_dst_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
     std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
@@ -291,27 +288,27 @@ void run_single_core_broadcast(
     log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = test_config.math_fidelity, .compile_args = {}, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         reader_kernel,
         core,
         {
@@ -323,7 +320,7 @@ void run_single_core_broadcast(
         });
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         writer_kernel,
         core,
         {
@@ -362,6 +359,7 @@ void run_single_core_broadcast(
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;

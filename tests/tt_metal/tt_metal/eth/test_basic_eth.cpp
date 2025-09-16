@@ -72,8 +72,6 @@ bool reader_kernel_no_send(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -93,7 +91,7 @@ bool reader_kernel_no_send(
         eth_l1_byte_address);
 
     auto eth_reader_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
         eth_reader_core,
         ethernet_config);
@@ -111,7 +109,7 @@ bool reader_kernel_no_send(
         device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         eth_reader_kernel,
         eth_reader_core,
         {
@@ -121,6 +119,7 @@ bool reader_kernel_no_send(
             (uint32_t)eth_l1_byte_address,
         });
 
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     fixture->RunProgram(mesh_device, workload);
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -147,8 +146,6 @@ bool writer_kernel_no_receive(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -168,7 +165,7 @@ bool writer_kernel_no_receive(
         dram_byte_address);
 
     auto eth_writer_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_writer_l1_to_dram.cpp",
         eth_writer_core,
         ethernet_config);
@@ -186,7 +183,7 @@ bool writer_kernel_no_receive(
     fixture->WriteBuffer(mesh_device, output_dram_buffer, all_zeros);
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         eth_writer_kernel,
         eth_writer_core,
         {
@@ -196,6 +193,7 @@ bool writer_kernel_no_receive(
             (uint32_t)eth_l1_byte_address,
         });
 
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> readback_vec;
@@ -221,8 +219,6 @@ bool noc_reader_and_writer_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -252,13 +248,13 @@ bool noc_reader_and_writer_kernels(
     auto eth_noc_xy = device->ethernet_core_from_logical_core(logical_eth_core);
 
     auto eth_reader_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
         logical_eth_core,
         reader_eth_config);
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         eth_reader_kernel,
         logical_eth_core,
         {
@@ -269,13 +265,13 @@ bool noc_reader_and_writer_kernels(
         });
 
     auto eth_writer_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_writer_l1_to_dram.cpp",
         logical_eth_core,
         writer_eth_config);
 
     tt_metal::SetRuntimeArgs(
-        program_,
+        program,
         eth_writer_kernel,
         logical_eth_core,
         {
@@ -298,6 +294,7 @@ bool noc_reader_and_writer_kernels(
         device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
     distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
 
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(

@@ -108,28 +108,26 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
 
     CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     auto reader_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         WriterDataMovementConfig{});
 
     CreateCircularBuffer(
-        program_,
-        WORKER_CORE,
-        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
     auto result_buffer = create_result_buffer(mesh_device);
-    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -152,24 +150,20 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
         WORKER_CORE,
         ReaderDataMovementConfig{});
 
     auto reader_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     CreateCircularBuffer(
-        program_,
-        WORKER_CORE,
-        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = RESULT_BUFFER_PAGE_SIZE,
@@ -180,7 +174,9 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
     };
     auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
-    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -218,11 +214,9 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
 
     CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
@@ -231,18 +225,18 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     reader_config.defines["CHECK_FRONT"] = "1";
 
     auto reader_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
         WORKER_CORE,
         reader_config);
 
     CreateCircularBuffer(
-        program_,
-        WORKER_CORE,
-        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
     auto result_buffer = create_result_buffer(mesh_device);
-    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -275,31 +269,29 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
 
     ReaderDataMovementConfig writer_config;
     writer_config.defines["CHECK_BACK"] = "1";
 
     auto writer_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
         WORKER_CORE,
         writer_config);
 
     CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     CreateCircularBuffer(
-        program_,
-        WORKER_CORE,
-        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
     auto result_buffer = create_result_buffer(mesh_device);
-    SetRuntimeArgs(program_, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+    SetRuntimeArgs(program, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 

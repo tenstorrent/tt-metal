@@ -37,14 +37,12 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReshardC
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
     auto device = mesh_device->get_devices()[0];
 
     // Kernels
     auto receiver_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/data_movement/reshard_hardcoded/kernels/reshard_reader.cpp",
         test_config.dest_core_set,
         DataMovementConfig{
@@ -53,11 +51,13 @@ bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReshardC
             .compile_args = test_config.dest_core_compile_args});
 
     // Runtime Arguments
-    SetRuntimeArgs(program_, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
+    SetRuntimeArgs(program, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());

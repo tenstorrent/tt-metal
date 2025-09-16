@@ -37,13 +37,12 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
         CreateKernelFromString(
-            program_,
+            program,
             kernel_src_code,
             cores,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         this->RunProgram(mesh_device, workload);
     };
 }
@@ -70,10 +69,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
         CreateKernelFromString(
-            program_,
+            program,
             kernel_src_code,
             cores,
             ComputeConfig{
@@ -81,6 +78,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = {}});
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         this->RunProgram(mesh_device, workload);
     };
 }
@@ -109,13 +107,12 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
         tt_metal::CreateKernelFromString(
-            program_,
+            program,
             kernel_src_code,
             *active_ethernet_cores.begin(),
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         this->RunProgram(mesh_device, workload);
     };
 }

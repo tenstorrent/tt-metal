@@ -40,14 +40,12 @@ static void eth_direct_send_multi_txq_rxq(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program sender_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-    auto& sender_program_ = sender_workload.get_programs().at(device_range);
 
     constexpr size_t PAYLOAD_SIZE = 32;
     const size_t unreserved_l1_start = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto eth_sender_kernel = tt_metal::CreateKernel(
-        sender_program_,
+        sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{.compile_args = {data_txq_id, ack_txq_id, PAYLOAD_SIZE}});
@@ -58,7 +56,7 @@ static void eth_direct_send_multi_txq_rxq(
     size_t remote_eth_l1_dst_addr = receiver_credit_ack_dest + 32;
 
     tt_metal::SetRuntimeArgs(
-        sender_program_,
+        sender_program,
         eth_sender_kernel,
         eth_sender_core,
         {unreserved_l1_start,
@@ -74,18 +72,16 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
-    auto& receiver_program_ = receiver_workload.get_programs().at(device_range);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
-        receiver_program_,
+        receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{
             .compile_args = {data_txq_id, ack_txq_id, PAYLOAD_SIZE}});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
-        receiver_program_,
+        receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
         {unreserved_l1_start,
@@ -102,9 +98,13 @@ static void eth_direct_send_multi_txq_rxq(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
         t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
         fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
