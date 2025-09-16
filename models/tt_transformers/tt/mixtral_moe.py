@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -104,7 +104,7 @@ class TtMoeLayer(LightweightModule):
             input_i_1SBH,
             self.gates_H8,
             memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
-            compute_kernel_config=self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"],
+            compute_kernel_config=self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"],
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )

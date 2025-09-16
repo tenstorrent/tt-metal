@@ -715,8 +715,8 @@ class ModelArgs:
             # Configure data precision and math fidelity for tensors and kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
             # Mixtral
-            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
-            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+            self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
             # end mixtral
 
             if self.optimizations is None:
@@ -1850,6 +1850,7 @@ class ModelArgs:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
         if self.is_mixture_of_experts:
+            self.num_experts_per_tok = self.num_experts_per_tok
             self.initialize_mixture_of_experts_configs()
             self.moe = True
             self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])

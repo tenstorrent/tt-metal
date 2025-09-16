@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,7 @@ class TtMixtralMLP(LightweightModule):
         self.w2 = as_tensor("w2")
         self.w3 = as_tensor("w3")
 
-        self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
+        self.prefill_mlp_config = self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"]
 
     def get_mem_config(self, name: str, weight) -> ttnn._ttnn.tensor.MemoryConfig:
         num_device = self.mesh_device.get_num_devices()
