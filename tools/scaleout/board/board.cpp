@@ -9,9 +9,10 @@
 #include <unordered_map>
 #include <vector>
 #include <stdexcept>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/reflection.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -116,7 +117,7 @@ Board::Board(
     // Currently UBB has a different definition of board in this representation compared to UMD.
     // TODO: This exception shouldn't live here.
     uint32_t expected_asic_indices = 0;
-    if (board_type_ == tt::umd::BoardType::UBB) {
+    if (board_type_ == tt::umd::BoardType::UBB_WORMHOLE || board_type_ == tt::umd::BoardType::UBB_BLACKHOLE) {
         expected_asic_indices = 8;
     } else {
         expected_asic_indices = tt::umd::get_number_of_chips_from_board_type(board_type_);
@@ -211,21 +212,22 @@ private:
     }
 };
 
-// WH_UBB board class
-class WH_UBB : public Board {
+// UBB_WORMHOLE board class
+class UBB_WORMHOLE : public Board {
 public:
-    WH_UBB() : Board(create_wh_ubb_ports_and_connections(), tt::umd::BoardType::UBB) {}
+    UBB_WORMHOLE() : Board(create_ubb_wormhole_ports_and_connections(), tt::umd::BoardType::UBB_WORMHOLE) {}
 
 private:
     static std::pair<
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
         std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
-    create_wh_ubb_ports_and_connections() {
-        auto ports = create_wh_ubb_ports();
+    create_ubb_wormhole_ports_and_connections() {
+        auto ports = create_ubb_wormhole_ports();
         auto internal_connections = create_internal_connections_from_ports(ports, PortType::TRACE);
         return {ports, internal_connections};
     }
-    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_wh_ubb_ports() {
+    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>
+    create_ubb_wormhole_ports() {
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
         // QSFP ports
@@ -366,21 +368,22 @@ private:
     }
 };
 
-// BH_UBB board class
-class BH_UBB : public Board {
+// UBB_BLACKHOLE board class
+class UBB_BLACKHOLE : public Board {
 public:
-    BH_UBB() : Board(create_bh_ubb_ports_and_connections(), tt::umd::BoardType::UBB) {}
+    UBB_BLACKHOLE() : Board(create_ubb_blackhole_ports_and_connections(), tt::umd::BoardType::UBB_BLACKHOLE) {}
 
 private:
     static std::pair<
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
         std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
-    create_bh_ubb_ports_and_connections() {
-        auto ports = create_bh_ubb_ports();
+    create_ubb_blackhole_ports_and_connections() {
+        auto ports = create_ubb_blackhole_ports();
         auto internal_connections = create_internal_connections_from_ports(ports, PortType::TRACE);
         return {ports, internal_connections};
     }
-    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_bh_ubb_ports() {
+    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>
+    create_ubb_blackhole_ports() {
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
         // QSFP ports
@@ -400,6 +403,7 @@ private:
         add_port(ports, PortType::QSFP, PortId(14), {{7, ChanId(9)}, {8, ChanId(9)}});  // ASIC 7,8: channel 9
 
         // NOTE: These Linking Board connections are not finalized yet.
+        log_warning(tt::LogDistributed, "UBB_BLACKHOLE: Linking Board connections are not finalized yet.");
 
         // LINKING_BOARD_1 ports
         add_sequential_port(ports, PortType::LINKING_BOARD_1, PortId(1), 5, 6, 7);  // ASIC 5, channels 6,7
@@ -443,13 +447,11 @@ private:
 Board create_board(tt::umd::BoardType board_type) {
     switch (board_type) {
         case BoardType::N300: return N300();
-        case BoardType::UBB: return WH_UBB();
+        case BoardType::UBB_WORMHOLE: return UBB_WORMHOLE();
         case BoardType::P300: return P300();
         case BoardType::P150: return P150();
         case BoardType::N150: return N150();
-        // TODO: Uncomment this once BH_UBB is finalized and has an enum value in BoardType
-        // case BoardType::BH_UBB:
-        //     return BH_UBB();
+        case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
         default: throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
     }
 }
