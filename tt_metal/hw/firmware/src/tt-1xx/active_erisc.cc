@@ -24,6 +24,7 @@
 #include "dev_mem_map.h"
 #include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 #include "eth_fw_api.h"
+#include "erisc.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -78,27 +79,11 @@ inline void run_subordinate_eriscs(uint32_t enables) {
     }
 }
 
-inline void apply_tweaks() {
-    // #18384: This register was left dirty by eth training.
-    // It is not used in dataflow api, so it can be set to 0
-    // one time here instead of setting it each time in dataflow_api.
-    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-}
-
-inline void service_base_fw() {
-    // Base fw only uses noc0. Only do the reinit for noc0
-    ncrisc_noc_full_sync<1>();
-    service_eth_msg();
-    update_boot_results_eth_link_status_check();
-    noc_init<1>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    ncrisc_noc_counters_init<1>();
-    apply_tweaks();
-}
-
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
+        internal_::risc_context_switch();
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }
@@ -119,6 +104,9 @@ void __attribute__((noinline)) Application(void) {
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
+    disable_interrupts();
+    update_next_link_status_check_timestamp();
+
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -134,7 +122,6 @@ void __attribute__((noinline)) Application(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
-    apply_tweaks();
     ncrisc_noc_full_sync();
 
     deassert_all_reset();
@@ -153,7 +140,7 @@ void __attribute__((noinline)) Application(void) {
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
-            lite_fabric::service_lite_fabric_channels();
+
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
@@ -169,7 +156,7 @@ void __attribute__((noinline)) Application(void) {
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
             } else {
-                service_base_fw();
+                internal_::risc_context_switch();
             }
         }
         WAYPOINT("GD");
@@ -188,7 +175,6 @@ void __attribute__((noinline)) Application(void) {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            apply_tweaks();
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
 
