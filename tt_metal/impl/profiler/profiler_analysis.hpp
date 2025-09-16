@@ -5,9 +5,7 @@
 #pragma once
 
 #include <unordered_map>
-#include <array>
 #include <unordered_set>
-#include <set>
 #include <vector>
 #include <string>
 #include <nlohmann/json.hpp>
@@ -36,27 +34,22 @@ constexpr AnalysisMarkerType AnalysisMarkerTypeAny = AnalysisMarkerType::ZONE_ST
 
 using AnalysisMarkerNameKeywords = std::unordered_set<tracy::MarkerDetails::MarkerNameKeyword>;
 
-// struct AnalysisResultConfig {
-//     AnalysisResultType result_type;
-//     std::vector<std::string> header_names;
-// };
-
-// struct DurationAnalysisResultConfig : public AnalysisResultConfig {
-//     static constexpr AnalysisResultType result_type = AnalysisResultType::DURATION;
-//     std::string start_timestamp_header;
-//     std::string end_timestamp_header;
-//     std::string duration_header;
-// };
-
+struct AnalysisResultsConfig {
+    std::string analysis_name{};
+    bool display_start_and_end_timestamps = false;
+    std::optional<std::string> start_timestamp_header = std::nullopt;
+    std::optional<std::string> end_timestamp_header = std::nullopt;
+};
 struct AnalysisResults {
     struct RuntimeIdMetaData {
         chip_id_t device_id;
         std::string op_name;
     };
 
+    AnalysisResultsConfig results_config;
+
     virtual ~AnalysisResults() = default;
 
-    virtual uint32_t getNumFieldsPerResult() const = 0;
     virtual std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const = 0;
 
     std::unordered_set<uint64_t> getRuntimeIds() const { return runtime_ids; }
@@ -64,6 +57,18 @@ struct AnalysisResults {
     RuntimeIdMetaData getMetaDataForRuntimeId(uint64_t runtime_id) const {
         TT_ASSERT(runtime_id_to_meta_data.find(runtime_id) != runtime_id_to_meta_data.end());
         return runtime_id_to_meta_data.at(runtime_id);
+    }
+
+    std::string getStringifiedHeaders() const {
+        std::string headers;
+        if (results_config.display_start_and_end_timestamps) {
+            TT_FATAL(results_config.start_timestamp_header.has_value(), "Start timestamp header is not set");
+            TT_FATAL(results_config.end_timestamp_header.has_value(), "End timestamp header is not set");
+            headers +=
+                results_config.start_timestamp_header.value() + "," + results_config.end_timestamp_header.value() + ",";
+        }
+        headers += results_config.analysis_name;
+        return headers;
     }
 
 protected:
@@ -80,13 +85,21 @@ struct DurationAnalysisResults : public AnalysisResults {
         uint64_t duration = 0;
     };
 
-    uint32_t getNumFieldsPerResult() const override { return 3; }
-
     std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const override {
-        TT_ASSERT(results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end());
-        return std::to_string(results_per_runtime_id.at(runtime_id).start_timestamp) + "," +
-               std::to_string(results_per_runtime_id.at(runtime_id).end_timestamp) + "," +
-               std::to_string(results_per_runtime_id.at(runtime_id).duration);
+        // TT_ASSERT(results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end());
+        std::string results;
+        if (results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end()) {
+            if (results_config.display_start_and_end_timestamps) {
+                results += std::to_string(results_per_runtime_id.at(runtime_id).start_timestamp) + "," +
+                           std::to_string(results_per_runtime_id.at(runtime_id).end_timestamp) + ",";
+            }
+            results += std::to_string(results_per_runtime_id.at(runtime_id).duration);
+        } else {
+            if (results_config.display_start_and_end_timestamps) {
+                results += ",,";
+            }
+        }
+        return results;
     }
 
     void addResultsForRuntimeId(uint64_t runtime_id, const SingleResult& result) {
@@ -104,44 +117,26 @@ private:
 };
 
 struct AnalysisStartEndConfig {
-    AnalysisRisc risc;
-    AnalysisMarkerType marker_type;
-    AnalysisMarkerNameKeywords marker_name_keywords;
-};
-
-struct AnalysisResultsDisplayConfig {
-    std::string analysis_name;
-    bool display_start_and_end_timestamps;
-    std::optional<std::string> start_timestamp_header;
-    std::optional<std::string> end_timestamp_header;
+    AnalysisRisc risc = AnalysisRiscAny;
+    AnalysisMarkerType marker_type = AnalysisMarkerTypeAny;
+    AnalysisMarkerNameKeywords marker_name_keywords{};
 };
 
 struct AnalysisConfig {
-    AnalysisType type;
-    AnalysisDimension dimension;
-    std::string analysis_name;
-    AnalysisStartEndConfig start_config;
-    AnalysisStartEndConfig end_config;
+    AnalysisType type = AnalysisType::OP_FIRST_TO_LAST_MARKER;
+    AnalysisDimension dimension = AnalysisDimension::OP;
+    AnalysisResultsConfig results_config{};
+    AnalysisStartEndConfig start_config{};
+    AnalysisStartEndConfig end_config{};
 };
-
-// renaming headers could break other scripts
-// look at process_ops_logs.py to see how to name headers
-// have option to either autogen headers or manually specify headers
-// std::vector<std::string> get_headers_for_analysis_config(const AnalysisConfig& analysis_config);
-
-// rename to parse_time_series_data_points
-// convert second arg to class/struct with vector as part of it
-// with struct/class, we can have caching
-// look into sorting beforehand to avoid doing linear traversal
 
 std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
 
 void writeAnalysisResultsToCSV(
-    const std::vector<const AnalysisResults*>& analysis_results,
-    const std::vector<std::vector<std::string>>& header_names);
-
+    const std::vector<std::unique_ptr<const AnalysisResults>>& analysis_results,
+    const std::filesystem::path& report_path);
 }  // namespace tt_metal
 
 }  // namespace tt
