@@ -157,6 +157,9 @@ for (uint32_t i = 0; i < num_shards; ++i) {
 ### Note on Padding ⚠️
 In case the tensor shape is not divisible by the shard shape, the tensor shape is padded. The Shard Pages iterator iterates over **logical** pages, so padded pages are ignored. This also means two `shard_pages()` calls with the same offsets can have different sizes if they are created for different shards.
 
+### Advanced Usage 🔧
+Like with a Page Accessor, you can iterate over pages with a positive step > 1.
+
 ## When Should You Use Each Iterator? 🤔
 
 The regular (non-shard) pages iterator is a generic abstraction for iterating over pages on any kind of tensor.
@@ -261,7 +264,7 @@ To achieve this, we need to iterate over pages inside the local shard (i.e., the
 - On the [device side](https://github.com/tenstorrent/tt-metal/blob/fb3b1e24b601fe1a6cd712b92388b4ece46bc72d/tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp), we iterate over local shards and then use the shard iterator to iterate over all the pages inside a given shard.
 
 <details>
-<summary>Kernel code</summary>
+<summary>Kernel code:</summary>
 
 ```C++
 void kernel_main() {
