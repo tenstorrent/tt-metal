@@ -466,7 +466,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_host(
     auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
         write_cmd->write_linear_host.is_event = is_event;
-        // This padding value is checked on the host side for eveent commands.
+        // This padding value is checked on the host side for event commands.
         write_cmd->write_linear_host.pad1 = pad1;
         write_cmd->write_linear_host.pad2 = DeviceCommand::random_padding_value();
         write_cmd->write_linear_host.length =
