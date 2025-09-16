@@ -40,8 +40,10 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         #  SDXL VAE
         (1, 128, 1024, 1024, 32, 32, 8, 8),
+        (1, 128, 512, 512, 32, 8, 8, 8),
         (1, 256, 1024, 1024, 32, 48, 8, 8),
         (1, 256, 515, 512, 32, 12, 8, 8),
+        (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 512, 512, 32, 12, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
         # SDXL Refiner
