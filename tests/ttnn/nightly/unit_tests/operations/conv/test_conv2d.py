@@ -4775,11 +4775,10 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
     ]
 )
 @pytest.mark.parametrize("has_bias", [True])
-@pytest.mark.parametrize("enable_split_reader", [True])
 @pytest.mark.parametrize("act_db", [True])
 @pytest.mark.parametrize("w_db", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_conv_1kX1k(
+def test_conv2d_1kX1k(
     device,
     torch_tensor_map,
     batch,
@@ -4800,7 +4799,6 @@ def test_conv_1kX1k(
     output_layout,
     slice_type,
     has_bias,
-    enable_split_reader,
     act_db,
     w_db,
 ):
@@ -4841,7 +4839,6 @@ def test_conv_1kX1k(
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
         input_layout=input_layout,
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
