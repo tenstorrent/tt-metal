@@ -329,7 +329,6 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #if defined(DYNAMIC_ROUTING_ENABLED)
     // Unimplemented for dynamic 2D
 #else
-    // Low-latency and hybrid share the same behavior
     static_assert(
         my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST ||
         my_direction == eth_chan_directions::NORTH || my_direction == eth_chan_directions::SOUTH);

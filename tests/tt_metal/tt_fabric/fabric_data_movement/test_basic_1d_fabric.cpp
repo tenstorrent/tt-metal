@@ -449,6 +449,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    fprintf(stderr, "Fabric config %d\n", static_cast<int>(fabric_config));
 
     // common compile time args for sender and receiver
     // Note: see run_unicast_dw_chips() for DRAM coverage

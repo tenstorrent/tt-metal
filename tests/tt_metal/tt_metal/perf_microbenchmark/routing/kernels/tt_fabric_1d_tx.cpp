@@ -86,8 +86,7 @@ inline void setup_header_routing_2d(
             fabric_set_unicast_route(
                 (HybridMeshPacketHeader*)packet_header,
                 my_dev_id,
-                // my_mesh_id,
-                0,  // TODO: inter-mesh support
+                dst_mesh_id,  // my_mesh_id, TODO: inter-mesh support
                 dst_dev_id,
                 dst_mesh_id,
                 ew_dim);
