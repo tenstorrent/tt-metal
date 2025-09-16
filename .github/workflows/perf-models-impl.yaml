@@ -47,6 +47,11 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
+        -e PYTHONNOUSERSITE=1
+        -e PIP_DISABLE_PIP_VERSION_CHECK=1
+        -e PIP_ROOT_USER_ACTION=ignore
+        -e XDG_CACHE_HOME=/root/.cache
+        -e PIP_CACHE_DIR=/root/.cache/pip
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
