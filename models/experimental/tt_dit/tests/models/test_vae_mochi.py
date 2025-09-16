@@ -288,6 +288,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
     tt_output = tt_model(tt_input)
+    logger.info("End TtResBlock forward")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
@@ -310,6 +311,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     logger.info("Run RefResBlock forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
+    logger.info("End RefResBlock forward")
 
     logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.999)
