@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      gtest_filter:
+        required: false
+        default: "*"
+        type: string
+        description: "Filter for gtest"
 
 jobs:
   models:
