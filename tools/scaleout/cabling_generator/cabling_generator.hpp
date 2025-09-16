@@ -95,7 +95,7 @@ struct ResolvedGraphInstance {
 
 enum class CableLength { CABLE_0P5, CABLE_1, CABLE_2P5, CABLE_3, CABLE_5, UNKNOWN };
 
-CableLength calc_cable_length(Host host1, Host host2);
+CableLength calc_cable_length(const Host& host1, const Host& host2);
 
 class CablingGenerator {
 public:

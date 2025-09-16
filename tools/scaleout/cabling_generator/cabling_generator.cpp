@@ -690,7 +690,7 @@ void CablingGenerator::get_all_connections_of_type(
     }
 }
 
-CableLength calc_cable_length(Host host1, Host host2) {
+CableLength calc_cable_length(const Host& host1, const Host& host2) {
     if (host1.hall != host2.hall) {
         return CableLength::UNKNOWN;
     } else if (host1.aisle != host2.aisle) {
