@@ -9,7 +9,7 @@ def _tensor_info(obj):
         return {
             "shape": list(obj.shape),
             "dtype": str(obj.dtype),
-            "min_max": [(obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0)],
+            "min_max": (obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0),
         }
     elif isinstance(obj, (list, tuple)):
         return [_tensor_info(x) for x in obj]
