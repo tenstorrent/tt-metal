@@ -876,7 +876,7 @@ void bind_unary_rdiv(
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
-    const std::string parameter_b_value,
+    const std::string& parameter_b_value,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -936,7 +936,7 @@ void bind_unary_rdiv(
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) {

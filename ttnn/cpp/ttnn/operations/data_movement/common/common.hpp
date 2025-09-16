@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <utility>
+
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
@@ -32,10 +34,10 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     uint32_t num_cores,
     int index,
     bool is_read,
-    std::map<uint32_t, std::array<float, 2>> l1_local_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
-    std::map<uint32_t, std::array<float, 2>> dram_bw);
+    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw);
 int common_tm_bw_model(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -94,7 +96,7 @@ public:
     using PostTransformFunc = std::function<OpOutputType(const OpOutputType&)>;
     using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
-    MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...> params) :
+    MassagedOperation(const MassagedOperationParams<OpOutputType, OpInputTypes...>& params) :
         predicate_(params.predicate),
         pre_transform_(params.pre_transform),
         post_transform_(params.post_transform),
@@ -104,7 +106,7 @@ public:
 
     inline OwnedArgsType pre_format(OpInputTypes... args) const { return pre_transform_(args...); }
 
-    inline OpOutputType post_format(OpOutputType output) const { return post_transform_(output); }
+    inline OpOutputType post_format(const OpOutputType& output) const { return post_transform_(output); }
 
     inline OpOutputType operator()(OpInputTypes... args) const {
         if (should_format(args...)) {
@@ -183,7 +185,7 @@ public:
     OpType get_operation() const { return operation_; }
 
     // setters for all private members
-    void set_predicate(PredicateFunc predicate) { predicate_ = predicate; }
+    void set_predicate(PredicateFunc predicate) { predicate_ = std::move(predicate); }
     void set_pre_transform(PreTransformFunc pre_transform) { pre_transform_ = pre_transform; }
     void set_post_transform(PostTransformFunc post_transform) { post_transform_ = post_transform; }
     void set_operation(OpType operation) { operation_ = operation; }

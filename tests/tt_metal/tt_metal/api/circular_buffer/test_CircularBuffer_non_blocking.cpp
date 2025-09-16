@@ -25,7 +25,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -42,7 +42,7 @@ constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
 std::vector<std::shared_ptr<Buffer>> create_output_buffers(
-    distributed::MeshWorkload& workload, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto device = mesh_device->get_devices()[0];

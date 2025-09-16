@@ -8,10 +8,10 @@ from loguru import logger
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
 from models.demos.vanilla_unet.reference.unet import UNet
 from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

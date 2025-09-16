@@ -67,7 +67,7 @@ struct ConvTranpose2dOperation {
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
         const std::optional<const DataType>& dtype = std::nullopt,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,

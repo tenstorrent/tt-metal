@@ -31,8 +31,8 @@
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
@@ -51,12 +51,12 @@
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "get_platform_architecture.hpp"
 
 namespace tt {
 
@@ -353,6 +353,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
         &regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+std::string get_physical_architecture_name() {
+    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -848,7 +852,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
-        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
@@ -859,11 +862,15 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
                             const auto& rt_args = kernel->runtime_args(logical_core);
-                            auto dispatch_class = kernel->dispatch_class();
 
+                            // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.
+                            uint32_t processor_index = hal.get_processor_index(
+                                kernel->get_kernel_programmable_core_type(),
+                                kernel->get_kernel_processor_class(),
+                                kernel->get_kernel_processor_type(0));
+                            const auto& rta_offset = kg->launch_msg.kernel_config.rta_offset[processor_index];
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base +
-                                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -880,9 +887,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
-                                auto common_rt_args_addr =
-                                    kernel_config_base +
-                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset;
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
