@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+from pathlib import Path
 
 BIN = "build/test/tt_metal/tt_fabric/bench_unicast"
 SRC = "0:0"
@@ -10,7 +11,8 @@ DST = "0:1"
 PAGE = "2048"
 ITERS = "5"
 WARMUP = "1"
-CSV = "artifacts/unicast_sweep.csv"
+CSV = Path("artifacts/unicast_sweep.csv")
+CSV.parent.mkdir(parents=True, exist_ok=True)
 
 sizes = [65536, 131072, 262144, 524288]  # bytes
 recv_cores = [(0, 0), (1, 0), (2, 0)]  # x,y list
@@ -38,7 +40,7 @@ for size in sizes:
             "--format",
             "csv",
             "--csv",
-            CSV,
+            str(CSV),
         ]
         print(">>", " ".join(cmd))
         subprocess.run(cmd, check=True)
