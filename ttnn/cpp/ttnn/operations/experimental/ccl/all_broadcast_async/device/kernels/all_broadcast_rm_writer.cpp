@@ -82,11 +82,11 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
     size_t fab_idx = arg_for_fab + rt_increment;
-    open_connections(fabric_connection, data_route_id, fab_idx);
+    open_connections(fabric_connection, num_connections, fab_idx);
 #else
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
-    open_connections(fabric_connection, data_route_id, arg_for_fab);
+    open_connections(fabric_connection, num_connections, arg_for_fab);
 #endif
     uint8_t starts[] = {
         static_cast<uint8_t>(forward_multicast_route_info.start_distance_in_hops),
