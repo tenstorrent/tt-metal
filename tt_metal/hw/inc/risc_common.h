@@ -210,7 +210,7 @@ inline __attribute__((always_inline)) void flush_erisc_icache() {
 // Zero a buffer in L1 memory
 void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     for (uint32_t i = 0; i < size_bytes / 4; i++) {
-        buf[i] = 0;
+        buf[i] = 0xdeadbeef;
     }
 }
 

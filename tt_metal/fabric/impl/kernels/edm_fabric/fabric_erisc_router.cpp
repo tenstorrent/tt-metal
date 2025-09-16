@@ -355,6 +355,8 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #endif
 }
 
+static uint8_t cnt_send = 0;
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -383,6 +385,26 @@ FORCE_INLINE void send_next_data(
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
     }
+    cnt_send++;
+    WATCHER_RING_BUFFER_PUSH(0x55500000 | cnt_send);
+    bool is_valid_packet = payload_size_bytes - sizeof(PACKET_HEADER_TYPE) > 0 ||
+                           pkt_header->noc_send_type == NOC_UNICAST_INLINE_WRITE ||
+                           pkt_header->noc_send_type == NOC_UNICAST_ATOMIC_INC;
+    if (!is_valid_packet) {
+        WATCHER_RING_BUFFER_PUSH((uint32_t)pkt_header);
+        WATCHER_RING_BUFFER_PUSH(payload_size_bytes);
+        WATCHER_RING_BUFFER_PUSH(pkt_header->noc_send_type);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[0]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[1]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[2]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[3]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[4]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[5]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[6]);
+        WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(pkt_header)[7]);
+        WATCHER_RING_BUFFER_PUSH(SENDER_NUM_BUFFERS);
+    }
+    ASSERT(is_valid_packet);
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
@@ -741,6 +763,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     return ret_val;
 }
 
+static uint8_t cnt = 0;
+
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
@@ -755,6 +779,8 @@ FORCE_INLINE void receiver_forward_packet(
 #else
         false;
 #endif
+    cnt++;
+    static_assert(FORCE_ALL_PATHS_TO_USE_SAME_NOC, "FORCE_ALL_PATHS_TO_USE_SAME_NOC must be true");
     invalidate_l1_cache();  // Make sure we have the latest packet header in L1
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
@@ -797,6 +823,12 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             default: {
+                WATCHER_RING_BUFFER_PUSH(cnt);
+                WATCHER_RING_BUFFER_PUSH(routing);
+                WATCHER_RING_BUFFER_PUSH(payload_size_bytes);
+                for (size_t i = 0; i < 4000000000; i++) {
+                    asm volatile("nop");
+                }
                 ASSERT(false);
             }
         }
@@ -1523,6 +1555,14 @@ FORCE_INLINE void establish_edm_connection(
     local_sender_channel_worker_interface.cache_producer_noc_addr();
 }
 
+#ifdef ARCH_BLACKHOLE
+// A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
+// A more detailed description can be found in `noc_inline_dw_write` in the `dataflow_api` header file
+constexpr bool use_posted_writes_for_credit_updates = false;
+#else
+constexpr bool use_posted_writes_for_credit_updates = true;
+#endif
+
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1593,9 +1633,9 @@ void run_sender_channel_step_impl(
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-                local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
-                        completions_since_last_check);
+                local_sender_channel_worker_interface.template update_persistent_connection_copy_of_free_slots<
+                    enable_deadlock_avoidance,
+                    use_posted_writes_for_credit_updates>(completions_since_last_check);
             } else {
                 // Connection liveness checks are only done for connections that are not persistent
                 // For those connections, it's unsafe to use free-slots counters held in stream registers
@@ -1603,7 +1643,8 @@ void run_sender_channel_step_impl(
                 // instead because these connections will be read/write counter based instead
                 local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<use_posted_writes_for_credit_updates>();
                 } else {
                     local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
                     // If not connected, we update the read counter in L1 as well so the next connecting worker

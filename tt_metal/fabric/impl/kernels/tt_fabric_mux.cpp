@@ -12,6 +12,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
+#include "debug/ring_buffer.h"
+
 #include <cstddef>
 #include <array>
 // clang-format on
@@ -88,6 +90,15 @@ void setup_channel(
     channel_connection_established = false;
 }
 
+constexpr bool posted_credit_write =
+#ifdef ARCH_BLACKHOLE
+    false;
+#else
+    true;
+#endif
+
+static size_t num_writes = 0;
+
 template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
@@ -107,10 +118,28 @@ void forward_data(
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
+        invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
-
+        reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 0] =
+            0xdeadbeef;
+        reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 1] =
+            fabric_connection.buffer_slot_write_counter.counter;
+        reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 2] =
+            fabric_connection.buffer_slot_write_counter.counter;
+        // WATCHER_RING_BUFFER_PUSH(0xdead0000 | (fabric_connection.edm_noc_x << 8) | fabric_connection.edm_noc_y);
+        WATCHER_RING_BUFFER_PUSH(
+            fabric_connection.edm_noc_x << 24 | (uint32_t)fabric_connection.compute_dest_buffer_slot_noc_addr());
         fabric_connection.wait_for_empty_write_slot();
-
+        // WATCHER_RING_BUFFER_PUSH((uint32_t)((uint32_t)fabric_connection.buffer_slot_write_counter.counter << 16) |
+        // (uint32_t)(*fabric_connection.edm_buffer_local_free_slots_read_ptr));
+        // WATCHER_RING_BUFFER_PUSH(fabric_connection.worker_credits_stream_id);
+        // WATCHER_RING_BUFFER_PUSH(fabric_connection.num_buffers_per_channel);
+        // WATCHER_RING_BUFFER_PUSH((packet_header->payload_size_bytes << 16) | (packet_header->noc_send_type << 8) |
+        // num_writes++); WATCHER_RING_BUFFER_PUSH(fabric_connection.compute_dest_buffer_slot_noc_addr());
+        bool is_valid_packet = packet_header->payload_size_bytes - sizeof(PACKET_HEADER_TYPE) > 0 ||
+                               packet_header->noc_send_type == NOC_UNICAST_INLINE_WRITE ||
+                               packet_header->noc_send_type == NOC_UNICAST_ATOMIC_INC;
+        ASSERT(is_valid_packet);
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
@@ -120,15 +149,17 @@ void forward_data(
         // not handling/processing acks for now, re-evaluate if needed
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
+        // WATCHER_RING_BUFFER_PUSH(0xc0ffee);
         noc_async_writes_flushed();
         if (is_persistent_channel) {
             constexpr bool enable_deadlock_avoidance = true;  // not used
-            worker_interface.template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(1);
+            worker_interface.template update_persistent_connection_copy_of_free_slots<
+                enable_deadlock_avoidance,
+                posted_credit_write>(1);
         } else if (channel_connection_established) {
-            worker_interface.notify_worker_of_read_counter_update();
+            worker_interface.template notify_worker_of_read_counter_update<posted_credit_write>();
         }
     }
-
     if (!is_persistent_channel) {
         tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
@@ -148,6 +179,7 @@ void kernel_main() {
         auto size = get_arg_val<uint32_t>(rt_args_idx++);
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
+    WATCHER_RING_BUFFER_PUSH(0x1);
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
@@ -180,6 +212,10 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
+    THERE IS A PROBLEM WITH CONNECTION LIVE SEMAPHORE OVERLAPPING WITH THE ZERO_L1_BUF
+        REGION.For some reason this causes issues.
+
+        WATCHER_RING_BUFFER_PUSH(0x2);
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
@@ -193,8 +229,10 @@ void kernel_main() {
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]},
             is_persistent_channels[i]);
+        ASSERT(full_size_channel_worker_interfaces[i].connection_live_semaphore)
     }
 
+    WATCHER_RING_BUFFER_PUSH(0x3);
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
             &header_only_channels[i],
@@ -213,6 +251,9 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
+    WATCHER_RING_BUFFER_PUSH(fabric_connection.edm_noc_x);
+    WATCHER_RING_BUFFER_PUSH(fabric_connection.edm_noc_y);
+
     // wait for fabric router to be ready before setting up the connection
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_connection.edm_noc_x,
@@ -223,12 +264,14 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
+    WATCHER_RING_BUFFER_PUSH(0x4);
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         if (is_persistent_channels[i]) {
             wait_for_static_connection_to_ready<NUM_BUFFERS_FULL_SIZE_CHANNEL>(full_size_channel_worker_interfaces[i]);
         }
     }
 
+    WATCHER_RING_BUFFER_PUSH(0x5);
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
         if (is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]) {
             wait_for_static_connection_to_ready<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
@@ -236,6 +279,7 @@ void kernel_main() {
         }
     }
 
+    WATCHER_RING_BUFFER_PUSH(0x6);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
@@ -244,6 +288,7 @@ void kernel_main() {
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
+            WATCHER_RING_BUFFER_PUSH(0x7);
             bool all_channels_drained = true;
             for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                 all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
@@ -293,4 +338,6 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+
+    WATCHER_RING_BUFFER_PUSH(0x00ffff00);
 }

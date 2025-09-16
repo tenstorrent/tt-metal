@@ -256,7 +256,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     next_l1_addr += eth_channel_sync_size;
 
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    // bool use_txq1_for_receiver_acks = !requires_forced_assignment_to_noc1() &&
+    bool use_txq1_for_receiver_acks = tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE;
+    if (use_txq1_for_receiver_acks) {
         this->receiver_txq_id = 1;
     }
     this->num_riscv_cores = get_num_riscv_cores();

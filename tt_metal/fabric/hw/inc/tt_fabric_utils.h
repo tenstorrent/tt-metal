@@ -57,6 +57,15 @@ FORCE_INLINE void check_worker_connections(
         //
         // In such a case like that, we still want to formally teardown the connection to keep things clean
         uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
+        if (!((cached == tt::tt_fabric::connection_interface::open_connection_value ||
+               cached == tt::tt_fabric::connection_interface::close_connection_request_value ||
+               cached == tt::tt_fabric::connection_interface::unused_connection_value))) {
+            WATCHER_RING_BUFFER_PUSH(cached);
+        }
+        ASSERT(
+            cached == tt::tt_fabric::connection_interface::open_connection_value ||
+            cached == tt::tt_fabric::connection_interface::close_connection_request_value ||
+            cached == tt::tt_fabric::connection_interface::unused_connection_value);
         if (connect_is_requested(cached)) {
             channel_connection_established = true;
 
