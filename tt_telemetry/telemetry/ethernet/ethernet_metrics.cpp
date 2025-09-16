@@ -6,6 +6,36 @@
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <chrono>
 
+/**************************************************************************************************
+ Metric Creation
+**************************************************************************************************/
+
+// Creates Ethernet metrics with contiguous IDs and returns the next free ID value
+size_t create_ethernet_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    size_t start_id,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) {
+    size_t id = start_id;
+    for (const auto& [chip_id, endpoints] : get_ethernet_endpoints_by_chip(cluster)) {
+        for (const auto& endpoint : endpoints) {
+            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint, hal));
+            uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(id++, endpoint, cluster, hal));
+            if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
+                // These are available only on Wormhole
+                uint_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(id++, endpoint, cluster, hal));
+                uint_metrics.push_back(
+                    std::make_unique<EthernetCorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
+                uint_metrics.push_back(
+                    std::make_unique<EthernetUncorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
+            }
+        }
+    }
+    log_info(tt::LogAlways, "Created Ethernet metrics");
+    return id;
+}
 
 /**************************************************************************************************
  EthernetEndpointUpMetric

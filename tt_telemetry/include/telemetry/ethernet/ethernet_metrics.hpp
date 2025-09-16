@@ -100,3 +100,11 @@ private:
     std::optional<tt::umd::CoreCoord> ethernet_core_;
     uint32_t uncorr_addr_;
 };
+
+size_t create_ethernet_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    size_t start_id,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal);

@@ -14,6 +14,8 @@
 #include <memory>
 #include <string>
 
+#include <llrt/hal.hpp>
+
 #include <telemetry/metric.hpp>
 #include <telemetry/arc/arc_telemetry_reader.hpp>
 
@@ -87,3 +89,11 @@ private:
     double scale_factor_;  // Factor to scale raw telemetry value to double
     Signedness signedness_;  // Whether the value is signed or unsigned
 };
+
+size_t create_arc_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    size_t start_id,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal);
