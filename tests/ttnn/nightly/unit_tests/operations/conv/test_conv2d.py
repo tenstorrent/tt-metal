@@ -2828,6 +2828,7 @@ def test_shallow_conv_with_tiled_input(device):
         groups=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         return_output_dim=True,
+        slice_config=ttnn.Conv2dL1FullSliceConfig,
     )
 
     tt_output_tensor = ttnn.from_device(tt_out)
