@@ -338,7 +338,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 
     // this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
 
-    this->completion_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    this->prefetch_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
