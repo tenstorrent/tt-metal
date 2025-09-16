@@ -7,7 +7,6 @@ import ttnn
 
 from typing import Literal
 
-from ttnn.device import is_wormhole_b0
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -78,16 +77,13 @@ def create_unet_model_parameters(
 
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3["use_activation_double_buffer"] = True
-    parameters.c3["enable_activation_reuse"] = is_wormhole_b0(device)
     parameters.c3_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3_2["use_activation_double_buffer"] = True
 
     parameters.c4["conv_blocking_and_parallelization_config_override"] = None
     parameters.c4["use_activation_double_buffer"] = True
-    parameters.c4["enable_activation_reuse"] = is_wormhole_b0(device)
     parameters.c4_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c4_2["use_activation_double_buffer"] = True
-    parameters.c4_2["enable_activation_reuse"] = is_wormhole_b0(device)
 
     parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
     parameters.bnc["use_activation_double_buffer"] = False
