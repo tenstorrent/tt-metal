@@ -198,6 +198,10 @@ public:
         return cmd;
     }
 
+    // This value is random, but stable for the lifetime of the program. It is used to pad the command for event
+    // commands, so we can check the value on the host side.
+    static uint32_t random_padding_value();
+
 private:
     static bool zero_init_enable;
 

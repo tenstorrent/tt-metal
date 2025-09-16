@@ -181,6 +181,20 @@ void read_events_from_completion_queue(
         read_ptr,
         mmio_device_id,
         channel);
+
+    CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
+    uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
+
+    TT_FATAL(
+        dispatch_cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST && dispatch_cmd->write_linear_host.is_event &&
+            dispatch_cmd->write_linear_host.length == sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE &&
+            dispatch_cmd->write_linear_host.pad2 == expected_padding_value,
+        "Unexpected values for event in completion queue, got cmd id {}, is event {}, length {}, pad2 {} (expected {})",
+        dispatch_cmd->base.cmd_id,
+        dispatch_cmd->write_linear_host.is_event,
+        dispatch_cmd->write_linear_host.length,
+        dispatch_cmd->write_linear_host.pad2,
+        expected_padding_value);
     uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
 
     TT_FATAL(
