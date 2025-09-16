@@ -63,7 +63,7 @@ def main():
         attention_scores = query @ key
         attention_scores = attention_scores * (1 / (head_size**0.5))
         attention_scores += attention_mask
-        attention_probs = ttnn.softmax(attention_scores, dim=-1)
+        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False)
 
         context_layer = attention_probs @ value
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))

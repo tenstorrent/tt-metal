@@ -156,7 +156,7 @@ void bind_normalization_softmax_operation(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("numeric_stable").noconvert() = false,
+            py::arg("numeric_stable").noconvert() = true,
             py::arg("queue_id") = DefaultQueueId});
 }
 
@@ -263,7 +263,7 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("is_causal_mask") = false,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
+            py::arg("numeric_stable") = true,
             py::arg("queue_id") = DefaultQueueId});
 }
 
@@ -347,7 +347,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
             py::kw_only(),
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
+            py::arg("numeric_stable") = true,
             py::arg("queue_id") = 0});
 }
 
@@ -491,6 +491,8 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("is_causal_mask") = false,
             py::arg("compute_kernel_config") = std::nullopt,
+            // TODO: switch the default value to 'true' once model accuracy is fixed
+            // See issue #28531
             py::arg("numeric_stable") = false,
             py::arg("queue_id") = 0});
 }
@@ -614,6 +616,8 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
             py::kw_only(),
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("compute_kernel_config") = std::nullopt,
+            // TODO: switch the default value to 'true' once model accuracy is fixed
+            // See issue #28531
             py::arg("numeric_stable") = false,
             py::arg("queue_id") = 0});
 }
