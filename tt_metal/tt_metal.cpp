@@ -1079,7 +1079,8 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
     // Due to conflict with eth fw using noc0, ensure each risc only uses their own noc
-    if (config.eth_mode != Eth::IDLE && !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
+        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
         TT_FATAL(
             static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
             "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
