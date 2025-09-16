@@ -161,8 +161,6 @@ Checks: >
   -performance-faster-string-find,
   -performance-inefficient-string-concatenation,
   -performance-no-int-to-ptr,
-  -performance-noexcept-move-constructor,
-  -performance-noexcept-swap,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
   -readability-avoid-nested-conditional-operator,
