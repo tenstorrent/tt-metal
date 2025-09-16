@@ -112,19 +112,32 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             import urllib.parse
 
             filename = self.path[len("/traces/") :]
+            # Remove query string if present
+            filename = filename.split("?", 1)[0]
             filename = urllib.parse.unquote(filename)
+            print(f"[DEBUG] /traces/ raw filename: {repr(filename)}")
+            file_path = os.path.join(traces_dir, filename)
+            print(f"[DEBUG] /traces/ resolved file_path: '{file_path}'")
+            # List directory contents for debugging
+            try:
+                dir_listing = os.listdir(traces_dir)
+                print(f"[DEBUG] /traces/ directory listing: {dir_listing}")
+            except Exception as e:
+                print(f"[DEBUG] /traces/ could not list directory: {e}")
             # Only allow .tracy files, no path traversal
             if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+                print(f"[DEBUG] /traces/ rejected filename: '{filename}'")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
-            file_path = os.path.join(traces_dir, filename)
             if not os.path.isfile(file_path):
+                print(f"[DEBUG] /traces/ file not found: '{file_path}'")
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"File not found")
                 return
+            print(f"[DEBUG] /traces/ serving file: '{file_path}'")
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename={filename}")
