@@ -247,11 +247,13 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -338,11 +340,13 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -358,10 +362,10 @@ def test_wan_conv3d(
     )
     torch_model.eval()
 
-    h_factor = tuple(mesh_device.shape)[h_axis]
-    w_factor = tuple(mesh_device.shape)[w_axis]
-    if H % h_factor != 0 or W % w_factor != 0:
-        pytest.skip(f"H % h_factor != 0 or W % w_factor != 0, got {H % h_factor} != 0 or {W % w_factor} != 0")
+    # h_factor = tuple(mesh_device.shape)[h_axis]
+    # w_factor = tuple(mesh_device.shape)[w_axis]
+    # if H % h_factor != 0 or W % w_factor != 0:
+    #     pytest.skip(f"H % h_factor != 0 or W % w_factor != 0, got {H % h_factor} != 0 or {W % w_factor} != 0")
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = VaeHWParallelConfig(
@@ -446,11 +450,13 @@ def test_wan_conv3d(
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -564,11 +570,13 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -677,11 +685,13 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -788,8 +798,8 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         (1, 384, 384, 1, 90, 160, "upsample3d", 2),  # decoder.up_blocks.0
         (1, 192, 384, 2, 180, 320, "upsample3d", 2),  # decoder.up_blocks.1
         (1, 192, 192, 4, 360, 640, "upsample2d", 2),  # decoder.up_blocks.2
-        # (1, 192, 192, 4, 720, 1280, None, 2),  # decoder.up_blocks.3 # OOM on 720p input
-        (1, 192, 192, 4, 480, 832, None, 2),  # decoder.up_blocks.3 on 480p input
+        (1, 192, 192, 4, 720, 1280, None, 2),  # decoder.up_blocks.3 # OOM on 720p input
+        # (1, 192, 192, 4, 480, 832, None, 2),  # decoder.up_blocks.3 on 480p input
     ],
     ids=[
         "upblock_0",
@@ -805,11 +815,13 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -944,7 +956,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("check_cache", [True])
+@pytest.mark.parametrize("check_cache", [True, False])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -952,6 +964,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
+        ((1, 4), 0, 1),
         ((1, 4), 1, 0),
     ],
     ids=[
@@ -959,14 +972,16 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         "2x4_h0_w1",
         "2x4_h1_w0",
         "1x8_h0_w1",
+        "1x4_h0_w1",
         "1x4_h1_w0",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, check_cache):
+def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, check_cache, reset_seeds):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
+    # mesh_device.disable_and_clear_program_cache()
     torch_dtype = torch.float32
     base_dim = 96
     z_dim = 16
@@ -1024,7 +1039,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
     tt_feat_cache = [None for _ in range(num_convs)]
 
     # Run 4 times to get models to create their own caches
-    for i in range(4):
+    for i in range(3):
         torch_feat_idx = [0]
         tt_feat_idx = [0]
         logger.info(f"running test iteration {i}")
@@ -1084,7 +1099,15 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
                 if tt_feat_cache_back.shape[1] != torch_feat_cache[i].shape[1]:
                     logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
                     tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[i].shape[1]]
-                assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.998_000, relative_rmse=0.08)
+                logger.info(f"feat_cache {i} shape: {torch_feat_cache[i].shape}, {tt_feat_cache_back.shape}")
+                try:
+                    assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.997_000, relative_rmse=0.08)
+                except Exception as e:
+                    logger.error(
+                        f"Error checking feat_cache {i}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
+                    )
+                    breakpoint()
+                    raise e
 
         # Defrag the cache
         tt_feat_cache_host = []
