@@ -933,12 +933,9 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            # breakpoint()
             persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
                 self.reduce_scatter_buffer_idx[cluster_axis]
             ]
-            # breakpoint()
-
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,
@@ -952,7 +949,6 @@ class TT_CCL:
                 topology=self.model_config["CCL_TOPOLOGY"],
                 use_noc1_only=use_noc1_only,
             )
-            # breakpoint()
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (
                 self.reduce_scatter_buffer_idx[cluster_axis] + 1

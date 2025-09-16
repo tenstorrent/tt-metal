@@ -958,6 +958,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
+            # wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
             self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
                 n=wo_shape_ring[1],
