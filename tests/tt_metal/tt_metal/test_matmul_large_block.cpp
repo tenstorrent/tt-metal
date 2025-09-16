@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
     pass &= mesh_device->close();
 
     if (pass) {
-        log_info(LogTest, "skibidi Test Passed");
+        log_info(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }
