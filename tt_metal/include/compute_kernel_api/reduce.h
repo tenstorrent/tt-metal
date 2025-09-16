@@ -15,6 +15,22 @@
 
 namespace ckernel {
 
+/**
+ * Populates the first tile of the destination register with ones.
+ *
+ * This function fills the first 32x32 tile in the destination register with 1.0 values
+ * in 16-bit floating point format. Uses SFPU operations with ADDR_MOD_1 addressing.
+ *
+ * Prerequisites:
+ * - Destination register must be properly configured for 16-bit mode
+ * - ADDR_MOD_1 should be set up with appropriate increment values
+ * - SFPU must be available and initialized
+ *
+ * @note This operation modifies the destination register starting from tile 0
+ * @note Uses ADDR_MOD_1 which has auto-increment behavior for dest counter
+ */
+ALWI void populate_first_tile_with_ones() { MATH((ckernel::sfpu::_populate_first_tile_with_ones_())); }
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
