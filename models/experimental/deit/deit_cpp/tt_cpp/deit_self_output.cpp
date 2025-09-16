@@ -20,8 +20,8 @@ TtDeiTSelfOutput::TtDeiTSelfOutput(
     }
 
     // Load dense layer weights and bias from state_dict
-    std::string dense_weight_key = base_address + ".dense.weight";
-    std::string dense_bias_key = base_address + ".dense.bias";
+    std::string dense_weight_key = base_address + "dense.weight";
+    std::string dense_bias_key = base_address + "dense.bias";
 
     auto dense_weight_it = state_dict.find(dense_weight_key);
     auto dense_bias_it = state_dict.find(dense_bias_key);
@@ -34,13 +34,13 @@ TtDeiTSelfOutput::TtDeiTSelfOutput(
     dense_bias = (dense_bias_it != state_dict.end()) ? std::optional<ttnn::Tensor>(helper_funcs::torch_to_tt_tensor_tile(dense_bias_it->second, device)) : std::nullopt;
 }
 
-ttnn::Tensor TtDeiTSelfOutput::forward(
+auto TtDeiTSelfOutput::forward(
     const ttnn::Tensor& hidden_states,
-    const ttnn::Tensor& input_tensor
-) {
+    const std::optional<ttnn::Tensor>& input_tensor
+) -> ttnn::Tensor {
     // Apply dense linear transformation using matmul and add
     auto output = helper_funcs::linear_transform(hidden_states, dense_weight, dense_bias);
-    output = ttnn::add(output, input_tensor);
+    // output = ttnn::add(output, input_tensor);
     
     // Note: In the original Python implementation, the residual connection
     // is handled in the DeiTLayer, not here. So we just return the dense output.
