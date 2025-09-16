@@ -6,6 +6,8 @@
 #include "../../../../../../kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
+
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
     const uint32_t tile_offset = get_arg_val<uint32_t>(2);
