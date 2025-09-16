@@ -473,6 +473,8 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Multiplier applied to logits after LM head; HF Falcon models use this
+        self.lm_head_multiplier = 1.0
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -542,6 +544,9 @@ class ModelArgs:
             self.checkpoint_type = CheckpointType.HuggingFace
             if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
                 self.trust_remote_code_hf = True
+            # Some HF repos (e.g., Falcon3) may require remote code for config/model classes
+            if "falcon3" in HF_MODEL.lower():
+                self.trust_remote_code_hf = True
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
@@ -588,6 +593,8 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1794,6 +1801,12 @@ class ModelArgs:
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
+                # Capture HF logits multiplier if provided by the model implementation
+                try:
+                    if hasattr(model, "model") and hasattr(model.model, "lm_head_multiplier"):
+                        self.lm_head_multiplier = float(model.model.lm_head_multiplier)
+                except Exception:
+                    pass
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
@@ -2160,6 +2173,8 @@ class ModelArgs:
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
                 "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+                "Falcon3-1B": "tiiuae/Falcon3-1B-Instruct",
+                "Falcon3-7B": "tiiuae/Falcon3-7B-Instruct",
             }
 
             logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2179,6 +2194,10 @@ class ModelArgs:
                 # If no direct match, try to infer from model name patterns
                 if not fallback_tokenizer_path:
                     model_name_lower = self.model_name.lower()
+                    if "falcon3" in model_name_lower and "1b" in model_name_lower:
+                        fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                    elif "falcon3" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
                     if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
                         fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
                     elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:

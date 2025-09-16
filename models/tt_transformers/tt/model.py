@@ -95,6 +95,10 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+
+        # Final norm key is always 'norm' for supported models
+        final_norm_key = "norm"
+
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -104,7 +108,7 @@ class Transformer(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", None),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="norm",
+                weight_key=final_norm_key,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
@@ -404,6 +408,13 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
+            # Restrict argmax to the first vocab_size columns to avoid selecting padded indices
+            if tt_logits.shape[-1] > self.vocab_size:
+                tt_logits = ttnn.slice(
+                    tt_logits,
+                    (0, 0, 0, 0),
+                    (tt_logits.shape[0], tt_logits.shape[1], tt_logits.shape[2], self.vocab_size),
+                )
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
 
             # Update device tensors for the next iteration
