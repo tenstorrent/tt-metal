@@ -75,6 +75,11 @@ jobs:
                   - ${{ github.workspace }}:/app/tt-metal
                   - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
               environment:
+                HOME: /app
+                LD_LIBRARY_PATH: /app/tt-metal/build/lib
+                PYTHONPATH: /app/tt-metal
+                TT_METAL_HOME: /app/tt-metal
+                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
                 TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1.txt
               devices:
                 - "/dev/tenstorrent/0:/dev/tenstorrent/0"
