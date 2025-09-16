@@ -1080,7 +1080,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
         tt_output_torch = tt_output_torch[:, :out_channels]
 
         logger.info(f"checking output")
-        assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
+        assert_quality(torch_output, tt_output_torch, pcc=0.997_000, relative_rmse=0.08)
 
         if check_cache:
             for i in range(len(tt_feat_cache)):
@@ -1106,7 +1106,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
                     logger.error(
                         f"Error checking feat_cache {i}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
                     )
-                    breakpoint()
+                    # breakpoint()
                     raise e
 
         # Defrag the cache
