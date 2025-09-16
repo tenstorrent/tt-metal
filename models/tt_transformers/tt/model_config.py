@@ -719,8 +719,6 @@ class ModelArgs:
             self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
             # end mixtral
 
-            # if self.optimizations is None:
-            #     self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
@@ -1806,6 +1804,7 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+            self.is_mixture_of_experts = any(["experts" in k for k in state_dict.keys()])
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:

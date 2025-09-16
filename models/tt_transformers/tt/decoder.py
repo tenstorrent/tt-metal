@@ -44,7 +44,7 @@ class TransformerBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
-
+        self.is_mixture_of_experts = False
         self.layer_num = layer_num
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
@@ -62,7 +62,7 @@ class TransformerBlock(LightweightModule):
             use_paged_kv_cache=use_paged_kv_cache,
         )
 
-        if hasattr(self.args, "is_mixture_of_experts"):
+        if getattr(self.args, "is_mixture_of_experts", False):
             self.feed_forward = TtMoeLayer(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
