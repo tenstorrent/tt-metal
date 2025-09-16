@@ -370,7 +370,7 @@ class ResBlock:
                 padding_right=1,
                 padding_mode="replicate",
                 secondary_cluster_axis=1,
-                secondary_mesh_shape=(4, 2),
+                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
@@ -381,7 +381,7 @@ class ResBlock:
                 padding_right=1,
                 padding_mode="replicate",
                 secondary_cluster_axis=0,
-                secondary_mesh_shape=(4, 2),
+                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
