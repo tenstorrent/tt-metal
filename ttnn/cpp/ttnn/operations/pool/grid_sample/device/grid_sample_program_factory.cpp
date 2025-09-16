@@ -265,8 +265,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t pre_tilize_cb_id =
         32;  // Unused CB for pool compute kernel for grid sample, we don't have tiled output in gridsample
 
-    const bool is_output_bfp4_b = false;
-
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
     const uint32_t in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
@@ -296,7 +294,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             pre_tilize_cb_id,                  // ct_arg[19]: pre_tilize_cb_id
             is_output_tiled ? 1U : 0U,         // ct_arg[20]: is_output_tiled
             is_output_block_format ? 1U : 0U,  // ct_arg[21]: is_output_block_format
-            is_output_bfp4_b ? 1U : 0U         // ct_arg[22]: is_output_bfp4_b
         };
 
         return tt::tt_metal::CreateKernel(
