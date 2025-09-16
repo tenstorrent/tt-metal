@@ -156,6 +156,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    DPRINT << "in1_single_tile_size_bytes: " << in1_single_tile_size_bytes << ENDL();
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
@@ -218,7 +219,7 @@ void kernel_main() {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
 
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);  // TODO: Here read
             noc_async_read_barrier();
         }
 
@@ -299,6 +300,7 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         // Operand 1
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                        DPRINT << "!!! in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
                         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         uint64_t in1_start_address =
                             l1_write_addr_in1;  // copy start address of block, to be used for mcasting
@@ -309,7 +311,12 @@ void kernel_main() {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                                    DPRINT << "     > --- w: " << w << " / " << in1_block_w << " ---" << ENDL();
+                                    DPRINT << "     > in1_tensor_tile_id: " << in1_tensor_tile_id << ENDL();
+                                    DPRINT << "     > l1_write_addr_in1: " << l1_write_addr_in1 << ENDL();
+                                    // noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr_in1); // TODO: HERE
+                                    // READ noc_async_read_barrier();
+                                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);  // TODO: HERE READ
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
@@ -413,7 +420,7 @@ void kernel_main() {
                         uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
                         for (uint32_t w = 0; w < in1_block_w; ++w) {
                             if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
+                                noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);  // TODO: HERE READ
                             }
                             l1_write_addr_in3 += bias_single_tile_size_bytes;
                             in3_tensor_tile_id += in3_tensor_stride_w;
