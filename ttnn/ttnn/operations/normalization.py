@@ -195,7 +195,7 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
     """Prepares a gamma/beta tensor in a padded [1,1,-1,32] format.
 
-    - Splits channels into num_cores_x equal chunks (C must be divisible by num_cores_x).
+    - Splits channels into num_cores_x equal chunks
     - Pads each chunk to a multiple of 32 (tile width).
     - Returns a tensor reshaped to [1, 1, tiles_per_core_total, 32].
     """

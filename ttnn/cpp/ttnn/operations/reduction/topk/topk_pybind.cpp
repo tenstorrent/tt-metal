@@ -67,7 +67,7 @@ void bind_reduction_topk_operation(py::module& module) {
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
 
             Limitations:
-                - The op fundamentally operates on 4D tensors with :attr:`dim` of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.
+                - The op fundamentally operates on 4D tensors with shape [N, C, H, W], and with :attr:`dim` of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.
                 - For :attr:`input_tensor`, N*C*H must be a multiple of 32
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
                 - The width of :attr:`input_tensor` along :attr:`dim` should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.
