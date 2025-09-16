@@ -3,10 +3,10 @@ from sklearn import datasets
 from sklearn.metrics import mean_squared_error, r2_score
 
 import numpy
+
 import sys
 import os
 
-print(f'{os.environ["HOME"]}/tt-metal/build/tt-train/sources/ttml/')
 sys.path.append(f'{os.environ["HOME"]}/tt-metal/build/tt-train/sources/ttml/')
 import _ttml
 
