@@ -214,7 +214,7 @@ void py_module(nb::module_& m) {
         py_linear_layer.def(nb::init<uint32_t, uint32_t, bool>());
         py_linear_layer.def("__call__", &modules::LinearLayer::operator());
         py_linear_layer.def("get_weight", &modules::LinearLayer::get_weight);
-        py_linear_layer.def("get_weight2", [](const modules::LinearLayer& layer) {
+        py_linear_layer.def("get_weight_numpy", [](const modules::LinearLayer& layer) {
             auto const w = layer.get_weight();
             return make_numpy_tensor(w->get_value(PreferredPrecision::FULL));
         });

@@ -3,6 +3,11 @@ from sklearn import datasets
 from sklearn.metrics import mean_squared_error, r2_score
 
 import numpy
+import sys
+import os
+
+print(f'{os.environ["HOME"]}/tt-metal/build/tt-train/sources/ttml/')
+sys.path.append(f'{os.environ["HOME"]}/tt-metal/build/tt-train/sources/ttml/')
 import _ttml
 
 batch_size = 32
@@ -11,12 +16,11 @@ batch_size = 32
 # diabetes_X, diabetes_y = datasets.load_diabetes(return_X_y=True)
 diabetes_X, diabetes_y = datasets.make_regression(n_samples=320, n_features=2, n_targets=1, noise=1, random_state=42)
 
-# Use only one feature
-diabetes_X = diabetes_X.astype(numpy.float32)
+# Use only one feature diabetes_X = diabetes_X.astype(numpy.float32)
 
 # Split the data into training/testing sets
-diabetes_X_train = diabetes_X[:-batch_size]
-diabetes_X_test = diabetes_X[-batch_size:]
+diabetes_X_train = diabetes_X[:-batch_size].astype(numpy.float32)
+diabetes_X_test = diabetes_X[-batch_size:].astype(numpy.float32)
 
 # Split the targets into training/testing sets
 diabetes_y_train = diabetes_y[:-batch_size].astype(numpy.float32)
@@ -55,7 +59,7 @@ for _ in range(100):
 
 regr.eval()
 
-print("Coefficients: \n", regr.get_weight2())
+print("Coefficients: \n", regr.get_weight_numpy())
 # 938.23786125
 # The mean squared error
 print("Mean squared error: %.2f" % mean_squared_error(diabetes_y_test, diabetes_y_pred))
