@@ -67,7 +67,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
@@ -98,7 +98,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
         CircularBufferConfig l1_cb_config =
             CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
                 .set_page_size(l1_cb_index, test_config.page_size_bytes);
-        auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
+        CreateCircularBuffer(program, test_config.cores, l1_cb_config);
     }
 
     std::vector<uint32_t> l1_addrs;
