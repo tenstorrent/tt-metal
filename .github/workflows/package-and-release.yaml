@@ -73,7 +73,7 @@ jobs:
       fetch_depth: 0
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
-      tag-type: ""
+      tag-type: ${{ needs.release-precheck.outputs.tag-type }}
       dry-run: ${{ inputs.dry-run }}
 
 
