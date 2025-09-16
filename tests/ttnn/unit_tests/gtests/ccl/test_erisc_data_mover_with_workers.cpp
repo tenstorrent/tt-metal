@@ -105,7 +105,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
+        for (const auto& [device_id, device_ptr] : devices_) {
             device_ptr->close();
         }
     }
@@ -136,7 +136,7 @@ struct KernelXY {
 
 void generate_receiver_worker_kernels(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CoreCoord& worker_core,
     const CoreCoord& edm_core,
     const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
@@ -223,7 +223,7 @@ void generate_receiver_worker_kernels(
 
 void generate_sender_worker_kernels(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CoreCoord& worker_core,
     const CoreCoord& edm_core,
     const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
@@ -303,8 +303,8 @@ void generate_sender_worker_kernels(
 }
 
 bool RunWriteBWTest(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -611,15 +611,7 @@ bool RunWriteBWTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    try {
-        distributed::EnqueueMeshWorkload(sender_cq, sender_workload, false);
-        distributed::EnqueueMeshWorkload(receiver_cq, receiver_workload, false);
-    } catch (std::exception& e) {
-        log_error(tt::LogTest, "Failed compile: {}", e.what());
-        throw e;
-    }
-
-    log_info(tt::LogTest, "Running...");
+    log_info(tt::LogTest, "Compiling and Running...");
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] { distributed::EnqueueMeshWorkload(sender_cq, sender_workload, false); });
@@ -641,8 +633,7 @@ bool RunWriteBWTest(
 
     auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<distributed::MeshBuffer>& output_buffer) {
         constexpr bool debug_mode = false;
-        std::vector<uint32_t> readback_data_vec;  // init to 0 data for easier debug
-        readback_data_vec.reserve(all_zeros.size());
+        std::vector<uint32_t> readback_data_vec(all_zeros.size());  // init to 0 data for easier debug
         std::fill(readback_data_vec.begin(), readback_data_vec.end(), 0);
 
         distributed::ReadShard(
