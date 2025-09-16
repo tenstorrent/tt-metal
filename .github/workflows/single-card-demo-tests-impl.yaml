@@ -218,6 +218,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
+            ${{ !matrix.test-group.civ2-compatible && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined
