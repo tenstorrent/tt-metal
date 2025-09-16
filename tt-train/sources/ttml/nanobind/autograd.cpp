@@ -55,13 +55,24 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
         std::vector<int64_t> numpy_strides(tensor_strides.rank());
         std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
 
-        const auto tensor_data = t.template to_vector<T>();
-        T* numpy_data = new T[tensor_data.size()];
-        std::copy(tensor_data.cbegin(), tensor_data.cend(), numpy_data);
+        auto cpu_tensor = t.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
+        auto tensor_data = tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor);
 
-        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
-        return nb::ndarray<nb::numpy>(
-            numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+        const auto return_data_copy_with_capsule = [&](const auto& src) {
+            T* numpy_data = new T[src.size()];
+            std::copy(src.begin(), src.end(), numpy_data);
+
+            const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+            return nb::ndarray<nb::numpy>(
+                numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+        };
+
+        if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor.tensor_spec())) {
+            return return_data_copy_with_capsule(tensor_data);
+        }
+        auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(
+            tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor), cpu_tensor.tensor_spec());
+        return return_data_copy_with_capsule(decoded_data);
     };
 
     const auto ensure_row_major = [&impl]<typename T>(const tt::tt_metal::Tensor& t) {
