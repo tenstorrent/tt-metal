@@ -25,7 +25,7 @@
 using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {
 
-uint64_t get_alloc_limit(const std::shared_ptr<distributed::MeshDevice> mesh_device) {
+uint64_t get_alloc_limit(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto device = mesh_device->get_devices()[0];
     const metal_SocDescriptor& soc_desc =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());

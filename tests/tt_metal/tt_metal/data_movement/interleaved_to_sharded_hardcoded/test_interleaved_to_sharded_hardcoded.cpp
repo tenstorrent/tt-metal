@@ -34,7 +34,7 @@ namespace test1_writer_sharded_dram_row_major {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -88,7 +88,7 @@ namespace test2_writer_sharded_dram_tile {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -142,7 +142,7 @@ namespace test3_interleaved_reader_tile_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -196,7 +196,7 @@ namespace test4_interleaved_reader_tile_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -250,7 +250,7 @@ namespace test5_interleaved_reader_row_major_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -305,7 +305,7 @@ namespace test6_interleaved_reader_row_major_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

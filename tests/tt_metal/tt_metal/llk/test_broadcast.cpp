@@ -203,7 +203,7 @@ std::vector<bfloat16> gold_broadcast(
 }
 
 void run_single_core_broadcast(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const BroadcastConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BroadcastConfig& test_config) {
     if (test_config.eltwise_op == EltwiseOp::SUB && test_config.broadcast_dim == BroadcastDim::ROW &&
         test_config.api_convention != ApiConvention::DEFAULT) {
         GTEST_SKIP();  // FIXME sub_tiles_bcast_rows and sub_bcast_rows_init_short dont exist

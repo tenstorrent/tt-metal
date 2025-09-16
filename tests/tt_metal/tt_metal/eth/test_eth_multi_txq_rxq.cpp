@@ -124,8 +124,8 @@ namespace tt::tt_metal {
 
 static void run_multi_txq_rxq_test(
     MeshDispatchFixture* fixture,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device_0,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device_1,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_0,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_1,
     uint32_t data_txq_id,
     uint32_t ack_txq_id,
     uint32_t num_messages) {

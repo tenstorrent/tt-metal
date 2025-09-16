@@ -59,7 +59,7 @@ namespace unit_tests::erisc::kernels {
 
 bool reader_kernel_no_send(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_reader_core,
@@ -133,7 +133,7 @@ bool reader_kernel_no_send(
 
 bool writer_kernel_no_receive(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_writer_core,
@@ -206,7 +206,7 @@ bool writer_kernel_no_receive(
 }
 
 bool noc_reader_and_writer_kernels(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     const uint32_t byte_size,
     const uint32_t eth_dst_l1_address,
     const uint32_t eth_src_l1_address,

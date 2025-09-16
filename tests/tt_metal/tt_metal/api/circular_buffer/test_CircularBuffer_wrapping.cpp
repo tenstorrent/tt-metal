@@ -50,7 +50,8 @@ static constexpr std::size_t RESULT_BUFFER_SIZE = RESULT_BUFFER_PAGE_SIZE;
 static constexpr auto RESULT_BUFFER_TYPE = BufferType::L1;
 
 // Helper function that creates and zero-initializes a result buffer.
-std::shared_ptr<distributed::MeshBuffer> create_result_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+std::shared_ptr<distributed::MeshBuffer> create_result_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = RESULT_BUFFER_PAGE_SIZE,
         .buffer_type = RESULT_BUFFER_TYPE,

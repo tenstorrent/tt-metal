@@ -31,7 +31,7 @@ struct ConvConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(std::shared_ptr<distributed::MeshDevice> mesh_device, const ConvConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ConvConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
