@@ -56,14 +56,27 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
+def test_unet_2d_condition_model_512x512(
+    device,
+    batch_size,
+    in_channels,
+    input_height,
+    input_width,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
-    model_name = "CompVis/stable-diffusion-v1-4"
+    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
     load_from_disk = False
     if not load_from_disk:
-        pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+            torch_dtype=torch.float32,
+            local_files_only=is_ci_env or is_ci_v2_env,
+        )
 
         model = pipe.unet
         model.eval()
@@ -75,7 +88,10 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name="CompVis/stable-diffusion-v1-4",
+        initialize_model=lambda: model,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
 
     # unsqueeze weight tensors to 4D for generating perf dump
