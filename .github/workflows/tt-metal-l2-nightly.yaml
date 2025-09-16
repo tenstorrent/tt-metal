@@ -175,6 +175,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN Tutorials
   test-ttnn-tutorials:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
