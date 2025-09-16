@@ -5,14 +5,13 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from ..utils.substate import pop_substate
-
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, MutableMapping
+    from collections.abc import Iterator, MutableMapping
     from typing import Any
 
     import torch
@@ -45,36 +44,37 @@ class Module:
 
         super().__delattr__(name)
 
-    def _prepare_torch_state_dict(self, state_dict: MutableMapping[str, torch.Tensor]) -> None:
+    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
         pass
 
-    def _load_local_torch_state_dict(self, state_dict: MutableMapping[str, torch.Tensor]) -> None:
+    def _load_local_torch_state(self, state: MutableMapping[str, Any]) -> None:
         pass
 
-    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, warn: bool = True) -> list[str]:
-        state_dict = dict(state_dict)
+    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, warn: bool = True) -> dict[str, Any]:
+        state = _unflatten_state_dict(state_dict)
 
-        self._prepare_torch_state_dict(state_dict)
-        self._load_local_torch_state_dict(state_dict)
+        self._prepare_torch_state(state)
+        self._load_local_torch_state(state)
 
-        unexpected_keys = []
+        unexpected = {}
 
         for name, child in self.named_children():
-            child_state_dict = pop_substate(state_dict, name)
+            child_state = state.pop(name, {})
 
             if isinstance(child, Module):
-                child_unexpected_keys = child.load_torch_state_dict(child_state_dict, warn=False)
-                unexpected_keys.extend(f"{name}.{k}" for k in child_unexpected_keys)
+                child_unexpected = child.load_torch_state_dict(child_state, warn=False)
+                if child_unexpected:
+                    unexpected[name] = child_unexpected
             else:  # legacy
-                child.load_state_dict(child_state_dict)
+                child.load_state_dict(_flatten_state_dict(child_state))
 
-        unexpected_keys.extend(state_dict.keys())
+        unexpected.update(state)
 
-        if warn:
-            for k in unexpected_keys:
-                logger.warning("unexpected torch state key: {}", k)
+        if warn and unexpected:
+            for k in _flatten_state_dict(unexpected):
+                logger.warning("unexpected torch state entry: {}", k)
 
-        return unexpected_keys
+        return unexpected
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -82,3 +82,33 @@ class Module:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         return self.forward(*args, **kwargs)
+
+
+def _unflatten_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, Any]:
+    """Turns a PyTorch state dict into a nested dict of dicts."""
+    root = {}
+
+    for key, value in state_dict.items():
+        *parts, leaf = key.split(".")
+
+        node = root
+        for p in parts:
+            node = node.setdefault(p, {})
+
+        node[leaf] = value
+
+    return root
+
+
+def _flatten_state_dict(nested: Mapping[str, Any], *, prefix: str = "") -> dict[str, torch.Tensor]:
+    """Turns a nested dict of dicts back into a PyTorch state dict."""
+    state_dict = {}
+
+    for k, v in nested.items():
+        child_key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, Mapping):
+            state_dict.update(_flatten_state_dict(v, prefix=child_key))
+        else:
+            state_dict[child_key] = v
+
+    return state_dict

@@ -10,7 +10,6 @@ import torch
 import ttnn
 
 from ..utils.padding import PaddingConfig, pad_weight_tensor
-from ..utils.substate import has_substate, pop_substate
 from ..utils.tensor import bf16_tensor
 from .linear import ColParallelLinear
 from .module import Module
@@ -18,6 +17,7 @@ from .normalization import RMSNorm
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping
+    from typing import Any
 
     from ..parallel.config import DiTParallelConfig, ParallelFactor
     from ..parallel.manager import CCLManager
@@ -44,6 +44,8 @@ class Attention(Module):
         use_spatial_weights_for_prompt: bool = False,
         added_head_scaling: bool = False,
     ) -> None:
+        super().__init__()
+
         self.head_dim = head_dim
         self.pre_only = pre_only
         self.mesh_device = mesh_device
@@ -101,7 +103,7 @@ class Attention(Module):
             else None
         )
 
-    def _prepare_torch_state_dict(self, state_dict: MutableMapping[str, torch.Tensor]) -> None:
+    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
         def pad_dense_out(state):
             # Pad dense output weights and biases to match the padded heads
             weight = state["weight"].T
@@ -111,35 +113,35 @@ class Attention(Module):
             weight = weight.T
             return {"weight": weight, "bias": bias}
 
-        state_dict["to_qkv"] = self._reshape_and_merge_qkv(
-            pop_substate(state_dict, "to_q"),
-            pop_substate(state_dict, "to_k"),
-            pop_substate(state_dict, "to_v"),
+        state["to_qkv"] = self._reshape_and_merge_qkv(
+            state.pop("to_q"),
+            state.pop("to_k"),
+            state.pop("to_v"),
         )
 
-        if has_substate(state_dict, "add_q_proj"):
-            state_dict["add_qkv_proj"] = self._reshape_and_merge_qkv(
-                pop_substate(state_dict, "add_q_proj"),
-                pop_substate(state_dict, "add_k_proj"),
-                pop_substate(state_dict, "add_v_proj"),
+        if "add_q_proj" in state:
+            state["add_qkv_proj"] = self._reshape_and_merge_qkv(
+                state.pop("add_q_proj"),
+                state.pop("add_k_proj"),
+                state.pop("add_v_proj"),
             )
 
-        if has_substate(state_dict, "to_out.0"):
-            state_dict["to_out"] = pad_dense_out(pop_substate(state_dict, "to_out.0"))
+        if "to_out" in state:
+            state["to_out"] = pad_dense_out(state.pop("to_out")["0"])
 
-        if has_substate(state_dict, "to_add_out"):
-            state_dict["to_add_out"] = pad_dense_out(pop_substate(state_dict, "to_add_out"))
+        if "to_add_out" in state:
+            state["to_add_out"] = pad_dense_out(state.pop("to_add_out"))
 
-        if has_substate(state_dict, "added_head_factors"):
-            factors = state_dict["added_head_factors"].reshape([-1, 1])
+        if "added_head_factors" in state:
+            factors = state.pop("added_head_factors").reshape([-1, 1])
             if self.padding_config is not None:
                 pad = (0, 0, 0, self.padding_config.self.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
-            state_dict["added_head_factors"] = factors
+            state["added_head_factors"] = factors
 
-    def _load_local_torch_state_dict(self, state_dict: MutableMapping[str, torch.Tensor]) -> None:
+    def _load_local_torch_state(self, state: MutableMapping[str, Any]) -> None:
         if self.added_head_scaling:
-            factors = state_dict.pop("added_head_factors")
+            factors = state.pop("added_head_factors")
             self.added_head_factors = bf16_tensor(factors, device=self.mesh_device)
 
     def _reshape_and_merge_qkv(
