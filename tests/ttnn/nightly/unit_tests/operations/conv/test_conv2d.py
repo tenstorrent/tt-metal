@@ -4260,47 +4260,47 @@ def test_conv_sharded_rm_input(
     )
 
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, input_dtype, weights_dtype, output_dtype, kernel, stride, padding, groups, has_bias, frequency_in_model",
+    "batch_size, input_channels, output_channels, input_height, input_width, input_dtype, weights_dtype, output_dtype, kernel, stride, padding, groups, has_bias, frequency_in_model, shard_layout, act_block_h_override",
     # fmt: off
     [
-        (1, 1024, 2048,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1, 1024,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 5),
-        (1, 1024,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3),
-        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1),
-        (1,  128,  256, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1,  128,   32, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 2),
-        (1,  128,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1,  128,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 4),
-        (1,  128,  512,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 4),
-        (1, 1280,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1,  160,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1),
-        (1, 2048,  256,   1,    1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 2),
-        (1, 2048,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1, 2048,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1,  256,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1,  256,   19, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1),
-        (1,  256,   32, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1,  256,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1,  256, 1024,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 6),
-        (1,  256,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 5),
-        (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1),
-        (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1),
-        (1,    3,   64, 512, 1024, ttnn.bfloat16,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1),
-        (1,   32,    1, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1),
-        (1,   32,    2, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1),
-        (1,  320,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1),
-        (1,  320,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1),
-        (1,  512, 2048,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3),
-        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (2, 2), 1, False, 1),
-        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (4, 4), 1, False, 1),
-        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (8, 8), 1, False, 1),
-        (1,  512, 1024,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (2, 2), (0, 0), 1, False, 1),
-        (1,  512,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3),
-        (1,  512,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1),
-        (1,  512,   64,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2),
-        (1,   64,  256, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3),
-        (1,   64,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3),
+        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3, HS, 32 * 4),
+        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 0),
+        (1,  128,   32, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 2, HS, 32 * 4),
+        (1,  128,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 4, HS, 0),
+        (1,  160,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 4),
+        (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 0),
+        (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 2),
+        (1,    3,   64, 512, 1024, ttnn.bfloat16,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 32 * 41),
+        (1,  320,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 2),
+        (1,  320,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, BS, 32 * 16),
+        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (2, 2), 1, False, 1, BS, 32 * 9),
+        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (4, 4), 1, False, 1, BS, 32 * 7),
+        (1,  512,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (8, 8), 1, False, 1, BS, 32),
+        (1,  512, 1024,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (2, 2), (0, 0), 1, False, 1, BS, 0),
+
+        # Matmul convs
+        (1, 1024, 2048,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1, 1024,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 5, None, 0),
+        (1, 1024,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1,  128,  256, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1,  128,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1,  128,  512,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 4, None, 0),
+        (1, 1280,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1, 2048,  256,   1,    1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 2, None, 0),
+        (1, 2048,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1, 2048,  512,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1,  256,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1,  256,   19, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1, None, 0),
+        (1,  256,   32, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1,  256,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1,  256, 1024,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 6, None, 0),
+        (1,   32,    1, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1, None, 0),
+        (1,   32,    2, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1,  True, 1, None, 0),
+        (1,  512, 2048,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3, None, 0),
+        (1,  512,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3, None, 0),
+        (1,  512,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 1, None, 0),
+        (1,  512,   64,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 2, None, 0),
+        (1,   64,  256, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (1, 1), (1, 1), (0, 0), 1, False, 3, None, 0),
 
     ],
     # fmt: on
@@ -4324,15 +4324,20 @@ def test_conv2d_panoptic(
     torch_tensor_map,
     has_bias,
     frequency_in_model,
+    shard_layout,
+    act_block_h_override,
 ):
     skip_if_not_blackhole_20_cores(device)
 
     signpost(header=f"conv2d_{input_channels}_{output_channels}_{input_height}_{input_width}; frequency_in_model={frequency_in_model}")
+    config_override = {
+        "act_block_h": act_block_h_override,
+    }
     run_conv(
         device=device,
-        config_override=None,
+        config_override=config_override,
         torch_tensor_map=torch_tensor_map,
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         input_dtype=input_dtype,
         input_layout=ttnn.ROW_MAJOR_LAYOUT if input_dtype == ttnn.bfloat16 else ttnn.TILE_LAYOUT,
         output_dtype=output_dtype,
@@ -4350,7 +4355,11 @@ def test_conv2d_panoptic(
         padding=padding,
         groups=groups,
         has_bias=has_bias,
-        deallocate_activation=True
+        deallocate_activation=True,
+        shard_layout=shard_layout,
+        enable_split_reader=True if shard_layout == HS else False,
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=True if shard_layout == BS else False,
 
     )
     signpost(header="conv2d_end.")
@@ -4364,14 +4373,14 @@ def test_conv2d_panoptic(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, frequency_in_model",
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, shard_layout, frequency_in_model",
     # fmt: off
     (
-        (1, 256, 256,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.HiFi4, 3), # Panoptic
-        (1, 256, 512,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (1, 1), (2, 2), (1, 1), (1, 1), None,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
-        (1, 288, 256,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
-        (1,  64, 128,  256,    512,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
-        (1,  64,  64,  256,    512,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.HiFi4, 1), # Panoptic
+        (1, 256, 256,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.LoFi, HS, 3), # Panoptic
+        (1, 256, 512,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (1, 1), (2, 2), (1, 1), (1, 1), None,  ttnn.MathFidelity.LoFi, HS, 1), # Panoptic
+        (1, 288, 256,  128,    256,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.LoFi, HS, 1), # Panoptic
+        (1,  64, 128,  256,    512,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.LoFi, HS, 1), # Panoptic
+        (1,  64,  64,  256,    512,   SliceWidth,   0,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), None,  ttnn.MathFidelity.LoFi, HS, 1), # Panoptic
     )
     # fmt: on
 )
@@ -4402,6 +4411,7 @@ def test_conv_dram_panoptic(
     fp32_accum,
     input_layout,
     packer_l1_acc,
+    shard_layout,
     frequency_in_model,
 ):
     skip_if_not_blackhole_20_cores(device)
@@ -4439,10 +4449,14 @@ def test_conv_dram_panoptic(
         input_dtype=dtype,
         input_layout=input_layout,
         output_layout=input_layout,
+        shard_layout=shard_layout,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
+        enable_split_reader=True if shard_layout == HS else False,
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=True if shard_layout == BS else False,
     )
     signpost(header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_end.")
 
@@ -4451,13 +4465,13 @@ def test_conv_dram_panoptic(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
     # fmt: off
     (
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (12, 12), (12, 12), BS, 32 * 4, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (18, 18), (18, 18), BS, 32 * 2, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1),  (6, 6),  (6, 6),   BS, 32 * 4, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, True, True, 2),  # Panoptic
     ),
     # fmt: on
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 1024}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
 def test_conv2d_ch_split_dram_panoptic(
     device,
