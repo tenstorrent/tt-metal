@@ -7,6 +7,7 @@
 #include "datasets/in_memory_token_dataset.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer_trainer.hpp"
+#include "tokenizers/tiktoken_tokenizer.hpp"
 #include "tokenizers/tokenizer_base.hpp"
 
 namespace ttml::datasets {
