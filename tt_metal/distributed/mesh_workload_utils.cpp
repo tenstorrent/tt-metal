@@ -7,11 +7,13 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include <cstdint>
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -32,8 +34,12 @@ void write_go_signal(
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     const auto& hal = MetalContext::instance().hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB =
-        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal.get_alignment(HalMemType::HOST);
+    DeviceCommandCalculator calculator;
+    if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_notify_dispatch_s_go_signal_cmd();
+    }
+    calculator.add_dispatch_go_signal_mcast();
+    uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     cmd_sequence_sizeB +=
         dispatch_md.prefetcher_cache_info.is_cached ? 0 : align(sizeof(CQPrefetchCmd), pcie_alignment);
 
