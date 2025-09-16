@@ -245,7 +245,13 @@ Result conv2d_DRAM(
                 ? input_tensor
                 : ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
         // Matmul expects inputs to be in Tile Layout
-        input_tensor_on_device = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
+        if (input_tensor_on_device.layout() != Layout::TILE) {
+            Tensor input_tensor_tilized = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
+            if (conv_config.deallocate_activation) {
+                input_tensor_on_device.deallocate(/*force*/ true);
+            }
+            input_tensor_on_device = std::move(input_tensor_tilized);
+        }
         Tensor matmul_output = ttnn::linear(
             input_tensor_on_device,
             weight_tensor_on_device,
@@ -257,6 +263,9 @@ Result conv2d_DRAM(
             program_config,
             linear_activation,
             compute_config);
+        if (conv_config.deallocate_activation) {
+            input_tensor_on_device.deallocate(true);
+        }
         return {matmul_output, input_height, input_width, weight_tensor_on_device, bias_tensor_on_device};
     }
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
