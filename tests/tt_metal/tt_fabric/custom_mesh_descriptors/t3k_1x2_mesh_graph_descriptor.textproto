@@ -26,13 +26,13 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ E, W ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ E, W ]
   }
 
@@ -40,25 +40,25 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 1 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ S, N ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 1 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 2 }
     routing_direction : [ S, N ]
   }
 }
