@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
@@ -20,7 +21,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model import Transformer as TTTransformer
-from models.utility_functions import comp_pcc
 
 
 class VisionTransformer(LightweightModule):
