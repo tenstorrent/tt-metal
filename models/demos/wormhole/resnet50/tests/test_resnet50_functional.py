@@ -5,8 +5,8 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-from models.utility_functions import is_blackhole
 
 
 def run_resnet_50(

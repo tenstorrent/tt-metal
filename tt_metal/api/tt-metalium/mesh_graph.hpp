@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <umd/device/types/arch.hpp>                    // tt::ARCH
+#include <umd/device/types/arch.hpp>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +17,8 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+
+#include <tt-metalium/mesh_graph_descriptor.hpp>
 
 #include <vector>
 
@@ -122,6 +124,7 @@ private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
+    void initialize_from_mgd(const MeshGraphDescriptor& mgd2);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

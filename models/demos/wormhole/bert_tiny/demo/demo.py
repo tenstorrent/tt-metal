@@ -12,9 +12,14 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    is_wormhole_b0,
+    profiler,
+    skip_for_grayskull,
+)
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
-from models.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0, profiler, skip_for_grayskull
 
 
 def load_inputs(input_path, batch):
