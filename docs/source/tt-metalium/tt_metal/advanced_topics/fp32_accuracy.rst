@@ -5,9 +5,9 @@ Achieving FP32 Accuracy for Computation
 
 Tensix provides two main compute engines: the matrix engine (FPU) and the vector engine (SFPU). Each has distinct strengths and limitations that affect numerical accuracy and throughput. For a detailed overview of these engines, see :ref:`Compute Engines and Data Flow within Tensix <compute_engines_and_dataflow_within_tensix>`.
 
-The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy.
+The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, ...) properly. For detailed information about FPU numerical accuracy characteristics, see the `FPU FMA Numerical Accuracy <https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee>`_. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy.
 
-The vector engine, on the other hand, supports full 32-bit floating-point (FP32) arithmetic. This makes it suitable for computations where precision is critical. However, as a vector unit, it processes data in smaller batches and at lower throughput—behavior similar to SIMD units found in conventional CPUs and GPUs.
+The vector engine, on the other hand, supports full 32-bit floating-point (FP32) arithmetic and is more IEEE 754-compliant (though not 100%). This makes it suitable for computations where precision is critical. However, as a vector unit, it processes data in smaller batches and at lower throughput—behavior similar to SIMD units found in conventional CPUs and GPUs.
 
 Choosing between these engines depends on the requirements of your workload. Use the matrix engine for bulk computation where speed is the priority and the vector engine when higher accuracy is needed.
 
@@ -42,7 +42,7 @@ Additionally, ensure that the circular buffers that will handle the FP32 data ar
 
 .. note::
 
-    Some functions, most notably ``exp_tile`` and the various trigonometric functions, have inherent limitations due to their polynomial approximations. These limitations can lead to reduced accuracy for certain input ranges, even when using the vector engine with FP32 settings. Always validate the accuracy of results for your specific use case. The operator implementations are built to balance performance and accuracy for the intended (machine learning) workloads. If your application requires higher precision across all input ranges, consider implementing custom functions.
+    Some functions, most notably ``exp_tile`` and the various trigonometric functions, have inherent limitations due to their polynomial approximations. Some functions have multiple available approximations (e.g. approx and fast_and_approx template parameters for exp_tile). These limitations can lead to reduced accuracy for certain input ranges, even when using the vector engine with FP32 settings. Always validate the accuracy of results for your specific use case. The operator implementations are built to balance performance and accuracy for the intended (machine learning) workloads. If your application requires higher precision across all input ranges, consider implementing custom functions.
 
 Kernel-Side Implementation
 --------------------------

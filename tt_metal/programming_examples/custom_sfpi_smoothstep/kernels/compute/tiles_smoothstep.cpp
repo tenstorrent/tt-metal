@@ -28,11 +28,12 @@
  * This function only processes ONE FACE of a tile. The wrapper will call it for each face.
  */
 inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
-    for (size_t i = 0; i < 8; i++) {
+    constexpr size_t vectors_per_face = 8;
+    for (size_t i = 0; i < vectors_per_face; i++) {
         vFloat x = dst_reg[i];
         vFloat t = (x - edge0) * inv_delta;
-        v_if(t < 0.0f) { t = 0.0f; }
-        v_elseif(t > 1.0f) { t = 1.0f; }
+        v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
+        v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
         v_endif;
         vFloat result = t * t * (3.0f - 2.0f * t);
         dst_reg[i] = result;
