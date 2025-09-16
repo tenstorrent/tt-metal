@@ -101,6 +101,7 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
+        service_base_fw();
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }

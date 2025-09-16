@@ -250,12 +250,14 @@ FORCE_INLINE bool is_port_up() {
 FORCE_INLINE void service_eth_msg() {
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 }
 
 FORCE_INLINE void update_boot_results_eth_link_status_check() {
     invalidate_l1_cache();
     reinterpret_cast<void (*)(uint32_t)>(
         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 }
 
 #endif
