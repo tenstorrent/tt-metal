@@ -35,13 +35,12 @@ void kernel_main() {
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding_left = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -67,19 +66,19 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    uint32_t outer_dim_offset = 0;
+    uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
             if (!is_padding_zeros) {
                 // Replicate a slice of 1 from input to output
                 uint32_t dst_stick_id = 0;
                 if (direction) {
-                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim + stick_start_id;
+                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim;
                 } else {
-                    dst_stick_id = stick_start_id;
+                    dst_stick_id = 0;
                 }
                 dst_stick_id += outer_dim_offset;
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                for (uint32_t iter = 0; iter < num_sticks_per_halo_dim; ++iter) {
                     cb_wait_front(cb_output_id, 1);
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
@@ -96,14 +95,14 @@ void kernel_main() {
             } else {
                 uint32_t dst_stick_id = 0;
                 if (direction) {
-                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim + stick_start_id;
+                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim;
                 } else {
-                    dst_stick_id = stick_start_id;
+                    dst_stick_id = 0;
                 }
                 dst_stick_id += outer_dim_offset;
                 cb_wait_front(cb_output_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                for (uint32_t iter = 0; iter < num_sticks_per_halo_dim; ++iter) {
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                         uint64_t dst_noc_addr =
                             get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
@@ -122,13 +121,12 @@ void kernel_main() {
             for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                 uint32_t dst_stick_id = 0;
                 if (direction) {
-                    dst_stick_id =
-                        (output_halo_dim_size - (padding - pad_id)) * num_sticks_per_halo_dim + stick_start_id;
+                    dst_stick_id = (output_halo_dim_size - (padding - pad_id)) * num_sticks_per_halo_dim;
                 } else {
-                    dst_stick_id = pad_id * num_sticks_per_halo_dim + stick_start_id;
+                    dst_stick_id = pad_id * num_sticks_per_halo_dim;
                 }
                 dst_stick_id += outer_dim_offset;
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                for (uint32_t iter = 0; iter < num_sticks_per_halo_dim; ++iter) {
                     cb_wait_front(cb_output_id, 1);
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
@@ -182,9 +180,9 @@ void kernel_main() {
         // Copy the entire input
         if (direction) {
             for (uint32_t t = 0; t < input_halo_dim_size; t++) {
-                uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim + stick_start_id;
+                uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim;
                 dst_stick_id += outer_dim_offset;
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                for (uint32_t iter = 0; iter < num_sticks_per_halo_dim; ++iter) {
                     cb_wait_front(cb_output_id, 1);
                     uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
