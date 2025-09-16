@@ -96,7 +96,7 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
         py::kw_only(),
-        py::arg("queue_id") = ttnn::DefaultQueueId,
+        py::arg("queue_id") = std::nullopt,
         R"doc(
             Copy tensor from host to device.
 
@@ -106,7 +106,7 @@ void py_module(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
 
             Kwargs:
-                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `ttnn.DefaultQueueId`.
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -124,7 +124,7 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("blocking") = true,
         py::kw_only(),
-        py::arg("queue_id") = ttnn::DefaultQueueId,
+        py::arg("queue_id") = std::nullopt,
         R"doc(
             Copy tensor from device to host.
 
@@ -133,7 +133,7 @@ void py_module(py::module& module) {
                 blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
 
             Kwargs:
-                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `ttnn.DefaultQueueId`.
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
@@ -304,13 +304,13 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
            bool blocking = true,
-           std::optional<ttnn::QueueId> cq_id = ttnn::DefaultQueueId) {
+           std::optional<ttnn::QueueId> cq_id = std::nullopt) {
             tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),
         py::arg("host_tensor"),
         py::arg("blocking") = true,
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     bind_registered_operation(
         module,

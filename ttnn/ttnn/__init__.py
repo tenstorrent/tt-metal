@@ -253,7 +253,6 @@ from ttnn.device import (
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
-    DefaultQueueId,
     init_device_compute_kernel_config,
 )
 

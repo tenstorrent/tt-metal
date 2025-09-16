@@ -834,20 +834,18 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
 }
 
-MeshTraceId MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id) {
+MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) {
     auto trace_id = MeshTrace::next_id();
     this->begin_mesh_trace(cq_id, trace_id);
     return trace_id;
 }
 
-void MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
-
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
-        !this->mesh_command_queues_[actual_cq_id]->trace_id().has_value(),
+        !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
         "CQ {} is already being used for tracing tid {}",
-        (uint32_t)actual_cq_id,
+        (uint32_t)cq_id,
         *trace_id);
     this->mark_allocations_safe();
     // Create an empty trace buffer here. This will get initialized in end_trace
@@ -859,17 +857,15 @@ void MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceI
         this->mesh_id_,
         active_sub_device_manager->id());
     auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
-    this->mesh_command_queues_[actual_cq_id]->record_begin(trace_id, trace_buffer->desc);
+    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_buffer->desc);
 }
 
-void MeshDevice::end_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
-
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
-        this->mesh_command_queues_[actual_cq_id]->trace_id() == trace_id,
+        this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
         "CQ {} is not being used for tracing tid {}",
-        (uint32_t)actual_cq_id,
+        (uint32_t)cq_id,
         trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     auto trace_buffer = active_sub_device_manager->get_trace(trace_id);
@@ -879,15 +875,13 @@ void MeshDevice::end_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId&
         *trace_id,
         this->mesh_id_,
         active_sub_device_manager->id());
-    this->mesh_command_queues_[actual_cq_id]->record_end();
+    this->mesh_command_queues_[cq_id]->record_end();
 
-    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[actual_cq_id]), trace_buffer);
+    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
     this->mark_allocations_unsafe();
 }
 
-void MeshDevice::replay_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id, bool blocking) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
-
+void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
     ZoneScoped;
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
@@ -898,7 +892,7 @@ void MeshDevice::replay_mesh_trace(std::optional<uint8_t> cq_id, const MeshTrace
         *trace_id,
         this->mesh_id_,
         *(active_sub_device_manager->id()));
-    mesh_command_queues_[actual_cq_id]->enqueue_trace(trace_id, blocking);
+    mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 
 uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }

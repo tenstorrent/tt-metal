@@ -705,7 +705,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     /*device=*/nullptr,
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::arg("data"),
@@ -756,7 +756,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device.value_or(nullptr),
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::keep_alive<1, 6>(),
@@ -819,7 +819,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device.value_or(nullptr),
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::keep_alive<1, 7>(),
@@ -901,7 +901,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("layout").noconvert() = std::nullopt,
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("tile").noconvert() = std::nullopt,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("cq_id") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("mesh_mapper") = nullptr,
             py::return_value_policy::move,
@@ -957,7 +957,7 @@ void pytensor_module(py::module& m_tensor) {
                std::optional<ttnn::QueueId> cq_id) { return self.to_device(device, mem_config, cq_id); },
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = std::nullopt,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("cq_id") = std::nullopt,
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
@@ -1032,7 +1032,7 @@ void pytensor_module(py::module& m_tensor) {
                 return self.cpu(blocking, cq_id);
             },
             py::arg("blocking") = true,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("cq_id") = std::nullopt,
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 

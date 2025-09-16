@@ -18,7 +18,6 @@ namespace ttnn {
     are 0 and 1.
 */
 using QueueId = tt::stl::StrongType<uint8_t, struct QueueIdTag>;
-constexpr std::optional<QueueId> DefaultQueueId = std::nullopt;
 
 }  // namespace ttnn
 
@@ -28,7 +27,7 @@ namespace tt::tt_metal {
 
 using QueueId = ttnn::QueueId;
 
-std::optional<uint8_t> raw_optional(const std::optional<QueueId>& cq_id) {
+inline std::optional<uint8_t> raw_optional(const std::optional<QueueId>& cq_id) {
     return cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
 }
 

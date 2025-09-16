@@ -34,7 +34,7 @@ void py_module(py::module& module) {
         },
         py::arg("mesh_device"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "end_trace_capture",
@@ -44,7 +44,7 @@ void py_module(py::module& module) {
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "execute_trace",
@@ -54,7 +54,7 @@ void py_module(py::module& module) {
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
+        py::arg("cq_id") = std::nullopt,
         py::arg("blocking") = true);
 
     module.def(

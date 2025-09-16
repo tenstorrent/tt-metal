@@ -800,7 +800,6 @@ Tensor to_device<bfloat8_b>(
 }
 
 template void copy_to_device<bfloat16>(const Tensor&, Tensor&, std::optional<ttnn::QueueId>);
-template void copy_to_device<bfloat16>(const Tensor&, Tensor&, std::optional<ttnn::QueueId>);
 template void copy_to_device<float>(const Tensor&, Tensor&, std::optional<ttnn::QueueId>);
 template void copy_to_device<int32_t>(const Tensor&, Tensor&, std::optional<ttnn::QueueId>);
 template void copy_to_device<uint32_t>(const Tensor&, Tensor&, std::optional<ttnn::QueueId>);
