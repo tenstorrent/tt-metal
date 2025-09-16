@@ -2,15 +2,13 @@
 #define DEIT_CPP_TT_CPP_DEIT_OUTPUT_H
 
 #include "deit_config.h"
-#include "helper_funcs.h"
+#include "../helper_funcs.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <optional>
 #include <torch/torch.h>
 #include <ttnn/tensor/tensor.hpp>
-
-namespace deit_cpp {
 
 /**
  * TtDeiTOutput class - C++ implementation of DeiT output layer
@@ -57,7 +55,5 @@ private:
     ttnn::Tensor dense_weight;
     std::optional<ttnn::Tensor> dense_bias;
 };
-
-} // namespace deit_cpp
 
 #endif // DEIT_CPP_TT_CPP_DEIT_OUTPUT_H

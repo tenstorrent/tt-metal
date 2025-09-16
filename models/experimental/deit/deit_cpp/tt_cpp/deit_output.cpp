@@ -2,7 +2,6 @@
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <stdexcept>
 
-namespace deit_cpp {
 
 TtDeiTOutput::TtDeiTOutput(
     const DeiTConfig& config,
@@ -12,8 +11,8 @@ TtDeiTOutput::TtDeiTOutput(
 ) : config(config), device(device) {
     
     // Load dense layer weights and bias from state_dict
-    std::string weight_key = base_address + ".dense.weight";
-    std::string bias_key = base_address + ".dense.bias";
+    std::string weight_key = base_address + "dense.weight";
+    std::string bias_key = base_address + "dense.bias";
     
     auto weight_it = state_dict.find(weight_key);
     auto bias_it = state_dict.find(bias_key);
@@ -40,5 +39,3 @@ ttnn::Tensor TtDeiTOutput::forward(const ttnn::Tensor& hidden_states, const ttnn
     
     return output;
 }
-
-} // namespace deit_cpp
