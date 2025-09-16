@@ -113,6 +113,7 @@ jobs:
         env:
           TT_METAL_HOME: ${{ github.workspace }}
           PYTHONPATH: ${{ github.workspace }}
+          PYTHON_ENV_DIR: ${{ github.workspace }}/python_env
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
