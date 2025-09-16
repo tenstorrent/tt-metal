@@ -12,8 +12,6 @@
 #include <torch/torch.h>
 #include <ttnn/tensor/tensor.hpp>
 
-namespace deit_cpp {
-
 /**
  * TtDeiTEncoder class - C++ implementation of DeiT encoder
  * Equivalent to the Python TtDeiTEncoder class
@@ -76,7 +74,5 @@ private:
     // Gradient checkpointing flag (not used in inference)
     bool gradient_checkpointing;
 };
-
-} // namespace deit_cpp
 
 #endif // DEIT_CPP_TT_CPP_DEIT_ENCODER_H

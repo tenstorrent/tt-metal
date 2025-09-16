@@ -4,7 +4,6 @@
 #include <ttnn/operations/data_movement/tilize/tilize.hpp>
 #include <stdexcept>
 
-namespace deit_cpp {
 
 TtDeiTLayer::TtDeiTLayer(
     const DeiTConfig& config,
@@ -15,20 +14,20 @@ TtDeiTLayer::TtDeiTLayer(
     
     // Initialize sub-modules
     attention = std::make_unique<TtDeiTAttention>(
-        config, device, state_dict, base_address + ".attention"
+        config, device, state_dict, base_address + "attention."
     );
     intermediate = std::make_unique<TtDeiTIntermediate>(
-        config, device, state_dict, base_address + ".intermediate"
+        config, device, state_dict, base_address + "intermediate."
     );
     output = std::make_unique<TtDeiTOutput>(
-        config, device, state_dict, base_address + ".output"
+        config, device, state_dict, base_address + "output."
     );
     
     // Load layer normalization parameters
-    std::string ln_before_weight_key = base_address + ".layernorm_before.weight";
-    std::string ln_before_bias_key = base_address + ".layernorm_before.bias";
-    std::string ln_after_weight_key = base_address + ".layernorm_after.weight";
-    std::string ln_after_bias_key = base_address + ".layernorm_after.bias";
+    std::string ln_before_weight_key = base_address + "layernorm_before.weight";
+    std::string ln_before_bias_key = base_address + "layernorm_before.bias";
+    std::string ln_after_weight_key = base_address + "layernorm_after.weight";
+    std::string ln_after_bias_key = base_address + "layernorm_after.bias";
     
     auto ln_before_weight_it = state_dict.find(ln_before_weight_key);
     auto ln_before_bias_it = state_dict.find(ln_before_bias_key);
@@ -60,8 +59,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
         config.layer_norm_eps
     );
     
-    // Convert to tile layout for attention
-    normalized_hidden_states = ttnn::tilize(normalized_hidden_states);
     
     // Self-attention
     auto attention_outputs = attention->forward(
@@ -84,8 +81,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
         config.layer_norm_eps
     );
     
-    // Convert to tile layout for intermediate layer
-    layer_output = ttnn::tilize(layer_output);
     
     // Intermediate layer (feed-forward)
     layer_output = intermediate->forward(layer_output);
@@ -105,5 +100,3 @@ ttnn::Tensor TtDeiTLayer::apply_layernorm(
     // Apply layer normalization using ttnn operations
     return ttnn::layer_norm(input, eps, weight, bias);
 }
-
-} // namespace deit_cpp
