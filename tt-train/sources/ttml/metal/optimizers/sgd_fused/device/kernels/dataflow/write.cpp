@@ -3,7 +3,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/kernel_structs.h"
 
-constexpr auto kParamOutCbIndex = tt::CBIndex::c_16;
+constexpr auto cb_param_in_idx = tt::CBIndex::c_16;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -26,7 +26,7 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t tile_size_bytes = get_tile_size(kParamOutCbIndex);
+    const uint32_t tile_size_bytes = get_tile_size(cb_param_in_idx);
     constexpr auto param_out_args = TensorAccessorArgs<2U>();
     const auto param_out_addr_generator = TensorAccessor(param_out_args, param_out_addr, tile_size_bytes);
 
@@ -35,9 +35,9 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t start_idx = (r * Wt) + c;
 
-            write_cb_block_to_dram(kParamOutCbIndex, param_out_addr_generator, start_idx, block_size, tile_size_bytes);
+            write_cb_block_to_dram(cb_param_in_idx, param_out_addr_generator, start_idx, block_size, tile_size_bytes);
             noc_async_write_barrier();
-            cb_pop_front(kParamOutCbIndex, block_size);
+            cb_pop_front(cb_param_in_idx, block_size);
         }
     }
 }
