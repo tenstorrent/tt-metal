@@ -356,7 +356,11 @@ run_t3000_gemma3_tests() {
 
   HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
+<<<<<<< HEAD
   HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+=======
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+>>>>>>> 7ea2b737e9 ([Gemma3] Loop vision model for >3 images)
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
