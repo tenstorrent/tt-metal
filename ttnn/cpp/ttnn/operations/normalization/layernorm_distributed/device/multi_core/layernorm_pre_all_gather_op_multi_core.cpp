@@ -48,6 +48,9 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+namespace operation = tt::tt_metal::operation;
+
 operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     const Tensor& a,
     Tensor& output,
@@ -146,7 +149,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program program = tt::tt_metal::CreateProgram();
     auto reducer_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -193,39 +196,39 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
     // Create circular buffers
     // c_in0 -> a
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
+    auto cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
             .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_src0_config);
     // c_in1 -> reduce scalar
-    CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
+    auto cb_reduce_config =
+        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
             .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
     CreateCircularBuffer(program, all_cores, cb_reduce_config);
 
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
-    CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
+    auto cb_intermed0_config =
+        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
             .set_page_size(tt::CBIndex::c_6, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
-    CircularBufferConfig cb_intermed1_config =
-        CircularBufferConfig(tiles_per_core_y * single_tile_size, {{tt::CBIndex::c_15, cb_data_format}})
+    auto cb_intermed1_config =
+        tt::tt_metal::CircularBufferConfig(tiles_per_core_y * single_tile_size, {{tt::CBIndex::c_15, cb_data_format}})
             .set_page_size(tt::CBIndex::c_15, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_16, cb_data_format}})
+    auto cb_out0_config =
+        tt::tt_metal::CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_16, cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
-    CircularBufferConfig cb_zero_config =
-        CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_13, cb_data_format}})
+    auto cb_zero_config =
+        tt::tt_metal::CircularBufferConfig(out0_tiles * single_tile_size, {{tt::CBIndex::c_13, cb_data_format}})
             .set_page_size(tt::CBIndex::c_13, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_zero_config);
 
-    CircularBufferConfig cb_out_final_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+    auto cb_out_final_config =
+        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, merge_cores, cb_out_final_config);
 
@@ -422,7 +425,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program program = tt::tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)block_size,
@@ -468,25 +471,25 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     // Create circular buffers
     // c_in0 -> a
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
+    auto cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
             .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_src0_config);
     // c_in1 -> reduce scalar
-    CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
+    auto cb_reduce_config =
+        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
             .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
     CreateCircularBuffer(program, all_cores, cb_reduce_config);
 
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
-    CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
+    auto cb_intermed0_config =
+        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
             .set_page_size(tt::CBIndex::c_6, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
-    CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+    auto cb_out0_config =
+        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
