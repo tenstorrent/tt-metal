@@ -235,7 +235,7 @@ init_packages() {
                 "capstone-devel"
                 "wget"
                 "curl"
-                "xxd"
+                "vim-common" # Includes xxd
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
