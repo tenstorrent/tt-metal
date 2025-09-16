@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov10x.tt.common import Conv
+from models.demos.yolov10x.tt.common import Conv, deallocate_tensors
 
 try:
     from tracy import signpost
@@ -77,6 +77,7 @@ class TtnnCIB:
         conv4_out = self.conv4(conv3_out)
 
         output = ttnn.add(inputs, conv4_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        deallocate_tensors(conv1_out, conv2_out, conv3_out, conv4_out)
         if use_signpost:
             signpost(header="TtnnCIB End")
         return output
