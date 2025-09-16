@@ -6,6 +6,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
+#include "tt-metalium/constants.hpp"
+#include "noc_parameters.h"
 
 void kernel_main() {
     // clang-format off
@@ -93,8 +95,7 @@ void kernel_main() {
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
@@ -351,7 +352,7 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_read_ptr + single_tile_size_bytes);
 
-                    auto local_result = combine_welford_stats<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+                    auto local_result = combine_welford_stats<tt::constants::TILE_WIDTH, num_channels_per_group * num_rows_per_group / tt::constants::TILE_WIDTH, 2>(p_local_means, p_local_vars);
 
                     // Write this to cb_ex_global
                     auto global_means_ptr = get_write_ptr(cb_ex_global);
@@ -373,8 +374,8 @@ void kernel_main() {
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
                             uint64_t noc_vars_addr =
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
-                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * 32, 32);
-                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * 32, 32);
+                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
                         }
                         noc_async_read_barrier();
                     }
@@ -434,7 +435,7 @@ void kernel_main() {
                 }
             }
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tt::constants::TILE_WIDTH) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -443,11 +444,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tt::constants::TILE_WIDTH) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tt::constants::TILE_WIDTH) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -455,7 +456,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tt::constants::TILE_WIDTH) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {
@@ -473,7 +474,7 @@ void kernel_main() {
         cb_wait_front(cb_repack_out, per_core_N);
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
