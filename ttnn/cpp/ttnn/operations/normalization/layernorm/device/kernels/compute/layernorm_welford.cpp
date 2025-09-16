@@ -4,20 +4,15 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
@@ -199,10 +194,8 @@ void MAIN {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, onetile);
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, onetile);
         REL();

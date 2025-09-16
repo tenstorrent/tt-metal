@@ -3,15 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "ttnn/operations/reduction/accumulation/device/kernels/accumulation_common.hpp"
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
@@ -19,8 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 
@@ -208,11 +203,8 @@ void MAIN {
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-
-        recip_tile_init();
-        recip_tile(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
 
         tile_regs_commit();
 
