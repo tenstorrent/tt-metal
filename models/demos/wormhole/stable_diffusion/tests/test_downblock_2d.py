@@ -26,9 +26,27 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "hidden_states, shard_layout, shard_end_core, shard_shape", (DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,)
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-def test_downblock_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb):
+def test_downblock_512x512(
+    reset_seeds,
+    device,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    temb,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     # Initialize PyTorch component
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     unet = pipe.unet
     unet.eval()
     torch_down_block = pipe.unet.down_blocks[3]

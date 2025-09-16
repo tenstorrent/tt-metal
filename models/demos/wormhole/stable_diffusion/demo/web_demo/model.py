@@ -36,7 +36,9 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
 model_pipeline = None
 
 
-def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
+def create_model_pipeline(
+    device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
+):
     disable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
@@ -50,16 +52,37 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(

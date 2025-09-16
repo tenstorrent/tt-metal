@@ -63,7 +63,17 @@ def preprocess_images(image_paths):
     return torch.stack(images)
 
 
-def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)):
+def run_demo_inference(
+    device,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size=(256, 256),
+):
     enable_persistent_kernel_cache()
     profiler.clear()
 
@@ -78,16 +88,37 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -223,7 +254,9 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     return output_images
 
 
-def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
+def run_interactive_demo_inference(
+    device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
+):
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
@@ -237,17 +270,38 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -363,7 +417,15 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
 
 def run_demo_inference_diffusiondb(
-    device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)
+    device,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size=(256, 256),
 ):
     enable_persistent_kernel_cache()
 
@@ -382,17 +444,38 @@ def run_demo_inference_diffusiondb(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -545,5 +628,25 @@ def run_demo_inference_diffusiondb(
     "image_size",
     ((512, 512),),
 )
-def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
-    run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
+def test_demo(
+    device,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    run_demo_inference(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
+        reset_seeds,
+        input_path,
+        num_prompts,
+        num_inference_steps,
+        image_size,
+    )

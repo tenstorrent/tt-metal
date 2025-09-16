@@ -30,9 +30,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[2] + (2,),
     ),
 )
-def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index):
+def test_downsample_512x512(
+    reset_seeds,
+    device,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    block_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
     # Initialize PyTorch component
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     unet = pipe.unet
     unet.eval()
     torch_downsample = pipe.unet.down_blocks[block_index].downsamplers[0]

@@ -19,7 +19,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("has_encoder_hidden_states", (True, False))
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
@@ -27,7 +26,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 def test_cross_attention_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -37,12 +35,22 @@ def test_cross_attention_512x512(
     block,
     block_index,
     attention_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
 
     N, C, H, W = input_shape
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     model = pipe.unet
     model.eval()
 
