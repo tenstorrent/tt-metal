@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <debug/dprint.h>
+
 #include <cstdint>
 
 #include "dataflow_api.h"
@@ -9,7 +11,6 @@
 
 constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
-constexpr auto kLrCbIndex = tt::CBIndex::c_2;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -34,11 +35,9 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t param_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
+
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-
-    generate_tile_with_float32_value(kLrCbIndex, lr);
 
     const uint32_t tile_size_bytes = get_tile_size(kParamInCbIndex);
 
