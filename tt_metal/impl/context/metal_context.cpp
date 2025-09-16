@@ -1225,8 +1225,8 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     cluster_->l1_barrier(device_id);
 
     // Deassert worker cores
-    tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
     for (const auto& worker_core : not_done_cores) {
+        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
             reset_val &= tt::umd::RiscType::TRISC0;

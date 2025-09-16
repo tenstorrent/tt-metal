@@ -85,15 +85,11 @@ SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, chip_id_t mmi
 
 void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset) {
     // We run on DM1. Don't touch DM0. It is running base firmware
-    TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
     if (assert_reset) {
-        reset_val = reset_val & static_cast<TensixSoftResetOptions>(
-                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+        tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::BRISC;
         cluster.assert_risc_reset_at_core(virtual_core, reset_val);
     } else {
-        reset_val = TENSIX_DEASSERT_SOFT_RESET &
-                    static_cast<TensixSoftResetOptions>(
-                        ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        tt::umd::RiscType reset_val = tt::umd::RiscType::TRISC0;
         cluster.deassert_risc_reset_at_core(virtual_core, reset_val);
     }
 }
