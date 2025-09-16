@@ -66,6 +66,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
