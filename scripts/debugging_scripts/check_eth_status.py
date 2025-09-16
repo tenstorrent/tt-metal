@@ -13,6 +13,7 @@ Description:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from triage import ScriptConfig, triage_field, log_check, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
 from ttexalens.register_store import read_word_from_device
@@ -21,8 +22,6 @@ from check_per_device import run as get_check_per_device
 
 from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
-from scripts.debugging_scripts import utils
-from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
     depends=["check_per_device"],
@@ -31,6 +30,8 @@ script_config = ScriptConfig(
 
 @dataclass
 class EthCoreDefinitions:
+    """Arch specific addresses of various ethernet core fields"""
+
     port_status: int
     retrain_count: int
     rx_link_up: int
@@ -39,20 +40,34 @@ class EthCoreDefinitions:
     mailbox_slots: int
 
 
+@dataclass
+class EthCoreCheckData:
+    location: OnChipCoordinate = triage_field("Loc")
+    port_status: str = triage_field("Port Status")
+    retrain_count: int = triage_field("Retrain Count")
+    rx_link_up: str = triage_field("RX Link Up")
+    heartbeat: bool = triage_field("Heartbeat")
+    mailbox: list[int] = triage_field("Mailbox")
+
+    def __init__(self):
+        self.location = None
+        self.port_status = None
+        self.retrain_count = None
+        self.rx_link_up = None
+        self.heartbeat = None
+        self.mailbox = None
+
+
 class EthCore(ABC):
     """
     Base class for Ethernet cores that provides common functionality.
     """
 
+    eth_core_definitions: EthCoreDefinitions
+
     def __init__(self, location: OnChipCoordinate, context: Context):
         self.location = location
         self.context = context
-        self.eth_core_definitions = EthCoreDefinitions(**self.get_addresses())
-
-    @abstractmethod
-    def get_addresses(self) -> dict:
-        """Return architecture-specific addresses as a dictionary."""
-        pass
 
     @abstractmethod
     def port_status_to_string(self, port_status: int) -> str:
@@ -66,15 +81,16 @@ class EthCore(ABC):
         for i in range(100):
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
             if read_data != previous_data:
-                return
+                return True
             previous_data = read_data
         log_check(False, f"No heartbeat detected for {self.location.to_user_str()}")
+        return False
 
     def get_results(self):
         """Get and log all ethernet core status results."""
+        output = EthCoreCheckData()
         # HEARTBEAT
-        passed, message = self.check_for_heartbeat()
-        log_check(passed, message)
+        output.heartbeat = self.check_for_heartbeat()
 
         # PORT STATUS
         if self.eth_core_definitions.port_status is not None:
@@ -83,62 +99,59 @@ class EthCore(ABC):
             )
             port_status_str = self.port_status_to_string(port_status)
             if port_status_str == None:
-                log_check(
-                    False, f"{self.location.to_user_str()} port_status is unknown: {port_status} ({port_status_str})"
-                )
+                output.port_status = "Unknown"
             else:
-                utils.INFO(f"{self.location.to_user_str()} port_status: {port_status} ({port_status_str})")
+                output.port_status = port_status_str
+            log_check(port_status_str != "Down", f"{self.location.to_user_str()} port is down")
 
         # RETRAIN COUNT
-        retrain_count = read_word_from_device(
-            self.location, self.eth_core_definitions.retrain_count, context=self.context
+        output.retrain_count = int(
+            read_word_from_device(self.location, self.eth_core_definitions.retrain_count, context=self.context)
         )
-        if retrain_count > 0:
-            utils.WARN(f"{self.location.to_user_str()} retrain_count: {retrain_count}")
-        else:
-            utils.INFO(f"{self.location.to_user_str()} retrain_count: {retrain_count}")
+        log_check(not output.retrain_count, f"{self.location.to_user_str()} retrain count is {output.retrain_count}")
 
         # RX LINK UP
-        rx_link_up = (
+        output.rx_link_up = (
             "Up"
             if read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
             else "Down"
         )
-        utils.INFO(f"{self.location.to_user_str()} rx_link_up: {rx_link_up}")
+        log_check(output.rx_link_up != "Down", f"{self.location.to_user_str()} RX link is Down")
 
         # MAILBOX
         if self.eth_core_definitions.mailbox is not None:
-            mailbox_data = []
+            output.mailbox = []
             any_pending_message = False
             for i in range(self.eth_core_definitions.mailbox_slots):
                 # Format each mailbox value as a hex string
                 mailbox_value = read_word_from_device(
                     self.location, self.eth_core_definitions.mailbox + i * 4, context=self.context
                 )
-                mailbox_data.append(f"0x{mailbox_value:08X}")
+                output.mailbox.append(f"0x{mailbox_value:08X}")
                 if mailbox_value & 0xFFFF0000 == 0xCA110000:
                     any_pending_message = True
-            if any_pending_message:
-                utils.WARN(f"{self.location.to_user_str()} mailbox: {mailbox_data} (pending message)")
-            else:
-                utils.INFO(f"{self.location.to_user_str()} mailbox: {mailbox_data}")
+                log_check(
+                    any_pending_message, f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)"
+                )
         else:
-            utils.INFO(f"{self.location.to_user_str()} mailbox: None")
+            output.mailbox = ["None"]
+
+        return output
 
 
 class WormholeEthCore(EthCore):
     """Wormhole-specific Ethernet core implementation."""
 
-    def get_addresses(self) -> dict:
-        """Return Wormhole-specific addresses."""
-        return {
-            "port_status": None,
-            "retrain_count": 0x1EC0 + 0x28,
-            "rx_link_up": 0x1EC0 + 0x20,
-            "heartbeat": 0x1C,
-            "mailbox": None,
-            "mailbox_slots": 0,
-        }
+    def __init__(self, location: OnChipCoordinate, context: Context):
+        super().__init__(location, context)
+        self.eth_core_definitions = EthCoreDefinitions(
+            port_status=None,
+            retrain_count=0x1EC0 + 0x28,
+            rx_link_up=0x1EC0 + 0x20,
+            heartbeat=0x1C,
+            mailbox=None,
+            mailbox_slots=0,
+        )
 
     def port_status_to_string(self, port_status: int) -> str:
         """Convert Wormhole port status to readable string."""
@@ -150,16 +163,16 @@ class WormholeEthCore(EthCore):
 class BlackholeEthCore(EthCore):
     """Blackhole-specific Ethernet core implementation."""
 
-    def get_addresses(self) -> dict:
-        """Return Blackhole-specific addresses."""
-        return {
-            "port_status": 0x7CC04,
-            "retrain_count": 0x7CE00,
-            "rx_link_up": 0x7CE04,
-            "heartbeat": 0x7CC70,
-            "mailbox": 0x7D000,
-            "mailbox_slots": 4,
-        }
+    def __init__(self, location: OnChipCoordinate, context: Context):
+        super().__init__(location, context)
+        self.eth_core_definitions = EthCoreDefinitions(
+            port_status=0x7CC04,
+            retrain_count=0x7CE00,
+            rx_link_up=0x7CE04,
+            heartbeat=0x7CC70,
+            mailbox=0x7D000,
+            mailbox_slots=4,
+        )
 
     def port_status_to_string(self, port_status: int) -> str:
         """Convert Blackhole port status to readable string."""
@@ -167,7 +180,7 @@ class BlackholeEthCore(EthCore):
         return status_map.get(port_status, None)
 
 
-def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context):
+def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context) -> EthCoreCheckData:
     """Create appropriate EthCore instance based on device type and get results."""
     if type(device) == WormholeDevice:
         eth_core = WormholeEthCore(location, context)
@@ -183,13 +196,16 @@ def run_checks(device: Device, context: Context):
     # Loop through all active ethernet cores
     locations = device.get_block_locations(block_type="eth")
     for loc in locations:
+        noc_block = device.get_block(loc)
+        if noc_block not in device.active_eth_blocks:
+            continue
         get_eth_core_data(device, loc, context)
         print()
 
 
 def run(args, context: Context):
     check_per_device = get_check_per_device(args, context)
-    check_per_device.run_check(lambda device: run_checks(device, context))
+    return check_per_device.run_check(lambda device: run_checks(device, context))
 
 
 if __name__ == "__main__":
