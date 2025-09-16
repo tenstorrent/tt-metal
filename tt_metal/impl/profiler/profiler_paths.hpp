@@ -14,6 +14,7 @@ namespace tt_metal {
 constexpr std::string_view PROFILER_RUNTIME_ROOT_DIR = "generated/profiler/";
 constexpr std::string_view PROFILER_LOGS_DIR_NAME = ".logs/";
 constexpr std::string_view PROFILER_REPORTS_DIR_NAME = "reports2/";
+constexpr std::string_view PROFILER_OPS_PERF_RESULTS_REPORT_NAME = "ops_perf_results.csv";
 
 inline std::string get_profiler_artifacts_dir() {
     std::string artifacts_dir;
@@ -39,8 +40,6 @@ inline std::string get_profiler_reports_dir() {
 
 inline std::string PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "zone_src_locations.log";
 inline std::string NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "new_zone_src_locations.log";
-
-inline std::string PROFILER_OPS_PERF_RESULTS_LOG = get_profiler_reports_dir() + "ops_perf_results2.csv";
 }  // namespace tt_metal
 
 }  // namespace tt
