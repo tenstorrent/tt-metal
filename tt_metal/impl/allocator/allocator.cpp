@@ -110,6 +110,7 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
+    // auto num_cores = buffer->num_cores_with_data();
     auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
     if (config_.disable_interleaved) {

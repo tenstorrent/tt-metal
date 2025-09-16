@@ -1280,6 +1280,9 @@ template <typename DSpec>
 FORCE_INLINE void noc_async_read_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
+    auto src_addr = s.get_shard_noc_addr(shard_id, noc);
+    DPRINT << "[noc_async_read_shard] src: " << src_addr << ", dst: " << dst_local_l1_addr
+           << ", size: " << s.page_size * shard_volume << ", noc: " << (uint32_t)noc << ENDL();
     noc_async_read(s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
 }
 

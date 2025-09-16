@@ -284,6 +284,7 @@ public:
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
+    std::optional<uint32_t> num_cores_with_data() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
     // Returns the buffer that owns the underlying device memory.

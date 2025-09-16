@@ -140,6 +140,34 @@ struct CopyParams {
 };
 
 template <typename T>
+static void test_nd_sharded_writeback(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
+    TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
+
+    const auto inp0_vec = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+    const auto inp1_vec = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+    auto inp0_tensor = Tensor::from_vector(inp0_vec, input_spec, mesh_device);
+    auto inp1_tensor = Tensor::from_vector(inp1_vec, input_spec, mesh_device);
+
+    log_error(tt::LogTest, "Tensor volume: {}", params.tensor_shape.volume());
+    log_error(tt::LogTest, "Inp0 bytes: {}", inp0_vec.size() * sizeof(T));
+    log_error(tt::LogTest, "Inp0 address: {}", inp0_tensor.buffer()->address());
+    log_error(tt::LogTest, "Inp1 address: {}", inp1_tensor.buffer()->address());
+
+    auto inp0_round_trip = inp0_tensor.cpu(true);
+    auto inp0_round_trip_vec = inp0_round_trip.template to_vector<T>();
+
+    auto inp1_round_trip = inp1_tensor.cpu(true);
+    auto inp1_round_trip_vec = inp1_round_trip.template to_vector<T>();
+
+    EXPECT_EQ(inp1_round_trip_vec, inp1_vec);
+    EXPECT_EQ(inp0_round_trip_vec, inp0_vec);
+    auto n_cores_with_data = inp1_tensor.buffer()->buffer_distribution_spec()->num_cores_with_data();
+    // EXPECT_EQ(inp0_tensor.buffer()->address() - inp1_tensor.buffer()->address(), inp1_tensor.buffer()->aligned_size()
+    // / n_cores_with_data);
+}
+
+template <typename T>
 static void test_multi_core_copy(
     const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& kernel_path) {
     MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
@@ -148,6 +176,7 @@ static void test_multi_core_copy(
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
     auto input_tensor = Tensor::from_vector(src, input_spec, mesh_device);
+    // auto input_round_trip = input_tensor.cpu(true);
     auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), input_spec, mesh_device);
 
     auto input_buffer = input_tensor.buffer();
@@ -159,6 +188,13 @@ static void test_multi_core_copy(
     auto cores_with_data = corerange_to_cores(
         core_groups.cores_with_data, std::nullopt, params.input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
     auto num_cores = cores_with_data.size();
+    log_error(tt::LogTest, "Num cores with data: {}", num_cores);
+    log_error(tt::LogTest, "Num cores in group 1: {}", core_groups.cores_in_group_1.size());
+    log_error(tt::LogTest, "Num cores in group 2: {}", core_groups.cores_in_group_2.size());
+    log_error(tt::LogTest, "Num shards per core in group 1: {}", core_groups.num_shards_per_core_in_group_1);
+    log_error(tt::LogTest, "Num shards per core in group 2: {}", core_groups.num_shards_per_core_in_group_2);
+    log_error(tt::LogTest, "Input address: {}", input_buffer->address());
+    log_error(tt::LogTest, "Output address: {}", output_buffer->address());
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
@@ -178,7 +214,7 @@ static void test_multi_core_copy(
 
     for (size_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& core = cores_with_data[core_idx];
-        std::vector<uint32_t> runtime_args = input_accessor_args.get_common_runtime_args();
+        std::vector<uint32_t> runtime_args;
         auto n_shards = core_groups.cores_in_group_1.contains(core) ? core_groups.num_shards_per_core_in_group_1
                                                                     : core_groups.num_shards_per_core_in_group_2;
         runtime_args.push_back(input_buffer->address());
@@ -199,6 +235,50 @@ static void test_multi_core_copy(
     Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
     auto output_vec = output_tensor_shard0.to_vector<T>();
 
+    // auto num_tiles = output_tensor_shard0.physical_volume() / tt::constants::TILE_HW;
+
+    // std::cout << "Output vector:" << std::endl;
+    // size_t index = 0;
+    // for (size_t t = 0; t < num_tiles; ++t) {
+    //     std::cout << "> Tile #" << t << std::endl;
+    //     for (size_t h = 0; h < tt::constants::TILE_HEIGHT; ++h) {
+    //         std::cout << "> Row #" << h << ": ";
+    //         for (size_t w = 0; w < tt::constants::TILE_WIDTH; ++w) {
+    //             std::cout << output_vec[index++] << " ";
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    // std::cout << "Expected vector:" << std::endl;
+    // index = 0;
+    // for (size_t t = 0; t < num_tiles; ++t) {
+    //     std::cout << "> Tile #" << t << std::endl;
+    //     for (size_t h = 0; h < tt::constants::TILE_HEIGHT; ++h) {
+    //         std::cout << "> Row #" << h << ": ";
+    //         for (size_t w = 0; w < tt::constants::TILE_WIDTH; ++w) {
+    //             std::cout << src[index++] << " ";
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    auto input_round_trip = input_tensor.cpu(true);
+    auto input_round_trip_vec = input_round_trip.template to_vector<T>();
+
+    // std::cout << "Input round trip vector:" << std::endl;
+    // index = 0;
+    // for (size_t t = 0; t < num_tiles * 2; ++t) {
+    //     std::cout << "> Tile #" << t << std::endl;
+    //     for (size_t h = 0; h < tt::constants::TILE_HEIGHT; ++h) {
+    //         std::cout << "> Row #" << h << ": ";
+    //         for (size_t w = 0; w < tt::constants::TILE_WIDTH; ++w) {
+    //             std::cout << input_round_trip_vec[index++] << " ";
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    // }
+    // EXPECT_EQ(input_round_trip_vec, src);
     EXPECT_EQ(output_vec, src);
 }
 
@@ -525,6 +605,17 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
     }
 }
 
+TEST_P(ShardedAccessorTestsCopyOnDevice, NDShardedWriteback) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_nd_sharded_writeback<uint8_t>(params, mesh_device_.get()); break;
+        case DataType::UINT16: test_nd_sharded_writeback<uint16_t>(params, mesh_device_.get()); break;
+        case DataType::BFLOAT16: test_nd_sharded_writeback<bfloat16>(params, mesh_device_.get()); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
     const auto& params = GetParam();
 
@@ -604,6 +695,34 @@ INSTANTIATE_TEST_SUITE_P(
                                    .shard_shape = tt::tt_metal::Shape{1, 32, 64},
                                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                                    .orientation = ShardOrientation::ROW_MAJOR,
+                               },
+                       },
+                       CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{1, 2, 32, 32},
+                           .layout = Layout::TILE,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {0, 1})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+                               },
+                       },
+                       CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{2, 64, 128},
+                           .layout = Layout::ROW_MAJOR,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {7, 7})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
                                },
                        },
                        CopyParams{

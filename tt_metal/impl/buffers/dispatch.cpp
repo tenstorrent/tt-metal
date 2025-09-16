@@ -699,6 +699,14 @@ void write_sharded_buffer_to_core(
         log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_params_for_write_transaction(num_pages_available_in_cq);
+
+        uint32_t txn_data_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
+        std::cout << "[write_sharded_buffer_to_core] Core (" << core.x << ", " << core.y << ") transaction - "
+                  << "Pages: " << dispatch_params.pages_per_txn << ", "
+                  << "Page size: " << dispatch_params.page_size_to_write << " bytes, "
+                  << "Transaction data: " << txn_data_bytes << " bytes, "
+                  << "Remaining pages: " << dispatch_params.core_num_pages_remaining_to_write << std::endl;
+
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
         dispatch_params.update_params_after_write_transaction();
     }
@@ -728,10 +736,26 @@ void write_to_device_buffer(
         ShardedBufferWriteDispatchParams dispatch_params(
             &buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
+
+        std::cout << "[write_to_device_buffer] Sharded buffer write - "
+                  << "Total size: " << buffer.size() << " bytes, "
+                  << "Page size: " << buffer.page_size() << " bytes, "
+                  << "Aligned page size: " << buffer.aligned_page_size() << " bytes, "
+                  << "Total pages: " << (buffer.size() / buffer.page_size()) << ", "
+                  << "Number of cores: " << buffer.num_cores().value() << std::endl;
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
+            auto core = cores[core_id];
+            std::cout << "[write_to_device_buffer] Writing to core " << core.x << ", " << core.y << std::endl;
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
+                uint32_t total_pages_for_core = core_page_mapping.num_pages;
+                uint32_t page_size = buffer.aligned_page_size();
+                uint32_t total_data_bytes_for_core = total_pages_for_core * page_size;
+                std::cout << "[write_to_device_buffer] Core (" << core.x << ", " << core.y << ") - "
+                          << "Pages: " << total_pages_for_core << ", "
+                          << "Page size: " << page_size << " bytes, "
+                          << "Total data: " << total_data_bytes_for_core << " bytes" << std::endl;
                 write_sharded_buffer_to_core(
                     src,
                     core_id,
@@ -897,6 +921,14 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     if (dispatch_params.pages_per_txn > 0) {
         dispatch_params.address = address;
         dispatch_params.core = core;
+
+        uint32_t txn_data_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+        std::cout << "[copy_sharded_buffer_from_core_to_completion_queue] Core (" << core.x << ", " << core.y << ") - "
+                  << "Pages: " << dispatch_params.pages_per_txn << ", "
+                  << "Padded page size: " << dispatch_params.padded_page_size << " bytes, "
+                  << "Transaction data: " << txn_data_bytes << " bytes, "
+                  << "Address: 0x" << address << std::endl;
+
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
     }
 }

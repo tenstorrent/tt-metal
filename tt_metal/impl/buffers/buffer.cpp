@@ -551,7 +551,14 @@ std::optional<uint32_t> Buffer::num_cores() const {
     if (shard_spec_.has_value()) {
         return shard_spec_->tensor_shard_spec.grid.num_cores();
     }
-    return buffer_distribution_spec_.value().num_cores();
+    return buffer_distribution_spec_.value().num_cores_with_data();
+}
+
+std::optional<uint32_t> Buffer::num_cores_with_data() const {
+    if (!is_sharded(this->buffer_layout_)) {
+        return std::nullopt;
+    }
+    return buffer_distribution_spec_.value().num_cores_with_data();
 }
 
 DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {

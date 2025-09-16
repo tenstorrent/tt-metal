@@ -107,6 +107,9 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
         .size = tensor_spec.compute_packed_buffer_size_bytes(),
     };
 
+    std::cout << "[allocate_device_buffer] size: " << tensor_spec.compute_packed_buffer_size_bytes()
+              << ", page_size: " << tensor_spec.compute_page_size_bytes() << std::endl;
+
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
