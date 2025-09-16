@@ -159,6 +159,7 @@ Result conv_transpose2d(
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
+            DefaultQueueId,
             input_tensor_post_tm,
             sliding_window_config,
             0,
@@ -290,8 +291,7 @@ Result conv_transpose2d(
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
-        conv_config.full_inner_dim,
-        conv_config.enable_split_reader);
+        conv_config.full_inner_dim);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
@@ -309,6 +309,7 @@ Result conv_transpose2d(
 }
 
 Result ConvTranpose2dOperation::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,

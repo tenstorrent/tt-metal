@@ -7,12 +7,12 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mlp import SegformerMLP
 from models.demos.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

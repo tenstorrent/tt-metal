@@ -9,7 +9,7 @@ from loguru import logger
 
 from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_image
 from models.experimental.lenet.tt.lenet import lenet5
-from models.utility_functions import comp_pcc, torch2tt_tensor
+from models.common.utility_functions import comp_pcc, torch2tt_tensor
 
 
 @pytest.mark.parametrize(
