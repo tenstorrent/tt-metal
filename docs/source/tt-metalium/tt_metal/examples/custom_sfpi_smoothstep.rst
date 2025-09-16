@@ -170,8 +170,8 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
         for (size_t i = 0; i < vectors_per_face; i++) {
             vFloat x = dst_reg[i];
             vFloat t = (x - edge0) * inv_delta;
-            v_if(t < 0.0f) { t = 0.0f; }
-            v_elseif(t > 1.0f) { t = 1.0f; }
+            v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
+            v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
             v_endif;
             vFloat result = t * t * (3.0f - 2.0f * t);
             dst_reg[i] = result;
@@ -223,11 +223,13 @@ The clamping of the intermediate value ``t`` to the [0, 1] range is implemented 
 
 .. code-block:: cpp
 
-    v_if(t < 0.0f) { t = 0.0f; }
-    v_elseif(t > 1.0f) { t = 1.0f; }
+    v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
+    v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
     v_endif;
 
-The ``v_if`` and ``v_elseif`` instructions perform element-wise conditional assignments on the ``vFloat`` vector `t`. Each lane of the SIMD vector is evaluated independently. A ``v_endif`` is required to terminate the conditional block.
+The ``v_if`` and ``v_elseif`` instructions perform element-wise conditional assignments on the ``vFloat`` vector ``t``. Each lane of the SIMD vector is evaluated independently. A ``v_endif`` is required to terminate the conditional block.
+
+The SFPI constants ``sfpi::vConst0`` and ``sfpi::vConst1`` are vectors with all 32 lanes set to 0.0f and 1.0f, respectively. These constants are hardware-defined, readily available for SFPI programs, and do not require manual initialization. Using these pre-defined constants is more efficient than using literal values because the SFPU operates on vectors. Literal values would require broadcasting to a vector, which adds instructions and overhead.
 
 This is analogous to conditional execution in other parallel programming models, where a mask is used to control which processing elements are active.
 
