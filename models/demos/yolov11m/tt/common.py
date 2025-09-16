@@ -45,14 +45,21 @@ class Yolov11Conv2D:
             math_approx_mode=True,
         )
         self.activation_dtype = activation_dtype
+        # Convert activation string to proper ttnn activation object
+        activation_param = None
+        if self.activation == "silu":
+            activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+        elif self.activation == "relu":
+            activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        # Add more activation types as needed
+
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True if self.reshard else False,
-            activation=self.activation,
+            activation=activation_param,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
