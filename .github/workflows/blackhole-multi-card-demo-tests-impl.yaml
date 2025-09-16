@@ -115,7 +115,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data:ro
+        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data
       options: "--device /dev/tenstorrent"
     defaults:
       run:
