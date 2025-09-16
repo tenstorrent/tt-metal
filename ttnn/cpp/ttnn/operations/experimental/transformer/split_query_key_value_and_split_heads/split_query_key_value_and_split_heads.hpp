@@ -18,7 +18,7 @@ struct SplitFusedQKVAndSplitHeadsOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const uint32_t num_heads = 16,
-        std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors = std::nullopt) {
+        const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors = std::nullopt) {
         auto result = tt::tt_metal::operation::run(
             SplitFusedQKVAndSplitHeadsDeviceOperation{
                 compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config()), num_heads},
