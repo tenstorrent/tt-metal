@@ -248,13 +248,13 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
+    std::unique_ptr<tt::umd::ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
     if (rtoptions_.get_mock_enabled()) {
-        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+        cluster_desc = tt::umd::ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
     }
 
     bool is_base_routing_fw_enabled = Cluster::is_base_routing_fw_enabled(

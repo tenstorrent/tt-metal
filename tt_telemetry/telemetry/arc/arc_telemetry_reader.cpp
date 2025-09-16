@@ -86,7 +86,7 @@ tt::umd::wormhole::TelemetryTag ARCTelemetryReader::translate_to_wormhole_tag(tt
 
 std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> create_arc_telemetry_readers_for_mmio_chips(
     const std::unique_ptr<tt::umd::Cluster>& cluster) {
-    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+    tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
     std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> arc_readers;
 
     // Get all chips using get_ethernet_endpoints_by_chip

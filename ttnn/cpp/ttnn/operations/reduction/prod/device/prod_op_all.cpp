@@ -2,15 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <optional>
 #include "prod_op_all.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include "tools/profiler/op_profiler.hpp"
-
-#include <umd/device/cluster_descriptor.hpp>  // tt_ClusterDescriptor
 
 namespace tt {
 using namespace constants;
