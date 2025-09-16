@@ -46,12 +46,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      # - name: Extract Wheel and files
-      #   run: |
-      #     rm -rf ./docker_artifacts
-      #     mkdir -p ./docker_artifacts
-      #     tar -xvf ttm_any.tar -C ./docker_artifacts
-      #     mv *.whl ./docker_artifacts
       - name: Create Docker Compose file
         run: |
           for i in [1..4]; do
