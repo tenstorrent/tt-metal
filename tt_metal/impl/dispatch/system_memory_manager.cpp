@@ -42,8 +42,6 @@ bool wrap_ge(uint32_t a, uint32_t b) {
 SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
     device_id(device_id),
     num_hw_cqs(num_hw_cqs),
-    fast_write_callable(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fast_pcie_static_tlb_write_callable(device_id)),
     bypass_enable(false),
     bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
@@ -114,7 +112,9 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
                                                                                      completion_queue_writer_virtual.y))
                                                                                  .value();
         auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-        this->completion_byte_addrs[cq_id] = completion_tlb_offset + completion_q_rd_ptr % completion_tlb_size;
+
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
+        // this->completion_byte_addrs[cq_id] = completion_tlb_offset + completion_q_rd_ptr % completion_tlb_size;
 
         this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
@@ -334,7 +334,13 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-    this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
+
+    //  void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &read_ptr_and_toggle, sizeof(uint32_t), this->prefetcher_cores[cq_id], this->completion_byte_addrs[cq_id]
+    );
+    // this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
