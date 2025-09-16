@@ -2,6 +2,29 @@
 
 namespace ttml::models::distributed::pipeline_parallel_llama {
 
+namespace {
+
+void initialize_weights_tensor_parallel(PipelineParallelLlama& model, bool is_tensor_parallel) {
+    auto params = model.parameters();
+    for (auto& [name, tensor_ptr] : params) {
+        const auto& tensor = tensor_ptr->get_value();
+        if (name.find("weight") != std::string::npos) {
+            auto tensor_shape = tensor.logical_shape();
+            auto* device = &autograd::ctx().get_device();
+            auto num_devices = static_cast<uint32_t>(device->num_devices());
+            tensor_shape[0] *= num_devices;
+            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
+        } else if (name.find("bias") != std::string::npos) {
+            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
+        }
+    }
+}
+
+}  // namespace
+
 void PipelineParallelLlama::verify() const {
     auto total_blocks = std::accumulate(
         pipeline_parallel_config.blocks_per_rank.begin(),
@@ -11,6 +34,14 @@ void PipelineParallelLlama::verify() const {
     if (pipeline_parallel_config.num_blocks != total_blocks) {
         throw std::runtime_error("Number of blocks must match number of blocks per rank");
     }
+}
+
+PipelineParallelConfig read_config(const YAML::Node& config) {
+    PipelineParallelConfig pipeline_parallel_config;
+    pipeline_parallel_config.num_blocks = config["num_blocks"].as<uint32_t>();
+    pipeline_parallel_config.blocks_per_rank = config["blocks_per_rank"].as<std::unordered_map<uint32_t, uint32_t>>();
+    pipeline_parallel_config.verify();
+    return pipeline_parallel_config;
 }
 
 PipelineParallelLlama::PipelineParallelLlama(
@@ -118,7 +149,41 @@ PipelineParallelLlama::PipelineParallelLlama(
         register_module(fc, "fc");
     }
 
-    initialize_weights(*this);
+    if (is_tensor_parallel) {
+        initialize_weights_tensor_parallel(*this, is_tensor_parallel);
+    } else {
+        common::transformer::initialize_weights_gpt2(*this);
+    }
+}
+
+bool PipelineParallelLlama::is_first_rank() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
+    auto rank = distributed_ctx.get_rank();
+    return rank.get() == 0U;
+}
+
+bool PipelineParallelLlama::is_last_rank() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
+    auto rank = distributed_ctx.get_rank();
+    return rank.get() == distributed_ctx.get_num_ranks() - 1U;
+}
+
+uint32_t PipelineParallelLlama::get_blocks_to_skip() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
+    auto our_rank = distributed_ctx.get_rank();
+    auto blocks_to_skip = 0U;
+    for (const auto& [rank, blocks] : pipeline_parallel_config.blocks_per_rank) {
+        if (rank.get() < our_rank.get()) {
+            blocks_to_skip += blocks;
+        }
+    }
+    return blocks_to_skip;
+}
+
+uint32_t PipelineParallelLlama::get_blocks_to_load() const {
+    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
+    auto our_rank = distributed_ctx.get_rank();
+    return pipeline_parallel_config.blocks_per_rank.at(our_rank.get());
 }
 
 autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
