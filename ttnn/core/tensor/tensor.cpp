@@ -603,7 +603,7 @@ void memcpy(
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
     auto mesh_device = src.device();
-    TT_FATAL(mesh_device, "src must be a mesh tensor");
+    TT_FATAL(mesh_device, "Tensor must be on device");
     memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
 }
 
@@ -639,7 +639,7 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     auto mesh_device = dst.device();
-    TT_FATAL(mesh_device, "dst must be a mesh tensor");
+    TT_FATAL(mesh_device, "Tensor must be on device");
     memcpy(mesh_device->mesh_command_queue(), dst, src, region);
 }
 
@@ -685,11 +685,9 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         auto mesh_device = src.device();
-        TT_FATAL(mesh_device, "src must be a mesh tensor");
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         auto mesh_device = dst.device();
-        TT_FATAL(mesh_device, "dst must be a mesh tensor");
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         TT_THROW("Unsupported memcpy");

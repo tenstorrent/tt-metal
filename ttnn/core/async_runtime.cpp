@@ -15,7 +15,7 @@ namespace ttnn {
 void write_buffer(
     QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
     auto mesh_device = dst.device();
-    TT_FATAL(mesh_device, "dst must be a mesh tensor");
+    TT_FATAL(mesh_device, "Tensor must be on device");
     auto& cq = mesh_device->mesh_command_queue(*cq_id);
     auto device_tensors = ttnn::distributed::get_device_tensors(dst);
     for (size_t i = 0; i < device_tensors.size(); i++) {
@@ -32,7 +32,7 @@ void read_buffer(
     bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
     auto mesh_device = src.device();
-    TT_FATAL(mesh_device, "src must be a mesh tensor");
+    TT_FATAL(mesh_device, "Tensor must be on device");
     auto& cq = mesh_device->mesh_command_queue(*cq_id);
     auto device_tensors = ttnn::distributed::get_device_tensors(src);
     for (size_t i = 0; i < device_tensors.size(); i++) {
@@ -40,32 +40,17 @@ void read_buffer(
     }
 }
 
-void queue_synchronize(CommandQueue& cq) {
-    // Wait for device CQ to finish
-    Finish(cq);
-}
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
 
-void event_synchronize(const std::shared_ptr<Event>& event) { EventSynchronize(event); }
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
     tt::tt_metal::distributed::EventSynchronize(event);
 }
 
-void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    auto cq_id = cq.id();
-    auto cq_worker = cq.device();
-    EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event);
-}
 void wait_for_event(
     tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
     tt::tt_metal::distributed::EnqueueWaitForEvent(cq, event);
 }
 
-void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    auto cq_id = cq.id();
-    auto cq_worker = cq.device();
-    EnqueueRecordEvent(cq_worker->command_queue(cq_id), event);
-}
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
     return tt::tt_metal::distributed::EnqueueRecordEvent(cq);
 }
