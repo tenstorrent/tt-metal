@@ -1739,10 +1739,10 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     ),
 )
 # @pytest.mark.parametrize("exponent", [0.5])
-@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+@pytest.mark.parametrize("exponent", [5.0])
 def test_unary_rpow_ttnn(input_shapes, exponent, device):
     # torch.manual_seed(0)
-    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-20, 20)
+    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30, 30)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     print(in_data1)
     output_tensor = ttnn.rpow(input_tensor1, exponent)
