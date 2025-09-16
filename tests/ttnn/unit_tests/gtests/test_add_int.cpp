@@ -47,15 +47,19 @@ TEST_P(AddUnaryFixture, CompareWithTorchReference) {
 
     // create input tensor with fill value
     auto input_tensor = ttnn::fill(zero_tensor, param.scalar1);
+    std::cout << "input_tensor: " << param.scalar1 << std::endl;
+    input_tensor.print();
 
     // Run TTNN unary add operation
     auto ttnn_output = ttnn::add_sfpu(input_tensor, param.scalar2);
+    std::cout << "ttnn_output: " << std::endl;
+    ttnn_output.print();
 
     int32_t expected_scalar_result = param.scalar1 + param.scalar2;
 
     // Create expected tensor (should be filled with the expected scalar value)
     auto expected_tensor = ttnn::full(shape, expected_scalar_result, dtype, ttnn::TILE_LAYOUT, device);
-
+    // expected_tensor.print();
     // Compare results using allclose
     auto expected_host = ttnn::from_device(expected_tensor);
     auto output_host = ttnn::from_device(ttnn_output);
@@ -68,9 +72,9 @@ INSTANTIATE_TEST_SUITE_P(
     AddUnaryTests,
     AddUnaryFixture,
     ::testing::Values(
-        // AddUnaryParam{-2147483648, 89, 128, 32},
-        // AddUnaryParam{2147483647, -5,  128, 32}, will be enabled once unary infra supports int32 scalar #23180.
-        AddUnaryParam{45, -5, 32, 32},
+        AddUnaryParam{-2147483648, 89, 128, 32},
+        AddUnaryParam{2147483647, -5, 128, 32},
+        AddUnaryParam{-45, -5, 32, 32},
         AddUnaryParam{-5, 67, 64, 64},
         AddUnaryParam{0, 78, 4, 4},
         AddUnaryParam{17, -96, 64, 64},
