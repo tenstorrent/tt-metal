@@ -566,7 +566,6 @@ private:
         }
 
         if (is_torus_2d_unicast && hops.has_value()) {
-            log_info(tt::LogTest, "Torus 2D unicast: Ignoring provided hops, using control plane routing");
             hops = std::nullopt;
         }
 
