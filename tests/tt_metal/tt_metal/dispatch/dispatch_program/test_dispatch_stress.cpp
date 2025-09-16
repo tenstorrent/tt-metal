@@ -38,7 +38,7 @@ namespace tt::tt_metal {
 using std::vector;
 using namespace tt;
 
-void RunTest(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
@@ -65,10 +65,10 @@ void RunTest(std::shared_ptr<distributed::MeshDevice> mesh_device) {
 
     // Write runtime args
     auto get_first_arg =
-        [](std::shared_ptr<distributed::MeshDevice> mesh_device, CoreCoord& core, uint32_t multiplier) {
+        [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
             return (uint32_t)mesh_device->get_devices()[0]->id() + (uint32_t)core.x * 10 * multiplier;
         };
-    auto get_second_arg = [](std::shared_ptr<distributed::MeshDevice> mesh_device,
+    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                              CoreCoord& core,
                              uint32_t multiplier) { return (uint32_t)core.y * 100 * multiplier; };
 

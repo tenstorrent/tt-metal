@@ -13,7 +13,7 @@ Description:
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, hex_serializer, log_check, run_script
-from check_per_device import run as get_check_per_device
+from run_checks import run as get_run_checks
 from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
@@ -27,7 +27,7 @@ import utils
 from utils import RED, BLUE, GREEN, ORANGE, RST
 
 script_config = ScriptConfig(
-    depends=["check_per_device"],
+    depends=["run_checks"],
 )
 
 
@@ -122,8 +122,8 @@ def check_arc(device: Device):
 
 
 def run(args, context: Context):
-    check_per_device = get_check_per_device(args, context)
-    return check_per_device.run_check(check_arc)
+    run_checks = get_run_checks(args, context)
+    return run_checks.run_per_device_check(lambda device: check_arc(device))
 
 
 if __name__ == "__main__":

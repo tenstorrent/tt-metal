@@ -163,7 +163,6 @@ Checks: >
   -performance-no-int-to-ptr,
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
-  -performance-unnecessary-value-param,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
   -readability-avoid-nested-conditional-operator,

@@ -317,7 +317,7 @@ inline void print_datum(std::ostream& ss, T datum) {
 
 template <>
 inline void print_datum(std::ostream& ss, bfloat16 datum) {
-    print_datum(ss, datum.to_float());
+    print_datum(ss, static_cast<float>(datum));
 }
 
 template <>
