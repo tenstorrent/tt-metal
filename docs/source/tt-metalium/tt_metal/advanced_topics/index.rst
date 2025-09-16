@@ -10,5 +10,4 @@ Hardware implications and the effects
     tiles
     memory_for_kernel_developers
     compute_engines_and_dataflow_within_tensix
-    writing_sfpu_kernels
     fp32_accuracy
