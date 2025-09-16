@@ -5,6 +5,7 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_op.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -52,6 +53,7 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
@@ -97,13 +99,15 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 enough_space_height},
             {input_tensor},
             {},
-            {})[0];
+            {},
+            queue_id)[0];
     };
 
     return build_ndiml_tilize_val(base_tilize)(input_tensor);
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& output_padded_shape,
     const PadValue pad_value,
@@ -123,10 +127,17 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     }
 
     return invoke(
-        input_tensor, ttnn::Shape{output_padded_shape}, pad_value, memory_config, output_dtype, use_multicore);
+        queue_id,
+        input_tensor,
+        ttnn::Shape{output_padded_shape},
+        pad_value,
+        memory_config,
+        output_dtype,
+        use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -159,7 +170,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
+        queue_id, input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -45,9 +45,10 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
@@ -144,7 +145,7 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
     return src;
 }
 
-void clear_buffer(distributed::MeshCommandQueue& cq, std::shared_ptr<distributed::MeshBuffer> buffer) {
+void clear_buffer(distributed::MeshCommandQueue& cq, const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     TT_FATAL(buffer->size() % sizeof(uint32_t) == 0, "Error");
     vector<uint32_t> zeroes(buffer->size() / sizeof(uint32_t), 0);
     distributed::WriteShard(cq, buffer, zeroes, distributed::MeshCoordinate(0, 0));
@@ -232,10 +233,10 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
 // These are helper functions that are used for Slow Dispatch based IO. These are used in tests mixing Fast Dispatch IO
 // with Slow Dispatch for validation.
 void WriteToUnitMeshBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const TestBufferConfig& config,
     const std::vector<uint32_t>& src,
-    std::shared_ptr<distributed::MeshBuffer> buf,
+    const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
     auto device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
@@ -248,10 +249,10 @@ void WriteToUnitMeshBuffer(
 }
 
 void ReadFromUnitMeshBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const TestBufferConfig& config,
     std::vector<uint32_t>& dst,
-    std::shared_ptr<distributed::MeshBuffer> buf,
+    const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
     auto device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
@@ -266,7 +267,7 @@ void ReadFromUnitMeshBuffer(
 // These are helper functions used to write and read from a region of a MeshBuffer (sub-buffer)
 void EnqueueWriteMeshSubBuffer(
     distributed::MeshCommandQueue& cq,
-    const std::shared_ptr<distributed::MeshBuffer> buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& buffer,
     const std::vector<uint32_t>& src,
     const BufferRegion& region,
     bool blocking) {
@@ -282,7 +283,7 @@ void EnqueueWriteMeshSubBuffer(
 void EnqueueReadMeshSubBuffer(
     distributed::MeshCommandQueue& cq,
     std::vector<uint32_t>& dst,
-    const std::shared_ptr<distributed::MeshBuffer> buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& buffer,
     const BufferRegion& region,
     bool blocking) {
     auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
@@ -296,10 +297,9 @@ void EnqueueReadMeshSubBuffer(
 
 template <bool cq_dispatch_only = false>
 void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
-
     auto device = mesh_device->get_devices()[0];
     // Clear out command queue
     uint16_t channel =
@@ -383,7 +383,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 
 template <bool blocking>
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const BufferStressTestConfig& config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshCommandQueue& cq,
+    const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
@@ -452,7 +454,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 }
 
 void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     BufferStressTestConfigSharded& config,
     BufferType buftype,
@@ -523,7 +525,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
 }
 
 std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> EnqueueWriteShard_prior_to_wrap(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
     size_t buf_size = config.num_pages * config.page_size;
@@ -543,7 +545,7 @@ std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> Enque
 }
 
 void test_EnqueueWrap_on_EnqueueReadBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
     auto [buffer, src] = EnqueueWriteShard_prior_to_wrap(mesh_device, cq, config);
@@ -554,7 +556,7 @@ void test_EnqueueWrap_on_EnqueueReadBuffer(
 }
 
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const BufferStressTestConfig& config) {
     srand(config.seed);
@@ -605,7 +607,9 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 }
 
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs, const TestBufferConfig& config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs,
+    const TestBufferConfig& config) {
     bool pass = true;
     for (const bool use_void_star_api : {true, false}) {
         size_t buf_size = config.num_pages * config.page_size;

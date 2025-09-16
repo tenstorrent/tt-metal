@@ -10,7 +10,7 @@
 #include <vector>
 #include <stdexcept>
 #include <tt_stl/caseless_comparison.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace tt::scaleout_tools {
@@ -79,7 +79,8 @@ std::pair<
     std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
     std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
 create_ports_and_connections(
-    std::function<std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>()> ports_func,
+    const std::function<std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>()>&
+        ports_func,
     PortType connection_port_type) {
     auto ports = ports_func();
     auto internal_connections = create_internal_connections_from_ports(ports, connection_port_type);

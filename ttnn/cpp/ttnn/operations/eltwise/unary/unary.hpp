@@ -23,6 +23,7 @@ struct ExecuteUnaryInvokeResult {
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -34,6 +35,7 @@ struct ExecuteUnary {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -43,6 +45,7 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFastAndApproximateModeTrue {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         bool parameter = true,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -52,6 +55,7 @@ struct ExecuteUnaryWithFastAndApproximateModeTrue {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         int vector_mode = (int32_t)VecMode::RC,
         bool parameter = false,
@@ -62,6 +66,7 @@ struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -71,6 +76,7 @@ struct ExecuteUnaryWithFloatParameter {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithTwoFloatParameter {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float parameter_a,
         float parameter_b,
@@ -82,6 +88,7 @@ template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVariantFloatIntParameter {
     template <typename T>
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -90,6 +97,7 @@ struct ExecuteUnaryWithVariantFloatIntParameter {
 
 struct LogSigmoid {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -97,20 +105,33 @@ struct LogSigmoid {
 
 struct Sigmoid_accurate {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 struct Unary_chain {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::vector<UnaryWithParam>& ops_chain,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Selu {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float scale = 1.050700987,
+        float alpha = 1.673263242,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Softplus {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         float beta,
         float threshold,
@@ -120,6 +141,7 @@ struct Softplus {
 
 struct Prelu {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -128,6 +150,7 @@ struct Prelu {
 
 struct Identity {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -135,6 +158,7 @@ struct Identity {
 
 struct Abs {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -144,6 +168,7 @@ struct Abs {
 
 struct Eqz {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -151,6 +176,7 @@ struct Eqz {
 
 struct Floor {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -158,6 +184,7 @@ struct Floor {
 
 struct Trunc {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -165,6 +192,7 @@ struct Trunc {
 
 struct Frac {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -172,6 +200,7 @@ struct Frac {
 
 struct Ceil {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -189,6 +218,7 @@ struct Dropout {
 template <UnaryOpType unary_op_type, typename T = int32_t>
 struct ExecuteUnaryWithIntegerParameter {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -198,6 +228,7 @@ struct ExecuteUnaryWithIntegerParameter {
 template <UnaryOpType unary_op_type, typename T = int32_t>
 struct ExecuteUnaryWithOptionalIntegerParameter {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<T>& parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -207,12 +238,14 @@ struct ExecuteUnaryWithOptionalIntegerParameter {
 template <UnaryOpType unary_op_type, typename T = float>
 struct SymmetricBinop {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         T param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
+        QueueId queue_id,
         T param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -222,12 +255,14 @@ struct SymmetricBinop {
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 struct AsymmetricBinop {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
+        QueueId queue_id,
         float param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -236,21 +271,15 @@ struct AsymmetricBinop {
 
 struct Mish {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-struct Tanhshrink {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        bool approx = false);
-};
-
 struct Hardshrink {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float lambda = 0.5f,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -259,6 +288,7 @@ struct Hardshrink {
 
 struct Elu {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         float alpha = 1.0f,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -267,6 +297,7 @@ struct Elu {
 
 struct Hardtanh {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float min_val = -1.0f,
         float max_val = 1.0f,
@@ -276,6 +307,7 @@ struct Hardtanh {
 
 struct Softshrink {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         float lambda = 0.5f,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -284,6 +316,7 @@ struct Softshrink {
 
 struct Deg2Rad {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -291,6 +324,7 @@ struct Deg2Rad {
 
 struct Rad2Deg {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -298,6 +332,16 @@ struct Rad2Deg {
 
 struct Tanh {
     static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        bool approx = false);
+};
+
+struct Tanhshrink {
+    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -380,6 +424,7 @@ REGISTER_UNARY_OPERATION(atan, ATAN);
 REGISTER_UNARY_OPERATION(atanh, ATANH);
 REGISTER_UNARY_OPERATION(cos, COS);
 REGISTER_UNARY_OPERATION(acosh, ACOSH);
+REGISTER_UNARY_OPERATION(cosh, COSH);
 REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
@@ -474,6 +519,8 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
+
+constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();

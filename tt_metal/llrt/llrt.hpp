@@ -18,9 +18,8 @@
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 
 struct go_msg_t;
@@ -63,7 +62,7 @@ using WorkerCores = std::vector<WorkerCore>;
 const ll_api::memory& get_risc_binary(
     const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
-    std::function<void(ll_api::memory&)> update_callback = nullptr);
+    const std::function<void(ll_api::memory&)>& update_callback = nullptr);
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 

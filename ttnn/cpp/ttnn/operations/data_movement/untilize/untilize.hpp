@@ -12,6 +12,7 @@ namespace operations::data_movement {
 
 struct ExecuteUntilize {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         bool use_multicore = true,

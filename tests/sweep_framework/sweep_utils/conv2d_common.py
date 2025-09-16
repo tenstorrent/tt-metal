@@ -63,7 +63,6 @@ def run_conv2d_full_sweep(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -126,7 +125,6 @@ def run_conv2d_full_sweep(
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

@@ -76,7 +76,6 @@ int main() {
         .page_size = packed_data_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
-    uint32_t pad_addr = pad_buffer->address();
 
     uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
     tt_metal::InterleavedBufferConfig output_dram_config{
@@ -160,7 +159,6 @@ int main() {
     uint32_t start_src_idx = 0;
     uint32_t start_dst_idx = 0;
     uint32_t num_rows_per_core = src_M / num_cores;
-    uint32_t row_size_diff = dst_N - src_N;
     uint32_t num_src_sticks_per_core = num_packed_row_src * num_rows_per_core;
     for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
         CoreCoord core = {0, core_idx};
@@ -192,7 +190,7 @@ int main() {
         src_N,
         dst_M,
         dst_N,
-        pad_value.to_uint16());
+        std::bit_cast<uint16_t>(pad_value));
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {

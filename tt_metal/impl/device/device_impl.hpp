@@ -119,7 +119,7 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
+    CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -177,7 +177,9 @@ public:
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        this->mesh_device = mesh_device;
+    };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
