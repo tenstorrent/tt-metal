@@ -45,7 +45,7 @@ namespace basic_tests::circular_buffer {
 
 void validate_cb_address(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
     auto& cq = mesh_device->mesh_command_queue();

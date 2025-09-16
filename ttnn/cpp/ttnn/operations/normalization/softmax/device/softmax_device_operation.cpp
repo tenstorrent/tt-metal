@@ -4,6 +4,8 @@
 
 #include "softmax_device_operation.hpp"
 
+#include <utility>
+
 #include "softmax_operation_types.hpp"
 #include "softmax_program_factory.hpp"
 
@@ -359,7 +361,7 @@ SoftmaxDeviceOperation::invoke(
             dim,
             scale,
             inplace,
-            output_mem_config,
+            std::move(output_mem_config),
             program_config,
             is_causal_mask,
             compute_kernel_config,
