@@ -96,6 +96,9 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // Utilities
+    bool is_coord_in_range(CoreCoord coord, CoreType core_type);
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
