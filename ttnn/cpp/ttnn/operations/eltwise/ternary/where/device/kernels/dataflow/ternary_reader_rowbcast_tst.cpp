@@ -34,18 +34,19 @@ void kernel_main() {
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
-    constexpr auto predicate_cb = tt::CBIndex::c_0;
-    constexpr auto false_cb = tt::CBIndex::c_1;
+    constexpr auto cb_id_src = tt::CBIndex::c_0;    // predicate
+    constexpr auto cb_id_src_c = tt::CBIndex::c_1;  // false tensor (matches TTT pattern using c_1 as third tensor)
 
     // Compile-time args layout for TST: 2 CB ids, then 2 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
-    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(false_cb));
+    const auto src = TensorAccessor(src0_args, src0_addr, get_tile_size(cb_id_src));
+    const auto src_c = TensorAccessor(src1_args, src1_addr, get_tile_size(cb_id_src_c));
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
+    const uint32_t dst_num_tiles = num_tiles;
 
     const uint32_t tiles_per_n = C * HtWt;
     const uint32_t tiles_per_d = N * tiles_per_n;
@@ -72,83 +73,66 @@ void kernel_main() {
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
 
-    // For false tensor - use false tensor strides but predicate dimensions for offset
-    uint32_t false_tile_offset =
+    // For false tensor (CB1) - use false tensor strides
+    uint32_t tile_offset_c =
         start_nd * false_nD_stride + start_d * false_d_stride + start_n * false_n_stride + start_c * false_c_stride;
 #if !SRC_BCAST_FALSE
-    // Use predicate dimensions for offset calculation (same as TTT)
-    false_tile_offset += start_th * Wt;
+    tile_offset_c += start_th * Wt;
 #endif
-    uint32_t false_next_c_shift = false_c_stride - HtWt;                  // Use predicate HtWt
-    uint32_t false_next_n_shift = false_n_stride - false_c_stride * C;    // Use predicate C
-    uint32_t false_next_d_shift = false_d_stride - false_n_stride * N;    // Use predicate N
-    uint32_t false_next_nd_shift = false_nD_stride - false_d_stride * D;  // Use predicate D
+    uint32_t next_c_shift_c = false_c_stride - HtWt;
+    uint32_t next_n_shift_c = false_n_stride - false_c_stride * C;
+    uint32_t next_d_shift_c = false_d_stride - false_n_stride * N;
+    uint32_t next_nd_shift_c = false_nD_stride - false_d_stride * D;
 
-    // Main loop for reading tiles
+    // Main loop for reading tiles - TTT ROW BROADCAST PATTERN
     uint32_t num_tiles_read = 0;
-    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < num_tiles; ++nd, start_d = 0) {
-        for (uint32_t d = start_d; d < D && num_tiles_read < num_tiles; ++d, start_n = 0) {
-            for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
-                for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
-#if SRC_BCAST_PREDICATE
-                    cb_reserve_back(predicate_cb, onetile);
-#if !SRC_SHARDED_PREDICATE
-                    uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                    noc_async_read_tile(tile_offset + start_th, s0, l1_write_addr_predicate);
-                    noc_async_read_barrier();
-#endif
-                    FILL_TILE_WITH_FIRST_ROW(predicate_cb);
-                    cb_push_back(predicate_cb, onetile);
-#endif
-#if SRC_BCAST_FALSE
-                    cb_reserve_back(false_cb, onetile);
-#if !SRC_SHARDED_FALSE
-                    uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                    noc_async_read_tile(false_tile_offset + start_th, s1, l1_write_addr_false);
-                    noc_async_read_barrier();
-#endif
-                    FILL_TILE_WITH_FIRST_ROW_B(false_cb);
-                    cb_push_back(false_cb, onetile);
-#endif
-
-                    for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th) {
-                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < num_tiles;
+    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
+        for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
+            for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
+                for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
+                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th, start_tw = 0) {
+                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_BCAST_PREDICATE
-                            cb_reserve_back(predicate_cb, onetile);
 #if !SRC_SHARDED_PREDICATE
-                            uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                            noc_async_read_tile(tile_offset + tw, s0, l1_write_addr_predicate);
-                            noc_async_read_barrier();
+                            cb_reserve_back(cb_id_src, onetile);
+                            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
+                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
 #endif
-                            cb_push_back(predicate_cb, onetile);
-#endif
-#if !SRC_BCAST_FALSE
-                            cb_reserve_back(false_cb, onetile);
 #if !SRC_SHARDED_FALSE
-                            uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                            noc_async_read_tile(false_tile_offset + tw, s1, l1_write_addr_false);
+                            // read a tile from src_c (false tensor)
+                            cb_reserve_back(cb_id_src_c, onetile);
+                            uint32_t l1_write_addr_c = get_write_ptr(cb_id_src_c);
+                            noc_async_read_tile(tile_offset_c + tw, src_c, l1_write_addr_c);
+#endif
+#if !SRC_SHARDED_PREDICATE || !SRC_SHARDED_FALSE
                             noc_async_read_barrier();
 #endif
-                            cb_push_back(false_cb, onetile);
+#if SRC_BCAST_PREDICATE && !BCAST_LLK  // no sharding support for row bcast yet
+                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+#endif
+#if SRC_BCAST_FALSE && !BCAST_LLK  // no sharding support for row bcast yet
+                            FILL_TILE_WITH_FIRST_ROW_C(cb_id_src_c);
+#endif
+#if !SRC_SHARDED_PREDICATE
+                            cb_push_back(cb_id_src, onetile);
+#endif
+#if !SRC_SHARDED_FALSE
+                            cb_push_back(cb_id_src_c, onetile);
 #endif
                         }
-                        // next row of tiles should start at the first column for non-sharded case
                         if (dst_shard_width == 0) {
+                            // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-#if !SRC_BCAST_PREDICATE && !SRC_SHARDED_PREDICATE
+#if !SRC_BCAST_PREDICATE
                         tile_offset += Wt;
 #endif
-#if !SRC_BCAST_FALSE && !SRC_SHARDED_FALSE
-                        false_tile_offset += Wt;
+#if !SRC_BCAST_FALSE
+                        tile_offset_c += Wt;
 #endif
                     }
 #if !SRC_SHARDED_PREDICATE
 #if SRC_BCAST_PREDICATE
-                    // same as following logically
-                    // tile_offset += HtWt;
-                    // tile_offset += next_c_shift;
                     tile_offset += c_stride;
 #else
                     tile_offset += next_c_shift;
@@ -156,11 +140,9 @@ void kernel_main() {
 #endif
 #if !SRC_SHARDED_FALSE
 #if SRC_BCAST_FALSE
-                    // For broadcast false tensor, use full stride
-                    false_tile_offset += false_c_stride;
+                    tile_offset_c += false_c_stride;
 #else
-                    // For non-broadcast false tensor, use incremental stride
-                    false_tile_offset += false_next_c_shift;
+                    tile_offset_c += next_c_shift_c;
 #endif
 #endif
                 }
@@ -168,21 +150,21 @@ void kernel_main() {
                 tile_offset += next_n_shift;
 #endif
 #if !SRC_SHARDED_FALSE
-                false_tile_offset += false_next_n_shift;
+                tile_offset_c += next_n_shift_c;
 #endif
             }
 #if !SRC_SHARDED_PREDICATE
             tile_offset += next_d_shift;
 #endif
 #if !SRC_SHARDED_FALSE
-            false_tile_offset += false_next_d_shift;
+            tile_offset_c += next_d_shift_c;
 #endif
         }
 #if !SRC_SHARDED_PREDICATE
         tile_offset += next_nd_shift;
 #endif
 #if !SRC_SHARDED_FALSE
-        false_tile_offset += false_next_nd_shift;
+        tile_offset_c += next_nd_shift_c;
 #endif
     }
 }

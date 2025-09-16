@@ -39,8 +39,6 @@ enum class KernelName {
     ComputeColBcastTTS,
     ComputeColBcastTST,
     ComputeRowBcastTTT,
-    ComputeRowBcastTTS,
-    ComputeRowBcastTST,
     ComputeScalarBcastTST,
     ComputeScalarBcastTTS,
 };

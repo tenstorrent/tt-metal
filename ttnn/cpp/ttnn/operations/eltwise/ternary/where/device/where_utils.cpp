@@ -39,7 +39,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
                 reader_kernel = KernelName::ReaderRowBcastTTS;
-                compute_kernel = KernelName::ComputeRowBcastTTS;
+                compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTS;
@@ -65,7 +65,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
                 reader_kernel = KernelName::ReaderRowBcastTST;
-                compute_kernel = KernelName::ComputeRowBcastTST;
+                compute_kernel = KernelName::ComputeNoBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTST;
@@ -150,10 +150,6 @@ std::string get_kernel_file_path(KernelName kernel_name) {
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tst.cpp";
         case KernelName::ComputeRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_ttt.cpp";
-        case KernelName::ComputeRowBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_tts.cpp";
-        case KernelName::ComputeRowBcastTST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
