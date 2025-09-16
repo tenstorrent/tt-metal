@@ -18,6 +18,7 @@ function(setup_multiprocess_unit_test target_name test_source)
         PRIVATE
             test_common_libs
             TTNN::CPP
+	    execinfo
     )
     target_include_directories(${target_name} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 endfunction()

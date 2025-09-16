@@ -2,7 +2,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
 add_library(test_common_utils STATIC)
 target_sources(test_common_utils PUBLIC common_test_utils.cpp)
-target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+target_link_libraries(test_common_utils PRIVATE TTNN::CPP execinfo)
 
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
@@ -10,12 +10,14 @@ function(setup_ttnn_test_target target_name)
         PUBLIC
             test_common_libs
             TTNN::CPP
+	    execinfo
     )
     target_include_directories(
         ${target_name}
         PRIVATE
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
+	    execinfo
     )
 endfunction()
 
@@ -42,6 +44,7 @@ target_link_libraries(
         test_common_libs
         test_common_utils
         TTNN::CPP
+	execinfo
 )
 
 add_library(unit_tests_ttnn_basic OBJECT)
@@ -68,6 +71,7 @@ target_link_libraries(
     PRIVATE
         test_common_libs
         TTNN::CPP
+	execinfo
 )
 
 add_executable(unit_tests_ttnn)
@@ -76,6 +80,7 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
+	execinfo
 )
 
 # unit_tests_ttnn_ccl
@@ -100,10 +105,11 @@ target_link_libraries(
     PUBLIC
         test_common_libs
         TTNN::CPP
+	execinfo
 )
 
 add_executable(unit_tests_ttnn_ccl)
-target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
+target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL execinfo)
 
 # unit_tests_ttnn_ccl_ops
 
@@ -126,10 +132,11 @@ target_link_libraries(
     PUBLIC
         test_common_libs
         TTNN::CPP
+	execinfo
 )
 
 add_executable(unit_tests_ttnn_ccl_ops)
-target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
+target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops execinfo)
 
 # unit_tests_ttnn_ccl_multi_tensor
 
@@ -174,10 +181,10 @@ target_sources(
         tensor/test_xtensor_conversion.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_tensor_lib)
-target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
+target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor execinfo)
 
 add_executable(unit_tests_ttnn_tensor)
-target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor execinfo)
 
 # test_ccl_multi_cq_multi_device
 
@@ -190,6 +197,7 @@ target_link_libraries(
         Boost::asio
         Boost::lockfree
         test_common_utils
+	execinfo
 )
 
 # unit_tests_ttnn_emitc

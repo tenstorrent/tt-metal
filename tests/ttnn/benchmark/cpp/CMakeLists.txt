@@ -19,6 +19,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             test_common_libs
             benchmark::benchmark
             Python3::Python
+	    execinfo
     )
     target_include_directories(
         ${TEST_TARGET}

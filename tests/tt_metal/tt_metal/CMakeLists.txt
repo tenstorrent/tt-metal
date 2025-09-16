@@ -3,6 +3,7 @@ target_link_libraries(
     test_metal_common_libs
     INTERFACE
         Metalium::Metal
+	execinfo
         test_common_libs
 )
 

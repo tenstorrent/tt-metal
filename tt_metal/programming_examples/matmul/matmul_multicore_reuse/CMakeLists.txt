@@ -10,4 +10,5 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         Matmul::Common
+	execinfo
 )

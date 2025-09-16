@@ -1,5 +1,5 @@
 # All programming example targets should link tt_stl
-link_libraries(TT::STL)
+link_libraries(TT::STL execinfo)
 
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)

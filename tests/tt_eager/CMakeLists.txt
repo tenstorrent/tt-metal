@@ -2,7 +2,7 @@ set(Python3_FIND_STRATEGY LOCATION)
 find_package(Python3 REQUIRED COMPONENTS Development)
 
 add_library(test_eager_common_libs INTERFACE)
-target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
+target_link_libraries(test_eager_common_libs INTERFACE test_common_libs execinfo)
 
 set(TT_EAGER_TESTS_OPS
     ops/test_eltwise_binary_op.cpp

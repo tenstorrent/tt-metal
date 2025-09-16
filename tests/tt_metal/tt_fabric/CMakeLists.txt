@@ -19,6 +19,7 @@ target_link_libraries(
         tt_metal
         fabric
         test_common_libs
+	execinfo
 )
 
 target_include_directories(
@@ -49,6 +50,7 @@ target_link_libraries(
         tt_metal
         fabric
         test_common_libs
+	execinfo
 )
 
 target_include_directories(
@@ -82,6 +84,7 @@ target_link_libraries(
         tt_metal
         fabric
         test_common_libs
+	execinfo
 )
 
 target_include_directories(
@@ -111,6 +114,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+	execinfo
 )
 add_executable(test_system_health)
 
@@ -128,7 +132,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
-target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
+target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke execinfo)
 
 add_library(test_fabric_smoke OBJECT)
 add_library(TT::Metalium::Test::Fabric::Smoke ALIAS test_fabric_smoke)
@@ -150,10 +154,11 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+	execinfo
 )
 
 add_executable(fabric_smoke_tests)
-target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke)
+target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke execinfo)
 set_target_properties(
     fabric_smoke_tests
     PROPERTIES
@@ -184,6 +189,7 @@ target_link_libraries(
         tt_metal
         fabric
         test_common_libs
+	execinfo
 )
 target_sources(
     unit_tests_1d_fabric_latency
