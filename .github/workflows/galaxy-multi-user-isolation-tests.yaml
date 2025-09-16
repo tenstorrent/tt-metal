@@ -228,7 +228,7 @@ jobs:
           }
 
           export -f run_test
-          # run_test "test_system_health" "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
+          run_test "test_system_health" "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
 
       - name: Tear down containers
