@@ -4,7 +4,8 @@
 
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <cstdint>
 #include <cstddef>

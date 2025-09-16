@@ -36,7 +36,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;

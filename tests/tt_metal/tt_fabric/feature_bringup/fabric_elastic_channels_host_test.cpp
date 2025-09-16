@@ -34,7 +34,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include <array>
