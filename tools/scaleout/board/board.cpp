@@ -179,6 +179,31 @@ const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& Boar
     return internal_connections_;
 }
 
+// N150 board class
+class N150 : public Board {
+public:
+    N150() : Board(create_n150_ports(), create_n150_internal_connections(), tt::umd::BoardType::N150) {}
+
+private:
+    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_n150_ports() {
+        std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
+
+        // QSFP_DD_400G ports
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(1), 0, 6, 7);  // ASIC 0, channels 6,7
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(2), 0, 0, 1);  // ASIC 0, channels 0,1
+
+        // WARP100 ports
+        add_sequential_port(ports, PortType::WARP100, PortId(1), 0, 14, 15);  // ASIC 0, channels 14,15
+
+        return ports;
+    }
+
+    static std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_n150_internal_connections() {
+        // No internal connections for N150
+        return std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>();
+    }
+};
+
 // N300 board class
 class N300 : public Board {
 public:
@@ -196,9 +221,9 @@ private:
     static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_n300_ports() {
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
-        // QSFP ports
-        add_sequential_port(ports, PortType::QSFP, PortId(1), 0, 6, 7);  // ASIC 0, channels 6,7
-        add_sequential_port(ports, PortType::QSFP, PortId(2), 0, 0, 1);  // ASIC 0, channels 0,1
+        // QSFP_DD_400G ports
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(1), 0, 6, 7);  // ASIC 0, channels 6,7
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(2), 0, 0, 1);  // ASIC 0, channels 0,1
 
         // WARP100 ports
         add_sequential_port(ports, PortType::WARP100, PortId(1), 0, 14, 15);  // ASIC 0, channels 14,15
@@ -230,13 +255,13 @@ private:
     create_ubb_wormhole_ports() {
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
-        // QSFP ports
-        add_sequential_port(ports, PortType::QSFP, PortId(1), 5, 4, 7);  // ASIC 5, channels 4,5,6,7
-        add_sequential_port(ports, PortType::QSFP, PortId(2), 1, 4, 7);  // ASIC 1, channels 4,5,6,7
-        add_sequential_port(ports, PortType::QSFP, PortId(3), 1, 0, 3);  // ASIC 1, channels 0,1,2,3
-        add_sequential_port(ports, PortType::QSFP, PortId(4), 2, 0, 3);  // ASIC 2, channels 0,1,2,3
-        add_sequential_port(ports, PortType::QSFP, PortId(5), 3, 0, 3);  // ASIC 3, channels 0,1,2,3
-        add_sequential_port(ports, PortType::QSFP, PortId(6), 4, 0, 3);  // ASIC 4, channels 0,1,2,3
+        // QSFP_DD_400G ports
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(1), 5, 4, 7);  // ASIC 5, channels 4,5,6,7
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(2), 1, 4, 7);  // ASIC 1, channels 4,5,6,7
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(3), 1, 0, 3);  // ASIC 1, channels 0,1,2,3
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(4), 2, 0, 3);  // ASIC 2, channels 0,1,2,3
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(5), 3, 0, 3);  // ASIC 3, channels 0,1,2,3
+        add_sequential_port(ports, PortType::QSFP_DD_400G, PortId(6), 4, 0, 3);  // ASIC 4, channels 0,1,2,3
 
         // LINKING_BOARD_1 ports
         add_sequential_port(ports, PortType::LINKING_BOARD_1, PortId(1), 5, 12, 15);  // ASIC 5, channels 12,13,14,15
@@ -273,6 +298,30 @@ private:
         add_sequential_port(ports, PortType::TRACE, PortId(20), 4, 12, 15);  // ASIC 4, channels 12,13,14,15
 
         return ports;
+    }
+};
+
+// P150 board class
+class P150 : public Board {
+public:
+    P150() : Board(create_p150_ports(), create_p150_internal_connections(), tt::umd::BoardType::P150) {}
+
+private:
+    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_p150_ports() {
+        std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
+
+        // QSFP_DD_800G ports
+        add_port(ports, PortType::QSFP_DD_800G, PortId(1), {{0, ChanId(9)}, {0, ChanId(11)}});  // ASIC 0, channels 9,11
+        add_port(ports, PortType::QSFP_DD_800G, PortId(2), {{0, ChanId(8)}, {0, ChanId(10)}});  // ASIC 0, channels 8,10
+        add_port(ports, PortType::QSFP_DD_800G, PortId(3), {{0, ChanId(5)}, {0, ChanId(7)}});   // ASIC 0, channels 5,7
+        add_port(ports, PortType::QSFP_DD_800G, PortId(4), {{0, ChanId(4)}, {0, ChanId(6)}});   // ASIC 0, channels 4,6
+
+        return ports;
+    }
+
+    static std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_p150_internal_connections() {
+        // No internal connections for P150
+        return std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>();
     }
 };
 
@@ -319,55 +368,6 @@ private:
     }
 };
 
-// P150 board class
-class P150 : public Board {
-public:
-    P150() : Board(create_p150_ports(), create_p150_internal_connections(), tt::umd::BoardType::P150) {}
-
-private:
-    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_p150_ports() {
-        std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
-
-        // QSFP ports
-        add_port(ports, PortType::QSFP, PortId(1), {{0, ChanId(9)}, {0, ChanId(11)}});  // ASIC 0, channels 9,11
-        add_port(ports, PortType::QSFP, PortId(2), {{0, ChanId(8)}, {0, ChanId(10)}});  // ASIC 0, channels 8,10
-        add_port(ports, PortType::QSFP, PortId(3), {{0, ChanId(5)}, {0, ChanId(7)}});   // ASIC 0, channels 5,7
-        add_port(ports, PortType::QSFP, PortId(4), {{0, ChanId(4)}, {0, ChanId(6)}});   // ASIC 0, channels 4,6
-
-        return ports;
-    }
-
-    static std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_p150_internal_connections() {
-        // No internal connections for P150
-        return std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>();
-    }
-};
-
-// N150 board class
-class N150 : public Board {
-public:
-    N150() : Board(create_n150_ports(), create_n150_internal_connections(), tt::umd::BoardType::N150) {}
-
-private:
-    static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_n150_ports() {
-        std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
-
-        // QSFP ports
-        add_sequential_port(ports, PortType::QSFP, PortId(1), 0, 6, 7);  // ASIC 0, channels 6,7
-        add_sequential_port(ports, PortType::QSFP, PortId(2), 0, 0, 1);  // ASIC 0, channels 0,1
-
-        // WARP100 ports
-        add_sequential_port(ports, PortType::WARP100, PortId(1), 0, 14, 15);  // ASIC 0, channels 14,15
-
-        return ports;
-    }
-
-    static std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_n150_internal_connections() {
-        // No internal connections for N150
-        return std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>();
-    }
-};
-
 // UBB_BLACKHOLE board class
 class UBB_BLACKHOLE : public Board {
 public:
@@ -386,21 +386,21 @@ private:
     create_ubb_blackhole_ports() {
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> ports;
 
-        // QSFP ports
-        add_sequential_port(ports, PortType::QSFP, PortId(1), 5, 2, 3);                 // ASIC 5, channels 2,3
-        add_sequential_port(ports, PortType::QSFP, PortId(2), 1, 2, 3);                 // ASIC 1, channels 2,3
-        add_sequential_port(ports, PortType::QSFP, PortId(3), 1, 0, 1);                 // ASIC 1, channels 0,1
-        add_sequential_port(ports, PortType::QSFP, PortId(4), 2, 0, 1);                 // ASIC 2, channels 0,1
-        add_sequential_port(ports, PortType::QSFP, PortId(5), 3, 0, 1);                 // ASIC 3, channels 0,1
-        add_sequential_port(ports, PortType::QSFP, PortId(6), 4, 0, 1);                 // ASIC 4, channels 0,1
-        add_port(ports, PortType::QSFP, PortId(7), {{1, ChanId(8)}, {2, ChanId(8)}});   // ASIC 1,2: channel 8
-        add_port(ports, PortType::QSFP, PortId(8), {{5, ChanId(8)}, {6, ChanId(8)}});   // ASIC 5,6: channel 8
-        add_port(ports, PortType::QSFP, PortId(9), {{3, ChanId(8)}, {4, ChanId(8)}});   // ASIC 3,4: channel 8
-        add_port(ports, PortType::QSFP, PortId(10), {{7, ChanId(8)}, {8, ChanId(8)}});  // ASIC 7,8: channel 8
-        add_port(ports, PortType::QSFP, PortId(11), {{1, ChanId(9)}, {2, ChanId(9)}});  // ASIC 1,2: channel 9
-        add_port(ports, PortType::QSFP, PortId(12), {{5, ChanId(9)}, {6, ChanId(9)}});  // ASIC 5,6: channel 9
-        add_port(ports, PortType::QSFP, PortId(13), {{3, ChanId(9)}, {4, ChanId(9)}});  // ASIC 3,4: channel 9
-        add_port(ports, PortType::QSFP, PortId(14), {{7, ChanId(9)}, {8, ChanId(9)}});  // ASIC 7,8: channel 9
+        // QSFP_DD_800G ports
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(1), 5, 2, 3);                 // ASIC 5, channels 2,3
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(2), 1, 2, 3);                 // ASIC 1, channels 2,3
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(3), 1, 0, 1);                 // ASIC 1, channels 0,1
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(4), 2, 0, 1);                 // ASIC 2, channels 0,1
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(5), 3, 0, 1);                 // ASIC 3, channels 0,1
+        add_sequential_port(ports, PortType::QSFP_DD_800G, PortId(6), 4, 0, 1);                 // ASIC 4, channels 0,1
+        add_port(ports, PortType::QSFP_DD_800G, PortId(7), {{1, ChanId(8)}, {2, ChanId(8)}});   // ASIC 1,2: channel 8
+        add_port(ports, PortType::QSFP_DD_800G, PortId(8), {{5, ChanId(8)}, {6, ChanId(8)}});   // ASIC 5,6: channel 8
+        add_port(ports, PortType::QSFP_DD_800G, PortId(9), {{3, ChanId(8)}, {4, ChanId(8)}});   // ASIC 3,4: channel 8
+        add_port(ports, PortType::QSFP_DD_800G, PortId(10), {{7, ChanId(8)}, {8, ChanId(8)}});  // ASIC 7,8: channel 8
+        add_port(ports, PortType::QSFP_DD_800G, PortId(11), {{1, ChanId(9)}, {2, ChanId(9)}});  // ASIC 1,2: channel 9
+        add_port(ports, PortType::QSFP_DD_800G, PortId(12), {{5, ChanId(9)}, {6, ChanId(9)}});  // ASIC 5,6: channel 9
+        add_port(ports, PortType::QSFP_DD_800G, PortId(13), {{3, ChanId(9)}, {4, ChanId(9)}});  // ASIC 3,4: channel 9
+        add_port(ports, PortType::QSFP_DD_800G, PortId(14), {{7, ChanId(9)}, {8, ChanId(9)}});  // ASIC 7,8: channel 9
 
         // NOTE: These Linking Board connections are not finalized yet.
         log_warning(tt::LogDistributed, "UBB_BLACKHOLE: Linking Board connections are not finalized yet.");
@@ -446,11 +446,11 @@ private:
 // Factory function to create boards by type (for backward compatibility)
 Board create_board(tt::umd::BoardType board_type) {
     switch (board_type) {
+        case BoardType::N150: return N150();
         case BoardType::N300: return N300();
         case BoardType::UBB_WORMHOLE: return UBB_WORMHOLE();
-        case BoardType::P300: return P300();
         case BoardType::P150: return P150();
-        case BoardType::N150: return N150();
+        case BoardType::P300: return P300();
         case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
         default: throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
     }

@@ -59,7 +59,7 @@ protected:
         add_boards(&node, "N300", 1, 4);
 
         // Add QSFP connections
-        auto* const qsfp_connections = get_port_connections(&node, "QSFP");
+        auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD_400G");
         add_connection(qsfp_connections, 1, 1, 4, 1);
         add_connection(qsfp_connections, 2, 2, 3, 2);
 
@@ -90,55 +90,11 @@ public:
     }
 };
 
-// P150 QB Global Node class
-class P150QBGlobalNode {
-public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
-        node.set_motherboard("SIENAD8-2L2T");
-
-        // Add boards
-        add_boards(&node, "P150", 1, 4);
-
-        // Add QSFP connections
-        auto* const qsfp_connections = get_port_connections(&node, "QSFP");
-        add_connection(qsfp_connections, 1, 1, 2, 1);
-        add_connection(qsfp_connections, 1, 2, 2, 2);
-        add_connection(qsfp_connections, 1, 3, 4, 3);
-        add_connection(qsfp_connections, 1, 4, 4, 4);
-        add_connection(qsfp_connections, 2, 3, 3, 3);
-        add_connection(qsfp_connections, 2, 4, 3, 4);
-        add_connection(qsfp_connections, 3, 1, 4, 1);
-        add_connection(qsfp_connections, 3, 2, 4, 2);
-
-        return node;
-    }
-};
-
-// P300 QB America Node class
-class P300QBAmericaNode {
-public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
-        node.set_motherboard("SIENAD8-2L2T");
-
-        // Add boards
-        add_boards(&node, "P300", 1, 2);
-
-        // Add WARP400 connections
-        auto* const warp400_connections = get_port_connections(&node, "WARP400");
-        add_connection(warp400_connections, 1, 1, 2, 1);
-        add_connection(warp400_connections, 1, 2, 2, 2);
-
-        return node;
-    }
-};
-
 class WHGalaxyNode {
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
-        auto* const qsfp_connections = get_port_connections(node, "QSFP");
+        auto* const qsfp_connections = get_port_connections(node, "QSFP_DD_400G");
         add_connection(qsfp_connections, 1, 3, 2, 3);
         add_connection(qsfp_connections, 1, 4, 2, 4);
         add_connection(qsfp_connections, 1, 5, 2, 5);
@@ -151,7 +107,7 @@ private:
 
     // Add Y-torus QSFP connections
     static void add_y_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
-        auto* const qsfp_connections = get_port_connections(node, "QSFP");
+        auto* const qsfp_connections = get_port_connections(node, "QSFP_DD_400G");
         add_connection(qsfp_connections, 1, 2, 3, 2);
         add_connection(qsfp_connections, 1, 1, 3, 1);
         add_connection(qsfp_connections, 2, 1, 4, 1);
@@ -237,11 +193,55 @@ public:
     }
 };
 
+// P150 QB Global Node class
+class P150QBGlobalNode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
+        node.set_motherboard("SIENAD8-2L2T");
+
+        // Add boards
+        add_boards(&node, "P150", 1, 4);
+
+        // Add QSFP connections
+        auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD_800G");
+        add_connection(qsfp_connections, 1, 1, 2, 1);
+        add_connection(qsfp_connections, 1, 2, 2, 2);
+        add_connection(qsfp_connections, 1, 3, 4, 3);
+        add_connection(qsfp_connections, 1, 4, 4, 4);
+        add_connection(qsfp_connections, 2, 3, 3, 3);
+        add_connection(qsfp_connections, 2, 4, 3, 4);
+        add_connection(qsfp_connections, 3, 1, 4, 1);
+        add_connection(qsfp_connections, 3, 2, 4, 2);
+
+        return node;
+    }
+};
+
+// P300 QB America Node class
+class P300QBAmericaNode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
+        node.set_motherboard("SIENAD8-2L2T");
+
+        // Add boards
+        add_boards(&node, "P300", 1, 2);
+
+        // Add WARP400 connections
+        auto* const warp400_connections = get_port_connections(&node, "WARP400");
+        add_connection(warp400_connections, 1, 1, 2, 1);
+        add_connection(warp400_connections, 1, 2, 2, 2);
+
+        return node;
+    }
+};
+
 class BHGalaxyNode {
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
-        auto* const qsfp_connections = get_port_connections(node, "QSFP");
+        auto* const qsfp_connections = get_port_connections(node, "QSFP_DD_800G");
         add_connection(qsfp_connections, 1, 3, 2, 3);
         add_connection(qsfp_connections, 1, 4, 2, 4);
         add_connection(qsfp_connections, 1, 5, 2, 5);
@@ -254,7 +254,7 @@ private:
 
     // Add Y-torus QSFP connections
     static void add_y_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
-        auto* const qsfp_connections = get_port_connections(node, "QSFP");
+        auto* const qsfp_connections = get_port_connections(node, "QSFP_DD_800G");
         add_connection(qsfp_connections, 1, 2, 3, 2);
         add_connection(qsfp_connections, 1, 1, 3, 1);
         add_connection(qsfp_connections, 2, 1, 4, 1);
@@ -344,12 +344,12 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
     switch (node_type) {
         case NodeType::N300_LB: return N300LBNode::create();
         case NodeType::N300_QB: return N300QBNode::create();
-        case NodeType::P150_QB_GLOBAL: return P150QBGlobalNode::create();
-        case NodeType::P300_QB_AMERICA: return P300QBAmericaNode::create();
         case NodeType::WH_GALAXY: return WHGalaxyNode::create();
         case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
         case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
         case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
+        case NodeType::P150_QB_GLOBAL: return P150QBGlobalNode::create();
+        case NodeType::P300_QB_AMERICA: return P300QBAmericaNode::create();
         case NodeType::BH_GALAXY: return BHGalaxyNode::create();
         case NodeType::BH_GALAXY_X_TORUS: return BHGalaxyXTorusNode::create();
         case NodeType::BH_GALAXY_Y_TORUS: return BHGalaxyYTorusNode::create();

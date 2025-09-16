@@ -63,7 +63,8 @@ std::vector<AsicChannelConnection> get_asic_channel_connections(
             }
             return connection_mappers::cross_connect_mapping(start_channels, end_channels);
 
-        case PortType::QSFP:
+        case PortType::QSFP_DD_400G:
+        case PortType::QSFP_DD_800G:
         case PortType::LINKING_BOARD_1:
         case PortType::LINKING_BOARD_2:
         case PortType::LINKING_BOARD_3:

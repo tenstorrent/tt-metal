@@ -57,7 +57,7 @@ struct PhysicalPortEndpoint {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     TrayId tray_id{0};
-    PortType port_type = PortType::QSFP;
+    PortType port_type = PortType::TRACE;
     PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;

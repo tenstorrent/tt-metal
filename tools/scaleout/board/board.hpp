@@ -31,7 +31,8 @@ using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
 enum class PortType {
     TRACE,
-    QSFP,  // TODO: Should distinguish between QSFP types?
+    QSFP_DD_400G,
+    QSFP_DD_800G,
     WARP100,
     WARP400,
     LINKING_BOARD_1,
