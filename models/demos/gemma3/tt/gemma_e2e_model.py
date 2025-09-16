@@ -4,6 +4,7 @@
 from typing import List
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
@@ -133,5 +134,7 @@ class TtGemmaModel(Transformer):
         return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
     def compute_vision_token(self, pixel_values):
+        logger.info(f"Starting vision encoder for {pixel_values.shape[0]} images")
         vision_output = self.vision_model(pixel_values)
+        logger.info(f"Vision encoder done")
         return vision_output
