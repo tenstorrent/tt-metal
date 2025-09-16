@@ -22,6 +22,9 @@ HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
+L1Full = ttnn.Conv2dL1Full
 try:
     from tracy import signpost
 except ImportError:
@@ -741,10 +744,6 @@ def test_conv_activation(
         enable_weights_double_buffer=enable_weights_double_buffer,
         bs_full_inner_dim=True,
     )
-
-
-SliceHeight = ttnn.Conv2dDRAMSliceHeight
-SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize(
@@ -4031,7 +4030,7 @@ def test_conv_yolov10x(
     ],
 )
 @pytest.mark.parametrize("slice_type, num_slices", [
-    (None,1), # no slicing
+    (L1Full,1), # no slicing
     (SliceHeight, 2),
 ])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -4069,8 +4068,6 @@ def test_conv2d_act_dealloc(
         pytest.skip("Slicing is not supported for sharded conv2d")
     if slice_type is not None and enable_fenable_kernel_stride_folding:
         pytest.skip("Skip slicing when folding is enabled")
-    if slice_type is SliceHeight and kernel == (1,1) and stride == (1,1) and input_channels == 512:
-        pytest.skip("Skip due to assertion in conv2d implementation in tilize op")
 
     input_shape = (batch, input_channels, input_height, input_width)
     weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
