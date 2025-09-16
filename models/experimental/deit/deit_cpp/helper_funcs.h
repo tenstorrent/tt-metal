@@ -1,7 +1,7 @@
 #ifndef DEIT_CPP_TT_CPP_HELPER_FUNCS_H
 #define DEIT_CPP_TT_CPP_HELPER_FUNCS_H
 
-#include "deit_config.h"
+#include "tt_cpp/deit_config.h"
 #include <optional>
 #include <functional>
 #include <torch/torch.h>
@@ -51,8 +51,9 @@ ttnn::Tensor torch_to_tt_tensor_tile(
 ttnn::Tensor from_torch(
     const at::Tensor& tensor,
     std::optional<ttnn::DataType> dtype = std::nullopt,
-    std::optional<ttnn::Layout> layout = std::nullopt
-);
+    std::optional<ttnn::Layout> layout = std::nullopt);
+
+at::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = false);
 
 } // namespace helper_funcs
 
