@@ -1,3 +1,7 @@
+[submodule "tt_metal/third_party/tracy"]
+	path = tt_metal/third_party/tracy
+	url = https://github.com/tenstorrent-metal/tracy.git
+	branch = master
 [submodule "tt_metal/third_party/umd"]
 	path = tt_metal/third_party/umd
 	url = https://github.com/tenstorrent/tt-umd.git
