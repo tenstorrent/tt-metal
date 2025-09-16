@@ -21,12 +21,23 @@ class TtnnPSA:
         self.parameters = parameters
         self.conv_pt = conv_pt
 
-        self.cv1 = Conv(device, parameters.cv1, self.conv_pt.cv1, deallocate_activation=True)
+        self.cv1 = Conv(
+            device,
+            parameters.cv1,
+            self.conv_pt.cv1,
+            deallocate_activation=True,
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
         self.cv2 = Conv(
             device,
             parameters.cv2,
             self.conv_pt.cv2,
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.attn = TtnnAttention(
@@ -42,6 +53,9 @@ class TtnnPSA:
             device,
             parameters.ffn[0],
             self.conv_pt.ffn[0],
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.ffn_1 = Conv(
@@ -49,6 +63,9 @@ class TtnnPSA:
             parameters.ffn[1],
             self.conv_pt.ffn[1],
             enable_identity=True,
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
     def __call__(self, input_tensor):
@@ -72,6 +89,7 @@ class TtnnPSA:
         out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.cv2(out)
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
         deallocate_tensors(a, b)
         if use_signpost:
             signpost(header="TtnnPSA End")

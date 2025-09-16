@@ -24,6 +24,7 @@ class TtnnSPPF:
             device,
             parameters.cv1,
             self.conv_pt.cv1,
+            use_1d_systolic_array=False,
         )
 
         self.cv2 = Conv(
@@ -37,6 +38,7 @@ class TtnnSPPF:
         if use_signpost:
             signpost(header="TtnnSPPF Start")
         cv1 = self.cv1(x)
+        cv1 = ttnn.to_memory_config(cv1, ttnn.L1_MEMORY_CONFIG)
         if cv1.get_layout() == ttnn.TILE_LAYOUT:
             cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
         y = [cv1]
