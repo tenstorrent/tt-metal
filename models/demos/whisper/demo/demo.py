@@ -30,8 +30,6 @@ from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 
-SPACE = 50256
-
 
 def load_input_paths(folder_path):
     files = [os.path.join(folder_path, f) for f in listdir(folder_path) if isfile(join(folder_path, f))]
@@ -223,6 +221,11 @@ def run_generate(
 
             total_decode_time += time.time() - start_iter
             avg_decode_throughput = (i + 1) / total_decode_time
+            for user_id, user_decode_id in enumerate(next_tokens[:unpadded_batch_size]):
+                if user_decode_id == config.eos_token_id:
+                    prompt_is_done[user_id] = True
+                if prompt_is_done[user_id]:
+                    next_tokens[user_id] = config.eos_token_id
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
             if print_each_iter:
                 logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True))
@@ -231,12 +234,6 @@ def run_generate(
                 yield ttnn_transcription, ttft, avg_decode_throughput
             else:
                 yield ttnn_transcription
-
-            for user_id, user_decode_id in enumerate(next_tokens[:unpadded_batch_size]):
-                if user_decode_id == config.eos_token_id:
-                    prompt_is_done[user_id] = True
-                if prompt_is_done[user_id]:
-                    next_tokens[user_id] = SPACE
 
             if all(prompt_is_done):
                 break
@@ -501,6 +498,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
         current_batch = []
+        reference_sentences = []
         if current_batch_size < batch_size:
             logger.info(f"Skipping last batch with size {current_batch_size}")
             continue
@@ -510,6 +508,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
             samplerate = sample["audio"]["sampling_rate"]
             data = sample["audio"]["array"]
             current_batch.append((samplerate, data))
+            reference_sentences.append(sample["text"].lower())
         ttnn_output = model_pipeline(
             current_batch,
             stream=False,
@@ -520,7 +519,8 @@ def run_demo_whisper_for_conditional_generation_dataset(
         )
         batch_start = i + 1
         batch_end = i + current_batch_size
-        logger.debug(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
+        logger.debug(f"Dataset text (Inputs {batch_start}--{batch_end}) Sample: {reference_sentences}")
+        logger.debug(f"ttnn Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
         for j in range(current_batch_size):
             reference = ds[i + j]["text"].lower()
             predicted = ttnn_output[j].lower()
@@ -647,7 +647,7 @@ def test_demo_for_conditional_generation(
             else:
                 expected_perf_metrics = {"prefill_t/s": 8.77, "decode_t/s/u": 96.51}
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 7.98, "decode_t/s/u": 49.5}
+            expected_perf_metrics = {"prefill_t/s": 7.40, "decode_t/s/u": 41.1}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
             "prefill_t/s": (1 / ttft) * total_batch,

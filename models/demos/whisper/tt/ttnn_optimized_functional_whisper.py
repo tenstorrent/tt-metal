@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.utils.common_demo_utils import preprocess_linear_bias, preprocess_linear_weight
+
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 WHISPER_L1_SMALL_SIZE = 1024
