@@ -50,11 +50,13 @@ void MAIN {
                     } else {
                         uint32_t global_tile_index = tiles_read + packet_id * tile_granularity + tile_id;
                         uint32_t batch_tile_index = global_tile_index - running_batch_tile_offset;
-                        uint32_t slice_index = batch_tile_index / (num_pages_per_slice / ring_size);
-                        uint32_t tile_index_in_slice = batch_tile_index % (num_pages_per_slice / ring_size);
-                        uint32_t intermediate_tile_index =
-                            slice_index * (num_pages_per_slice / ring_size) + tile_index_in_slice;
-                        add_tiles(input_cb_id, intermediate_cb, tile_id, intermediate_tile_index, tile_id);
+                        uint32_t pages_per_slice_per_device = 1;
+                        if (num_pages_per_slice > ring_size) {
+                            pages_per_slice_per_device = num_pages_per_slice / ring_size;
+                        }
+                        uint32_t tile_index_in_slice = batch_tile_index % pages_per_slice_per_device;
+
+                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_index_in_slice, tile_id);
                     }
                     pack_tile(tile_id, output_cb);
                 }

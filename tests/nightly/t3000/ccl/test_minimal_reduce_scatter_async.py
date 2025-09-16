@@ -237,10 +237,13 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
     [
-        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-    ],
-    ids=[
-        "_test_one",
+        # ([1, 3, 96, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        # ([12, 3, 64, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        # ([2, 1, 128, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        # ([1, 256, 96, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        # ([128, 3, 32, 64], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        # ([1, 256, 96, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 128, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -276,8 +279,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],

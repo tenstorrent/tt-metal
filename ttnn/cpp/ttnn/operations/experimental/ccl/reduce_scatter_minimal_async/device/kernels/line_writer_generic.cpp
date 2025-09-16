@@ -44,7 +44,7 @@ constexpr bool do_final_reduction = get_compile_time_arg_val(16);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
-constexpr bool dim = get_compile_time_arg_val(20);
+constexpr uint32_t dim = get_compile_time_arg_val(20);
 constexpr uint32_t num_pages_per_slice = get_compile_time_arg_val(21);
 
 constexpr bool is_termination_master = get_compile_time_arg_val(22);
@@ -73,8 +73,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "DIM: " << (uint32_t)dim << "\n";
-    DPRINT << "NUM PAGES PER SLICE: " << (uint32_t)num_pages_per_slice << "\n";
 
     DPRINT << "device id: " << (uint32_t)my_chip_id << "\n";
     DPRINT << "is_forward: " << (uint32_t)is_forward << "\n";
@@ -114,7 +112,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        33 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+        35 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -208,7 +206,10 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
-    uint32_t slice_Wt = input_tensor_Wt / ring_size;
+    uint32_t slice_Wt = input_tensor_Wt;
+    if constexpr (dim == 3) {
+        slice_Wt = input_tensor_Wt / ring_size;
+    }
     DPRINT << "slice_Wt: " << (uint32_t)slice_Wt << "\n";
 
     if (mux_connection_valid) {
@@ -261,27 +262,20 @@ void kernel_main() {
             constexpr uint32_t cb_output_id = is_first_device_in_direction ? cb_reader_output_id : cb_compute_output_id;
 
             uint32_t stride_Wt = input_tensor_Wt;
-            uint32_t pages_per_slice_per_worker;
-            if constexpr (dim == 3) {
-                pages_per_slice_per_worker = input_tensor_Wt / ring_size;
-            } else {
-                pages_per_slice_per_worker = num_pages_per_slice / ring_size;
-            }
-            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % pages_per_slice_per_worker;
-            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / pages_per_slice_per_worker * stride_Wt;
+            uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % input_tensor_Wt;
+            uint32_t row_offset = (link * batch_slice_num_pages / num_links) / input_tensor_Wt * stride_Wt;
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
-
-            DPRINT << "tiles read: " << (uint32_t)tiles_read << " tiles to read: " << (uint32_t)tiles_to_read << "\n";
 
             uint32_t input_tile_id_start;
             if constexpr (dim == 3) {
                 input_tile_id_start =
                     intermediate_full_offset + batch_offset + slice_idx * (input_tensor_Wt / ring_size);
             } else {
-                input_tile_id_start =
-                    intermediate_full_offset + batch_offset + slice_idx * (num_pages_per_slice / ring_size);
+                input_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * num_pages_per_slice;
             }
+            DPRINT << "tiles read: " << (uint32_t)tiles_read << " tiles to read: " << (uint32_t)tiles_to_read << "\n";
+
             DPRINT << "input_tile_id_start: " << (uint32_t)input_tile_id_start << "\n";
 
             // Write to remote intermediate buffer
@@ -299,7 +293,7 @@ void kernel_main() {
                     DPRINT << "first tile id: " << (uint32_t)first_tile_id << "\n";
 
                     pages_read_in_row++;
-                    if (pages_read_in_row >= pages_per_slice_per_worker) {
+                    if (pages_read_in_row >= input_tensor_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
@@ -317,7 +311,7 @@ void kernel_main() {
                         DPRINT << "second tile id: " << (uint32_t)second_tile_id << "\n";
 
                         pages_read_in_row++;
-                        if (pages_read_in_row >= pages_per_slice_per_worker) {
+                        if (pages_read_in_row >= input_tensor_Wt) {
                             row_offset += stride_Wt;
                             pages_read_in_row = 0;
                         }
@@ -363,7 +357,7 @@ void kernel_main() {
             // Write output
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
-            uint32_t tile_id_start = batch_slice_offset;
+            uint32_t tile_id_start = batch_slice_offset + (link * batch_slice_num_pages / num_links);
 
             DPRINT << "tiles read: " << (uint32_t)tiles_read << " tiles to read: " << (uint32_t)tiles_to_read << "\n";
             while (tiles_read < tiles_to_read) {
@@ -372,13 +366,14 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    uint32_t tile_id = tile_id_start + tiles_read;
+                    uint32_t tile_id = tile_id_start + j;
                     DPRINT << "final reduction write tile id: " << (uint32_t)tile_id << "\n";
                     uint64_t local_noc_addr = get_noc_addr(tile_id, output_addrgen);
                     noc_async_write(l1_read_addr, local_noc_addr, intermediate_page_size);
                     l1_read_addr += intermediate_page_size;
-                    tiles_read++;
                 }
+                tiles_read += num_pages_to_read;
+                tile_id_start += num_pages_to_read;
 
                 if constexpr (sync_with_other_direction && is_forward) {
                     noc_async_write_barrier();

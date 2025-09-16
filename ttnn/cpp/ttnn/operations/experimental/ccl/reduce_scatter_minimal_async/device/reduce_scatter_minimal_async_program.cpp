@@ -288,10 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const auto num_batches = input_tensor_shape[0];
     uint32_t slice_num_pages = 0;
     uint32_t num_pages_per_slice = 0;
-    if (dim == 3) {
-        slice_num_pages = input_tensor_shape[dim] / TILE_WIDTH;
-        num_pages_per_slice = input_tensor_shape[0] * input_tensor_shape[1] * (input_tensor_shape[2] / TILE_HEIGHT);
-    } else if (dim == 2) {
+    if (dim == 2) {
         slice_num_pages = input_tensor_shape[dim] / TILE_HEIGHT;
         num_pages_per_slice = input_tensor_shape[0] * input_tensor_shape[1] * (input_tensor_shape[3] / TILE_WIDTH);
     } else if (dim == 1) {
@@ -303,7 +300,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
         num_pages_per_slice =
             (input_tensor_shape[1] * input_tensor_shape[2] / TILE_HEIGHT) * (input_tensor_shape[3] / TILE_WIDTH);
     }
-    const auto batch_slice_num_pages = slice_num_pages / ring_size;
+    auto batch_slice_num_pages = slice_num_pages / ring_size;
+    if (dim == 3) {
+        batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
+    }
 
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
@@ -465,8 +465,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     fuse_op,                 // fused op
                     dir,                     // direction
                     chunks_per_sync_val,
-                    (uint32_t)dim,
-                    num_pages_per_slice,
+                    //(uint32_t)dim,
+                    // num_pages_per_slice,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -482,7 +482,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
-                    "ring_reader_generic.cpp",
+                    "ring_reduce_scatter_minimal_async_reader.cpp",
                     {core},
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
@@ -494,11 +494,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
                     worker_id,
                     num_workers,
-                    slice_num_pages / ring_size,  // slice_num_pages_per_worker
-                    (worker_id * batch_slice_num_pages / num_workers) %
-                        (slice_num_pages / ring_size),  // start_pages_read_in_row
-                    (worker_id * batch_slice_num_pages / num_workers) / (slice_num_pages / ring_size) *
-                        input_tensor_Wt,                                   // start_row_offset
+                    dim == 3 ? input_tensor_Wt / ring_size : slice_num_pages / ring_size,  // slice_num_pages_per_worker
+                    dim == 3 ? (worker_id * batch_slice_num_pages / num_workers) % (input_tensor_Wt / ring_size)
+                             : (worker_id * batch_slice_num_pages / num_workers) %
+                                   (slice_num_pages / ring_size),  // start_pages_read_in_row
+                    dim == 3 ? (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
+                                   input_tensor_Wt
+                             : (worker_id * batch_slice_num_pages / num_workers) / (slice_num_pages / ring_size) *
+                                   input_tensor_Wt,                        // start_row_offset
                     worker_id * batch_slice_num_pages / num_workers,       // start_tiles_read
                     (worker_id + 1) * batch_slice_num_pages / num_workers  // start_tiles_to_read
                 };
@@ -534,8 +537,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
                     dir,                              // direction
                     chunks_per_sync_val,
-                    (uint32_t)dim,
-                    num_pages_per_slice,
+                    //(uint32_t)dim,
+                    // num_pages_per_slice,
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -573,7 +576,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
-                    "ring_writer_generic.cpp",
+                    "ring_reduce_scatter_minimal_async_writer.cpp",
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
@@ -587,11 +590,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
                     worker_id,
                     num_workers,
-                    slice_num_pages / ring_size,  // slice_Wt
-                    (worker_id * batch_slice_num_pages / num_workers) %
-                        (slice_num_pages / ring_size),  // pages_read_in_row
-                    (worker_id * batch_slice_num_pages / num_workers) / (slice_num_pages / ring_size) *
-                        input_tensor_Wt,                                         // row_offset
+                    dim == 3 ? input_tensor_Wt / ring_size : slice_num_pages / ring_size,  // slice_Wt
+                    dim == 3 ? (worker_id * batch_slice_num_pages / num_workers) % (input_tensor_Wt / ring_size)
+                             : (worker_id * batch_slice_num_pages / num_workers) %
+                                   (slice_num_pages / ring_size),  // pages_read_in_row
+                    dim == 3 ? (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
+                                   input_tensor_Wt
+                             : (worker_id * batch_slice_num_pages / num_workers) / (slice_num_pages / ring_size) *
+                                   input_tensor_Wt,                              // row_offset
                     (worker_id * batch_slice_num_pages / num_workers),           // tiles_read
                     (worker_id + 1) * batch_slice_num_pages / num_workers,       // tiles_to_read
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
@@ -623,7 +629,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
-                    "ring_reduce_generic.cpp",
+                    "ring_reduction.cpp",
                     {core},
                     sender_reduce_kernel_config);
                 reduce_kernel_ids.push_back(sender_reduce_kernel_id);
@@ -868,34 +874,48 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];
-    // const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
+
     uint32_t slice_num_pages = 0;
-    uint32_t num_pages_per_slice = 0;
+    uint32_t num_pages_per_slice = 1;
     if (dim == 3) {
-        slice_num_pages = input_tensor_shape[dim] / TILE_WIDTH;
-        num_pages_per_slice = input_tensor_shape[0] * input_tensor_shape[1] * (input_tensor_shape[2] / TILE_HEIGHT);
+        // For dim 3, a "slice" is a row of tiles.
+        // The number of slices is the total number of rows.
+        slice_num_pages = input_tensor_shape[0] * input_tensor_shape[1] * (input_tensor_shape[2] / TILE_HEIGHT);
+        // The number of pages per slice is the width in tiles.
+        num_pages_per_slice = input_tensor_shape[dim] / TILE_WIDTH;
     } else if (dim == 2) {
+        // A "slice" is a plane of tiles in the H dimension.
         slice_num_pages = input_tensor_shape[dim] / TILE_HEIGHT;
         num_pages_per_slice = input_tensor_shape[0] * input_tensor_shape[1] * (input_tensor_shape[3] / TILE_WIDTH);
     } else if (dim == 1) {
+        // A "slice" is a plane of tiles in the C dimension.
         slice_num_pages = input_tensor_shape[dim];
         num_pages_per_slice =
             input_tensor_shape[0] * (input_tensor_shape[2] / TILE_HEIGHT) * (input_tensor_shape[3] / TILE_WIDTH);
     } else {  // dim == 0
+        // A "slice" is a batch.
         slice_num_pages = input_tensor_shape[dim];
         num_pages_per_slice =
             (input_tensor_shape[1] * input_tensor_shape[2] / TILE_HEIGHT) * (input_tensor_shape[3] / TILE_WIDTH);
     }
-    const auto batch_slice_num_pages = slice_num_pages / ring_size;
+    // The number of pages each device is responsible for is the total pages divided by the number of devices.
+    // This is true regardless of the reduction dimension.
+    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size;
 
+    uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+
+    bool input_is_sharded = input_tensor.is_sharded();
+    printf("num pages per slice: %d\n", num_pages_per_slice);
+    printf("batch slice num pages: %d\n", batch_slice_num_pages);
+    printf("ring size: %d\n", ring_size);
+    printf("working batch_slice_num_pages: %d\n", batch_slice_num_pages);
+    printf("non working batch_slice_num_pages: %d\n", slice_num_pages / ring_size / num_batches);
     // TT_FATAL(
     //     !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
     //     "Error, The number of tiles at input tensor dimension {} should be divisible by tile_width but the number of
     //     " "tiles is {} and the tile_width is {}", 3, input_tensor_shape[3] / tt::constants::TILE_WIDTH,
     //     tt::constants::TILE_WIDTH);
-    uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
 
-    bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -1017,6 +1037,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     chunks_per_sync.value_or(std::max((tiles_to_read - tiles_read) / tile_granularity, (uint32_t)1));
 
                 // Reader
+                printf("compile arg 6: input_tensor_Wt: %d\n", input_tensor_Wt);
+                printf("compile arg 8: ring_size: %d\n", ring_size);
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                 // my_chip_id
                     input_cb_index,             // cb_input_id
@@ -1064,6 +1086,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     {core},
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
+                printf("num links: %d\n", num_links * num_workers_per_direction);
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
@@ -1187,6 +1210,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
                 // Reduce kernel
                 auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+                printf("num pages per slice for reduction: %d\n", num_pages_per_slice);
                 sender_reduce_kernel_config.compile_args = {
                     input_cb_index,
                     intermediate_cb_index,
