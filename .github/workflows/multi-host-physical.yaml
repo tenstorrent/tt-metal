@@ -112,9 +112,9 @@ jobs:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e PYTHONPATH="${{ github.workspace }}"
-            -e PYTHON_ENV_DIR="${{ github.workspace }}/python_env"
-            -e TT_METAL_HOME="${{ github.workspace }}"
+            -e PYTHONPATH=${{ github.workspace }}
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
+            -e TT_METAL_HOME=${{ github.workspace }}
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
