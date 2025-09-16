@@ -111,7 +111,7 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     subdir = "ttnn_mnist"
     num_iterations = 1
     margin = 0.04
-    expected_perf = 890000
+    expected_perf = 1029400
 
     command = f"pytest tests/ttnn/integration_tests/mnist/test_mnist.py::test_mnist"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
