@@ -2,7 +2,6 @@
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 #include <stdexcept>
 
-namespace deit_cpp {
 
 TtDeiTIntermediate::TtDeiTIntermediate(
     const DeiTConfig& config,
@@ -12,8 +11,8 @@ TtDeiTIntermediate::TtDeiTIntermediate(
 ) : config(config), device(device), activation_type(config.hidden_act) {
     
     // Load dense layer weights and bias from state_dict
-    std::string weight_key = base_address + ".dense.weight";
-    std::string bias_key = base_address + ".dense.bias";
+    std::string weight_key = base_address + "dense.weight";
+    std::string bias_key = base_address + "dense.bias";
     
     auto weight_it = state_dict.find(weight_key);
     auto bias_it = state_dict.find(bias_key);
@@ -54,5 +53,3 @@ ttnn::Tensor TtDeiTIntermediate::apply_activation(const ttnn::Tensor& input) {
         throw std::runtime_error("Unsupported activation function: " + activation_type);
     }
 }
-
-} // namespace deit_cpp
