@@ -5,7 +5,7 @@
 #include "deit_attention.h"
 #include "deit_intermediate.h"
 #include "deit_output.h"
-#include "helper_funcs.h"
+#include "../helper_funcs.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -14,7 +14,6 @@
 #include <torch/torch.h>
 #include <ttnn/tensor/tensor.hpp>
 
-namespace deit_cpp {
 
 /**
  * TtDeiTLayer class - C++ implementation of DeiT layer (Block)
@@ -89,6 +88,5 @@ private:
     );
 };
 
-} // namespace deit_cpp
 
 #endif // DEIT_CPP_TT_CPP_DEIT_LAYER_H
