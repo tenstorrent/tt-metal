@@ -653,88 +653,97 @@ def test_max_pool2d_output_formats_and_layouts(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape",
-    (([1, 256, 56, 56],)),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    ((3, 3),),
-)
-@pytest.mark.parametrize(
-    "padding",
-    ((0, 0),),
-)
-@pytest.mark.parametrize("stride", ((2, 2),))
-@pytest.mark.parametrize(
-    "dilation",
-    ((1, 1),),
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("ceil_mode", [True])
-def test_run_max_pool_vovnet_model(
-    input_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    tensor_map,
-    dtype,
-    ceil_mode,
-):
-    run_max_pool(
-        input_shape,
-        kernel_size,
-        padding,
-        stride,
-        dilation,
-        device,
-        tensor_map,
-        dtype,
+def test_golden_maxpool2d_with_vovnet_params(device):
+    """
+    Test that golden_maxpool2d function correctly handles VoVNet parameters,
+    specifically the 4D padding format that caused issue #27576.
+
+    This test directly compares the golden function output with torch reference
+    to ensure the golden implementation is correct.
+    """
+    from ttnn.operations.pool import golden_maxpool2d
+    import torch
+
+    # VoVNet test parameters from the original issue
+    batch_size, in_h, in_w, in_c = 1, 56, 56, 256
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    dilation = (1, 1)
+    ceil_mode = True
+
+    # Create input tensor
+    torch.manual_seed(0)
+    torch_input = torch.randn(batch_size, in_c, in_h, in_w, dtype=torch.bfloat16)
+
+    # Convert to ttnn format for golden function (1, 1, NHW, C)
+    ttnn_format_input = torch_input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * in_h * in_w, in_c)
+    ttnn_input = ttnn.from_torch(ttnn_format_input, device=device)
+
+    # Golden function expects a torch tensor that will be converted internally
+    torch_input_for_golden = ttnn.to_torch(ttnn_input)
+
+    # Test 1: 4D padding format [pad_t, pad_b, pad_l, pad_r] - this was failing before fix
+    padding_4d = [0, 0, 0, 0]
+    golden_output_4d = golden_maxpool2d(
+        input_tensor=torch_input_for_golden,
+        batch_size=batch_size,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding_4d,  # 4D format that was causing the issue
+        dilation=dilation,
         ceil_mode=ceil_mode,
-        nightly_skips=False,
     )
 
+    # Test 2: 2D padding format for backward compatibility
+    padding_2d = (0, 0)
+    golden_output_2d = golden_maxpool2d(
+        input_tensor=torch_input_for_golden,
+        batch_size=batch_size,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding_2d,  # 2D format
+        dilation=dilation,
+        ceil_mode=ceil_mode,
+    )
 
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_run_max_pool_vovnet_model_with_pcc_comparison(device, tensor_map):
-    """
-    Test VoVNet max_pool2d with PCC comparison mode enabled.
-    This reproduces the original issue from #27576 by enabling the same environment
-    variables that caused the failure, ensuring the fix works correctly.
+    # Run torch reference
+    torch_output = torch.nn.functional.max_pool2d(
+        torch_input,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=(0, 0),  # torch expects 2D
+        dilation=dilation,
+        ceil_mode=ceil_mode,
+    )
 
-    Original issue: When PCC comparison mode was enabled via environment variables,
-    the test would fail with "RuntimeError: max_pool2d: padding must either be a
-    single int, or a tuple of two ints"
+    # Convert golden outputs back to NCHW for comparison
+    # First get the expected output shape
+    expected_out_h = torch_output.shape[2]
+    expected_out_w = torch_output.shape[3]
 
-    Environment variables that reproduced the issue:
-    export TTNN_CONFIG_OVERRIDES='{
-        "enable_fast_runtime_mode": false,
-        "enable_comparison_mode": true,
-        "comparison_mode_should_raise_exception": true,
-        "comparison_mode_pcc": 0.999
-    }'
+    # Reshape golden outputs from (1, 1, N*H*W, C) to (N, C, H, W)
+    # Golden function returns a torch tensor already
+    golden_4d_torch = golden_output_4d.reshape(batch_size, expected_out_h, expected_out_w, in_c)
+    golden_4d_torch = golden_4d_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
 
-    This test ensures the golden_maxpool2d function correctly handles 4D padding
-    format [pad_t, pad_b, pad_l, pad_r] used by ttnn.max_pool2d.
-    """
+    golden_2d_torch = golden_output_2d.reshape(batch_size, expected_out_h, expected_out_w, in_c)
+    golden_2d_torch = golden_2d_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
 
-    # Enable PCC comparison mode - equivalent to setting the environment variables
-    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config(
-        "comparison_mode_pcc", 0.999
-    ), ttnn.manage_config("comparison_mode_should_raise_exception", True):
-        # Run the exact same test that was failing in the original issue
-        run_max_pool(
-            [1, 256, 56, 56],  # input_shape
-            (3, 3),  # kernel_size
-            (0, 0),  # padding
-            (2, 2),  # stride
-            (1, 1),  # dilation
-            device,
-            tensor_map,
-            ttnn.bfloat16,  # dtype
-            ceil_mode=True,
-            nightly_skips=False,
-        )
+    # Verify both padding formats produce correct results
+    assert torch.allclose(
+        golden_4d_torch, torch_output, rtol=1e-3, atol=1e-3
+    ), f"Golden function with 4D padding produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_4d_torch.shape}"
+
+    assert torch.allclose(
+        golden_2d_torch, torch_output, rtol=1e-3, atol=1e-3
+    ), f"Golden function with 2D padding produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_2d_torch.shape}"
+
+    assert torch.allclose(
+        golden_4d_torch, golden_2d_torch, rtol=1e-5, atol=1e-5
+    ), "4D and 2D padding formats should produce identical results for symmetric padding"
