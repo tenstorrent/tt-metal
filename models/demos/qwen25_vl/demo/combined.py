@@ -65,8 +65,8 @@ def test_qwen_vl_end_to_end(
     request,
 ):
     test_id = request.node.callspec.id
-    if is_ci_env and "300dpi" in test_id:
-        pytest.skip("CI only runs small image test for time limit")
+    if is_ci_env and not "240dpi" in test_id:
+        pytest.skip("CI only runs 240dpi image test for compromise of coverage and time limit")
 
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
     batch_size = 1  # use batch size 1 for now to run the test in reasonable amount of time in CI
