@@ -52,14 +52,14 @@ line-length = 120
 
 [tool.setuptools_scm]
 # Supported tag formats:
-# v1.2.3, v1.2.3-rc1, v1.2.3-dev20240101, v1.2.3-dev123
-tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-(?:rc\d+|dev(?:\d{8}|\d+)))?)$'
+# v1.2.3, v1.2.3-rc1
+tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
+#Only look for release tags for calculating distance for wheel name
 git_describe_command = [
   "git","describe","--dirty","--tags","--long",
   "--match","v[0-9]*.[0-9]*.[0-9]*",
   "--match","v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
-  "--match","v[0-9]*.[0-9]*.[0-9]*-dev????????",
-  "--match","v[0-9]*.[0-9]*.[0-9]*-dev[0-9]*"
+  "--exclude","*-dev*"
 ]
 fallback_version = "0.0.0.dev0"
 
