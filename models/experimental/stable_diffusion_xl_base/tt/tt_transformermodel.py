@@ -65,17 +65,6 @@ class TtTransformer2DModel(LightweightModule):
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
-        # hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-        # grid_coord = ttnn.CoreCoord(self.norm_core_grid.x - 1, self.norm_core_grid.y - 1)
-        # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        # shard_shape = B * H * W // self.norm_core_grid.x, C // self.norm_core_grid.y
-        # shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-        # sharded_mem_config = ttnn.MemoryConfig(
-        #     ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        # )
-        # hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
-        # print(f"input tensor cfg: {input_tensor.memory_config()}, shape: {input_tensor.shape}")
         sharded_mem_config = ttnn.create_sharded_memory_config(
             input_tensor.shape,
             core_grid=self.norm_core_grid,
@@ -95,30 +84,19 @@ class TtTransformer2DModel(LightweightModule):
             epsilon=self.norm_eps,
             inplace=False,
         )
-        # if C == 640:
-        #     sharded_mem_config = ttnn.create_sharded_memory_config(
-        #         [512, 128],
-        #         core_grid=ttnn.CoreGrid(y=8, x=5),
-        #         strategy=ttnn.ShardStrategy.BLOCK,
-        #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #         use_height_and_width_as_shard_shape=True,
-        #     )
-        # if C == 640:
-        #     hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
             bias=self.tt_bias_in,
             program_config=self.program_config_in,
             compute_kernel_config=self.compute_config_in,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if W == 1280 else ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if C == 1280 else ttnn.L1_MEMORY_CONFIG,
         )
-        # if C == 640:
-        #     hidden_states = ttnn.reshard(hidden_states, sharded_mem_config)
-        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        print(f"after proj_in cfg: {hidden_states.memory_config()}, shape: {hidden_states.shape}")
+        print(f"{B}, {C}, {H}, {W}")
 
         for i, transformer_block in enumerate(self.transformer_blocks):
-            # print(f"Layer {i} input cfg: {hidden_states.memory_config()}, shape: {hidden_states.shape}")
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
 
         hidden_states = ttnn.linear(
