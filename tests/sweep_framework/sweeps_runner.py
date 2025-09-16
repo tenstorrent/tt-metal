@@ -403,75 +403,84 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if config.measure_perf:
-                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
-                    # Ensure a worker process is running if we're in child mode
+                need_retry = True
+                max_retries = 10
+                while need_retry == True:
+                    need_retry = False
+                    if config.measure_perf:
+                        # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                        # Ensure a worker process is running if we're in child mode
+                        if child_mode and (p is None or not p.is_alive()):
+                            p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                            p.start()
+                        input_queue.put(test_vector)
+                        if p is None:
+                            logger.info(
+                                "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            )
+                            run(module_name, input_queue, output_queue, config)
+                        output_queue.get(block=True, timeout=timeout)
                     if child_mode and (p is None or not p.is_alive()):
                         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                         p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
-                            "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                         )
                         run(module_name, input_queue, output_queue, config)
-                    output_queue.get(block=True, timeout=timeout)
-                if child_mode and (p is None or not p.is_alive()):
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                input_queue.put(test_vector)
-                if p is None:
-                    logger.info(
-                        "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
+
+                    response = output_queue.get(block=True, timeout=timeout)
+                    status, message, e2e_perf, device_perf = (
+                        response[0],
+                        response[1],
+                        response[2],
+                        response[3],
                     )
-                    run(module_name, input_queue, output_queue, config)
+                    if not status:
+                        if "control_plane.cpp" in message:
+                            reset_util.reset()
+                            if max_retries > 0:
+                                need_retry = True
+                                max_retries = max_retries - 1
+                                logger.info("retrying test after control plane error")
+                            else:
+                                logger.info("giving up on retrying on control plane error")
+                    # Set base result message
+                    result["message"] = message
 
-                response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = (
-                    response[0],
-                    response[1],
-                    response[2],
-                    response[3],
-                )
-                if not status:
-                    if "control_plane.cpp:507" in Message:
-                        print("Message is")
-                        print(message)
-                # Set base result message
-                result["message"] = message
-
-                # Determine test status
-                if status:
-                    # Test passed - check device perf requirements
-                    if config.measure_device_perf:
-                        if device_perf is None:
-                            result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                    # Determine test status
+                    if status:
+                        # Test passed - check device perf requirements
+                        if config.measure_device_perf:
+                            if device_perf is None:
+                                result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                            else:
+                                result["status"] = TestStatus.PASS
+                                result["device_perf"] = device_perf
                         else:
                             result["status"] = TestStatus.PASS
-                            result["device_perf"] = device_perf
                     else:
-                        result["status"] = TestStatus.PASS
-                else:
-                    # Test failed - categorize the failure
-                    result["exception"] = message
+                        # Test failed - categorize the failure
+                        result["exception"] = message
 
-                    # Log device exceptions
-                    if "DEVICE EXCEPTION" in message:
-                        logger.error(
-                            f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
-                        )
-                        logger.info("Device error detected. The suite will be aborted after this test.")
+                        # Log device exceptions
+                        if "DEVICE EXCEPTION" in message:
+                            logger.error(
+                                f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
+                            )
+                            logger.info("Device error detected. The suite will be aborted after this test.")
 
-                    # Set failure status based on error type
-                    if "Out of Memory: Not enough space to allocate" in message:
-                        result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                    elif "Watcher" in message:
-                        result["status"] = TestStatus.FAIL_WATCHER
-                    else:
-                        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                        # Set failure status based on error type
+                        if "Out of Memory: Not enough space to allocate" in message:
+                            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                        elif "Watcher" in message:
+                            result["status"] = TestStatus.FAIL_WATCHER
+                        else:
+                            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
-                # Set performance metrics if available
-                result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
+                    # Set performance metrics if available
+                    result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
