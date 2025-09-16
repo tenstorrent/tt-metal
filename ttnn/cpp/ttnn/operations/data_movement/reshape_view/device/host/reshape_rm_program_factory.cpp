@@ -174,7 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, runtime_args);
                 } else {
-                    // Original single kernel approach (remove dead code)
+                    // Original single kernel approach
                     const std::vector<uint32_t> reader_runtime_args = {
                         src_buffer->address(),
                         dst_buffer->address(),
