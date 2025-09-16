@@ -42,10 +42,10 @@ public:
      * @param input_tensor Original input tensor (for potential residual connection)
      * @return Output tensor after dense transformation
      */
-    ttnn::Tensor forward(
+    auto forward(
         const ttnn::Tensor& hidden_states,
-        const ttnn::Tensor& input_tensor
-    );
+        const std::optional<ttnn::Tensor>& input_tensor = std::nullopt
+    ) -> ttnn::Tensor;
 
     /**
      * Destructor

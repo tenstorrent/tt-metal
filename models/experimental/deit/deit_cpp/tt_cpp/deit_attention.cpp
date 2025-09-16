@@ -16,11 +16,11 @@ TtDeiTAttention::TtDeiTAttention(
     }
 
     // Create attention component with appropriate base address
-    std::string attention_address = base_address.empty() ? "attention" : base_address + ".attention";
+    std::string attention_address = base_address.empty() ? "attention" : base_address + "attention.";
     attention = std::make_unique<TtDeiTSelfAttention>(config, device, state_dict, attention_address);
 
     // Create output component with appropriate base address
-    std::string output_address = base_address.empty() ? "output" : base_address + ".output";
+    std::string output_address = base_address.empty() ? "output" : base_address + "output.";
     output = std::make_unique<TtDeiTSelfOutput>(config, device, state_dict, output_address);
 }
 

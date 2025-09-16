@@ -141,3 +141,4 @@ Testing
 learn_tt
 models/experimental/deit/cpp
 models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth
+models/experimental/deit/deit_cpp/model
