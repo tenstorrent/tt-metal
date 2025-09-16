@@ -173,8 +173,8 @@ def prepare_generator_args(
         (0, True, 1, False, False, 500, None),  # batch1-trace
         (0, True, 32, False, False, 500, None),  # batch32-trace
         (0, True, 4, True, False, 500, None),  # batch4-trace-with-text-prompts
-        (0, False, 1, True, True, 500, None),  # batch1-multi-image-notrace
-        (0, True, 1, True, True, 500, None),  # batch1-multi-image-trace
+        (0, False, 1, False, True, 500, None),  # batch1-multi-image-notrace
+        (0, True, 1, False, True, 500, None),  # batch1-multi-image-trace
         (0, True, 1, False, False, 5, 1),  # tracy
     ],
     ids=[
