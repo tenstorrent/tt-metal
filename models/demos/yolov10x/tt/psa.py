@@ -90,7 +90,7 @@ class TtnnPSA:
 
         output = self.cv2(out)
         output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-        deallocate_tensors(a, b)
+        deallocate_tensors(a, b, out, cv1)
         if use_signpost:
             signpost(header="TtnnPSA End")
         return output

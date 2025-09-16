@@ -42,6 +42,7 @@ class TtnnSCDown:
             cv1, ttnn.L1_MEMORY_CONFIG
         )  # needed since cv2 uses block_sharding and input is in height sharding
         output = self.cv2(cv1)
+        ttnn.deallocate(cv1)
         if use_signpost:
             signpost(header="TtnnSCDown End")
         return output

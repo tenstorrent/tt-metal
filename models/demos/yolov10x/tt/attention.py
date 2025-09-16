@@ -5,7 +5,7 @@
 import math
 
 import ttnn
-from models.demos.yolov10x.tt.common import Conv
+from models.demos.yolov10x.tt.common import Conv, deallocate_tensors
 
 try:
     from tracy import signpost
@@ -106,6 +106,7 @@ class TtnnAttention:
         x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.proj(x)
+        deallocate_tensors(attn, v, x, q, k)
         if use_signpost:
             signpost(header="TtnnAttention End")
         return output

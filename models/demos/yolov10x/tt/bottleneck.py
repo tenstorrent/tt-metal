@@ -40,4 +40,5 @@ class TtnnBottleNeck:
         cv2 = self.cv2(cv1)
         if input_tensor.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(cv1)
         return ttnn.add(input_tensor, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if self.shortcut else cv2

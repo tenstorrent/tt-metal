@@ -52,6 +52,7 @@ class TtnnC2f:
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.cv2(out)
+        ttnn.deallocate(out)
         if use_signpost:
             signpost(header="TtnnC2f End")
         return output
