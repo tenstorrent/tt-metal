@@ -37,6 +37,8 @@ class TtUpsampleParameters:
     mode: str = "bilinear"
     slice_config: SliceConfig = None
 
+    SUPPORTED_MODES = {"bilinear", "nearest"}
+
     def __post_init__(self):
         if self.slice_config is None:
             self.slice_config = SliceConfig()
@@ -46,8 +48,8 @@ class TtUpsampleParameters:
             self.scale_factor = (self.scale_factor, self.scale_factor)
 
         # Validate mode
-        if self.mode not in ["bilinear", "nearest"]:
-            raise ValueError(f"Mode must be 'bilinear' or 'nearest', got '{self.mode}'")
+        if self.mode not in self.SUPPORTED_MODES:
+            raise ValueError(f"Mode must be one of {self.SUPPORTED_MODES}, got '{self.mode}'")
 
     @classmethod
     def create(
@@ -56,15 +58,12 @@ class TtUpsampleParameters:
         scale_factor: Union[int, tuple[int, int]],
         mode: str = "bilinear",
         slice_config: SliceConfig | None = None,
-    ) -> TtUpsampleParameters:
-        if slice_config is None:
-            slice_config = SliceConfig()
-
+    ) -> "TtUpsampleParameters":
         return cls(
             device=device,
             scale_factor=scale_factor,
             mode=mode,
-            slice_config=slice_config,
+            slice_config=slice_config or SliceConfig(),
         )
 
 
@@ -106,80 +105,75 @@ class TtUpsample:
 
     def _perform_channel_slicing(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Perform channel slicing upsample"""
-        orig_batch, orig_height, orig_width, orig_channels = x.shape
+        batch_size, height, width, channels = x.shape
 
         logger.trace(
-            f"TtUpsample channel slicing - input shape: {x.shape}, slices: {self._slice_config.num_slices}, scale_factor: {self._scale_factor}, mode: {self._mode}"
+            f"Channel slicing upsample - input: {x.shape}, slices: {self._slice_config.num_slices}, "
+            f"scale: {self._scale_factor}, mode: {self._mode}"
         )
 
-        assert (
-            orig_channels % self._slice_config.num_slices == 0
-        ), f"Input channels ({orig_channels}) must be divisible by num_slices ({self._slice_config.num_slices})"
+        if channels % self._slice_config.num_slices != 0:
+            raise ValueError(
+                f"Input channels ({channels}) must be divisible by num_slices ({self._slice_config.num_slices})"
+            )
 
-        channels_per_slice = orig_channels // self._slice_config.num_slices
+        channels_per_slice = channels // self._slice_config.num_slices
         sliced_results = []
 
-        for slice_idx in range(self._slice_config.num_slices):
-            logger.trace(
-                f"TtUpsample processing channel slice {slice_idx+1}/{self._slice_config.num_slices}, channels_per_slice: {channels_per_slice}"
-            )
-            start_ch = slice_idx * channels_per_slice
-            end_ch = (slice_idx + 1) * channels_per_slice
+        try:
+            for slice_idx in range(self._slice_config.num_slices):
+                logger.trace(f"Processing slice {slice_idx + 1}/{self._slice_config.num_slices}")
 
-            # Slice input along channel dimension
-            x_slice = ttnn.slice(x, [0, 0, 0, start_ch], [orig_batch, orig_height, orig_width, end_ch])
+                start_ch = slice_idx * channels_per_slice
+                end_ch = (slice_idx + 1) * channels_per_slice
 
-            # Apply upsample to slice
-            x_slice_upsampled = ttnn.upsample(x_slice, scale_factor=self._scale_factor, mode=self._mode)
-            x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
+                # Slice input along channel dimension
+                x_slice = ttnn.slice(x, [0, 0, 0, start_ch], [batch_size, height, width, end_ch])
 
-            sliced_results.append(x_slice_upsampled)
-            ttnn.deallocate(x_slice)
+                # Apply upsample to slice
+                x_slice_upsampled = ttnn.upsample(x_slice, scale_factor=self._scale_factor, mode=self._mode)
+                x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Concatenate slices along channel dimension
-        x_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.trace(
-            f"TtUpsample channel slicing complete - output shape: {x_upsampled.shape}, memory_config: {x_upsampled.memory_config()}"
-        )
+                sliced_results.append(x_slice_upsampled)
+                ttnn.deallocate(x_slice)
 
-        # Deallocate slice tensors
-        for slice_result in sliced_results:
-            ttnn.deallocate(slice_result)
+            # Concatenate slices along channel dimension
+            result = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            logger.trace(f"Channel slicing complete - output: {result.shape}")
 
-        return x_upsampled
+            return result
+        finally:
+            # Cleanup slice tensors
+            for slice_result in sliced_results:
+                if slice_result is not None:
+                    ttnn.deallocate(slice_result)
 
     def _perform_standard_upsample(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Perform standard upsample without slicing"""
-        logger.trace(
-            f"TtUpsample standard upsampling - input shape: {x.shape}, scale_factor: {self._scale_factor}, mode: {self._mode}"
-        )
-        x_upsampled = ttnn.upsample(x, scale_factor=self._scale_factor, mode=self._mode)
-        logger.trace(
-            f"TtUpsample standard upsampling complete - output shape: {x_upsampled.shape}, memory_config: {x_upsampled.memory_config()}"
-        )
-        return x_upsampled
+        logger.trace(f"Standard upsample - input: {x.shape}, scale: {self._scale_factor}, mode: {self._mode}")
+
+        result = ttnn.upsample(x, scale_factor=self._scale_factor, mode=self._mode)
+        logger.trace(f"Standard upsample complete - output: {result.shape}")
+
+        return result
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Apply upsample operation with optional channel slicing"""
+        original_layout = x.layout
 
         # Convert to ROW_MAJOR layout for upsampling if needed
-        original_layout = x.layout
         if original_layout != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-        batch_size, height, width, channels = x.shape
+        # Determine whether to use channel slicing
+        use_channel_slicing = self._should_use_channel_slicing(x)
 
-        # Check if channels are divisible by slice factor for channel slicing
-        if self._slice_config.mode == SliceMode.CHANNEL and channels % self._slice_config.num_slices == 0:
+        if use_channel_slicing:
             result = self._perform_channel_slicing(x)
         else:
-            if self._slice_config.mode == SliceMode.CHANNEL:
-                print(
-                    f"Warning: Channel slicing requested but channels ({channels}) not divisible by {self._slice_config.num_slices}. Using standard upsample."
-                )
             result = self._perform_standard_upsample(x)
 
-        # Ensure proper memory configuration after upsampling
+        # Ensure proper memory configuration
         result = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
 
         # Convert back to original layout if needed
@@ -187,6 +181,22 @@ class TtUpsample:
             result = ttnn.to_layout(result, original_layout)
 
         return result
+
+    def _should_use_channel_slicing(self, x: ttnn.Tensor) -> bool:
+        """Determine if channel slicing should be used based on configuration and tensor properties"""
+        if self._slice_config.mode != SliceMode.CHANNEL:
+            return False
+
+        _, _, _, channels = x.shape
+
+        if channels % self._slice_config.num_slices != 0:
+            logger.warning(
+                f"Channel slicing requested but channels ({channels}) not divisible by "
+                f"{self._slice_config.num_slices}. Using standard upsample."
+            )
+            return False
+
+        return True
 
     @property
     def scale_factor(self) -> tuple[int, int]:
@@ -222,11 +232,9 @@ class TtUpsample:
         mode: str = "bilinear",
     ) -> "TtUpsample":
         """Create TtUpsample without any slicing."""
-        slice_config = SliceConfig(mode=SliceMode.NONE)
         parameters = TtUpsampleParameters.create(
             device=device,
             scale_factor=scale_factor,
             mode=mode,
-            slice_config=slice_config,
         )
         return cls(parameters)
