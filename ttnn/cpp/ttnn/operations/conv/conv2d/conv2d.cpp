@@ -322,7 +322,9 @@ Result conv2d_DRAM(
             current_num_slices <= output_sliced_dim,
             "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
             "Either increase the number of slices or reduce the output dimension being sliced.");
-        log_debug(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined number of slices: {}", current_num_slices);
+        log_info(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined slice_config : {}", dram_slice_config);
+    } else {
+        log_info(tt::LogOp, "Conv2D DRAM Slicing with slice_config : {}", dram_slice_config);
     }
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
