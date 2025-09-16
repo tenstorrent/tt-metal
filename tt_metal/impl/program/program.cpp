@@ -73,8 +73,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "util.hpp"
 #include "utils.hpp"
 #include "host_api.hpp"
@@ -433,7 +433,6 @@ KernelGroup::KernelGroup(
             hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);

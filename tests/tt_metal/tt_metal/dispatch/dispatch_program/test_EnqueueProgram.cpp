@@ -53,9 +53,9 @@
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -234,7 +234,7 @@ bool cb_config_successful(
 }
 
 void test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& eth_core_coord) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -274,7 +274,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -294,7 +294,7 @@ bool test_dummy_EnqueueProgram_with_cbs(
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -370,7 +370,7 @@ bool test_dummy_EnqueueProgram_with_sems(
 }
 
 bool test_dummy_EnqueueProgram_with_sems(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -391,7 +391,7 @@ bool test_dummy_EnqueueProgram_with_sems(
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_dm0,
@@ -506,7 +506,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_for_cr0,
@@ -892,7 +892,7 @@ IncrementKernelsSet create_increment_kernels(
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 // Multiple program_configs may be provided to create multiple kernels on the same program.
 bool test_increment_runtime_args_sanity(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<DummyProgramConfig>& program_configs,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args,
@@ -979,7 +979,7 @@ bool test_increment_runtime_args_sanity(
 }
 
 bool test_increment_runtime_args_sanity(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DummyProgramConfig& program_config,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args,
@@ -993,7 +993,7 @@ bool test_increment_runtime_args_sanity(
 }
 
 void test_my_coordinates(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, HalProcessorIdentifier processor, size_t cq_id = 0) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, HalProcessorIdentifier processor, size_t cq_id = 0) {
     const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
@@ -1017,7 +1017,7 @@ void test_my_coordinates(
         processor.core_type, cr, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
-void test_basic_dispatch_functions(std::shared_ptr<distributed::MeshDevice> mesh_device, int cq_id) {
+void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int cq_id) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 

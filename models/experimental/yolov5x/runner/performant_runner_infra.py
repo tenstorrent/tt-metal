@@ -9,7 +9,7 @@ from models.experimental.yolov5x.tt.model_preprocessing import (
     create_yolov5x_model_parameters,
 )
 from models.experimental.yolov5x.tt.yolov5x import Yolov5x
-from models.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.yolov5x.common import load_torch_model
 

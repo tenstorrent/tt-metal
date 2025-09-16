@@ -20,8 +20,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -31,7 +31,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -132,7 +132,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
             << "Enable this test on BH when base FW updated to flush data cache and invalidate instruction cache";
     }
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTest(fixture, mesh_device);
         },
         this->devices_[0]);
