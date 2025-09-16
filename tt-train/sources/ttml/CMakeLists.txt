@@ -90,6 +90,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
