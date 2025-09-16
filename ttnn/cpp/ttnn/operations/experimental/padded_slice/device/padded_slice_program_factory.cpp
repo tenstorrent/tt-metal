@@ -555,7 +555,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         if (num_full_rows < 0) {
             num_full_rows = 0;
-            num_tiles_this_core = 0;
         }
         log_trace(
             tt::LogOp,
