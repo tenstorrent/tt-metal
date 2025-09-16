@@ -243,7 +243,7 @@ public:
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
-        return *this->edm_buffer_local_free_slots_read_ptr != 0;
+        return get_ptr_val(worker_credits_stream_id) != 0;
     }
 
     template <
@@ -349,7 +349,7 @@ private:
             noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         // Write to the atomic increment stream register (write of -1 will subtract 1)
-        *edm_buffer_local_free_slots_update_ptr = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        increment_local_update_ptr_val(worker_credits_stream_id, -1);
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const { return this->buffer_slot_index.get(); }
