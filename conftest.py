@@ -1022,6 +1022,7 @@ def run_debug_script():
 
     try:
         logger.info("Running debug script to check system state")
+        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
         extra_env = {
             "LD_LIBRARY_PATH": None,
         }
