@@ -88,8 +88,8 @@ jobs:
             benchmark-timeout: 10,
             runner-label: topology-6u,
             mesh-device: TG,
-            tt-llama-text-ver: tt_transformers,
-            # override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            tt-llama-text-ver: llama3_70b_galaxy,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -192,7 +192,7 @@ jobs:
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
-          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+          export TT_CACHE_PATH="/work/tt_cache/$MODEL_NAME"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
