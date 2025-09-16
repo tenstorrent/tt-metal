@@ -50,6 +50,7 @@ permissions:
   actions: write
   issues: write
   checks: read
+  repository-projects: read
 
 jobs:
   update-submodule:
