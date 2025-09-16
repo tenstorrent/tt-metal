@@ -23,8 +23,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    DeviceComputeKernelConfig compute_kernel_config,
-    const bool use_welford);
+    bool legacy_reduction,
+    bool legacy_rsqrt,
+    bool use_welford,
+    DeviceComputeKernelConfig compute_kernel_config);
 
 tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const Tensor& a,

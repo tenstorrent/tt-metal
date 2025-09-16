@@ -93,8 +93,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    DeviceComputeKernelConfig compute_kernel_config,
-    const bool use_welford) {
+    bool legacy_reduction,
+    bool legacy_rsqrt,
+    bool use_welford,
+    DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const uint32_t no_weights_max_size = 120;
     const uint32_t with_weights_max_size = 60;
@@ -345,12 +347,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
         compute_args.push_back(W);
         compute_args.push_back(ttnn::types::TILE_SIZE);
         compute_args.push_back(static_cast<uint32_t>(rms_norm));
         compute_args.push_back(static_cast<uint32_t>(fuse_pre_add));
+    } else {
+        compute_args.push_back(float32_reduction);
+        compute_args.push_back(legacy_rsqrt);
     }
 
     auto compute_kernels_id = CreateKernel(

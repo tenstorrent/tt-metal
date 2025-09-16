@@ -439,8 +439,12 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     output_tensor,
                     this->norm_type,
                     this->eps,
-                    this->compute_kernel_config,
-                    program_config.use_welford);
+                    program_config.legacy_reduction,
+                    program_config.legacy_rsqrt,
+                    program_config.use_welford,
+                    this->compute_kernel_config);
+            } else {
+                TT_THROW("Unsupported program config");
             }
         },
         this->program_config);

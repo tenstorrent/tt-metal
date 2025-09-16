@@ -15,6 +15,8 @@ enum class LayerNormType { LAYERNORM, RMSNORM };
 enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
 
 struct LayerNormDefaultProgramConfig {
+    bool legacy_reduction = true;
+    bool legacy_rsqrt = true;
     bool use_welford = false;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
