@@ -5,10 +5,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 class Emb(torch.nn.Module):
