@@ -57,6 +57,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/qwen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/qwen.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp

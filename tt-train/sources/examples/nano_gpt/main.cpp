@@ -807,7 +807,7 @@ int main(int argc, char **argv) {
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::qwen::QwenConfig>) {
                 if (device_config.enable_tp) {
-                    throw std::runtime_error("Tensor parallel is not yet supported for Qwen model");
+                    return ttml::models::distributed::qwen::create(arg);
                 } else {
                     return ttml::models::qwen::create(arg);
                 }
