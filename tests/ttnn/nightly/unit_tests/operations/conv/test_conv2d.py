@@ -4761,7 +4761,6 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         (3, 1, 1, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
         (3, 1, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
         (3, 1, 3, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        #
         (3, 2, 1, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
         (3, 2, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
         (3, 2, 3, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
