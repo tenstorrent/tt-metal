@@ -9,8 +9,8 @@
 #include "dataflow_api.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
-constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
-constexpr auto kGradCbIndex = tt::CBIndex::c_1;
+constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
+constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -39,7 +39,7 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t tile_size_bytes = get_tile_size(kParamInCbIndex);
+    const uint32_t tile_size_bytes = get_tile_size(cb_param_in_idx);
 
     constexpr auto param_in_args = TensorAccessorArgs<2U>();
     constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
@@ -52,11 +52,11 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(kParamInCbIndex, param_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
-            read_tiles(kGradCbIndex, grad_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+            read_tiles(cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+            read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, tile_size_bytes);
             noc_async_read_barrier();
-            cb_push_back(kParamInCbIndex, block_size);
-            cb_push_back(kGradCbIndex, block_size);
+            cb_push_back(cb_param_in_idx, block_size);
+            cb_push_back(cb_grad_idx, block_size);
         }
     }
 }
