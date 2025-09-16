@@ -116,7 +116,7 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
         for func_name, input_lists in func_to_inputs.items():
             if func_name not in ref_sources:
                 continue
-            if "torch." not in ref_sources[func_name]:
+            if "torch." not in ref_sources[func_name] and "main" not in func_name:
                 continue
             # parametrize uses single argument: input_specs
             param_values = []
