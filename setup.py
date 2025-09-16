@@ -14,6 +14,8 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+from setuptools_scm.version import guess_next_dev_version as _guess_next_dev
+
 
 readme = None
 
@@ -105,19 +107,16 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    is_release_version = version.distance is None or version.distance == 0
-    is_dirty = version.dirty
-    is_clean_prod_build = (not is_dirty) and is_release_version
+    # Safety net
+    if version is None:
+        return "0.0.0.dev0"
 
-    if is_clean_prod_build:
-        return version.format_with("{tag}")
-    elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}")
-    elif is_dirty and is_release_version:
-        return version.format_with("{tag}")
-    else:
-        assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}")
+    if getattr(version, "exact", False):
+        # Exact tag (release/rc/dev*) already normalized by packaging
+        return version.version.public
+
+    # Untagged commit → let setuptools_scm choose X.Y.Z.devN
+    return _guess_next_dev(version)
 
 
 def get_version(metal_build_config):
