@@ -62,6 +62,8 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        env:
+          HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         with:
           device_perf_model_name: "non-civ2_tests"
           commands: |
