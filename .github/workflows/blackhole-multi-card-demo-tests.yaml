@@ -23,7 +23,7 @@ jobs:
         test-group:
           - name: LLMBox Demo tests
             runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
