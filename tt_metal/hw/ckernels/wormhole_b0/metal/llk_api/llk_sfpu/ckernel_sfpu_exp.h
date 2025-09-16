@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -31,41 +32,52 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = 0.0f;
     // Intermediary values can overflow if input value is below -88.0f, which leads to output increasing again instead
     // of staying at 0. This overflow happens when `log2(e) * val < 127.0f`, which correspond to `val < 88.0f`
-    v_if(val > -88.0f) {
-        // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
-        // z = (bias + x * factor * N_m; where:
-        // factor = 0x00b8aa3b (computed through log(e))
-        // bias = 0x3f800000
-        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-        sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
-        sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
-
-        // Polynomial coefficients for approximation of exp on [1; 2]
-        constexpr float POLY_D1 = 0.40196114e-7f;
-        constexpr int POLY_D2 = 0xf94ee7;
-        constexpr int POLY_D3 = 0x560e;
-
-        sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
-        d2 = d1 * d2;
-        zif = sfpu::_float_to_int32_(d2 * d3);
-
-        // Restore exponent
-        zii = sfpi::reinterpret<sfpi::vInt>(
-            sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
-
-        y = sfpi::reinterpret<sfpi::vFloat>(zii);
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
-            // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
-            // rather than 81 (which would have been correct).
-            // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-            y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
-        }
-    }
+    // Would it be possible to call minmax ?
+    // could also add SKIP_POSITIVE_CHECK here.ß
+    v_if(val > -88.0f) { val = -88.f; }
     v_endif;
+
+    // Idea: Loop unrolling + Loop splitting to reduce overhead of loading constants
+
+    // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
+    // z = (bias + x * factor * N_m; where:
+    // factor = 0x00b8aa3b (computed through log(e))
+    // bias = 0x3f800000
+    // Is sfpi::vFloat(0x3f800000) getting optimized ?
+    sfpi::vInt z = _float_to_int32_positive_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
+    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
+
+    // Polynomial coefficients for approximation of exp on [1; 2]
+    constexpr float POLY_D1 = 0.40196114e-7f;
+    constexpr int POLY_D2 = 0xf94ee7;
+    constexpr int POLY_D3 = 0x560e;
+
+    sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
+    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
+    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
+    d2 = d1 * d2;
+
+    // Let y = exp(d2 * d3). Can ?
+    // exexp(y) < 0 ?
+    // exexp(y) > 30 ?
+    zif = _float_to_int32_positive_(d2 * d3);
+
+    // Restore exponent
+    // Is this compiling properly to 1 instruction (vs. add + setexp)
+    zii = sfpi::reinterpret<sfpi::vInt>(
+        sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
+
+    y = sfpi::reinterpret<sfpi::vFloat>(zii);
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+    }
+
     return y;
 }
 
