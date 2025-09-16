@@ -15,6 +15,14 @@ on:
           - tilize_with_val_padding
           - untilize
           - untilize_with_unpadding
+          - ccl.generality.all_broadcast
+          - ccl.generality.all_gather
+          - ccl.generality.all_reduce
+          - ccl.generality.all_to_all_combine
+          - ccl.generality.all_to_all_dispatch
+          - ccl.generality.all_to_all
+          - ccl.generality.point_to_point
+          - ccl.generality.reduce_scatter
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
