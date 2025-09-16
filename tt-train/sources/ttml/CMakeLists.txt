@@ -76,6 +76,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/qwen_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/qwen_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
