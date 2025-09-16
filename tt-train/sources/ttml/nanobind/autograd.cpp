@@ -12,6 +12,8 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/graph.hpp"
@@ -26,7 +28,6 @@
 #include "optimizers/sgd.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
-#include "ttnn/operations/loss/loss.hpp"
 
 namespace nanobind::detail {
 template <>
@@ -325,7 +326,7 @@ void py_module(nb::module_& m) {
         py_sgd.def("zero_grad", &optimizers::SGD::zero_grad);
         py_sgd.def("step", &optimizers::SGD::step);
         py_sgd.def("get_state_dict", &optimizers::SGD::get_state_dict);
-        py_sgd.def("get_state_dict", &optimizers::SGD::get_state_dict);
+        py_sgd.def("set_state_dict", &optimizers::SGD::set_state_dict);
     }
 }
 
