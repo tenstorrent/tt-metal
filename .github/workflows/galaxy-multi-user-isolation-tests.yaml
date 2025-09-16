@@ -47,7 +47,7 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
-        run: python3 .github/scripts/util/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
+        run: python3 .github/scripts/utils/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
       - name: Run Docker Compose
         run: |
           TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
@@ -113,4 +113,4 @@ jobs:
       - name: Tear down containers
         if: always()
         run: |
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml down
+          docker compose -p multi-user -f multi-user-dc.yaml down
