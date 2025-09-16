@@ -245,7 +245,7 @@ class TtSegMaskHead:
         num_encoder_layers=6,
         num_decoder_layers=1,
         dim_feedforward=64,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         normalize_before=False,
         return_intermediate_dec=False,
         self_attn=False,

@@ -275,11 +275,18 @@ class TtBottleneck:
             self.conv1_stride = stride
             self.conv2_stride = 1
 
-        self.conv1 = TtnnConv2D(conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
+        self.conv1 = TtnnConv2D(
+            conv_args.conv1, conv_pth.conv1, device=device, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        )
 
         if not self.with_dcn:
             self.conv2 = TtnnConv2D(
-                conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32, dealloc_act=True
+                conv_args.conv2,
+                conv_pth.conv2,
+                device=device,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                act_block_h=32,
+                dealloc_act=True,
             )
         else:
             assert self.conv_cfg is None, "conv_cfg must be None for DCN"
@@ -298,7 +305,7 @@ class TtBottleneck:
             self.bn_parameters = conv_pth.bn2
 
         self.conv3 = TtnnConv2D(
-            conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded, dealloc_act=True
+            conv_args.conv3, conv_pth.conv3, device=device, activation=None, is_blk=conv3_blk_sharded, dealloc_act=True
         )
 
         if is_downsample:
@@ -306,7 +313,7 @@ class TtBottleneck:
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,
-                activation="",
+                activation=None,
                 is_blk=True if self.dcn else False,
                 activation_dtype=activation_dtype,
             )
@@ -417,7 +424,7 @@ class TtResNet:
             conv_args.conv1,
             conv_pth.conv1,
             device=device,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             activation_dtype=ttnn.bfloat16,
             act_block_h=64,
             dealloc_act=True,

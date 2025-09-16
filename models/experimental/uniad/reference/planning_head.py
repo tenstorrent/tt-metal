@@ -8,7 +8,6 @@ import torch.nn as nn
 from einops import rearrange
 from models.experimental.uniad.reference.utils import bivariate_gaussian_activation
 from models.experimental.uniad.reference.utils import CollisionNonlinearOptimizer
-import numpy as np
 import copy
 
 
@@ -157,5 +156,5 @@ class PlanningHeadSingleMode(nn.Module):
         )
         col_optimizer.set_reference_trajectory(sdc_traj_all[0].cpu().detach().numpy())
         sol = col_optimizer.solve()
-        sdc_traj_optim = np.stack([sol.value(col_optimizer.position_x), sol.value(col_optimizer.position_y)], axis=-1)
-        return torch.tensor(sdc_traj_optim[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
+        sdc_traj_optim = torch.tensor(sol[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
+        return sdc_traj_optim

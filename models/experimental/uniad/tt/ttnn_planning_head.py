@@ -7,7 +7,6 @@ import ttnn
 import torch
 from models.experimental.uniad.tt.ttnn_utils import bivariate_gaussian_activation_plan_head
 from models.experimental.uniad.reference.utils import CollisionNonlinearOptimizer
-import numpy as np
 
 from models.experimental.uniad.tt.ttnn_transformer_decoder_layer import TtTransformerDecoderLayer
 
@@ -23,7 +22,7 @@ class TtConv2d:
         act_block_h=None,
         reshard=False,
         deallocate=False,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         shard_type="HS",
         dtype=ttnn.bfloat16,
         slice_type=None,
@@ -193,15 +192,15 @@ class TtPlanningHeadSingleMode:
             self.bev_adapter = [
                 TtConv2d(device, parameters=parameters.bev_adapter[0][0], conv_pt=conv_pt.bev_adapter[0][0]),
                 TtConv2d(
-                    device, parameters=parameters.bev_adapter[0][2], conv_pt=conv_pt.bev_adapter[0][2], activation=""
+                    device, parameters=parameters.bev_adapter[0][2], conv_pt=conv_pt.bev_adapter[0][2], activation=None
                 ),
                 TtConv2d(device, parameters=parameters.bev_adapter[1][0], conv_pt=conv_pt.bev_adapter[1][0]),
                 TtConv2d(
-                    device, parameters=parameters.bev_adapter[1][2], conv_pt=conv_pt.bev_adapter[1][2], activation=""
+                    device, parameters=parameters.bev_adapter[1][2], conv_pt=conv_pt.bev_adapter[1][2], activation=None
                 ),
                 TtConv2d(device, parameters=parameters.bev_adapter[2][0], conv_pt=conv_pt.bev_adapter[2][0]),
                 TtConv2d(
-                    device, parameters=parameters.bev_adapter[2][2], conv_pt=conv_pt.bev_adapter[2][2], activation=""
+                    device, parameters=parameters.bev_adapter[2][2], conv_pt=conv_pt.bev_adapter[2][2], activation=None
                 ),
             ]
 
@@ -338,12 +337,12 @@ class TtPlanningHeadSingleMode:
             pos_xy = ttnn.from_torch(pos_xy, layout=ttnn.TILE_LAYOUT)
 
         col_optimizer = CollisionNonlinearOptimizer(
-            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t
+            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t, device=self.device
         )
         col_optimizer.set_reference_trajectory(sdc_traj_all[0].cpu().detach().numpy())
         sol = col_optimizer.solve()
-        sdc_traj_optim = np.stack([sol.value(col_optimizer.position_x), sol.value(col_optimizer.position_y)], axis=-1)
-        return torch.tensor(sdc_traj_optim[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
+        sdc_traj_optim = torch.tensor(sol[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
+        return sdc_traj_optim
 
     def collision_optimization(self, sdc_traj_all, occ_mask):
         pos_xy_t = []
@@ -371,13 +370,11 @@ class TtPlanningHeadSingleMode:
             return sdc_traj_all
 
         col_optimizer = CollisionNonlinearOptimizer(
-            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t
+            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t, device=self.device
         )
         col_optimizer.set_reference_trajectory(sdc_traj_all[0].cpu().detach().numpy())
         sol = col_optimizer.solve()
-        sdc_traj_optim = np.stack([sol.value(col_optimizer.position_x), sol.value(col_optimizer.position_y)], axis=-1)
-        result = torch.tensor(sdc_traj_optim[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
-
+        result = torch.tensor(sol[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
         # convert to ttnn
         result = ttnn.from_torch(result, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         return result

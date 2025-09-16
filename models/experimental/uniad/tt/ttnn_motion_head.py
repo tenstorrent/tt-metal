@@ -405,7 +405,13 @@ class TtMotionHead:
             ttnn.deallocate(tmp_a)
             ttnn.deallocate(tmp_b)
 
-            outputs_class = ttnn.log(ttnn.softmax((ttnn.squeeze(outputs_class, 3)), dim=2))
+            outputs_class = ttnn.squeeze(outputs_class, 3)
+            x_max = ttnn.max(outputs_class, dim=-1, keepdim=True)
+            x_shifted = ttnn.sub(outputs_class, x_max)
+            exp_x = ttnn.exp(x_shifted)
+            sum_exp = ttnn.sum(exp_x, dim=-1, keepdim=True)
+            log_sum_exp = ttnn.log(sum_exp)
+            outputs_class = ttnn.sub(x_shifted, log_sum_exp)
 
             outputs_traj_scores.append(outputs_class)
 

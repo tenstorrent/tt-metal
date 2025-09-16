@@ -4,21 +4,16 @@
 
 
 import math
-from einops import rearrange
-import torch
 import itertools
-import torch.nn.functional as F
 from functools import partial
-import numpy as np
-from typing import Any, Dict, List, Tuple, Union
 
+import numpy as np
+import torch
+import torch.nn.functional as F
 from torch import Tensor
-from typing import Union
+from einops import rearrange
 
 from typing import Any, Dict, List, Sequence, Tuple, Union
-import numpy as np
-import numpy.typing as npt
-from casadi import DM, Opti, sumsqr, vertcat, exp
 
 Pose = Tuple[float, float, float]  # (x, y, yaw)
 
@@ -275,68 +270,69 @@ class Instances:
 
 
 class CollisionNonlinearOptimizer:
-    def __init__(self, trajectory_len: int, dt: float, sigma, alpha_collision, obj_pixel_pos):
+    def __init__(
+        self,
+        trajectory_len: int,
+        dt: float,
+        sigma: float,
+        alpha_collision: float,
+        obj_pixel_pos: List[List[Tuple[float, float]]],
+        device: str = "cpu",
+    ):
         self.dt = dt
         self.trajectory_len = trajectory_len
-        self.current_index = 0
         self.sigma = sigma
         self.alpha_collision = alpha_collision
         self.obj_pixel_pos = obj_pixel_pos
-        # Use a array of dts to make it compatible to situations with varying dts across different time steps.
-        self._dts: npt.NDArray[np.float32] = np.asarray([[dt] * trajectory_len])
-        self._init_optimization()
+        self.device = device
 
-    def _init_optimization(self) -> None:
-        self.nx = 2  # state dim
+        # Initialize state trajectory as a learnable parameter (x, y)
+        self.state = torch.nn.Parameter(torch.zeros(2, trajectory_len, device="cpu", dtype=torch.float32))
 
-        self._optimizer = Opti()  # Optimization problem
-        self._create_decision_variables()
-        self._create_parameters()
-        self._set_objective()
+        # Reference trajectory placeholder
+        self.ref_traj = torch.zeros(2, trajectory_len, device="cpu", dtype=torch.float32)
 
-        # Set default solver options (quiet)
-        self._optimizer.solver("ipopt", {"ipopt.print_level": 0, "print_time": 0, "ipopt.sb": "yes"})
+    def set_reference_trajectory(self, reference_trajectory: Sequence["Pose"]):
+        reference_tensor = torch.tensor(reference_trajectory, dtype=torch.float32, device="cpu").T
+        self.ref_traj = reference_tensor.clone()
 
-    def set_reference_trajectory(self, reference_trajectory: Sequence[Pose]) -> None:
-        self._optimizer.set_value(self.ref_traj, DM(reference_trajectory).T)
-        self._set_initial_guess(reference_trajectory)
+        with torch.no_grad():
+            self.state.copy_(self.ref_traj)
 
-    def set_solver_optimizerons(self, options: Dict[str, Any]) -> None:
-        self._optimizer.solver("ipopt", options)
-
-    def solve(self):
-        return self._optimizer.solve()
-
-    def _create_decision_variables(self) -> None:
-        # State trajectory (x, y)
-        self.state = self._optimizer.variable(self.nx, self.trajectory_len)
-        self.position_x = self.state[0, :]
-        self.position_y = self.state[1, :]
-
-    def _create_parameters(self) -> None:
-        self.ref_traj = self._optimizer.parameter(2, self.trajectory_len)  # (x, y)
-
-    def _set_objective(self) -> None:
-        # Follow reference, minimize control rates and absolute inputs
+    def _compute_cost(self) -> torch.Tensor:
+        # Stage cost: follow reference trajectory
         alpha_xy = 1.0
-        cost_stage = alpha_xy * sumsqr(self.ref_traj[:2, :] - vertcat(self.position_x, self.position_y))
 
-        alpha_collision = self.alpha_collision
+        diff = self.state - self.ref_traj
+        squared_error = diff**2
+        error_sum = torch.sum(squared_error)
+        cost_stage = alpha_xy * error_sum
 
-        cost_collision = 0
+        # Collision cost
+        cost_collision = 0.0
         normalizer = 1 / (2.507 * self.sigma)
-        # TODO: vectorize this
-        for t in range(len(self.obj_pixel_pos)):
-            x, y = self.position_x[t], self.position_y[t]
-            for i in range(len(self.obj_pixel_pos[t])):
-                col_x, col_y = self.obj_pixel_pos[t][i]
-                cost_collision += (
-                    alpha_collision * normalizer * exp(-((x - col_x) ** 2 + (y - col_y) ** 2) / 2 / self.sigma**2)
-                )
-        self._optimizer.minimize(cost_stage + cost_collision)
 
-    def _set_initial_guess(self, reference_trajectory: Sequence[Pose]) -> None:
-        self._optimizer.set_initial(self.state[:2, :], DM(reference_trajectory).T)  # (x, y, yaw)
+        for t, obstacles in enumerate(self.obj_pixel_pos):
+            x, y = self.state[0, t], self.state[1, t]
+            for col_x, col_y in obstacles:
+                dist_sq = (x - col_x) ** 2 + (y - col_y) ** 2
+                cost_collision += self.alpha_collision * normalizer * torch.exp(-dist_sq / (2 * self.sigma**2))
+
+        return cost_stage + cost_collision
+
+    def solve(self, lr: float = 0.05, steps: int = 200):
+        """
+        Optimize the trajectory using gradient descent (Adam).
+        """
+        optimizer = torch.optim.Adam([self.state], lr=lr)
+
+        for step in range(steps):
+            optimizer.zero_grad()
+            cost = self._compute_cost()
+            cost.backward()
+            optimizer.step()
+
+        return self.state.detach().cpu().T.numpy()
 
 
 def bivariate_gaussian_activation(ip):
