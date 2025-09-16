@@ -4,6 +4,7 @@
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
@@ -45,37 +46,21 @@ class Model1D(SharedStateAddOn, AbstractModule):
         ), "Number of non-MoE blocks cannot be greater than the total number of blocks."
         (state_dict,) = state_dicts
 
-        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
-            mesh_device.shape[0], hf_config.first_k_dense_replace
-        )
+        _, mlp_meta_layer_indices = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
 
-        mlp_decoder_block_state_dicts = [
-            [
-                sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
-                if not is_padding and -1 < layer_idx < hf_config.first_k_dense_replace
-                else None
-                for is_padding, layer_idx in zip(is_padding_layer, meta_layer_list)
-            ]
-            for is_padding_layer, meta_layer_list in zip(mlp_is_padding_layer, mlp_meta_layer_indices)
-        ]
-
-        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+        _, moe_meta_layer_indices = cls.get_meta_layer_mapping(
             mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
         )
 
-        moe_decoder_block_state_dicts = [
+        decoder_block_state_dicts = np.array(
             [
                 sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
-                if (
-                    not is_padding
-                    and layer_idx >= hf_config.first_k_dense_replace
-                    and -1 < layer_idx < hf_config.num_hidden_layers
-                )
-                else None
-                for is_padding, layer_idx in zip(is_padding_layer, meta_layer_list)
+                for layer_idx in range(hf_config.num_hidden_layers)
             ]
-            for is_padding_layer, meta_layer_list in zip(moe_is_padding_layer, moe_meta_layer_indices)
-        ]
+            + [None]
+            # at last contact None in the state_dicts. get_meta_layer_mapping returns -1 for padding layer
+            # so while iterating over this state_dict we always index -1 for padding layers which should be None.
+        )
 
         return {
             "embedding": Embedding1D.convert_weights(
@@ -84,20 +69,20 @@ class Model1D(SharedStateAddOn, AbstractModule):
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
                     hf_config,
-                    mlp_decoder_block_state_dicts[meta_layer_idx],
+                    decoder_block_state_dicts[layer_indices].tolist(),
                     output_path / f"mlp_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx in range(len(mlp_meta_layer_indices))
+                for meta_layer_idx, layer_indices in enumerate(mlp_meta_layer_indices)
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock.convert_weights(
                     hf_config,
-                    moe_decoder_block_state_dicts[meta_layer_idx],
+                    decoder_block_state_dicts[layer_indices].tolist(),
                     output_path / f"moe_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx in range(len(moe_meta_layer_indices))
+                for meta_layer_idx, layer_indices in enumerate(moe_meta_layer_indices)
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
@@ -125,9 +110,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
             - pad_map: A list of lists of shape [num_meta_layers][num_rows], where
             each element is a boolean indicating if that position is padding (True) or a valid layer index (False).
             - mapping: A list of lists of shape [num_meta_layers][num_rows], where
-            each element is an int (layer index) or None (padding).
+            each element is an int (layer index) or -1 (padding).
         """
-
+        PADDING_LAYER_INDEX = -1
         if end_layer_idx is None:
             end_layer_idx = start_layer_idx
             start_layer_idx = 0
@@ -141,12 +126,14 @@ class Model1D(SharedStateAddOn, AbstractModule):
         total_slots = num_meta_layers * num_rows
 
         # Create a flat list of layers, padding with -1
-        padded_layers = list(range(start_layer_idx, start_layer_idx + num_layers)) + [-1] * (total_slots - num_layers)
+        padded_layers = list(range(start_layer_idx, start_layer_idx + num_layers)) + [PADDING_LAYER_INDEX] * (
+            total_slots - num_layers
+        )
 
         # Reshape into [num_rows, num_meta_layers]
         mapping = torch.tensor(padded_layers).reshape(num_rows, num_meta_layers).T
 
-        return mapping == -1, mapping
+        return mapping == PADDING_LAYER_INDEX, mapping
 
     @classmethod
     def prefill_model_config(
@@ -250,7 +237,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         )
         mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
             mesh_device.shape[0], hf_config.first_k_dense_replace
-        )
+        )  # [num_meta_layers, num_rows]
         if mla_caches is not None:
             mla_cache_shape = mla_caches[0].shape
             mla_caches = torch.stack(
