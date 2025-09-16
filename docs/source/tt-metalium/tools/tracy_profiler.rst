@@ -34,7 +34,7 @@ You can enable the profiler by running:
     ninja
     ninja install
 
-Note that Tracy support is not included in prebuilt binariecsvs or release builds by default. You must build from source with the profiler enabled to use these features.
+Note that Tracy support is not included in prebuilt binaries or release builds by default. You must build from source with the profiler enabled to use these features.
 
 GUI
 ---
