@@ -267,11 +267,13 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
         volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
-        uint8_t edm_read_counter_initial_value) :
+        uint8_t edm_read_counter_initial_value,
+        uint32_t worker_read_pointer_update_scratch_region) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(connection_live_semaphore),
-        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
+        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf),
+        worker_read_pointer_update_scratch_region(worker_read_pointer_update_scratch_region) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         local_write_counter.reset();
         local_read_counter.reset();
@@ -296,9 +298,60 @@ struct EdmChannelWorkerInterface {
             WORKER_HANDSHAKE_NOC);
     }
 
+    inline __attribute__((always_inline)) void fabric_noc_inline_dw_write_with_spoof_write(
+        uint32_t src_addr, uint64_t dest_addr, uint32_t val, uint32_t noc) {
+        // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the
+        // same time. If one port on the receipient has back-pressure then the transaction will hang because there is no
+        // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline
+        // writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+        ASSERT((dest_addr & 0x3) == 0);
+
+        // src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
+
+        // Flush to make sure write left L1 before updating it
+        WAYPOINT("NCBW");
+        while (!noc_cmd_buf_ready(noc, NCRISC_WR_CMD_BUF));
+        WAYPOINT("NWSW");
+        while (!ncrisc_noc_nonposted_writes_sent(noc));
+        WAYPOINT("NWSD");
+
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+        *interim_addr_ptr = val;
+        asm volatile("fence" ::: "memory");
+
+#ifdef WATCHER_ENABLED
+        invalidate_l1_cache();
+        volatile uint32_t read_back = *interim_addr_ptr;
+        ASSERT(read_back == val);
+#endif
+
+        ncrisc_noc_fast_write(
+            noc,
+            NCRISC_WR_CMD_BUF,
+            src_addr,
+            dest_addr,
+            4,
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            false,  // linked
+            1,      // num_dests
+            false,  // multicast_path_reserve
+            false   // posted
+        );
+    }
+
     FORCE_INLINE void notify_worker_of_read_counter_update() {
+#ifdef ARCH_BLACKHOLE
+        fabric_noc_inline_dw_write_with_spoof_write(
+            worker_read_pointer_update_scratch_region,
+            this->cached_worker_semaphore_address,
+            local_read_counter.counter,
+            WORKER_HANDSHAKE_NOC);
+#else
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address, local_read_counter.counter, 0xf, WORKER_HANDSHAKE_NOC);
+#endif
     }
 
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
@@ -351,6 +404,8 @@ struct EdmChannelWorkerInterface {
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
+
+    uint32_t worker_read_pointer_update_scratch_region;
 
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
