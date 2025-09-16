@@ -112,7 +112,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 .. code-block:: python
 
                     N, C, H, W = 1, 64, 32, 1
-                    num_groups = 4
+                    num_groups = 2
 
                     # Generate random inputs and reference output
                     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
