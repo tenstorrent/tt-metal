@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
+from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, reshard_if_possible, sharded_concat
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 
@@ -19,7 +19,7 @@ class TtnnC3K:
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
-        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3, reshard=True)  # needed as input is RM
+        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3)  # needed as input is RM
         self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
         self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
 
@@ -36,6 +36,23 @@ class TtnnC3K:
             x = sharded_concat([k2, x2], to_interleaved=False)
         else:
             x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        p(x, "cv3 in")
+
+        x = reshard_if_possible(x)
+        # if x.is_sharded() and (x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0):
+        #     print("BEFORE IS", x.memory_config().shard_spec.shape)
+        #     aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
+        #         x.memory_config().shard_spec.shape[1]
+        #     )
+        #     print("after IS", aligned_h, aligned_w)
+        #     resharded_memory_config = ttnn.create_sharded_memory_config(
+        #         shape=(aligned_h, aligned_w),
+        #         core_grid=x.memory_config().shard_spec.grid,
+        #         strategy=ttnn.ShardStrategy.HEIGHT,
+        #         orientation=x.memory_config().shard_spec.orientation,
+        #         use_height_and_width_as_shard_shape=True,
+        #     )
+        #     x = ttnn.to_memory_config(x, resharded_memory_config)
         x = self.cv3(device, x)
         deallocate_tensors(x1, x2, k1, k2)
         return x

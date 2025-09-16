@@ -5,6 +5,7 @@
 import math
 
 import ttnn
+from models.common.utility_functions import roundup32
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
@@ -219,7 +220,7 @@ class TtnnConv:
         activation=None,
         deallocate_activation=False,
         split_weights=False,
-        core_count=None,
+        core_count=64,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -268,3 +269,23 @@ def get_mesh_mappers(device):
         weights_mesh_mapper = None
         output_mesh_composer = None
     return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def reshard_if_possible(x):  # reshards if shard_spec is not multiples of 32
+    if x.is_sharded() and (
+        x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0
+    ):
+        print("BEFORE IS", x.memory_config().shard_spec.shape)
+        aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
+            x.memory_config().shard_spec.shape[1]
+        )
+        print("after IS", aligned_h, aligned_w)
+        resharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=(aligned_h, aligned_w),
+            core_grid=x.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=x.memory_config().shard_spec.orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, resharded_memory_config)
+    return x
