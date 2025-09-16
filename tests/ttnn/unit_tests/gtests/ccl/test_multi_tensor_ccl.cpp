@@ -38,7 +38,8 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
     };
 }
 
-std::vector<IDevice*> get_line_devices_as_idevice(std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices) {
+std::vector<IDevice*> get_line_devices_as_idevice(
+    const std::vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices) {
     std::vector<IDevice*> devices;
     devices.reserve(mesh_devices.size());
     for (auto& mesh_device : mesh_devices) {
@@ -87,7 +88,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
-            EXPECT_EQ(data[i].to_float(), expected);
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
 }
@@ -206,7 +207,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
         auto data = reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(mesh_devices.size());
-            EXPECT_EQ(data[i].to_float(), expected);
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
 }
