@@ -96,8 +96,8 @@ void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
 
-Device::Device(Device&& other) = default;
-Device& Device::operator=(Device&& other) = default;
+Device::Device(Device&& other) noexcept = default;
+Device& Device::operator=(Device&& other) noexcept = default;
 
 Device::Device(
     chip_id_t device_id,
