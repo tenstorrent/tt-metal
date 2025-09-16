@@ -30,7 +30,7 @@ namespace sfpu {
      (c1)) * (x) +                                                                                                 \
         (c0)
 
-inline sfpi::vFloat calculate_gelu_chebychev(sfpi::vFloat val) {
+inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
     v_if(val >= -5.5f) {
         result = POLYVAL15(
@@ -80,7 +80,7 @@ inline void calculate_gelu() {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = in;
         v_if(in == 0.0f) { result = 0.0f; }
-        v_elseif(in < 3.0f) { result = calculate_gelu_chebychev(in); }
+        v_elseif(in < 3.0f) { result = calculate_gelu_chebyshev(in); }
         v_endif;
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
