@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -107,7 +106,7 @@ def parse_capnp_interface(capnp_file: str) -> List[MethodInfo]:
 def generate_header(methods: List[MethodInfo]) -> str:
     """Generate the header file content."""
 
-    header = """// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+    header = """// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -189,7 +188,7 @@ private:
 def generate_source(methods: List[MethodInfo]) -> str:
     """Generate the source file content."""
 
-    source = """// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+    source = """// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //
