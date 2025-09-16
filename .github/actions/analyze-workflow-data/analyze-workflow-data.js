@@ -143,9 +143,11 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
                 }
                 j++;
               }
-              const snippet = block.join('\n').trim();
-              if (snippet.length > 0) {
-                collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
+              const snippetText = block.join('\n').trim();
+              if (snippetText.length > 0) {
+                const label = extractTestLabel(lines, Math.max(0, i - 15), Math.min(lines.length - 1, j + 15), p);
+                const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
+                collected.push({ snippet, label });
               }
               i = j; // advance past this block (backtrace line is not included)
             }
@@ -161,8 +163,10 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               if (nxt < lines.length && !infoRegex.test(lines[nxt]) && !backtraceRegex.test(lines[nxt])) {
                 block.push(lines[nxt].trim());
               }
-              const snippet = block.join('\n');
-              collected.push(snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet);
+              const snippetText = block.join('\n');
+              const label = extractTestLabel(lines, Math.max(0, k - 15), Math.min(lines.length - 1, (nxt || k) + 15), p);
+              const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
+              collected.push({ snippet, label });
             }
           }
         } catch (_) { /* ignore file errors */ }
@@ -172,6 +176,28 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   }
 
   return collected;
+}
+
+/**
+ * Try to extract a test identifier from the nearby log lines or path.
+ */
+function extractTestLabel(lines, startIdx, endIdx, filePath) {
+  const window = lines.slice(startIdx, endIdx + 1).join('\n');
+  // PyTest-like: FAILED tests/path::test_name[...] - ...
+  const m1 = window.match(/FAILED\s+([^\s]+::[^\s]+(?:\[[^\]]+\])?)/);
+  if (m1) return m1[1];
+  // Lines like: Error: test_sdxl_unet_perf_device
+  const m2 = window.match(/Error:\s*([A-Za-z0-9_:.+\-\[\]\/\\]+)/i);
+  if (m2) return m2[1];
+  // GTest: [  FAILED  ] Suite.Test
+  const m3 = window.match(/\[\s*FAILED\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
+  if (m3) return m3[1];
+  // Benchmark: Benchmark NAME ... error/failed
+  const m4 = window.match(/Benchmark\s+([^\s]+)\b.*?(error|failed)/i);
+  if (m4) return m4[1];
+  // As fallback, infer job/step from path
+  const base = path.basename(filePath);
+  return base && base.length <= 80 ? base : undefined;
 }
 
 /**
@@ -734,7 +760,7 @@ async function run() {
           for (const fr of failingRuns) {
             const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
             for (const sn of snippets) {
-              const key = sn; // raw string key; could normalize whitespace if needed
+              const key = sn.snippet; // count by text only
               counts.set(key, (counts.get(key) || 0) + 1);
             }
           }
@@ -797,7 +823,7 @@ async function run() {
           for (const fr of failingRuns) {
             const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
             for (const sn of snippets) {
-              counts.set(sn, (counts.get(sn) || 0) + 1);
+              counts.set(sn.snippet, (counts.get(sn.snippet) || 0) + 1);
             }
           }
           item.repeated_errors = Array.from(counts.entries())
@@ -855,7 +881,10 @@ async function run() {
             // Error snippets first
             let errorsList = '';
             if (Array.isArray(it.error_snippets) && it.error_snippets.length > 0) {
-              const errLines = it.error_snippets.map(snip => `    - "${snip.replace(/`/g, '\\`')}"`);
+              const errLines = it.error_snippets.map(obj => {
+                const prefix = obj.label ? `[${obj.label}] ` : '';
+                return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
+              });
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
             }
             let repeatedList = '';
@@ -893,7 +922,10 @@ async function run() {
             // Error snippets first
             let errorsList = '';
             if (Array.isArray(it.error_snippets) && it.error_snippets.length > 0) {
-              const errLines = it.error_snippets.map(snip => `    - "${snip.replace(/`/g, '\\`')}"`);
+              const errLines = it.error_snippets.map(obj => {
+                const prefix = obj.label ? `[${obj.label}] ` : '';
+                return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
+              });
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
             }
             let repeatedList = '';
