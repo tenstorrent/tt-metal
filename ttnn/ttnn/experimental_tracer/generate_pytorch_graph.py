@@ -99,7 +99,7 @@ class CompositePytorchGraph(PytorchGraph):
                 k: {
                     "shape": list(v.value.shape),
                     "dtype": str(v.value.dtype),
-                    "min_max": [v.value.min().item(), v.value.max().item()],
+                    "min_max": [v.value.min().item(), v.value.max().item()] if v.value.device == "cpu" else [-1, 1],
                 }
                 for k, v in CompositeOperation.ALL_CONSTANTS.items()
             }
@@ -141,10 +141,12 @@ class CustomModel(torch.nn.Module):
         """
         code_lines[
             "main"
-        ] += """\n# Fake tensors used based on const_meta.json
+        ] += f"""
+# Fake tensors used based on const_meta.json
 params = LazyParams(
-    meta_path="const_meta.json"
-)\n"""
+    meta_path="const_meta.json", empty={not self.clustered_graph}
+)
+"""
         input_shapes = [tuple(input_op.args[0]) for input_op in input_ops]
         input_args = [f"torch.ones({shape})" for shape in input_shapes]
 
@@ -158,7 +160,7 @@ params = LazyParams(
         else:
             code_lines[
                 "main"
-            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True)"
+            ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=False)"
             code_lines[
                 "main"
             ] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph, custom_patterns=[])"

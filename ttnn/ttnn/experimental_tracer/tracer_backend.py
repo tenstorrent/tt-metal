@@ -210,7 +210,9 @@ class Trackable_Tensor(torch.Tensor):
         return r
 
     def __repr__(self):
-        return f"Trackable_Tensor({self.elem}, module_name={self.module_name})"
+        elem = self.elem if "elem" in self.__dict__ else None
+        module_name = self.module_name if "module_name" in self.__dict__ else None
+        return f"Trackable_Tensor({elem}, module_name={module_name})"
 
     def set_id(self, id):
         self.id = id
@@ -1016,6 +1018,7 @@ def wrap_state_dict(state_dict):
             wrapped_tensor = Trackable_Tensor(value)
             wrapped_tensor.id = str(Trackable_Tensor.tracer_data.get_next_id())
             wrapped_tensor.const_name = key
+            wrapped_tensor.elem = value
             wrapped_state_dict[key] = wrapped_tensor
         else:
             wrapped_state_dict[key] = value
