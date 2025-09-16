@@ -313,11 +313,6 @@ class ResBlock:
             ttnn.deallocate(x_tiled_NTHWC)
             x_tiled_NTHWC = ttnn.reshape(
                 all_gather_output,
-                (1, 1, N * T, self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor, H, W, C),
-            )
-            x_tiled_NTHWC = ttnn.permute(x_tiled_NTHWC, (0, 1, 2, 3, 5, 4, 6, 7))
-            x_tiled_NTHWC = self.sharded_reshape_untilize_tilize(
-                x_tiled_NTHWC,
                 (N * T, 1, H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, C),
             )
         else:
@@ -344,10 +339,6 @@ class ResBlock:
         ttnn.deallocate(x_norm_tiled_NTHWC)
 
         if self.parallel_config.w_parallel.factor > 1:
-            x_NTHWC = ttnn.reshape(
-                x_NTHWC, (N, T, self.parallel_config.h_parallel.factor, H, self.parallel_config.w_parallel.factor, W, C)
-            )
-            x_NTHWC = ttnn.permute(x_NTHWC, (0, 1, 2, 4, 3, 5, 6))
             x_NTHWC = ttnn.reshape(
                 x_NTHWC,
                 (N, T, self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, H, W, C),
@@ -403,11 +394,6 @@ class ResBlock:
             )
             x_conv1_tiled_NTHWC = ttnn.reshape(
                 x_conv1_tiled_NTHWC,
-                (1, 1, N * T, self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor, H, W, C),
-            )
-            x_conv1_tiled_NTHWC = ttnn.permute(x_conv1_tiled_NTHWC, (0, 1, 2, 3, 5, 4, 6, 7))
-            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize(
-                x_conv1_tiled_NTHWC,
                 (N * T, 1, H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, C),
             )
         else:
@@ -423,10 +409,6 @@ class ResBlock:
         ttnn.deallocate(x_tiled_NTHWC)
 
         if self.parallel_config.w_parallel.factor > 1:
-            x_NTHWC = ttnn.reshape(
-                x_NTHWC, (N, T, self.parallel_config.h_parallel.factor, H, self.parallel_config.w_parallel.factor, W, C)
-            )
-            x_NTHWC = ttnn.permute(x_NTHWC, (0, 1, 2, 4, 3, 5, 6))
             x_NTHWC = ttnn.reshape(
                 x_NTHWC,
                 (N, T, self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, H, W, C),
