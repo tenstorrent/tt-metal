@@ -291,11 +291,6 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 
                 fmt::print("Loading embedding weight from: {}\n", info.name);
                 auto out_tensor1 = get_parameter("llama/tok_emb/weight");
-                fmt::print("Original shape {}, {}\n", info.shape[0], info.shape[1]);
-                fmt::print(
-                    "Transformed shape {}, {}\n",
-                    out_tensor1->get_value().logical_shape()[-2],
-                    out_tensor1->get_value().logical_shape()[-1]);
                 auto resized_emb = pad_and_resize_flat(
                     float_vec, 
                     info.shape[0], 
@@ -305,9 +300,15 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 out_tensor1->set_value(core::from_vector(
                     resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 
-                if (config.weight_tying == WeightTyingType::Enabled) {
-                    fmt::print("Weight tying enabled - embedding weights will be shared with output layer\n");
-                }
+                auto out_tensor2 = get_parameter("llama/fc/weight");
+                auto resized_weight1 = pad_and_resize_flat(
+                    float_vec, 
+                    info.shape[0], 
+                    info.shape[1], 
+                    out_tensor2->get_value().logical_shape()[-2],
+                    out_tensor2->get_value().logical_shape()[-1]);
+                out_tensor2->set_value(core::from_vector(
+                    resized_weight1, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
             }
             
             // Final layer norm
@@ -326,40 +327,6 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 } else {
                     out_tensor1->set_value(core::from_vector(
                         float_vec, target_shape, out_tensor1->get_value().device()));
-                }
-            }
-            
-            // Output projection (lm_head)
-            if (info.name == "lm_head.weight" || info.name == "output.weight" || 
-                info.name == "model.lm_head.weight" || info.name == "lm_head.linear.weight" ||
-                info.name == "model.lm_head.linear.weight" || info.name == "transformer.lm_head.weight") {
-                fmt::print("Loading output projection weight from: {}\n", info.name);
-                
-                // Check if weight tying is enabled
-                if (config.weight_tying == WeightTyingType::Enabled) {
-                    // When weight tying is enabled, fc and tok_emb share the same weight
-                    // Load into the embedding weight since that's the shared parameter
-                    auto out_tensor1 = get_parameter("llama/tok_emb/weight");
-                    fmt::print("Weight tying enabled - loading into shared embedding weight\n");
-                    auto resized_weight = pad_and_resize_flat(
-                        float_vec, 
-                        info.shape[0], 
-                        info.shape[1], 
-                        out_tensor1->get_value().logical_shape()[-2],
-                        out_tensor1->get_value().logical_shape()[-1]);
-                    out_tensor1->set_value(core::from_vector(
-                        resized_weight, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
-                } else {
-                    // When weight tying is disabled, load into separate fc weight
-                    auto out_tensor1 = get_parameter("llama/fc/weight");
-                    auto resized_weight = pad_and_resize_flat(
-                        float_vec, 
-                        info.shape[0], 
-                        info.shape[1], 
-                        out_tensor1->get_value().logical_shape()[-2],
-                        out_tensor1->get_value().logical_shape()[-1]);
-                    out_tensor1->set_value(core::from_vector(
-                        resized_weight, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
             }
 
