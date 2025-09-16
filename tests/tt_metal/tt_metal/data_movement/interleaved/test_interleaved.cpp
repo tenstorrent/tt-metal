@@ -8,6 +8,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -45,16 +46,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
-    InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
-        .size = total_size_bytes,
+    distributed::DeviceLocalBufferConfig local_config = {
         .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};
-    std::shared_ptr<Buffer> input_buffer;
-    input_buffer = CreateBuffer(interleaved_buffer_config);
+    distributed::ReplicatedBufferConfig buffer_config = {.size = total_size_bytes};
+    auto input_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     uint32_t input_buffer_address = input_buffer->address();
-
-    auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
     assert(input_buffer_address != output_buffer_address);
@@ -150,9 +148,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 
     // Launch program and record outputs
     vector<uint32_t> packed_output;
+    auto& cq = mesh_device->mesh_command_queue();
 
     if (test_config.read_kernel) {
-        detail::WriteToBuffer(input_buffer, packed_input);
+        distributed::WriteShard(cq, input_buffer, packed_input, distributed::MeshCoordinate(0, 0));
         if (test_config.is_dram) {
             MetalContext::instance().get_cluster().dram_barrier(device->id());
         } else {
@@ -169,12 +168,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
 
-    auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     if (test_config.write_kernel) {
-        detail::ReadFromBuffer(output_buffer, packed_output);
+        distributed::ReadShard(cq, packed_output, output_buffer, distributed::MeshCoordinate(0, 0));
     } else {
         detail::ReadFromDeviceL1(
             device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);
