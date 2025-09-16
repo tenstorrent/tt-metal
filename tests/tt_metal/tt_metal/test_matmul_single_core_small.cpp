@@ -11,12 +11,13 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include <tt-metalium/tilize_utils.hpp>
-
+#include <tt-metalium/distributed.hpp>
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 // Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
 // this is usually used for activation so that blocks data is contiguous in memory
@@ -91,12 +92,16 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
+        auto& cq = mesh_device->mesh_command_queue();
 
         CoreCoord core = {0, 0};
         uint32_t M = 4;
@@ -134,25 +139,22 @@ int main(int argc, char** argv) {
         uint32_t dram_buffer_size_out =
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        tt_metal::InterleavedBufferConfig act_config{
-            .device = device,
-            .size = dram_buffer_size_act,
-            .page_size = dram_buffer_size_act,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        tt_metal::InterleavedBufferConfig weights_config{
-            .device = device,
-            .size = dram_buffer_size_weights,
-            .page_size = dram_buffer_size_weights,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = device,
-            .size = dram_buffer_size_out,
-            .page_size = dram_buffer_size_out,
-            .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::DeviceLocalBufferConfig act_config = {
+            .page_size = dram_buffer_size_act, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig act_buffer_config = {.size = dram_buffer_size_act};
 
-        auto src0_dram_buffer = CreateBuffer(act_config);
-        auto src1_dram_buffer = CreateBuffer(weights_config);
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        distributed::DeviceLocalBufferConfig weights_config = {
+            .page_size = dram_buffer_size_weights, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig weights_buffer_config = {.size = dram_buffer_size_weights};
+
+        distributed::DeviceLocalBufferConfig dst_config = {
+            .page_size = dram_buffer_size_out, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig dst_buffer_config = {.size = dram_buffer_size_out};
+
+        auto src0_dram_buffer = distributed::MeshBuffer::create(act_buffer_config, act_config, mesh_device.get());
+        auto src1_dram_buffer =
+            distributed::MeshBuffer::create(weights_buffer_config, weights_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(dst_buffer_config, dst_config, mesh_device.get());
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
@@ -271,23 +273,24 @@ int main(int argc, char** argv) {
         auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
+        distributed::WriteShard(cq, src0_dram_buffer, activations_tile_transposed, zero_coord);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
+        distributed::WriteShard(cq, src1_dram_buffer, weights, zero_coord);
 
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_rt_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
         log_info(LogTest, "Launching kernels");
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, true);
         log_info(LogTest, "Kernels done");
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -308,7 +311,7 @@ int main(int argc, char** argv) {
             golden, result_untilized, [&](const bfloat16& a, const bfloat16& b) {
                 return tt::test_utils::is_close<bfloat16>(a, b, 0.015f);
             });
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
         log_info(LogTest, "Closing device");
 
     } catch (const std::exception& e) {
