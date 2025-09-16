@@ -47,132 +47,7 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
-        run: |
-          for i in [1..4]; do
-            mkdir -p /home/ubuntu/.cache/tt-metal-cache-$i
-            chown $(id -u):$(id -g) /home/ubuntu/.cache/tt-metal-cache-$i
-          done
-          cat > multi-user-dc.yaml <<EOF
-          x-base: &default
-            image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-            stdin_open: true
-            tty: true
-            entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
-            user: "\${USER_ID}:\${GROUP_ID}"
-            working_dir: /app/tt-metal
-            environment:
-              HOME: /app
-              LD_LIBRARY_PATH: /app/tt-metal/build/lib
-              PYTHONPATH: /app/tt-metal
-              TT_METAL_HOME: /app/tt-metal
-              TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-
-          services:
-            tray-1:
-              <<: *default
-              container_name: tray-1
-              volumes:
-                  - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-1:/app/.cache
-              environment:
-                HOME: /app
-                LD_LIBRARY_PATH: /app/tt-metal/build/lib
-                PYTHONPATH: /app/tt-metal
-                TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-1.txt
-              devices:
-                - "/dev/tenstorrent/0:/dev/tenstorrent/0"
-                - "/dev/tenstorrent/1:/dev/tenstorrent/1"
-                - "/dev/tenstorrent/2:/dev/tenstorrent/2"
-                - "/dev/tenstorrent/3:/dev/tenstorrent/3"
-                - "/dev/tenstorrent/4:/dev/tenstorrent/4"
-                - "/dev/tenstorrent/5:/dev/tenstorrent/5"
-                - "/dev/tenstorrent/6:/dev/tenstorrent/6"
-                - "/dev/tenstorrent/7:/dev/tenstorrent/7"
-            tray-2:
-              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              stdin_open: true
-              tty: true
-              container_name: tray-2
-              volumes:
-                  - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-2:/app/.cache
-              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
-              user: "\${USER_ID}:\${GROUP_ID}"
-              working_dir: /app/tt-metal
-              environment:
-                HOME: /app
-                LD_LIBRARY_PATH: /app/tt-metal/build/lib
-                PYTHONPATH: /app/tt-metal
-                TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-2.txt
-              devices:
-                - "/dev/tenstorrent/8:/dev/tenstorrent/8"
-                - "/dev/tenstorrent/9:/dev/tenstorrent/9"
-                - "/dev/tenstorrent/10:/dev/tenstorrent/10"
-                - "/dev/tenstorrent/11:/dev/tenstorrent/11"
-                - "/dev/tenstorrent/12:/dev/tenstorrent/12"
-                - "/dev/tenstorrent/13:/dev/tenstorrent/13"
-                - "/dev/tenstorrent/14:/dev/tenstorrent/14"
-                - "/dev/tenstorrent/15:/dev/tenstorrent/15"
-            tray-3:
-              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              stdin_open: true
-              tty: true
-              container_name: tray-3
-              volumes:
-                  - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-3:/app/.cache
-              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
-              user: "\${USER_ID}:\${GROUP_ID}"
-              working_dir: /app/tt-metal
-              environment:
-                HOME: /app
-                LD_LIBRARY_PATH: /app/tt-metal/build/lib
-                PYTHONPATH: /app/tt-metal
-                TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-3.txt
-              devices:
-                - "/dev/tenstorrent/16:/dev/tenstorrent/16"
-                - "/dev/tenstorrent/17:/dev/tenstorrent/17"
-                - "/dev/tenstorrent/18:/dev/tenstorrent/18"
-                - "/dev/tenstorrent/19:/dev/tenstorrent/19"
-                - "/dev/tenstorrent/20:/dev/tenstorrent/20"
-                - "/dev/tenstorrent/21:/dev/tenstorrent/21"
-                - "/dev/tenstorrent/22:/dev/tenstorrent/22"
-                - "/dev/tenstorrent/23:/dev/tenstorrent/23"
-            tray-4:
-              image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-              stdin_open: true
-              tty: true
-              container_name: tray-4
-              volumes:
-                  - ${{ github.workspace }}:/app/tt-metal
-                  - /home/ubuntu/.cache/tt-metal-cache-4:/app/.cache
-              entrypoint: ["./.github/scripts/utils/configure-multi-user-container.sh"]
-              user: "\${USER_ID}:\${GROUP_ID}"
-              working_dir: /app/tt-metal
-              environment:
-                HOME: /app
-                LD_LIBRARY_PATH: /app/tt-metal/build/lib
-                PYTHONPATH: /app/tt-metal
-                TT_METAL_HOME: /app/tt-metal
-                TT_MESH_GRAPH_DESC_PATH: /app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                TT_MULTI_USER_GALAXY: /app/tt-metal/.multi-user-galaxy-docker-files/tray-presence-4.txt
-              devices:
-                - "/dev/tenstorrent/24:/dev/tenstorrent/24"
-                - "/dev/tenstorrent/25:/dev/tenstorrent/25"
-                - "/dev/tenstorrent/26:/dev/tenstorrent/26"
-                - "/dev/tenstorrent/27:/dev/tenstorrent/27"
-                - "/dev/tenstorrent/28:/dev/tenstorrent/28"
-                - "/dev/tenstorrent/29:/dev/tenstorrent/29"
-                - "/dev/tenstorrent/30:/dev/tenstorrent/30"
-                - "/dev/tenstorrent/31:/dev/tenstorrent/31"
-          EOF
-
+        run: python3 .github/scripts/util/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
       - name: Run Docker Compose
         run: |
           TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
@@ -184,11 +59,11 @@ jobs:
 
           EPOCH_START=$(date +%s)
 
-          USER_ID=$(id -u) GROUP_ID=$(id -g) docker compose -p multi-user -f multi-user-dc.yaml up -d
+          docker compose -p multi-user -f multi-user-dc.yaml up -d
 
           # wait for REQUIRED .txt files to appear (with timeout)
           while true; do
-            files=( "$TRAY_PODS_DIR"/tray-presence-*.txt )
+            files=( "$TRAY_PODS_DIR"/tray-*.txt )
             count=${#files[@]}
             elapsed=$(( $(date +%s) - EPOCH_START))
             if [ "$count" -ge "$REQUIRED_PODS" ]; then
@@ -214,7 +89,6 @@ jobs:
               (
                 docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
                   status=${PIPESTATUS[0]}
-                  echo "[$tray] command exited with status $status"
                   exit $status
               ) &
               pids+=($!)
