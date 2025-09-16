@@ -699,14 +699,11 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     // Convert it to be unique per ethernet channel
 
     auto host_rank_id = this->get_local_host_rank_id_binding();
-    std::uint32_t num_ports_per_chip = 0;
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
-        if (!this->is_local_mesh(mesh_id)) {
-            continue;
-        }
         // Get the number of ports per chip from any chip in the local mesh
+        std::uint32_t num_ports_per_chip = 0;
         const auto& local_mesh_chip_id_container =
             this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
         for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
@@ -767,20 +764,27 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             }
         }
     }
-
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     for (std::uint32_t src_mesh_id_val = 0; src_mesh_id_val < router_inter_mesh_routing_table.size();
          src_mesh_id_val++) {
         MeshId src_mesh_id{src_mesh_id_val};
-        if (!this->is_local_mesh(MeshId{src_mesh_id})) {
-            continue;
+        std::uint32_t num_ports_per_chip = 0;
+        const auto& local_mesh_chip_id_container =
+            this->routing_table_generator_->mesh_graph->get_chip_ids(src_mesh_id, host_rank_id);
+        for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
+            const auto src_fabric_node_id = FabricNodeId(src_mesh_id, src_fabric_chip_id);
+            auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+            num_ports_per_chip = tt::tt_metal::MetalContext::instance()
+                                     .get_cluster()
+                                     .get_soc_desc(physical_chip_id)
+                                     .get_cores(CoreType::ETH)
+                                     .size();
+            break;
         }
         const auto& global_mesh_chip_id_container =
             this->routing_table_generator_->mesh_graph->get_chip_ids(src_mesh_id);
         for (const auto& [_, src_fabric_chip_id] : global_mesh_chip_id_container) {
             const auto src_fabric_node_id = FabricNodeId(src_mesh_id, src_fabric_chip_id);
-            std::uint32_t num_ports_per_chip =
-                this->routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction * 4;
             this->inter_mesh_routing_tables_[src_fabric_node_id].resize(
                 num_ports_per_chip);  // contains more entries than needed
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -1300,7 +1304,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
     // The src node is considered valid in this API if its owned by the current host. This requires the node to be in a
     // mesh on this host.
-    bool valid_src = this->is_local_mesh(src_fabric_node_id.mesh_id);
+    //  bool valid_src = this->is_local_mesh(src_fabric_node_id.mesh_id);
     // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
     // mesh or coordinate range owned by the host.
     bool end_route_at_exit_node =
@@ -1311,13 +1315,13 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         ((dst_fabric_node_id.mesh_id == src_fabric_node_id.mesh_id) and
          !(host_local_coord_range.contains(dst_mesh_coord)));
 
-    TT_FATAL(
-        valid_src,
-        "Cannot generate the fabric route between {} and {} on host {}, since M {} is not local to the host.",
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        this->local_mesh_binding_.host_rank,
-        src_fabric_node_id.mesh_id);
+    // TT_FATAL(
+    //  valid_src,
+    //  "Cannot generate the fabric route between {} and {} on host {}, since M {} is not local to the host.",
+    //  src_fabric_node_id,
+    //  dst_fabric_node_id,
+    //  this->local_mesh_binding_.host_rank,
+    //  src_fabric_node_id.mesh_id);
 
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
@@ -1365,10 +1369,14 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     auto dst_chip_id = dst_fabric_node_id.chip_id;
     if (src_mesh_id != dst_mesh_id) {
         const auto& inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
-        return inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id];
+        if (inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id] != RoutingDirection::NONE) {
+            return inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id];
+        }
     } else if (src_chip_id != dst_chip_id) {
         const auto& intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
-        return intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id];
+        if (intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id] != RoutingDirection::NONE) {
+            return intra_mesh_routing_table[*src_mesh_id][src_chip_id][dst_chip_id];
+        }
     }
     return std::nullopt;
 }
