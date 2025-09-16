@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import math
 import os
@@ -27,6 +28,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     load_hf_state_dict,
@@ -430,6 +432,14 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
+        "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+        "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+        "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+        "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
@@ -552,19 +562,8 @@ class ModelArgs:
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
+            local_params = self.__get_llama_local_params_name(self.CKPT_DIR)
+            if local_params is None:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
@@ -1340,6 +1339,24 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    @staticmethod
+    def __get_llama_local_params_name(model_name):
+        if "3.2-1B" in model_name:
+            local_params = "LLAMA3_2_1B_PARAMS"
+        elif "3.2-3B" in model_name:
+            local_params = "LLAMA3_2_3B_PARAMS"
+        elif "3.1-8B" in model_name:
+            local_params = "LLAMA3_1_8B_PARAMS"
+        elif "3.2-11B" in model_name:
+            local_params = "LLAMA3_2_11B_PARAMS"
+        elif "3.1-70B" in model_name:
+            local_params = "LLAMA3_1_70B_PARAMS"
+        elif "3.2-90B" in model_name:
+            local_params = "LLAMA3_2_90B_PARAMS"
+        else:
+            local_params = None
+        return local_params
+
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
@@ -1442,7 +1459,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
@@ -1479,7 +1496,7 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config, is_hf=False):
         eos_token_id = config.get("eos_token_id", None)
-        self.image_token_index = config.get("image_token_index", 262144)
+        self.image_token_index = config.get("image_token_index", None)
 
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
@@ -1491,6 +1508,9 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
 
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
@@ -1513,6 +1533,16 @@ class ModelArgs:
             self.hidden_dim = text_config["intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
+
+            # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
+            local_params = self.__get_llama_local_params_name(self.model_name)
+            if local_params in self.LOCAL_LLAMA_PARAMS:
+                params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
+                if os.path.exists(params_file):
+                    with open(params_file, "r") as f:
+                        params = json.load(f)
+                    self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+                    self.multiple_of = params["multiple_of"]
         else:
             self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
             self.multiple_of = text_config["multiple_of"]
@@ -1582,7 +1612,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
@@ -1632,6 +1662,8 @@ class ModelArgs:
             self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
@@ -1639,6 +1671,8 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_90b = True
@@ -1661,10 +1695,12 @@ class ModelArgs:
     def _set_vision_params(self, config):
         vision_config = config.get("vision_config", config)
 
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
-        self.image_size = vision_config.get("image_size", 896)
-        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
+        self.image_size = vision_config.get("image_size", -1)
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
+        self.vision_num_cross_attention_layers = vision_config.get(
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
+        )
         self.vision_dim = vision_config.get("hidden_size", 1280)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
@@ -1678,7 +1714,7 @@ class ModelArgs:
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -1690,15 +1726,11 @@ class ModelArgs:
 
         # Optional tuning knobs
         self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
-        self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
+        self.vision_n_global_layers = vision_config.get("n_global_layers", vision_config.get("num_global_layers", 8))
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-            else:
-                from transformers import AutoConfig
+            from transformers import AutoConfig
 
             if self.dummy_weights:
                 logger.info(
@@ -1708,7 +1740,11 @@ class ModelArgs:
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.CKPT_DIR,
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
 
             config = self.hf_config.to_dict()
         else:
@@ -1717,6 +1753,19 @@ class ModelArgs:
             with open(config_file, "r") as f:
                 config = json.load(f)
         self._set_params_from_dict(config, is_hf=True)
+
+        # compatibility with _set_params
+        if ("llama" in self.model_name.lower()) and ("3.2-11B" in checkpoint_dir):
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+        elif ("llama" in self.model_name.lower()) and ("3.1-70B" in checkpoint_dir):
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif ("llama" in self.model_name.lower()) and ("3.2-90B" in checkpoint_dir):
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
+            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.is_90b = True
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1737,9 +1786,8 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    # TODO: Rename to is_llama_vision
-    def is_vision(self):
-        return self.vision_chunk_size > 0
+    def is_llama_vision(self):
+        return ("vision" in self.CKPT_DIR.lower()) and ("llama" in self.model_name.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
@@ -1781,19 +1829,37 @@ class ModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) in model_cls._model_mapping:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig
 
                 config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -1806,20 +1872,12 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
-
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                else:
-                    from transformers import AutoModelForCausalLM
-
-                model = AutoModelForCausalLM.from_pretrained(
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true"
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -1834,7 +1892,10 @@ class ModelArgs:
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                if self.is_llama_vision():
+                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+                else:
+                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
@@ -2278,7 +2339,10 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2323,7 +2387,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2346,7 +2412,9 @@ class ModelArgs:
             from transformers import AutoProcessor
 
             try:
-                processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
+                processor = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
@@ -2366,7 +2434,6 @@ class ModelArgs:
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
@@ -2390,48 +2457,48 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
-            else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig
+
+            model_cls = self.get_hf_model_cls()
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(
-                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                    self.LOCAL_HF_PARAMS[self.model_name],
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
                 )
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
-            else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
-                    model = model
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
                 else:
-                    if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
-                        )
-                        self.cached_hf_model = model
-                    elif self.cache_hf_flag and self.cached_hf_model is not None:
-                        model = self.cached_hf_model
-                    else:
-                        # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
-                        )
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model.model = model.language_model
-                    # We keep language_model because transformers don't let us change or delete it
-                model.model.layers = model.model.layers[: self.n_layers]
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        local_files_only=os.getenv("CI") == "true",
+                        trust_remote_code=self.trust_remote_code_hf,
+                    )
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
+                    model = self.cached_hf_model
+                else:
+                    # No caching - load fresh each time
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=os.getenv("CI") == "true",
+                    )
+
+            # HACK: Assume that we want the language model layers only
+            if hasattr(model, "language_model"):
+                model.model = model.language_model
+                # We keep language_model because transformers don't let us change or delete it
+            model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2452,20 +2519,23 @@ class ModelArgs:
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig
+
+            model_cls = self.get_hf_model_cls()
 
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = model_cls.from_config(config)
             else:
                 if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
                     self.cached_hf_model = model
                 else:
                     model = self.cached_hf_model
                 model.model.layers = model.model.layers[: self.n_layers]
+
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2529,11 +2599,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in (
-                "Qwen3Attention",
-                "MistralAttention",
-                "Gemma3Attention",
-            )
+            use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2639,7 +2705,7 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
+            output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
                 past_key_value=self.past_key_value,
@@ -2785,26 +2851,34 @@ class HfModelWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        kvs = self.past_key_values.to_legacy_cache()
+        meta_ks = []
+        for k, v in kvs:
+            hf_k = k.permute(
+                0, 2, 1, 3
+            )  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+            batch_size, seq_len, n_heads, head_dim = hf_k.shape
 
-        meta_k = torch.zeros_like(hf_k)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+            meta_k = torch.zeros_like(hf_k)
+            for b in range(batch_size):
+                for s in range(seq_len):
+                    # Flatten just heads and head_dim
+                    flat = hf_k[b, s].flatten()
+                    # Apply reverse_permute
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    # Restore heads and head_dim shape
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
 
-        return meta_k
+            meta_ks.append(meta_k)
+
+        return meta_ks
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        kvs = self.past_key_values.to_legacy_cache()
+        return [
+            v.permute(0, 2, 1, 3) for k, v in kvs
+        ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class DecodersPrecision:
