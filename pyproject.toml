@@ -58,7 +58,8 @@ tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
 git_describe_command = [
   "git","describe","--dirty","--tags","--long",
   "--match","v[0-9]*.[0-9]*.[0-9]*",
-  "--match","v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*"
+  "--match","v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
+  "--exclude","*-dev*"
 ]
 fallback_version = "0.0.0.dev0"
 
