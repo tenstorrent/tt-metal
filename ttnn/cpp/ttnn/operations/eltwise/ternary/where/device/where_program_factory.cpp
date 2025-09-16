@@ -693,7 +693,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
-    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
         reader_defines = make_dataflow_defines(
             predicate_tensor.dtype(),
