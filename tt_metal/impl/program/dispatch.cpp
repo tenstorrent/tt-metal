@@ -324,8 +324,7 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& kernel_impl = KernelImpl::from(*kernel);
-            const auto& binaries = kernel_impl.binaries(
+            const auto& binaries = KernelImpl::from(*kernel).binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
@@ -333,7 +332,7 @@ uint32_t finalize_kernel_bins(
                 uint32_t kernel_text_offset = 0;
                 if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
                     kernel_text_offset = offset;
-                    offset += kernel_impl.get_binary_packed_size(device, i);
+                    offset += binaries[i]->get_packed_size();
                     offset = tt::align(offset, l1_alignment);
                 } else {
                     kernel_text_offset = binaries[i]->get_text_addr();
@@ -342,12 +341,12 @@ uint32_t finalize_kernel_bins(
                     programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
                 kg->kernel_text_offsets[processor_index] = kernel_text_offset;
                 kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                // Provide text size for copying to NCRISC IRAM
-                if (kernel->dispatch_class() == DISPATCH_CLASS_TENSIX_DM1) {
-                    const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                    TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                    kernel_config.ncrisc_kernel_size16() = (binary_text_size + 15) >> 4;
-                }
+                hal.set_iram_text_size(
+                    kg->launch_msg.view(),
+                    programmable_core_type,
+                    kernel->get_kernel_processor_class(),
+                    kernel->get_kernel_processor_type(i),
+                    binaries[i]->get_text_size());
             }
         }
         max_offset = std::max(offset, max_offset);
