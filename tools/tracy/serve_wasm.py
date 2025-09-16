@@ -45,13 +45,20 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
         cmd += ["--dir", directory]
     if port is not None:
         cmd += ["--port", str(port)]
-    cmd += [f" >> {log_path} 2>&1"]
-    if daemon:
-        cmd += ["&"]
-    cmd = " ".join(cmd)
-    logger.info(f"Running command: {cmd}")
-    subprocess.Popen(cmd, env=os.environ, shell=True)
-    logger.info(str(log_path) + " " + subprocess.check_output(["tail", "-n", "5", str(log_path)]).decode())
+    logger.info(f"Running command: {' '.join(cmd)}")
+    log_file = open(log_path, "a", buffering=1)  # line-buffered
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=log_file,
+        stderr=log_file,
+        start_new_session=True,
+        close_fds=True,
+    )
+    logger.info(f"Started server with PID {process.pid}, logging to {log_path}")
+    return process
 
 
 def is_server_running(port):
