@@ -719,8 +719,8 @@ class ModelArgs:
             self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
             # end mixtral
 
-            if self.optimizations is None:
-                self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
+            # if self.optimizations is None:
+            #     self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
