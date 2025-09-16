@@ -393,8 +393,6 @@ jobs:
           echo "SETUPTOOLS_SCM_DEBUG=1" >> $GITHUB_ENV
           echo "CIBW_BUILD_VERBOSITY=3" >> $GITHUB_ENV
 
-      - run: git describe --dirty --tags --long || true
-
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
