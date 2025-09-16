@@ -115,7 +115,7 @@ The following data types are visible to the programmer:
   * ``vUInt``
   * enum ``LRegs``
 
-Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32 bit values. Users should take consideration of the changing width when writing code and avoid running on architectures with a different width.
+Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should take consideration of the changing width when writing code and avoid running on architectures with a different width.
 
 LRegs are the SFPU's general purpose vector registers.  ``LRegs`` enumerates these registers.
 
@@ -572,7 +572,7 @@ Therefore, all function calls must be inlined.  To ensure this use
 Register Spilling
 -----------------
 
-The compiler does not implement register spilling.  Since there are only 8
+The compiler does not implement register spilling.  Since there are only 8 general purpose
 LRegs, running out of registers is not an uncommon occurrence.  If you see the
 following: ``error: cannot store SFPU register (reigster spill?) - exiting!``
 you have most likely run out of registers.
