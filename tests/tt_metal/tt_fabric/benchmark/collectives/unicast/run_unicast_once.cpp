@@ -55,6 +55,28 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     auto src_buf = tt::tt_metal::CreateBuffer(src_cfg);
     auto dst_buf = tt::tt_metal::CreateBuffer(dst_cfg);
 
+    // ---- Initialize source buffer with a deterministic pattern; clear dest ----
+    auto& cq_src = src_dev->command_queue();
+    auto& cq_dst = dst_dev->command_queue();
+
+    if ((p.tensor_bytes % 4) != 0) {
+        ADD_FAILURE() << "tensor_bytes must be a multiple of 4 for word-wise verification";
+        return PerfPoint{};
+    }
+    const size_t n_words = p.tensor_bytes / 4;
+
+    std::vector<uint32_t> tx(n_words);
+    for (size_t i = 0; i < n_words; ++i) {
+        // simple deterministic pattern
+        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+    }
+    // Blocking writes so data is resident before kernels run
+    tt::tt_metal::EnqueueWriteBuffer(cq_src, *src_buf, tx, /*blocking=*/true);
+
+    // clear dst so we can detect partial/corrupt writes
+    std::vector<uint32_t> zeros(n_words, 0u);
+    tt::tt_metal::EnqueueWriteBuffer(cq_dst, *dst_buf, zeros, /*blocking=*/true);
+
     std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
               << std::endl;
 
@@ -132,13 +154,12 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
 
     // Writer runtime args
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),        // 0: dst_base (receiver L1 offset)
-        (uint32_t)(p.use_dram_dst ? 1 : 0),  // 1: dst_is_dram (we set false above)
-        (uint32_t)p.mesh_id,                 // 2: dst_mesh_id (logical)
-        (uint32_t)p.dst_chip,                // 3: dst_dev_id  (logical)
-        (uint32_t)rx_xy.x,                   // 4: receiver_noc_x
-        (uint32_t)rx_xy.y,                   // 5: receiver_noc_y
-        (uint32_t)gsem.address()             // 6: receiver L1 semaphore addr
+        (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
+        (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)
+        (uint32_t)p.dst_chip,          // 2: dst_dev_id  (logical)
+        (uint32_t)rx_xy.x,             // 3: receiver_noc_x
+        (uint32_t)rx_xy.y,             // 4: receiver_noc_y
+        (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
     };
 
     auto dir_opt = get_eth_forwarding_direction(src, dst);
@@ -193,6 +214,30 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     auto t1 = std::chrono::steady_clock::now();
 
     fixture->WaitForSingleProgramDone(src_dev, sender_prog);
+
+    // ---- Read back destination buffer and verify ----
+    tt::tt_metal::Finish(cq_dst);
+    std::vector<uint32_t> rx;
+    tt::tt_metal::EnqueueReadBuffer(cq_dst, *dst_buf, rx, /*blocking=*/true);
+
+    if (rx.size() != tx.size()) {
+        ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
+    } else {
+        // Compare content
+        size_t first_bad = rx.size();
+        for (size_t i = 0; i < rx.size(); ++i) {
+            if (rx[i] != tx[i]) {
+                first_bad = i;
+                break;
+            }
+        }
+        if (first_bad != rx.size()) {
+            ADD_FAILURE() << "Data mismatch at word " << first_bad << " (got 0x" << std::hex << rx[first_bad]
+                          << ", exp 0x" << tx[first_bad] << std::dec << ")";
+        } else {
+            std::cout << "[verify] payload OK (" << rx.size() * 4 << " bytes)\n";
+        }
+    }
 
     // Compute E2E metrics
     const double e2e_sec = std::chrono::duration<double>(t1 - t0).count();

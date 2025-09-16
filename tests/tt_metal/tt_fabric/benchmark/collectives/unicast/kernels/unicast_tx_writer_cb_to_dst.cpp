@@ -22,12 +22,11 @@ using namespace tt::tt_fabric;
 //
 // RT args (must match host):
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
-//   1: dst_is_dram    (u32)  // 0=L1, 1=DRAM
-//   2: dst_mesh_id    (u32)  // logical (truncated to u16)
-//   3: dst_dev_id     (u32)  // logical (truncated to u16)
-//   4: rx_noc_x       (u32)  // receiver worker XY
-//   5: rx_noc_y       (u32)
-//   6: sem_l1_addr    (u32)  // receiver L1 semaphore address
+//   1: dst_mesh_id    (u32)  // logical (truncated to u16)
+//   2: dst_dev_id     (u32)  // logical (truncated to u16)
+//   3: rx_noc_x       (u32)  // receiver worker XY
+//   4: rx_noc_y       (u32)
+//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
@@ -38,7 +37,6 @@ void kernel_main() {
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
-    const bool dst_is_dram = (get_arg_val<uint32_t>(idx++) != 0);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
@@ -83,14 +81,8 @@ void kernel_main() {
 
         sender.wait_for_empty_write_slot();
 
-        // Compute destination NOC address (DRAM interleaved vs L1 + XY)
-        uint64_t dest_noc_addr;
-        if (dst_is_dram) {
-            dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
-        } else {
-            const uint32_t l1_off = dst_base + i * PAGE_SIZE;
-            dest_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, l1_off, /*NOC_INDEX=*/0);
-        }
+        // Compute destination NOC address (DRAM or L1 interleaved)
+        uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
 
         // Build the NOC header for this page
         fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
