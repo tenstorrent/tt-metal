@@ -63,7 +63,6 @@ namespace ckernel {
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | cb_inp0        | Input circular buffer 0                                       | uint32_t | 0 to 31     | True     |
  * | cb_inp1        | Input circular buffer 1                                       | uint32_t | 0 to 31     | True     |
- * | cb_intermediate| Intermediate circular buffer                                  | uint32_t | 0 to 31     | True     |
  * | cb_scaler      | Scaler circular buffer                                        | uint32_t | 0 to 31     | True     |
  * | cb_out         | Output circular buffer                                        | uint32_t | 0 to 31     | True     |
  * | itile0         | Input tile 0 index                                           | uint32_t | 0+          | True     |
@@ -73,26 +72,41 @@ namespace ckernel {
  */
 // clang-format on
 // =============================================================================
-// PHASE 1: ELTWISE BINARY INITIALIZATION
+// PHASE 1: ELTWISE BINARY INITIALIZATION (NO PACKER)
 // =============================================================================
-template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE>
-ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, uint32_t cb_intermediate) {
-    // 1. binary_op_init_common (sets up ALU for binary ops)
-    binary_op_init_common(cb_inp0, cb_inp1, cb_intermediate);
+template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE, bool full_init = true>
+ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc_to_dest = false) {
+    // UNPACK initialization - configure and init for both input CBs
+    UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_inp0, cb_inp1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1)));
 
-    // 2. binary_tiles_init (conditional compilation from original eltwise_binary.cpp)
-    binary_tiles_init<true, eltwise_binary_type>(cb_inp0, cb_inp1);
+    // MATH initialization - configure sync and hardware, then init eltwise binary
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(cb_inp0, cb_inp1)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
+
+    // Optional full initialization for UNPACK (conditional compilation)
+    if constexpr (full_init) {
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1, 0 /*transpose*/, acc_to_dest)));
+    }
 }
 
 // =============================================================================
 // PHASE 2: ELTWISE BINARY OPERATION
 // =============================================================================
-template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE>
-ALWI void fused_eltwise_binary_compute(
-    uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    // 3. mul_tiles (with last argument being 0, meaning the index of the result in dest register)
+template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE, uint32_t idst = 0>
+ALWI void fused_eltwise_binary_compute(uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1) {
+    // 3. Eltwise binary operation (with last argument being 0, meaning the index of the result in dest register)
     static_assert(idst == 0, "idst must be 0");  // since we are reusing dest as srcA
-    ELTWISE_OP(cb_inp0, cb_inp1, itile0, itile1, idst);
+
+    // Use the low-level LLK calls directly since we're in a fused operation
+    UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, itile0, itile1)));
+    MATH((llk_math_eltwise_binary<
+          eltwise_binary_type,
+          NONE,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(idst)));
 }
 
 // =============================================================================
@@ -100,31 +114,40 @@ ALWI void fused_eltwise_binary_compute(
 // =============================================================================
 ALWI void fused_eltwise_binary_reuse_dest() {
     // 4. eltwise_binary_reuse_dest_as_src, moving the result to srcA
-    eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>();
+    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>());
+
+    // tensix_sync(); // todo: remove unnecessary sync
 
     // 5. populate dest with ones
-    ckernel::sfpu::_populate_first_tile_with_ones_();
+    MATH(ckernel::sfpu::_populate_first_tile_with_ones_());
+
+    // tensix_sync();
 
     // 6. eltwise_binary_reuse_dest_as_src, moving the result to srcB
-    eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>();
+    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>());
 }
 
 // =============================================================================
-// PHASE 4: REDUCE INITIALIZATION
+// PHASE 4: REDUCE INITIALIZATION (NO UNPACKER)
 // =============================================================================
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void fused_reduce_init(uint32_t cb_intermediate, uint32_t cb_scaler, uint32_t cb_out) {
-    // 7. reduce_init (ONLY after mul_tiles - serves the purpose of setting the hardware for reduce op, not eltwise mul)
-    reduce_init<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, cb_out);
+ALWI void fused_reduce_init() {
+    // MATH initialization - init reduce operation (no unpacker calls)
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+
+    // PACK initialization - configure reduce mask for the specified dimension
+    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 }
 
 // =============================================================================
 // PHASE 5: REDUCE OPERATION
 // =============================================================================
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void fused_reduce_compute(uint32_t cb_intermediate, uint32_t cb_scaler, uint32_t iscaler, uint32_t idst) {
-    // 8. reduce operation
-    reduce_tile<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, iscaler, iscaler, idst);
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
+ALWI void fused_reduce_compute(uint32_t idst) {
+    // 8. reduce operation (using srcA from dest reuse, cb_scaler used as dummy first param)
+    // reduce_tile<reduce_type, reduce_dim>(cb_scaler, cb_scaler, iscaler, iscaler, idst); - under comment bcs of
+    // UNPACKER
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
 }
 
 // =============================================================================
@@ -134,41 +157,4 @@ ALWI void fused_reduce_uninit() {
     // 9. reduce_uninit
     reduce_uninit();
 }
-
-// =============================================================================
-// COMPLETE FUSED OPERATION (for convenience), idk
-// =============================================================================
-template <
-    EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE,
-    PoolType reduce_type = REDUCE_OP,
-    ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void fused_eltwise_binary_reduce_tile(
-    uint32_t cb_inp0,
-    uint32_t cb_inp1,
-    uint32_t cb_intermediate,
-    uint32_t cb_scaler,
-    uint32_t cb_out,
-    uint32_t itile0,
-    uint32_t itile1,
-    uint32_t iscaler,
-    uint32_t idst) {
-    // Phase 1: Initialize eltwise binary
-    fused_eltwise_binary_init<eltwise_binary_type>(cb_inp0, cb_inp1, cb_intermediate);
-
-    // Phase 2: Compute eltwise binary
-    fused_eltwise_binary_compute<eltwise_binary_type>(cb_inp0, cb_inp1, itile0, itile1, idst);
-
-    // Phase 3: Prepare destination reuse
-    fused_eltwise_binary_reuse_dest();
-
-    // Phase 4: Initialize reduce
-    fused_reduce_init<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, cb_out);
-
-    // Phase 5: Compute reduce
-    fused_reduce_compute<reduce_type, reduce_dim>(cb_intermediate, cb_scaler, iscaler, idst);
-
-    // Phase 6: Cleanup reduce
-    fused_reduce_uninit();
-}
-
 }  // namespace ckernel
