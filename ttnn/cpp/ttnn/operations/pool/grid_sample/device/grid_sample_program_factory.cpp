@@ -274,29 +274,29 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         // Compute kernel compile-time arguments
         std::vector<uint32_t> compute_compile_time_args = {
-            in_ntiles_c,                        // ct_arg[0]: in_ntiles_c
-            REDUCTION_SIZE,                     // ct_arg[1]: REDUCTION_SIZE
-            enable_split_reader && is_sharded,  // ct_arg[2]: enable_split_reader
-            total_interpolations,               // ct_arg[3]: total_interpolations
-            channels_per_shard,                 // ct_arg[4]: channels_per_shard
-            in_nblocks_c,                       // ct_arg[5]: in_nblocks_c
-            MAX_ROWS_FOR_REDUCTION,             // ct_arg[6]: MAX_ROWS_FOR_REDUCTION
-            input_cb_index_0,                   // ct_arg[7]: input_cb_index_0
-            input_cb_index_1,                   // ct_arg[8]: input_cb_index_1
-            DUMMY_CB_ID,                        // ct_arg[9]: unused
-            DUMMY_CB_ID,                        // ct_arg[10]: unused
-            scalar_cb_index_0,                  // ct_arg[11]: scalar_cb_index_0
-            scalar_cb_index_1,                  // ct_arg[12]: scalar_cb_index_1
-            DUMMY_CB_ID,                        // ct_arg[13]: unused
-            DUMMY_CB_ID,                        // ct_arg[14]: unused
-            output_cb_index,                    // ct_arg[15]: output_cb_index
-            DUMMY_CB_ID,                        // ct_arg[16]: unused
-            ONE_SCALAR_PER_CORE,                // ct_arg[17]: ONE_SCALAR_PER_CORE
-            false,                              // ct_arg[18]: unused
-            pre_tilize_cb_id,                   // ct_arg[19]: pre_tilize_cb_id
-            is_output_tiled ? 1U : 0U,          // ct_arg[20]: is_output_tiled
-            is_output_block_format ? 1U : 0U,   // ct_arg[21]: is_output_block_format
-            is_output_bfp4_b ? 1U : 0U          // ct_arg[22]: is_output_bfp4_b
+            in_ntiles_c,                       // ct_arg[0]: in_ntiles_c
+            REDUCTION_SIZE,                    // ct_arg[1]: REDUCTION_SIZE
+            enable_split_reader,               // ct_arg[2]: enable_split_reader
+            total_interpolations,              // ct_arg[3]: total_interpolations
+            channels_per_shard,                // ct_arg[4]: channels_per_shard
+            in_nblocks_c,                      // ct_arg[5]: in_nblocks_c
+            MAX_ROWS_FOR_REDUCTION,            // ct_arg[6]: MAX_ROWS_FOR_REDUCTION
+            input_cb_index_0,                  // ct_arg[7]: input_cb_index_0
+            input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
+            DUMMY_CB_ID,                       // ct_arg[9]: unused
+            DUMMY_CB_ID,                       // ct_arg[10]: unused
+            scalar_cb_index_0,                 // ct_arg[11]: scalar_cb_index_0
+            scalar_cb_index_1,                 // ct_arg[12]: scalar_cb_index_1
+            DUMMY_CB_ID,                       // ct_arg[13]: unused
+            DUMMY_CB_ID,                       // ct_arg[14]: unused
+            output_cb_index,                   // ct_arg[15]: output_cb_index
+            DUMMY_CB_ID,                       // ct_arg[16]: unused
+            ONE_SCALAR_PER_CORE,               // ct_arg[17]: ONE_SCALAR_PER_CORE
+            false,                             // ct_arg[18]: unused
+            pre_tilize_cb_id,                  // ct_arg[19]: pre_tilize_cb_id
+            is_output_tiled ? 1U : 0U,         // ct_arg[20]: is_output_tiled
+            is_output_block_format ? 1U : 0U,  // ct_arg[21]: is_output_block_format
+            is_output_bfp4_b ? 1U : 0U         // ct_arg[22]: is_output_bfp4_b
         };
 
         return tt::tt_metal::CreateKernel(
