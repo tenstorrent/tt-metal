@@ -35,6 +35,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -61,12 +62,16 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
+        auto& cq = mesh_device->mesh_command_queue();
 
         CoreCoord core = {0, 0};
         uint32_t single_tile_size = 2 * 1024;
@@ -78,21 +83,19 @@ int main(int argc, char** argv) {
         uint32_t bytesB = single_tile_size * num_tilesB;
         uint32_t bytesC = single_tile_size * num_tilesC;
 
-        tt_metal::InterleavedBufferConfig src0_config{
-            .device = device, .size = bytesA, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::DeviceLocalBufferConfig dram_config = {
+            .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig src0_buffer_config = {.size = bytesA};
+        distributed::ReplicatedBufferConfig src1_buffer_config = {.size = bytesB};
+        distributed::ReplicatedBufferConfig dst_buffer_config = {.size = bytesC};
 
-        auto src0_dram_buffer = CreateBuffer(src0_config);
+        auto src0_dram_buffer = distributed::MeshBuffer::create(src0_buffer_config, dram_config, mesh_device.get());
         uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
-        tt_metal::InterleavedBufferConfig src1_config{
-            .device = device, .size = bytesB, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-
-        auto src1_dram_buffer = CreateBuffer(src1_config);
+        auto src1_dram_buffer = distributed::MeshBuffer::create(src1_buffer_config, dram_config, mesh_device.get());
         uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
 
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = device, .size = bytesC, .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        auto dst_dram_buffer = distributed::MeshBuffer::create(dst_buffer_config, dram_config, mesh_device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         uint32_t src0_cb_index = 0;
@@ -157,8 +160,8 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
+        distributed::WriteShard(cq, src0_dram_buffer, src0_vec, zero_coord);
+        distributed::WriteShard(cq, src1_dram_buffer, src1_vec, zero_coord);
 
         uint32_t do_bcast = 0;
         tt_metal::SetRuntimeArgs(
@@ -168,10 +171,11 @@ int main(int argc, char** argv) {
             {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B, do_bcast});
         tt_metal::SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt * Kt, Kt * Nt, B});
 
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, true);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
         {
             // Read the result back from device DRAM and ref comparisone
@@ -207,7 +211,7 @@ int main(int argc, char** argv) {
             }
         }
         // pass &= (src0_vec == result_vec);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         pass = false;
