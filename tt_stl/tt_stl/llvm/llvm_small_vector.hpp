@@ -228,7 +228,7 @@ protected:
         this->assertSafeToAdd(To - 1, To - From);
     }
     template <class ItTy, std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T*>::value, bool> = false>
-    void assertSafeToAddRange(ItTy, ItTy) {}
+    void assertSafeToAddRange(const ItTy&, const ItTy&) {}
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.
@@ -510,7 +510,7 @@ protected:
     /// Copy the range [I, E) onto the uninitialized memory
     /// starting with "Dest", constructing elements into it as needed.
     template <typename It1, typename It2>
-    static void uninitialized_copy(It1 I, It1 E, It2 Dest) {
+    static void uninitialized_copy(const It1& I, const It1& E, It2 Dest) {
         // Arbitrary iterator types; just use the basic implementation.
         std::uninitialized_copy(I, E, Dest);
     }
@@ -698,7 +698,7 @@ public:
 
     /// Add the specified range to the end of the SmallVector.
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
-    void append(ItTy in_start, ItTy in_end) {
+    void append(const ItTy& in_start, const ItTy& in_end) {
         this->assertSafeToAddRange(in_start, in_end);
         size_type NumInputs = std::distance(in_start, in_end);
         this->reserve(this->size() + NumInputs);
@@ -1227,7 +1227,7 @@ public:
     SmallVector(size_t Size, const T& Value) : SmallVectorImpl<T>(N) { this->assign(Size, Value); }
 
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
-    SmallVector(ItTy S, ItTy E) : SmallVectorImpl<T>(N) {
+    SmallVector(const ItTy& S, const ItTy& E) : SmallVectorImpl<T>(N) {
         this->append(S, E);
     }
 

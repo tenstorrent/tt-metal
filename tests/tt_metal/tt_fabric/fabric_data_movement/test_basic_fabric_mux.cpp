@@ -265,8 +265,8 @@ void create_kernel(
 void create_mux_kernel(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& mux_logical_core,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> dest_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& dest_device,
     tt::tt_metal::Program& program_handle) {
     const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
     const auto dst_node_id =
@@ -298,7 +298,7 @@ void create_worker_kernel(
     const WorkerTestConfig& worker_test_config,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& mux_virtual_core,
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     tt::tt_metal::Program& program_handle) {
     auto worker_memory_map = worker_test_config.memory_map;
     CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
@@ -464,7 +464,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         }
     }
 
-    auto assign_worker_cores = [&](std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    auto assign_worker_cores = [&](const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
                                    uint8_t num_workers,
                                    uint8_t num_hops,
                                    bool is_sender) {

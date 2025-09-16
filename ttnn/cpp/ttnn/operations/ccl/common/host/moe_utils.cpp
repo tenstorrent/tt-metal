@@ -127,7 +127,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
     };
 
-    auto applicable_to_coord = [&](MeshCoordinate coord,
+    auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
                                    size_t axis_size,
                                    tt::tt_fabric::RoutingDirection direction) -> bool {

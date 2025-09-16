@@ -105,7 +105,7 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,
-        const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt) {
         return std::make_tuple(
             operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
             tensor_args_t{input_tensor, optional_output_tensor});
