@@ -123,13 +123,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
-        this->all_gather_async_struct.devices,
+        ttnn::ccl::get_devices(*mesh_device, this->all_gather_async_struct.cluster_axis),
         this->all_gather_async_struct.topology);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
     auto target_device_coord = mesh_coord;
 
-    std::vector<IDevice*> devices_to_use = {};
-    devices_to_use = this->all_gather_async_struct.devices;
+    std::vector<IDevice*> devices_to_use =
+        ttnn::ccl::get_devices(*mesh_device, this->all_gather_async_struct.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = std::nullopt;
     std::optional<MeshCoordinate> forward_coord = std::nullopt;
@@ -276,7 +276,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
 
     /* AllGather setup */
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
-        devices,
         dim,
         num_links,
         devices.size(),

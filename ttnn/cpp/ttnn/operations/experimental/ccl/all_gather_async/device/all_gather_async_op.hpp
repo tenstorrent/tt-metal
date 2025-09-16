@@ -31,7 +31,6 @@ enum class AllGatherAsyncVersion {
 };
 
 struct AllGatherAsync {
-    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -49,7 +48,6 @@ struct AllGatherAsync {
     std::optional<uint32_t> num_buffers_per_channel;
 
     AllGatherAsync(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -65,7 +63,6 @@ struct AllGatherAsync {
         std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel) :
-        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),

@@ -90,31 +90,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     }
     uint32_t target_ring_size = devices_to_use.size();
 
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? target_ring_size - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i + 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? 0 : coord[0], (this->cluster_axis.value() == 0) ? coord[1] : 0);
-            }
-        }
-    }
+    auto boundary_mode = this->topology == ttnn::ccl::Topology::Ring
+                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
+                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    std::optional<MeshCoordinate> backward_coord =
+        ttnn::ccl::get_neighbor(*mesh_device, coord, -1, boundary_mode, this->cluster_axis);
+    std::optional<MeshCoordinate> forward_coord =
+        ttnn::ccl::get_neighbor(*mesh_device, coord, 1, boundary_mode, this->cluster_axis);
+    uint32_t device_index = ttnn::ccl::get_linearized_index(*mesh_device, coord, this->cluster_axis);
 
     return all_broadcast_async_multicore(
         input_tensors[0],

@@ -14,9 +14,60 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+std::vector<IDevice*> get_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    if (cluster_axis.has_value()) {
+        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
+        return cluster_axis.value() == 0 ? mesh_view.get_devices_on_row(0) : mesh_view.get_devices_on_column(0);
+    }
+    return mesh_view.get_devices();
+}
+
+uint32_t get_num_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    if (cluster_axis.has_value()) {
+        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
+        return cluster_axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    }
+    return mesh_view.num_devices();
+}
+
+std::optional<MeshCoordinate> get_neighbor(
+    const MeshDevice& mesh_device,
+    const MeshCoordinate& coord,
+    int offset,
+    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode mode,
+    const std::optional<uint32_t>& cluster_axis) {
+    auto mesh_view = mesh_device.get_view();
+    auto shape = mesh_view.shape();
+    if (cluster_axis.has_value()) {
+        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
+        return coord.get_neighbor(shape, offset, cluster_axis.value(), mode);
+    } else if (shape[1] > 1) {
+        return coord.get_neighbor(shape, offset, 1, mode);
+    } else if (shape[0] > 1) {
+        return coord.get_neighbor(shape, offset, 0, mode);
+    } else {
+        TT_THROW("All gather without cluster axis is only supported when shape[1-cluster_axis] == 1");
+        return std::nullopt;
+    }
+}
+
+uint32_t get_linearized_index(
+    const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis) {
+    auto mesh_view = mesh_device.get_view();
+    auto shape = mesh_view.shape();
+    if (cluster_axis.has_value()) {
+        return coord[cluster_axis.value()];
+    } else {
+        return coord[0] * shape[1] + coord[1];
+    }
+}
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);

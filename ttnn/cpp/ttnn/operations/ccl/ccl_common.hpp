@@ -20,6 +20,10 @@
 namespace ttnn {
 namespace ccl {
 
+std::vector<IDevice*> get_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+uint32_t get_num_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+std::optional<MeshCoordinate> get_neighbor(const MeshDevice& mesh_device, const MeshCoordinate& coord, int offset, tt::tt_metal::distributed::MeshCoordinate::BoundaryMode mode, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+uint32_t get_linearized_index(const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis = std::nullopt);
 struct SyncModeSpec {
     uint32_t num_signals = 0;
     CoreCoord core;

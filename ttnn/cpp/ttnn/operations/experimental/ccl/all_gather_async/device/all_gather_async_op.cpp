@@ -9,6 +9,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
 
@@ -172,19 +173,18 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required");
     auto mesh_view = mesh_device->get_view();
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     auto target_device_coord = coord;
-    uint32_t target_ring_size = this->cluster_axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
-    TT_FATAL(this->cluster_axis.has_value(), "cluster_axis is required");
     auto boundary_mode = topology == tt::tt_fabric::Topology::Ring
                              ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                              : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-    uint32_t device_index = coord[this->cluster_axis.value()];
+    uint32_t device_index = ccl::get_linearized_index(*mesh_device, coord, this->cluster_axis);
     std::optional<MeshCoordinate> backward_coord =
-        coord.get_neighbor(mesh_view.shape(), -1, this->cluster_axis.value(), boundary_mode);
+        ccl::get_neighbor(*mesh_device, coord, -1, boundary_mode, this->cluster_axis);
     std::optional<MeshCoordinate> forward_coord =
-        coord.get_neighbor(mesh_view.shape(), 1, this->cluster_axis.value(), boundary_mode);
+        ccl::get_neighbor(*mesh_device, coord, 1, boundary_mode, this->cluster_axis);
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
@@ -219,7 +219,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 output_tensors[0],
                 this->dim,
                 this->num_links,
-                target_ring_size,
+                this->ring_size,
                 device_index,
                 this->topology,
                 this->semaphore,
@@ -276,28 +276,25 @@ Tensor all_gather_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices,
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "all_gather_async op is only supported for Fast Dispatch");
-    uint32_t num_devices = devices.size();
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required");
+    const auto& mesh_view = mesh_device->get_view();
+    uint32_t num_devices = mesh_view.num_devices();
+
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
-    log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     bool using_persistent_buffers = false;
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
-                   devices,
                    dim,
                    num_links,
                    num_devices,
@@ -326,7 +323,6 @@ Tensor all_gather_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices,
     const std::optional<uint32_t>& cluster_axis,
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
@@ -338,16 +334,9 @@ Tensor all_gather_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
-    }
+    TT_FATAL(input_tensor.device() != nullptr, "Mesh device is required");
+
+    uint32_t num_devices = ::ttnn::ccl::get_num_devices(*input_tensor.device(), cluster_axis);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -355,7 +344,7 @@ Tensor all_gather_async_impl(
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     bool using_persistent_buffers = persistent_output_buffer.has_value();
@@ -364,7 +353,6 @@ Tensor all_gather_async_impl(
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
-                   devices,
                    dim,
                    num_links,
                    num_devices,
@@ -403,7 +391,7 @@ Tensor all_gather_async_impl(
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    uint32_t num_devices = ttnn::ccl::get_num_devices(mesh_device, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
 
@@ -422,7 +410,6 @@ Tensor all_gather_async_impl(
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
-                   {},
                    gather_dim,
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
@@ -456,7 +443,6 @@ Tensor all_gather_async(
     bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    std::vector<IDevice*> devices;
     return all_gather_async_impl(
         input_tensor,
         dim,
@@ -465,7 +451,6 @@ Tensor all_gather_async(
         memory_config,
         topology,
         sub_device_id,
-        {},
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
         barrier_semaphore);
@@ -496,7 +481,6 @@ Tensor all_gather_async(
         memory_config,
         topology,
         sub_device_id,
-        {},
         cluster_axis,
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
