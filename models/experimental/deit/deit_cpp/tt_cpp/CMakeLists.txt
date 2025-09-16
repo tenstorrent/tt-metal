@@ -12,7 +12,7 @@ set(DEIT_TT_CPP_SOURCES
     deit_self_output.cpp
     deit_intermediate.cpp
     deit_pooler.cpp
-    helper_funcs.cpp
+    ../helper_funcs.cpp
 )
 
 set(DEIT_TT_CPP_HEADERS
@@ -23,7 +23,7 @@ set(DEIT_TT_CPP_HEADERS
     deit_self_output.h
     deit_intermediate.h
     deit_pooler.h
-    helper_funcs.h
+    ../helper_funcs.h
 )
 
 # Create object library for DeiT TT C++ components
@@ -61,9 +61,13 @@ target_compile_definitions(deit_tt_cpp PRIVATE
     FMT_HEADER_ONLY
 )
 
-# Set compiler flags for torch compatibility
+# Set compiler flags for torch compatibility and debugging
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(deit_tt_cpp PRIVATE -Wno-unused-parameter)
+    target_compile_options(deit_tt_cpp PRIVATE 
+        -g
+        -O0
+        -Wno-unused-parameter
+    )
 endif()
 
 # Install headers
