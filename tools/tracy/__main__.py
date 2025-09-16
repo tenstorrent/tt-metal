@@ -280,15 +280,43 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                # Copy the generated .tracy file to the server build folder as embed.tracy
+                # Copy the generated .tracy file to the server's traces folder with a unique name
+                import datetime
+
                 tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
-                tracy_dst = PROFILER_WASM_DIR / PROFILER_WASM_TRACE_FILE_NAME
+                traces_dir = PROFILER_WASM_TRACES_DIR
+                # Use timestamp, optional name_append, and a short form of the tested command for uniqueness
+                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                name_part = f"_{options.name_append}" if options.name_append else ""
+                # Short form of the command being tested (first arg, basename, no extension)
+                cmd_short = ""
+                if len(args) > 0:
+                    cmd_base = os.path.basename(args[0])
+                    cmd_short = os.path.splitext(cmd_base)[0]
+                    # Sanitize for filename
+                    cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
+                    cmd_short = f"_{cmd_short}"
+                tracy_dst = traces_dir / f"trace_{timestamp}{cmd_short}{name_part}.tracy"
                 logger.info(f"Copying {tracy_src} to {tracy_dst}")
                 try:
                     copyfile(tracy_src, tracy_dst)
                     logger.info(f"Copied {tracy_src} to {tracy_dst}")
                 except Exception as e:
                     logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
+                # Also update embed.tracy symlink or copy for default loading (in PROFILER_WASM_DIR)
+                embed_path = PROFILER_WASM_DIR / PROFILER_WASM_TRACE_FILE_NAME
+                try:
+                    if embed_path.exists() or embed_path.is_symlink():
+                        embed_path.unlink()
+                    # Try to symlink, fallback to copy
+                    try:
+                        embed_path.symlink_to(("traces/" + tracy_dst.name.split("/")[-1]))
+                        logger.info(f"Symlinked {embed_path} -> traces/{tracy_dst.name.split('/')[-1]}")
+                    except Exception:
+                        copyfile(tracy_dst, embed_path)
+                        logger.info(f"Copied {tracy_dst} to {embed_path}")
+                except Exception as e:
+                    logger.warning(f"Could not update embed.tracy: {e}")
                 launch_server_subprocess()
                 # Start the WASM server as a daemon with defaults
                 if options.report:

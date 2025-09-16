@@ -11,19 +11,22 @@ import argparse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import asyncio
 import websockets
+import json
+import signal
 
 from loguru import logger
 
-from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME
+from tt_metal.tools.profiler.common import (
+    PROFILER_ARTIFACTS_DIR,
+    PROFILER_WASM_DIR,
+    PROFILER_WASM_TRACE_FILE_NAME,
+    PROFILER_WASM_TRACES_DIR,
+)
 
 clients = set()
 
 
 def _kill_previous_server_process():
-    import subprocess
-    import signal
-    import os
-
     try:
         output = subprocess.check_output(["ps", "-eo", "pid,cmd"]).decode()
         for line in output.splitlines():
@@ -80,6 +83,89 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         print(f"[{self.client_address[0]}] {format % args}")
+
+    def do_GET(self):
+        # Serve /traces as a JSON list of available trace files (from PROFILER_WASM_DIR/traces)
+        traces_dir = PROFILER_WASM_TRACES_DIR
+        if self.path == "/traces":
+            try:
+                files = []
+                print(f"[DEBUG] traces_dir: {traces_dir}")
+                if os.path.isdir(traces_dir):
+                    files = [f for f in os.listdir(traces_dir) if f.endswith(".tracy")]
+                    print(f"[DEBUG] Found trace files: {files}")
+                    files.sort(reverse=True)
+                else:
+                    print(f"[DEBUG] traces_dir does not exist: {traces_dir}")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(files).encode("utf-8"))
+            except Exception as e:
+                print(f"[DEBUG] Exception in /traces: {e}")
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"[]")
+            return
+        # Serve /traces/<filename> for downloading a trace file (from PROFILER_WASM_DIR/traces)
+        if self.path.startswith("/traces/"):
+            import urllib.parse
+
+            filename = self.path[len("/traces/") :]
+            filename = urllib.parse.unquote(filename)
+            # Only allow .tracy files, no path traversal
+            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid filename")
+                return
+            file_path = os.path.join(traces_dir, filename)
+            if not os.path.isfile(file_path):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"File not found")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f"attachment; filename={filename}")
+            self.end_headers()
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            return
+        # New: /set-embed-tracy/<filename> copies the selected trace to embed.tracy for default loading
+        if self.path.startswith("/set-embed-tracy/"):
+            import urllib.parse
+
+            filename = self.path[len("/set-embed-tracy/") :]
+            filename = urllib.parse.unquote(filename)
+            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid filename")
+                return
+            src_path = os.path.join(traces_dir, filename)
+            dst_path = os.path.join(PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME)
+            import shutil
+
+            try:
+                # Remove embed.tracy if it is a symlink
+                if os.path.islink(dst_path):
+                    os.unlink(dst_path)
+                shutil.copyfile(src_path, dst_path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+        # Default: serve as normal static file (from PROFILER_WASM_DIR)
+        return super().do_GET()
 
 
 async def notify_clients():

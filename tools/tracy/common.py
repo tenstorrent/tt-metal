@@ -24,7 +24,11 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
 
 PROFILER_BIN_DIR = TT_METAL_HOME / "build/bin"
 PROFILER_WASM_DIR = TT_METAL_HOME / "build/profiler/build_wasm"
+
 PROFILER_WASM_TRACE_FILE_NAME = "embed.tracy"
+
+PROFILER_WASM_TRACES_DIR = PROFILER_WASM_DIR / "traces"
+PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
 TRACY_OPS_TIMES_FILE_NAME = "tracy_ops_times.csv"
 TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
