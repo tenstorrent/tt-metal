@@ -343,42 +343,49 @@ def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment):
             assert len([x for x in job.tests if not x.success]) == 2
 
 
-def test_create_with_steps():
-    workflow_outputs_dir = (
+def test_pipeline_job_contains_valid_steps():
+    workflow_data_dir = (
         INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/"
     ).resolve()
 
     pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir=workflow_outputs_dir,
+        workflow_outputs_dir=workflow_data_dir,
         github_runner_environment={"github_event_name": "push"},
-        github_pipeline_json_filename=str(workflow_outputs_dir / "workflow.json"),
-        github_jobs_json_filename=str(workflow_outputs_dir / "workflow_jobs.json"),
+        github_pipeline_json_filename=str(workflow_data_dir / "workflow.json"),
+        github_jobs_json_filename=str(workflow_data_dir / "workflow_jobs.json"),
     )
 
-    assert len(pipeline.jobs) > 0
+    assert len(pipeline.jobs) > 0, "Pipeline contains no jobs."
 
-    found_job_with_steps = False
+    # Select a known job that includes steps
+    target_job_name = "ttnn-unit-tests (grayskull, E150) / ttnn group 2 grayskull E150"
+    target_job = next(job for job in pipeline.jobs if job.name == target_job_name)
 
-    for job in pipeline.jobs:
-        assert isinstance(job.steps, list)
+    step_names = [step.name for step in target_job.steps]
+    assert len(step_names) >= 1, f"Expected at least 1 step, got {len(step_names)}"
 
-        if len(job.steps) == 0:
-            print(f" WARNING: Job {job.github_job_id} has empty steps list.")
-            continue
+    # Confirm the step names include general-purpose CI keywords
+    expected_keywords = {"set up", "run", "post", "test", "checkout", "build", "artifact"}
+    matching_steps = [
+        name for name in step_names if any(keyword in name.lower() for keyword in expected_keywords)
+    ]
+    assert matching_steps, (
+        f"Expected at least one step containing a keyword from {expected_keywords}, got: {step_names}"
+    )
 
-        found_job_with_steps = True
-        print(f"\n Job '{job.name}' has {len(job.steps)} steps:")
-        for step in job.steps:
-            print(f" - {step.name}: {step.status}, {step.conclusion}, {step.started_at}, {step.completed_at}")
+    # Validate step schema fields
+    valid_statuses = {None, "queued", "in_progress", "completed"}
+    valid_conclusions = {
+        None, "success", "skipped", "failure", "cancelled",
+        "timed_out", "neutral", "stale"
+    }
 
-        assert all(step.status in {None, "queued", "in_progress", "completed"} for step in job.steps)
-        assert all(step.conclusion in {
-            None, "success", "skipped", "failure", "cancelled",
-            "timed_out", "neutral", "action_required", "startup_failure", "stale"
-        } for step in job.steps)
+    assert all(step.status in valid_statuses for step in target_job.steps)
+    assert all(step.conclusion in valid_conclusions for step in target_job.steps)
 
-    if not found_job_with_steps:
-        print(" No job with non-empty steps found.")
-
-
-
+    print(f"\n✅ Job `{target_job_name}` has {len(target_job.steps)} steps:")
+    for step in target_job.steps:
+        print(
+            f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
+            f"started_at={step.started_at}, completed_at={step.completed_at}"
+        )

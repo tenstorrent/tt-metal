@@ -77,14 +77,10 @@ def create_cicd_json_for_data_analysis(
         else:
             tests = []
 
-        logger.info(f"Found {len(tests)} tests for job {github_pipeline_id}")
-        logger.info(f"Found {len(tests)} tests for job {github_job_id}")
-
-        
         raw_steps = raw_job.get("steps")
         steps = [Step(**step) for step in raw_steps] if raw_steps else []
 
-        # Remove 'steps' from raw_job to avoid double-passing
+        # Remove 'steps' from raw_job to avoid double-passing of 'steps'
         raw_job = dict(raw_job)
         raw_job.pop("steps", None)
 
