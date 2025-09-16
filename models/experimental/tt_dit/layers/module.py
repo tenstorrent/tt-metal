@@ -72,7 +72,7 @@ class Module:
 
         if warn:
             for k in unexpected_keys:
-                logger.warning("unexpected torch state key: %s", k)
+                logger.warning("unexpected torch state key: {}", k)
 
         return unexpected_keys
 
