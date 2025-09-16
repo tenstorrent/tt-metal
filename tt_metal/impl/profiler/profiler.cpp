@@ -855,6 +855,9 @@ void dumpDeviceResultsToCSV(
     tt::ARCH device_arch,
     int device_core_frequency,
     const std::filesystem::path& log_path) {
+    TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
+    TT_ASSERT(log_path.extension() == ".csv");
+
     // open CSV log file
     std::ofstream log_file_ofs;
 
@@ -1692,12 +1695,19 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
         return;
     }
 
-    this->output_dir = std::filesystem::path(get_profiler_logs_dir());
-    std::filesystem::create_directories(this->output_dir);
-    std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
+    this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
+    std::filesystem::create_directories(this->device_logs_output_dir);
+
+    this->ops_perf_report_output_dir = std::filesystem::path(get_profiler_reports_dir());
+    std::filesystem::create_directories(this->ops_perf_report_output_dir);
 
     if (new_logs) {
+        std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
         std::filesystem::remove(log_path);
+
+        std::filesystem::path ops_perf_report_path =
+            this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME;
+        std::filesystem::remove(ops_perf_report_path);
     }
 
     const std::string noc_events_report_path =
@@ -1705,7 +1715,7 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
     if (!noc_events_report_path.empty()) {
         this->noc_trace_data_output_dir = std::filesystem::path(noc_events_report_path);
     } else {
-        this->noc_trace_data_output_dir = this->output_dir;
+        this->noc_trace_data_output_dir = this->device_logs_output_dir;
     }
 
     this->is_last_fd_read_done = false;
@@ -1715,14 +1725,18 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 }
 
 void runAnalysesForDeviceMarkers(
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    const std::filesystem::path& report_path) {
 #if defined(TRACY_ENABLE)
     log_info(tt::LogMetal, "Running analyses for device markers");
     std::vector<AnalysisConfig> analysis_configs = {
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE FIRMWARE TRACE DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE FIRMWARE TRACE DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::CORE_AGG,
@@ -1737,7 +1751,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE KERNEL TRACE DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE KERNEL TRACE DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::CORE_AGG,
@@ -1752,7 +1769,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE KERNEL FIRST TO LAST START DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE KERNEL FIRST TO LAST START DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRiscAny,
@@ -1767,7 +1787,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE FIRMWARE DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE FIRMWARE DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRiscAny,
@@ -1782,7 +1805,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRiscAny,
@@ -1797,7 +1823,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE KERNEL DURATION DM START",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE KERNEL DURATION DM START",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::BRISC | AnalysisRisc::NCRISC | AnalysisRisc::ERISC,
@@ -1815,7 +1844,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE BRISC KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE BRISC KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::BRISC,
@@ -1830,7 +1862,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE NCRISC KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE NCRISC KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::NCRISC,
@@ -1845,7 +1880,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE TRISC_0 KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE TRISC_0 KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::TRISC_0,
@@ -1860,7 +1898,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE TRISC_1 KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE TRISC_1 KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::TRISC_1,
@@ -1875,7 +1916,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE TRISC_2 KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE TRISC_2 KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::TRISC_2,
@@ -1890,7 +1934,10 @@ void runAnalysesForDeviceMarkers(
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
-            .analysis_name = "DEVICE ERISC KERNEL DURATION",
+            .results_config =
+                AnalysisResultsConfig{
+                    .analysis_name = "DEVICE ERISC KERNEL DURATION",
+                },
             .start_config =
                 AnalysisStartEndConfig{
                     .risc = AnalysisRisc::ERISC,
@@ -1903,14 +1950,12 @@ void runAnalysesForDeviceMarkers(
                     .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL}},
         }};
 
+    std::vector<std::unique_ptr<const AnalysisResults>> analysis_results;
     for (const auto& analysis_config : analysis_configs) {
-        const std::unique_ptr<AnalysisResults> analysis_results =
-            generateAnalysisForDeviceMarkers(analysis_config, device_markers);
-
-        writeAnalysisResultsToCSV(
-            {analysis_results.get()},
-            {{"DEVICE KERNEL FIRST START", "DEVICE KERNEL LAST START", "DEVICE KERNEL FIRST TO LAST START"}});
+        analysis_results.push_back(generateAnalysisForDeviceMarkers(analysis_config, device_markers));
     }
+
+    writeAnalysisResultsToCSV(analysis_results, report_path);
 #endif
 }
 
@@ -1951,7 +1996,8 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
-    runAnalysesForDeviceMarkers(device_markers_vec);
+    runAnalysesForDeviceMarkers(
+        device_markers_vec, this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME);
 
     // for (auto& [runtime_id, durations] :
     // dynamic_cast<DurationAnalysisResults&>(*analysis_results).results_per_runtime_id) {
@@ -1978,8 +2024,11 @@ void DeviceProfiler::freshDeviceLog() {
     if (!getDeviceProfilerState()) {
         return;
     }
-    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     std::filesystem::remove(log_path);
+
+    std::filesystem::path ops_perf_report_path = ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME;
+    std::filesystem::remove(ops_perf_report_path);
 #endif
 }
 
@@ -1989,7 +2038,8 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
         return;
     }
     std::filesystem::create_directories(new_output_dir);
-    output_dir = new_output_dir;
+    device_logs_output_dir = new_output_dir;
+    ops_perf_report_output_dir = new_output_dir;
 #endif
 }
 
@@ -2135,7 +2185,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     }
     std::scoped_lock lock(profiler_state_manager->file_write_mutex);
 
-    const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
 
     if (!noc_trace_data.empty()) {
