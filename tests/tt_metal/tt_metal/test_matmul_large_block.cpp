@@ -11,12 +11,14 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/distributed.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 using std::string;
 
 void print_faces(std::vector<bfloat16> data, string name) {
@@ -45,7 +47,6 @@ void print_faces(std::vector<bfloat16> data, string name) {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -177,7 +178,8 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -190,7 +192,11 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
+        auto& cq = mesh_device->mesh_command_queue();
 
         CoreCoord core = {0, 0};
         uint32_t M = 8;
@@ -210,25 +216,23 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
             single_tile_size * K * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out =
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        tt_metal::InterleavedBufferConfig act_config{
-            .device = device,
-            .size = dram_buffer_size_act,
-            .page_size = dram_buffer_size_act,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        tt_metal::InterleavedBufferConfig weights_config{
-            .device = device,
-            .size = dram_buffer_size_weights,
-            .page_size = dram_buffer_size_weights,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = device,
-            .size = dram_buffer_size_out,
-            .page_size = dram_buffer_size_out,
-            .buffer_type = tt_metal::BufferType::DRAM};
 
-        auto src0_dram_buffer = CreateBuffer(act_config);
-        auto src1_dram_buffer = CreateBuffer(weights_config);
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        distributed::DeviceLocalBufferConfig act_config = {
+            .page_size = dram_buffer_size_act, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig act_buffer_config = {.size = dram_buffer_size_act};
+
+        distributed::DeviceLocalBufferConfig weights_config = {
+            .page_size = dram_buffer_size_weights, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig weights_buffer_config = {.size = dram_buffer_size_weights};
+
+        distributed::DeviceLocalBufferConfig dst_config = {
+            .page_size = dram_buffer_size_out, .buffer_type = tt_metal::BufferType::DRAM};
+        distributed::ReplicatedBufferConfig dst_buffer_config = {.size = dram_buffer_size_out};
+
+        auto src0_dram_buffer = distributed::MeshBuffer::create(act_buffer_config, act_config, mesh_device.get());
+        auto src1_dram_buffer =
+            distributed::MeshBuffer::create(weights_buffer_config, weights_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(dst_buffer_config, dst_config, mesh_device.get());
 
         const std::array mm_reader_rt_args{
             src0_dram_buffer->address(),
@@ -290,8 +294,7 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
 
         int in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
 
-        create_CBs_for_fused_matmul(
-            program, device, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
+        create_CBs_for_fused_matmul(program, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
 
         TT_FATAL(in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles, "Error");
         TT_FATAL(in0_block_w == K, "Error");
@@ -344,13 +347,13 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
             auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
             activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         }
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
+        distributed::WriteShard(cq, src0_dram_buffer, activations, zero_coord);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
+        distributed::WriteShard(cq, src1_dram_buffer, weights, zero_coord);
 
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_rt_args);
 
@@ -358,9 +361,11 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
 
         CoreCoord debug_core = {1, 1};
 
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::EnqueueMeshWorkload(cq, workload, true);
+
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -407,10 +412,10 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     // Tilized input, Tilized output
-    pass &= test_matmul_large_block(device, false, false);
+    pass &= test_matmul_large_block(mesh_device, false, false);
     if (pass) {
         log_info(tt::LogTest, "Tilized input, Tilized output Passed");
     } else {
@@ -418,7 +423,7 @@ int main(int argc, char** argv) {
     }
 
     // Row major input, Tilized output
-    pass &= test_matmul_large_block(device, true, false);
+    pass &= test_matmul_large_block(mesh_device, true, false);
     if (pass) {
         log_info(tt::LogTest, "Row major input, Tilized output Passed");
     } else {
@@ -426,7 +431,7 @@ int main(int argc, char** argv) {
     }
 
     // Tilized input, Row major output
-    pass &= test_matmul_large_block(device, false, true);
+    pass &= test_matmul_large_block(mesh_device, false, true);
     if (pass) {
         log_info(tt::LogTest, "Tilized input, Row major output Passed");
     } else {
@@ -434,17 +439,17 @@ int main(int argc, char** argv) {
     }
 
     // Row major input, Row major output
-    pass &= test_matmul_large_block(device, true, true);
+    pass &= test_matmul_large_block(mesh_device, true, true);
     if (pass) {
         log_info(tt::LogTest, "Row major input, Row major output Passed");
     } else {
         log_info(tt::LogTest, "Row major input, Row major output Failed");
     }
 
-    pass &= tt_metal::CloseDevice(device);
+    pass &= mesh_device->close();
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        log_info(LogTest, "skibidi Test Passed");
     } else {
         TT_THROW("Test Failed");
     }
