@@ -544,16 +544,29 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
 @pytest.mark.parametrize(
     "shapes",
     [
+        # scalar bcast
         pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
-        pytest.param([(1, 1, 32), (8, 16, 32)], id="broadcast_lhs_2"),
-        pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_3"),
         pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
-        pytest.param([(8, 16, 32), (1, 1, 32)], id="broadcast_rhs_2"),
-        pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_3"),
-        pytest.param([(8, 16, 1), (1, 1, 32)], id="broadcast_both_1"),
-        pytest.param([(1, 1, 32), (8, 16, 1)], id="broadcast_both_2"),
+        # no subtile bcast
+        pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_2"),
+        pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_2"),
+        # row bcast
+        pytest.param([(8, 1, 32), (8, 16, 32)], id="broadcast_lhs_3"),
+        pytest.param([(8, 16, 32), (8, 1, 32)], id="broadcast_rhs_3"),
+        pytest.param([(1, 1, 32), (8, 16, 32)], id="broadcast_lhs_4"),
+        pytest.param([(8, 16, 32), (1, 1, 32)], id="broadcast_rhs_4"),
+        # col bcast
+        pytest.param([(8, 16, 1), (8, 16, 32)], id="broadcast_lhs_5"),
+        pytest.param([(8, 16, 32), (8, 16, 1)], id="broadcast_rhs_5"),
+        pytest.param([(1, 16, 1), (8, 16, 32)], id="broadcast_lhs_6"),
+        pytest.param([(8, 16, 32), (1, 16, 1)], id="broadcast_rhs_6"),
+        # row-col mixed bcast
+        pytest.param([(1, 1, 32), (8, 16, 1)], id="broadcast_both_1"),
+        pytest.param([(8, 16, 1), (1, 1, 32)], id="broadcast_both_2"),
         pytest.param([(8, 1, 32), (8, 16, 1)], id="broadcast_both_3"),
         pytest.param([(8, 16, 1), (8, 1, 32)], id="broadcast_both_4"),
+        pytest.param([(1, 16, 1), (8, 1, 32)], id="broadcast_both_5"),
+        pytest.param([(8, 1, 32), (1, 16, 1)], id="broadcast_both_6"),
     ],
 )
 @pytest.mark.parametrize(
