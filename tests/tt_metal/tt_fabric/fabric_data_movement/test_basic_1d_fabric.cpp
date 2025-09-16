@@ -449,7 +449,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    fprintf(stderr, "Fabric config %d\n", static_cast<int>(fabric_config));
 
     // common compile time args for sender and receiver
     // Note: see run_unicast_dw_chips() for DRAM coverage
@@ -459,11 +458,9 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         topology == Topology::Mesh,
-        // fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        0 /* use_dynamic_routing */,
+        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
-        0 /* additional_dir */,
-        1 /* is 2d_hybrid */};
+        0 /* additional_dir */};
 
     std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {

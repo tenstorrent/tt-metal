@@ -648,7 +648,7 @@ struct LowLatencyMeshRoutingFieldsV2 {
             uint16_t hop_index : 5;
             uint16_t branch_east_offset : 5;  // Referenced when updating hop index for mcast east branch
             uint16_t branch_west_offset : 5;  // Referenced when updating hop index for mcast east branch
-            uint16_t reserved : 1;            // TODO: will be is_mcast_active
+            uint16_t reserved : 1;            // TODO: will be is_mcast_active?
         };
     };
 };
@@ -657,6 +657,14 @@ static_assert(
 
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     LowLatencyMeshRoutingFieldsV2 routing_fields;  // 2B
+    uint8_t padding0[2];                           // 2B, this is needed for now
+    // WARN: 12x12 mesh. want 16x16 yet
+    uint8_t route_buffer[24];
+    union {
+        // used for inter-mesh multicast
+        uint8_t mcast_params[4];
+        uint32_t mcast_params_32;
+    };
     union {
         struct {
             uint16_t dst_start_chip_id;  // TODO: uint8_t as the max is 256 chips
@@ -664,9 +672,6 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
         };
         uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
     };  // 4B
-    // WARN: 14x14 mesh. not 16x16 yet
-    // Use routing_fields.reserved bit as optional is_mcast_active when needed.
-    uint8_t route_buffer[30];
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
@@ -711,17 +716,16 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
-#elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-#define DYNAMIC_ROUTING_ENABLED 1
-#define PACKET_HEADER_TYPE tt::tt_fabric::MeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
-#elif ((ROUTING_MODE & ROUTING_MODE_HYBRID)) == ROUTING_MODE_HYBRID
 // TODO: remove this and combine LowLatencyMeshPacketHeader and MeshPacketHeader as 2D unified header
 #define HYBRID_ROUTING_ENABLED 1
 #define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFieldsV2
+// #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
+// #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
+#define DYNAMIC_ROUTING_ENABLED 1
+#define PACKET_HEADER_TYPE tt::tt_fabric::MeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
 #endif

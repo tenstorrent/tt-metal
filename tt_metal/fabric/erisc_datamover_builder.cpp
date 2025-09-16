@@ -1220,7 +1220,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         // to the mux yet to implement sender side updates.
         update_pkt_hdr_on_rx_ch = false;
     }
-    fprintf(stderr, "UPDATE_PKT_HDR_ON_RX_CH: %d\n", (int)update_pkt_hdr_on_rx_ch);
 
     TT_FATAL(
         sender_channel_num_buffers > 0,

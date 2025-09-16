@@ -229,6 +229,20 @@ void fabric_set_mcast_route(
     }
 }
 
+static bool fabric_set_inter_mesh_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t my_mesh_id,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id) {
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.reserved = 0;
+    if (my_mesh_id == dst_mesh_id) {
+        return false;
+    }
+    // TODO: unicast route to exit node
+    return true;
+}
+
 void fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t my_dev_id,
@@ -236,14 +250,9 @@ void fabric_set_unicast_route(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint16_t ew_dim) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->routing_fields.reserved = 0;
-    if (my_mesh_id != dst_mesh_id) {
-        // TODO: route to exit node
-        return;
+    if (!fabric_set_inter_mesh_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id)) {
+        fabric_set_unicast_route(packet_header, my_dev_id, dst_dev_id, dst_mesh_id, ew_dim);
     }
-
-    fabric_set_unicast_route(packet_header, my_dev_id, dst_dev_id, dst_mesh_id, ew_dim);
 }
 
 void fabric_set_mcast_route(
@@ -251,19 +260,15 @@ void fabric_set_mcast_route(
     uint16_t my_mesh_id,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
-    uint16_t e_num_hops,
-    uint16_t w_num_hops,
-    uint16_t n_num_hops,
-    uint16_t s_num_hops) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    // Clear optional is_mcast_active flag in routing_fields (reserved bit)
-    packet_header->routing_fields.reserved = 0;
-    if (my_mesh_id != dst_mesh_id) {
-        // TODO: route to exit node
-        return;
+    uint8_t e_num_hops,
+    uint8_t w_num_hops,
+    uint8_t n_num_hops,
+    uint8_t s_num_hops) {
+    packet_header->mcast_params_32 = ((uint32_t)s_num_hops << 24) | ((uint32_t)n_num_hops << 16) |
+                                     ((uint32_t)w_num_hops << 8) | ((uint32_t)e_num_hops);
+    if (!fabric_set_inter_mesh_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id)) {
+        fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
     }
-
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
 uint8_t get_router_direction(uint32_t eth_channel) {
