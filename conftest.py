@@ -931,11 +931,6 @@ def pytest_runtest_teardown(item, nextitem):
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
             logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
-            # Run debug script before reset for failed tests
-            try:
-                run_debug_script()
-            except Exception as e:
-                logger.error(f"Failed to run debug script during teardown: {e}")
             reset_tensix(set(item.pci_ids))
 
 
@@ -994,11 +989,6 @@ def pytest_timeout_set_timer(item, settings):
 # then it should get cleaned up by the controller through this fixture
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
-    # Run debug script before reset for crashed workers
-    try:
-        run_debug_script()
-    except Exception as e:
-        logger.error(f"Failed to run debug script during crash handling: {e}")
     reset_tensix()
 
 
@@ -1014,7 +1004,9 @@ def run_debug_script():
         )
         return
 
-    debug_script_path = os.path.join(os.getenv("TT_METAL_HOME", "."), "scripts", "debugging_scripts", "tt-triage.py")
+    debug_script_path = os.path.join(
+        os.getenv("TT_METAL_HOME", "."), "scripts", "debugging_scripts", "tt-triage.py", "--active_cores"
+    )
 
     if not os.path.exists(debug_script_path):
         logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
