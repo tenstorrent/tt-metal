@@ -337,6 +337,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address = {};
     std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_teardown_semaphore_address = {};
 
+    std::size_t worker_read_pointer_update_scratch_region = 0;
+
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
     // use use a different crediting scheme.

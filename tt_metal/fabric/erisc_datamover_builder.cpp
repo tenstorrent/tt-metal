@@ -338,6 +338,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
+    this->worker_read_pointer_update_scratch_region = buffer_address;
+    buffer_address += field_size;
+
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -1437,6 +1440,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     }
 
     ct_args.push_back(0x30c0ffee);
+    ct_args.push_back(config.worker_read_pointer_update_scratch_region);
     return ct_args;
 }
 

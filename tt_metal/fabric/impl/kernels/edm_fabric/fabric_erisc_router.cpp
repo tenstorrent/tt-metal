@@ -2153,7 +2153,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[0],
-                get_credits_init_val<0>());
+                get_credits_init_val<0>(),
+                worker_read_pointer_update_scratch_region);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2166,7 +2167,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[1],
-                get_credits_init_val<1>());
+                get_credits_init_val<1>(),
+                worker_read_pointer_update_scratch_region);
     }
 #ifdef FABRIC_2D
     {
@@ -2180,7 +2182,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[2],
-                get_credits_init_val<2>());
+                get_credits_init_val<2>(),
+                worker_read_pointer_update_scratch_region);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2193,7 +2196,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[3],
-                get_credits_init_val<3>());
+                get_credits_init_val<3>(),
+                worker_read_pointer_update_scratch_region);
     }
 #endif
     if constexpr (NUM_SENDER_CHANNELS == 3 || NUM_SENDER_CHANNELS == 5) {
@@ -2212,7 +2216,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                         local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                     sender_channel_ack_cmd_buf_ids[VC1_SENDER_CHANNEL],
-                    get_credits_init_val<VC1_SENDER_CHANNEL>());
+                    get_credits_init_val<VC1_SENDER_CHANNEL>(),
+                    worker_read_pointer_update_scratch_region);
         }
     }
 }

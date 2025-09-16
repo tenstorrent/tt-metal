@@ -377,7 +377,11 @@ static_assert(
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t WORKER_READ_POINTER_UPDATE_SCRATCH_REGION_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t worker_read_pointer_update_scratch_region =
+    get_compile_time_arg_val(WORKER_READ_POINTER_UPDATE_SCRATCH_REGION_IDX);
+
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = WORKER_READ_POINTER_UPDATE_SCRATCH_REGION_IDX + 1;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =
