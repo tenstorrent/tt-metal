@@ -280,7 +280,6 @@ void kernel_main() {
                     for (uint32_t j = 0; j < num_pages_to_read; j++) {
                         uint32_t logical_tile_id = input_tile_id_start + temp_row_offset + temp_pages_read_in_row;
                         uint32_t intermediate_tile_id = intermediate_full_offset + logical_tile_id;
-
                         DPRINT << "intermediate tile id: " << (uint32_t)intermediate_tile_id << "\n";
                         uint64_t noc_read_addr = get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
                         noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
@@ -416,7 +415,7 @@ void kernel_main() {
                             intermediate_slice_idx * (input_tensor_Wt / ring_size) + batch_offset;
                     } else {
                         intermediate_input_tile_id_start =
-                            (intermediate_slice_idx * num_pages_per_slice) + batch_offset;
+                            (intermediate_slice_idx * batch_slice_num_pages) + batch_offset;
                     }
 
                     // The logical tile ID is the start of our slice plus the offset within that slice.

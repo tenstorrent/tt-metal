@@ -272,7 +272,7 @@ void kernel_main() {
                 input_tile_id_start =
                     intermediate_full_offset + batch_offset + slice_idx * (input_tensor_Wt / ring_size);
             } else {
-                input_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * num_pages_per_slice;
+                input_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * batch_slice_num_pages;
             }
             DPRINT << "tiles read: " << (uint32_t)tiles_read << " tiles to read: " << (uint32_t)tiles_to_read << "\n";
 

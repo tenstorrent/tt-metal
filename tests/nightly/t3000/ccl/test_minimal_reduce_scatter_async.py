@@ -116,6 +116,35 @@ def run_reduce_scatter_impl(
     torch_input_tensor_list = []
 
     for i in range(num_iters):
+        # The shape passed in is the global shape. Do not multiply it.
+        """
+        rs_global_input_shape = rs_input_shape[:]
+        if ones_tensor:
+            rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
+        else:
+            # Create the specific tensor for debugging as requested
+            rs_input_tensor = torch.zeros(rs_global_input_shape).bfloat16()
+            slice_size = rs_global_input_shape[dim] // num_devices
+            for device_id in range(num_devices):
+                slice_obj = [slice(None)] * len(rs_global_input_shape)
+                slice_obj[dim] = slice(device_id * slice_size, (device_id + 1) * slice_size)
+                rs_input_tensor[tuple(slice_obj)] = float(device_id + 1)
+
+        # For the torch reference, all devices have the same input tensor
+        input_tensors = [rs_input_tensor for _ in range(num_devices)]
+        torch_input_tensor_list.append(input_tensors)
+
+        input_tensor_mesh = ttnn.from_torch(
+            rs_input_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        tt_input_tensor_mesh_list.append(input_tensor_mesh)
+        """
         rs_global_input_shape = rs_input_shape[:]
         rs_global_input_shape[dim] *= num_devices
         if ones_tensor:
@@ -224,6 +253,8 @@ def run_reduce_scatter_impl(
         else:
             eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
+        print("tt_rs_out:", tt_rs_out[:, :, :64, :])
+        print("torch_rs_out:", torch_rs_out[:, :, :64, :])
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
@@ -243,7 +274,7 @@ def run_reduce_scatter_impl(
         # ([1, 256, 96, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         # ([128, 3, 32, 64], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         # ([1, 256, 96, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 128, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 256, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
 )
 @pytest.mark.parametrize(
