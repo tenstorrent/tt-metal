@@ -19,11 +19,6 @@
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using address_t = uint32_t;
 
-using tt::tt_metal::BufferType;
-using tt::tt_metal::Layout;
-using tt::tt_metal::TensorMemoryLayout;
-using ttnn::ccl::Shape4D;
-
 #ifdef DEBUG_PRINT_ENABLED
 #include "debug/dprint.h"
 
@@ -82,34 +77,34 @@ FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, 
 
 }  // namespace v2
 
-template <TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
+template <tt::tt_metal::TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen {
     static constexpr char name[] = "Uninitialized";
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
-struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, page_layout> {
+struct source_tensor_addrgen<tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type, page_layout> {
     static constexpr bool is_dram = buffer_type == tt::tt_metal::BufferType::DRAM;
     static constexpr char name[] = "InterleavedAddrGen(default)";
     using type = InterleavedAddrGen<is_dram>;
 };
 template <tt::tt_metal::BufferType buffer_type>
-struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, tt::tt_metal::Layout::TILE> {
+struct source_tensor_addrgen<tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type, tt::tt_metal::Layout::TILE> {
     static constexpr bool is_dram = buffer_type == tt::tt_metal::BufferType::DRAM;
     static constexpr char name[] = "InterleavedAddrGen(Tile)";
     using type = InterleavedAddrGenFast<is_dram>;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
-struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, buffer_type, page_layout> {
+struct source_tensor_addrgen<tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "WidthSharded";
     using type = tt::tt_metal::address_generators::DefaultVirtualCoordWidthShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
-struct source_tensor_addrgen<TensorMemoryLayout::HEIGHT_SHARDED, buffer_type, page_layout> {
+struct source_tensor_addrgen<tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "HeightSharded";
     using type = tt::tt_metal::address_generators::DefaultVirtualCoordHeightShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
-struct source_tensor_addrgen<TensorMemoryLayout::BLOCK_SHARDED, buffer_type, page_layout> {
+struct source_tensor_addrgen<tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "BlockSharded";
     using type = tt::tt_metal::address_generators::DefaultVirtualCoordBlockShardedAddressGenerator;
 };
@@ -122,6 +117,6 @@ constexpr bool is_sharded_tensor_layout(tt::tt_metal::TensorMemoryLayout tensor_
 
 // reader code
 template <typename T>
-FORCE_INLINE constexpr Shape4D<T> build_wrapped_row_tensor_slice(T n_pages) {
-    return Shape4D<T>{1, 1, 1, n_pages};
+FORCE_INLINE constexpr ttnn::ccl::Shape4D<T> build_wrapped_row_tensor_slice(T n_pages) {
+    return ttnn::ccl::Shape4D<T>{1, 1, 1, n_pages};
 }
