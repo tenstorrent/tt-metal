@@ -6,6 +6,7 @@ import math
 
 import ttnn
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def interleaved_to_sharded(x):
@@ -42,6 +43,7 @@ class TtYolov10Conv2D:
         act_block_h_override=0,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
+        core_count=None,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -56,6 +58,7 @@ class TtYolov10Conv2D:
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = deallocate_activation
         self.auto_shard = auto_shard
+        self.core_count = core_count
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -86,6 +89,10 @@ class TtYolov10Conv2D:
             if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             else enable_weights_double_buffer,
         )
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
         if auto_shard:
             self.conv_config.shard_layout = None
 
@@ -157,6 +164,7 @@ class Conv:
         activation_dtype=ttnn.bfloat8_b,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
+        core_count=None,
     ):
         self.enable_identity = enable_identity
         self.enable_act = enable_act
@@ -177,6 +185,7 @@ class Conv:
             activation_dtype=activation_dtype,
             enable_act_double_buffer=enable_act_double_buffer,
             enable_weights_double_buffer=enable_weights_double_buffer,
+            core_count=core_count,
         )
 
     def __call__(self, x):
