@@ -11,11 +11,11 @@ Tests:
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 
@@ -30,11 +30,11 @@ Tests:
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 
@@ -50,11 +50,11 @@ Tests:
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 
