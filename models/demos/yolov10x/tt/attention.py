@@ -7,6 +7,13 @@ import math
 import ttnn
 from models.demos.yolov10x.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnAttention:
     def __init__(self, dim, num_heads=8, attn_ratio=0.5, device=None, parameters=None, conv_pt=None):
@@ -36,6 +43,8 @@ class TtnnAttention:
         )
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="TtnnAttention Start")
         B, C, H, W = (
             1,
             input_tensor.shape[-1],
@@ -81,4 +90,6 @@ class TtnnAttention:
         x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.proj(x)
+        if use_signpost:
+            signpost(header="TtnnAttention End")
         return output

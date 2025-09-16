@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov10x.tt.common import Conv, TtYolov10Conv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnV10Detect:
     end2end = True
@@ -124,6 +131,8 @@ class TtnnV10Detect:
         self.strides = conv_pt.strides
 
     def __call__(self, y1, y2, y3):
+        if use_signpost:
+            signpost(header="TtnnV10Detect Start")
         x1 = self.cv2_0_0(y1)
         x1 = self.cv2_0_1(x1)
         x1 = self.cv2_0_2(x1)
@@ -213,5 +222,6 @@ class TtnnV10Detect:
         output = concat(1, False, z, yb)
 
         deallocate_tensors(c, c1, c2, yb, z)
-
+        if use_signpost:
+            signpost(header="TtnnV10Detect End")
         return output

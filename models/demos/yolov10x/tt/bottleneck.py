@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.yolov10x.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtnnBottleNeck:
     def __init__(self, shortcut=True, device=None, parameters=None, conv_pt=None):
@@ -27,6 +34,8 @@ class TtnnBottleNeck:
         )
 
     def __call__(self, input_tensor):
+        if use_signpost:
+            signpost(header="TtnnBottleNeck Start")
         cv1 = self.cv1(input_tensor)
         cv2 = self.cv2(cv1)
         if input_tensor.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
