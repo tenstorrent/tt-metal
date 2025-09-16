@@ -28,6 +28,8 @@ enum class KernelName {
     ReaderScalarBcastTST,
     WriterNoBcast,
     ReaderRowBcastTTT,
+    ReaderRowBcastTTS,
+    ReaderRowBcastTST,
     WriterColBcastTTT,
     ComputeNoBcastTTT,
     ComputeNoBcastTST,
@@ -36,6 +38,9 @@ enum class KernelName {
     ComputeColBcastTTT,
     ComputeColBcastTTS,
     ComputeColBcastTST,
+    ComputeRowBcastTTT,
+    ComputeRowBcastTTS,
+    ComputeRowBcastTST,
     ComputeScalarBcastTST,
     ComputeScalarBcastTTS,
 };

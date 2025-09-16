@@ -658,10 +658,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
             false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
         } else {
-            // TTS case - not currently supported for row broadcast
-            pred_is_bcast = false;
-            true_is_bcast = false;
-            false_is_bcast = false;
+            // TTS case - now supports row broadcast
+            auto pred_h = pred_shape[pred_shape.rank() - 2];
+            auto true_h = true_shape[true_shape.rank() - 2];
+
+            pred_is_bcast = (pred_h == 1 && true_h > 1);
+            true_is_bcast = (true_h == 1 && pred_h > 1);
+            false_is_bcast = false;  // False is scalar for TTS
         }
     }
 
@@ -710,6 +713,48 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
         reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
 
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TTS row broadcast
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),  // CB1 uses true tensor dtype
+            predicate_tensor.dtype());          // For predicate (a), true (b), false is scalar
+
+        // Add basic sharding defines
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_FALSE"] = "0";  // False is scalar for TTS
+
+        // Set broadcast defines for TTS row broadcast
+        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor
+        reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
+
+        // Add BCAST_LLK define
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TST row broadcast
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_false_tensor.value().dtype(),  // CB1 uses false tensor dtype
+            predicate_tensor.dtype());           // For predicate (a), true is scalar, false (b)
+
+        // Add basic sharding defines
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = "0";  // True is scalar for TST
+        reader_defines["SRC_SHARDED_FALSE"] = false_sharded ? "1" : "0";
+
+        // Set broadcast defines for TST row broadcast
+        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = "0";                          // True is scalar
+        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";  // CB1 uses false tensor
+
+        // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
         // TTS column broadcast
@@ -914,6 +959,16 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_FALSE"] = "0";                       // False is scalar for TTS
     } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::COL_BCAST) {
         // TST column broadcast configuration
+        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_TRUE"] = "0";  // True is scalar for TST
+        kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+    } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TTS row broadcast configuration
+        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_FALSE"] = "0";  // False is scalar for TTS
+    } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TST row broadcast configuration
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = "0";  // True is scalar for TST
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";

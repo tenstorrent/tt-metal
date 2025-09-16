@@ -37,13 +37,17 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTTS;
                 compute_kernel = KernelName::ComputeColBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+                reader_kernel = KernelName::ReaderRowBcastTTS;
+                compute_kernel = KernelName::ComputeRowBcastTTS;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (
-            broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_kernel = KernelName::ReaderScalarBcastTTS;
                 compute_kernel = KernelName::ComputeScalarBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -59,13 +63,17 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTST;
                 compute_kernel = KernelName::ComputeColBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+                reader_kernel = KernelName::ReaderRowBcastTST;
+                compute_kernel = KernelName::ComputeRowBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTST;
                 compute_kernel = KernelName::ComputeNoBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (
-            broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_kernel = KernelName::ReaderScalarBcastTST;
                 compute_kernel = KernelName::ComputeScalarBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -113,6 +121,12 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
+        case KernelName::ReaderRowBcastTTS:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "ternary_reader_rowbcast_tts.cpp";
+        case KernelName::ReaderRowBcastTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "ternary_reader_rowbcast_tst.cpp";
 
         case KernelName::WriterNoBcast:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -134,6 +148,12 @@ std::string get_kernel_file_path(KernelName kernel_name) {
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tts.cpp";
         case KernelName::ComputeColBcastTST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tst.cpp";
+        case KernelName::ComputeRowBcastTTT:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_ttt.cpp";
+        case KernelName::ComputeRowBcastTTS:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_tts.cpp";
+        case KernelName::ComputeRowBcastTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_row_bcast_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -313,9 +333,9 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
 
         // Row broadcast case: at least one tensor is broadcasting in height and widths are same
         if ((pred_row_broadcasted || tensor_row_broadcasted) && same_width) {
-            // TTS and TST do not support row broadcast - fallback to legacy
-            log_debug(tt::LogOp, "2-tensor row broadcast not supported, falling back to legacy");
-            return WhereBroadcastType::INVALID_BCAST;
+            // TTS and TST now support row broadcast
+            log_debug(tt::LogOp, "2-tensor row broadcast detected for TTS/TST");
+            return WhereBroadcastType::ROW_BCAST;
         }
     }
 
