@@ -18,7 +18,8 @@ class Conv:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=False,
+            # math_approx_mode=False,
+            math_approx_mode=True,
         )
         self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
@@ -26,6 +27,7 @@ class Conv:
             activation=activation,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
+            # reshard_if_not_optimal=True,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=True,
             output_layout=ttnn.TILE_LAYOUT,

@@ -153,9 +153,10 @@ class TtGenBoxes:
         cls_confs = ttnn.sigmoid(cls_confs, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         confs = ttnn.multiply(det_confs, cls_confs, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(cls_confs)
+        ttnn.deallocate(det_confs)
         confs = ttnn.permute(confs, (0, 1, 3, 2))
         confs = ttnn.reshape(confs, (B, AHW, self.num_classes))
-
         #################
         ## Boxes
         #################

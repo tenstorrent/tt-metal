@@ -268,14 +268,14 @@ class TtNeck:
             in_sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
             )
-            output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+            # output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
             shard_spec = ttnn.ShardSpec(shard_grid, (80, 32), ttnn.ShardOrientation.ROW_MAJOR)
             out_sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
 
-            output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
-            output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
+            output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2))
+            # output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
         else:
             nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
             num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])
@@ -386,14 +386,14 @@ class TtNeck:
             in_sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
             )
-            output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+            # output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
             shard_spec = ttnn.ShardSpec(shard_grid, (80 * 4, 16), ttnn.ShardOrientation.ROW_MAJOR)
             out_sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
 
-            output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
-            output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
+            output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2))
+            # output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
         else:
             nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
             num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])

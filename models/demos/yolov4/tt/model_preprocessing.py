@@ -112,7 +112,7 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c1["reshard_if_not_optimal"] = False
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c1["dtype"] = ttnn.bfloat8_b
-    conv_args.c1["num_cores_nhw"] = None
+    conv_args.c1["num_cores_nhw"] = 64
 
     if resolution == (320, 320):
         conv_args.c2["act_block_h"] = None
@@ -124,14 +124,14 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c2["dtype"] = ttnn.bfloat8_b
-    conv_args.c2["num_cores_nhw"] = None
+    conv_args.c2["num_cores_nhw"] = 64
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["deallocate_activation"] = False
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c3["dtype"] = ttnn.bfloat8_b
-    conv_args.c3["num_cores_nhw"] = None
+    conv_args.c3["num_cores_nhw"] = 64
     if resolution == (640, 640):
         conv_args.c3["act_block_h"] = 1024
 
