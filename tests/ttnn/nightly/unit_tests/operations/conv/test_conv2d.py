@@ -80,7 +80,7 @@ def randomize_torch_tensor(
         torch_tensor = torch_tensor_map[cache_key]
     else:
         if mode == "random":
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
             if generate_positive_numbers:
                 torch_tensor = torch.abs(torch_tensor)
         elif mode == "stick":
@@ -90,7 +90,7 @@ def randomize_torch_tensor(
         elif mode == "single":
             if fill_value is None:
                 raise ValueError("fill_value must be provided when mode is 'single'")
-            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16).float()
+            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16)
         else:
             raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
 

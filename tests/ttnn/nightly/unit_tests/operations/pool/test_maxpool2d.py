@@ -11,6 +11,7 @@ import math
 
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import randomize_torch_tensor
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -23,33 +24,6 @@ def tensor_map(request):
     tensor_map = {}
 
     return tensor_map
-
-
-# Creates a tensor with specified mode:
-# - "random": fills tensor with random values using torch.randn
-# - "stick": each stick has same values starting from 0 and increasing
-# - "single": fills entire tensor with the provided value
-def randomize_torch_tensor(tensor_map, tensor_shape, mode="random", fill_value=None):
-    tensor_shape = tuple(tensor_shape)
-    cache_key = (tensor_shape, mode, fill_value)
-    if cache_key in tensor_map.keys():
-        torch_tensor = tensor_map[cache_key]
-    else:
-        if mode == "random":
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        elif mode == "stick":
-            h, w = tensor_shape[2], tensor_shape[3]
-            stick = torch.arange(h * w, dtype=torch.bfloat16).reshape(1, 1, h, w)
-            torch_tensor = stick.expand(tensor_shape)
-        elif mode == "single":
-            if fill_value is None:
-                raise ValueError("fill_value must be provided when mode is 'single'")
-            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16)
-        else:
-            raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
-        tensor_map[cache_key] = torch_tensor
-
-    return torch_tensor
 
 
 def run_max_pool(
