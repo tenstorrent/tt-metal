@@ -142,13 +142,10 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
 
     // Get worker cores
     CoreCoord core_grid(num_links * 2, 1);
-    auto
-        [num_cores,
-         worker_core_ranges,
-         core_group_1,
-         core_group_2,
-         outer_dims_per_core_group_1,
-         outer_dims_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, outer_dim_size * 2);
+    auto [num_cores, worker_core_ranges, core_group_1, core_group_2, dims_per_core_group_1, dims_per_core_group_2] =
+        (dim > 0) ? tt::tt_metal::split_work_to_cores(core_grid, outer_dim_size * 2)
+                  : tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_halo_dim * 2);
+    ;
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -180,18 +177,18 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     uint32_t num_directions = 2;
-    uint32_t outer_dim_offset_start_id = 0;
+    uint32_t link_offset_start_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
-        uint32_t outer_dims_to_read = 0;
+        uint32_t link_dims_to_read = 0;
 
         // direction 0 means pad left (top), 1 means pad right (bottom)
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             if (core_group_1.contains(core)) {
-                outer_dims_to_read = outer_dims_per_core_group_1;
+                link_dims_to_read = dims_per_core_group_1;
             } else {
-                outer_dims_to_read = outer_dims_per_core_group_2;
+                link_dims_to_read = dims_per_core_group_2;
             }
 
             // Reader
@@ -215,14 +212,16 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             reader_kernel_ids.push_back(worker_reader_kernel_id);
 
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),                 // input_tensor_address
-                output_tensor.buffer()->address(),                // output_tensor_address
-                outer_dim_offset_start_id * input_halo_dim_size,  // outer_dim_offset_start_id
-                input_halo_dim_size,                              // input_halo_dim_size
-                outer_dims_to_read,                               // outer_dim_size
-                direction ? padding_right : padding_left,         // padding
-                num_sticks_per_halo_dim,                          // num_sticks_per_halo_dim
-                final_semaphore.address()                         // out_ready_sem_bank_addr (absolute address)
+                input_tensor.buffer()->address(),                                         // input_tensor_address
+                output_tensor.buffer()->address(),                                        // output_tensor_address
+                (dim > 0) ? link_offset_start_id * input_halo_dim_size : outer_dim_size,  // link_offset_start_id
+                (dim == 0) ? link_offset_start_id : 0,
+                input_halo_dim_size,                                       // input_halo_dim_size
+                (dim > 0) ? link_dims_to_read : outer_dim_size,            // outer_dim_size
+                direction ? padding_right : padding_left,                  // padding
+                (dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
+                num_sticks_per_halo_dim,                                   // num_sticks_per_halo_dim
+                final_semaphore.address()                                  // out_ready_sem_bank_addr (absolute address)
             };
             tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
 
@@ -246,18 +245,20 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             writer_kernel_ids.push_back(worker_writer_kernel_id);
 
             std::vector<uint32_t> writer_rt_args = {
-                input_tensor.buffer()->address(),                  // input_tensor_address
-                output_tensor.buffer()->address(),                 // output_tensor_address
-                outer_dim_offset_start_id * output_halo_dim_size,  // outer_dim_offset_start_id
-                input_halo_dim_size,                               // input_halo_dim_size
-                output_halo_dim_size,                              // output_halo_dim_size
-                outer_dims_to_read,                                // outer_dim_size
-                direction ? padding_right : padding_left,          // padding
-                padding_left,                                      // padding left
-                num_sticks_per_halo_dim,                           // num_sticks_per_halo_dim
-                virtual_core.x,                                    // out_ready_sem_noc0_x
-                virtual_core.y,                                    // out_ready_sem_noc0_y
-                final_semaphore.address(),                         // out_ready_sem_bank_addr (absolute address)
+                input_tensor.buffer()->address(),                                          // input_tensor_address
+                output_tensor.buffer()->address(),                                         // output_tensor_address
+                (dim > 0) ? link_offset_start_id * output_halo_dim_size : outer_dim_size,  // link_offset_start_id
+                (dim == 0) ? link_offset_start_id : 0,
+                input_halo_dim_size,                                       // input_halo_dim_size
+                output_halo_dim_size,                                      // output_halo_dim_size
+                (dim > 0) ? link_dims_to_read : outer_dim_size,            // outer_dim_size
+                direction ? padding_right : padding_left,                  // padding
+                padding_left,                                              // padding left
+                (dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
+                num_sticks_per_halo_dim,                                   // num_sticks_per_halo_dim
+                virtual_core.x,                                            // out_ready_sem_noc0_x
+                virtual_core.y,                                            // out_ready_sem_noc0_y
+                final_semaphore.address(),                                 // out_ready_sem_bank_addr (absolute address)
                 direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
@@ -284,7 +285,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             }
             tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
         }
-        outer_dim_offset_start_id += (outer_dims_to_read * num_sticks_per_halo_dim);
+        if (dim > 0) {
+            link_offset_start_id += (link_dims_to_read * num_sticks_per_halo_dim);
+        } else {
+            link_offset_start_id += link_dims_to_read;
+        }
     }
 
     auto override_runtime_arguments_callback =
@@ -312,12 +317,12 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                     auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                     worker_reader_runtime_args[0] = input.buffer()->address();
                     worker_reader_runtime_args[1] = output.buffer()->address();
-                    worker_reader_runtime_args[7] = out_ready_semaphore.address();
+                    worker_reader_runtime_args[9] = out_ready_semaphore.address();
                     // writer
                     auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                     worker_writer_runtime_args[0] = input.buffer()->address();
                     worker_writer_runtime_args[1] = output.buffer()->address();
-                    worker_writer_runtime_args[11] = out_ready_semaphore.address();
+                    worker_writer_runtime_args[13] = out_ready_semaphore.address();
 
                     // if (barrier_semaphore.has_value()) {
                     // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
