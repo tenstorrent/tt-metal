@@ -9,6 +9,7 @@
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "autograd/auto_context.hpp"
@@ -21,9 +22,23 @@
 #include "modules/gpt_block.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/llama_block.hpp"
+#include "ops/losses.hpp"
+#include "optimizers/sgd.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+#include "ttnn/operations/loss/loss.hpp"
 
+namespace nanobind::detail {
+template <>
+struct dtype_traits<bfloat16> {
+    static constexpr dlpack::dtype value{
+        (uint8_t)dlpack::dtype_code::Float,  // type code
+        16,                                  // size in bits
+        1                                    // lanes (simd), usually set to 1
+    };
+    static constexpr auto name = const_name("bfloat16");
+};
+}  // namespace nanobind::detail
 namespace ttml::autograd {
 
 nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
@@ -71,7 +86,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
     TT_THROW("Unsupported type: unknown");
 }
 
-tt::tt_metal::Tensor make_metal_tensor(const nb::ndarray<>& data) {
+tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
     const auto data_type = data.dtype();
     TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
 
@@ -138,6 +153,7 @@ void py_module_types(nb::module_& m) {
     nb::export_enum<ttnn::DataType>(m);
     nb::export_enum<GradMode>(m);
     nb::export_enum<PreferredPrecision>(m);
+    nb::export_enum<ttml::ops::ReduceType>(m);
     nb::export_enum<RunMode>(m);
 
     nb::class_<GraphNode>(m, "GraphNode");
@@ -149,9 +165,14 @@ void py_module_types(nb::module_& m) {
     nb::class_<Tensor>(m, "Tensor");
     nb::class_<AutocastTensor>(m, "AutocastTensor");
     nb::class_<AutoContext>(m, "AutoContext");
+    nb::class_<optimizers::OptimizerBase>(m, "OptimizerBase");
+    nb::class_<optimizers::SGDConfig>(m, "SGDConfig");
+    nb::class_<optimizers::SGD, optimizers::OptimizerBase>(m, "SGD");
 
     m.def("create_linear_regression_model", &ttml::models::linear_regression::create);
     m.def("load_gpt2_model_from_safetensors", &ttml::models::gpt2::load_model_from_safetensors);
+    m.def("cross_entropy_loss", &ttml::ops::cross_entropy_loss);
+    m.def("mse_loss", &ttml::ops::mse_loss);
 }
 
 void py_module(nb::module_& m) {
@@ -179,24 +200,30 @@ void py_module(nb::module_& m) {
         py_module_base.def("train", &ModuleBase::train);
         py_module_base.def("eval", &ModuleBase::eval);
         py_module_base.def("set_run_mode", &ModuleBase::set_run_mode);
+        py_module_base.def("get_run_mode", &ModuleBase::get_run_mode);
     }
 
     {
-        auto py_gpt_mlp_base = static_cast<nb::class_<modules::GPTMLP, ModuleBase>>(m.attr("GPTMLP"));
-        py_gpt_mlp_base.def(nb::init<uint32_t, float>());
-        py_gpt_mlp_base.def("__call__", &modules::GPTMLP::operator());
+        auto py_gpt_mlp = static_cast<nb::class_<modules::GPTMLP, ModuleBase>>(m.attr("GPTMLP"));
+        py_gpt_mlp.def(nb::init<uint32_t, float>());
+        py_gpt_mlp.def("__call__", &modules::GPTMLP::operator());
     }
 
     {
-        auto py_linear_layer_base = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-        py_linear_layer_base.def(nb::init<uint32_t, std::optional<uint32_t>, float>());
-        py_linear_layer_base.def("__call__", &modules::LinearLayer::operator());
+        auto py_linear_layer = static_cast<nb::class_<modules::LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
+        py_linear_layer.def(nb::init<uint32_t, uint32_t, bool>());
+        py_linear_layer.def("__call__", &modules::LinearLayer::operator());
+        py_linear_layer.def("get_weight", &modules::LinearLayer::get_weight);
+        py_linear_layer.def("get_weight2", [](const modules::LinearLayer& layer) {
+            auto const w = layer.get_weight();
+            return make_numpy_tensor(w->get_value(PreferredPrecision::FULL));
+        });
     }
 
     {
-        auto py_llama_mlp_base = static_cast<nb::class_<modules::LlamaMLP, ModuleBase>>(m.attr("LlamaMLP"));
-        py_llama_mlp_base.def(nb::init<uint32_t, std::optional<uint32_t>, float>());
-        py_llama_mlp_base.def("__call__", &modules::LlamaMLP::operator());
+        auto py_llama_mlp = static_cast<nb::class_<modules::LlamaMLP, ModuleBase>>(m.attr("LlamaMLP"));
+        py_llama_mlp.def(nb::init<uint32_t, std::optional<uint32_t>, float>());
+        py_llama_mlp.def("__call__", &modules::LlamaMLP::operator());
     }
 
     {
@@ -220,9 +247,8 @@ void py_module(nb::module_& m) {
         py_tensor.def("get_rank", &Tensor::get_rank);
         py_tensor.def("backward", &Tensor::backward);
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
-        py_tensor.def("from_numpy", [](Tensor& tensor, const nb::ndarray<>& numpy_tensor) {
-            tensor.set_value(make_metal_tensor(numpy_tensor));
-        });
+        py_tensor.def_static(
+            "from_numpy", [](nb::ndarray<> numpy_tensor) { return Tensor(make_metal_tensor(numpy_tensor)); });
         py_tensor.def("to_numpy", [](const Tensor& tensor) {
             return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL));
         });
@@ -280,6 +306,26 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_profiler", &AutoContext::get_profiler);
         py_auto_context.def("close_profiler", &AutoContext::close_profiler);
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources);
+    }
+
+    {
+        auto py_sgd_config = static_cast<nb::class_<optimizers::SGDConfig>>(m.attr("SGDConfig"));
+        py_sgd_config.def_static(
+            "make", [](float lr, float momentum, float dampening, float weight_decay, bool nesterov) {
+                return optimizers::SGDConfig{
+                    .lr = lr,
+                    .momentum = momentum,
+                    .dampening = dampening,
+                    .weight_decay = weight_decay,
+                    .nesterov = nesterov};
+            });
+
+        auto py_sgd = static_cast<nb::class_<optimizers::SGD, optimizers::OptimizerBase>>(m.attr("SGD"));
+        py_sgd.def(nb::init<serialization::NamedParameters, const optimizers::SGDConfig&>());
+        py_sgd.def("zero_grad", &optimizers::SGD::zero_grad);
+        py_sgd.def("step", &optimizers::SGD::step);
+        py_sgd.def("get_state_dict", &optimizers::SGD::get_state_dict);
+        py_sgd.def("get_state_dict", &optimizers::SGD::get_state_dict);
     }
 }
 
