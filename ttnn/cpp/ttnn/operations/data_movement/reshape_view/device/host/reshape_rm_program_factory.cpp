@@ -56,7 +56,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
-    uint32_t write_start_offset = 0;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
