@@ -8,7 +8,7 @@ from torch import nn
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.mlp import MLP
 from models.experimental.swin_s.tt.tt_mlp import TtMLP

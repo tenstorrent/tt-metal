@@ -434,7 +434,6 @@ KernelGroup::KernelGroup(
         kernel_config.kernel_config_base()[index] = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
