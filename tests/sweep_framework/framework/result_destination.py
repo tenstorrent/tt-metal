@@ -16,7 +16,6 @@ from framework.database import (
     push_run,
     update_run,
     generate_error_signature,
-    generate_error_hash,
     map_test_status_to_run_status,
     generate_error_hash,
 )
