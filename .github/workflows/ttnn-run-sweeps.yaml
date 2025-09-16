@@ -552,8 +552,8 @@ on:
         description: "Upload sweep results to SFTP server?"
         type: boolean
         default: true
-  # schedule:
-  #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+  schedule:
+    - cron: "0 14 * * 0" # This cron schedule runs the workflow at 2:00 PM UTC / 9 AM EST weekly on Sundays
 
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}
@@ -613,7 +613,6 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
-
   ttnn-compute-module-matrix:
     name: Compute module matrix
     needs: ttnn-generate-sweeps
@@ -643,7 +642,6 @@ jobs:
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
-
   ttnn-run-single-sweep:
     name: Run single sweep
     needs:
@@ -658,15 +656,15 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -711,10 +709,9 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-results
+          name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
-
   ttnn-run-sweeps-parallel:
     name: Run sweeps in parallel (${{ matrix.test-group.name }}, ${{ matrix.batch }})
     needs:
@@ -731,15 +728,15 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -792,14 +789,12 @@ jobs:
           name: sweeps-results-${{ matrix.test-group.name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
-
-  ttnn-homogenize-and-publish-run-result:
-    name: Homogenize and publish run result
+  ttnn-homogenize-run-result:
+    name: Homogenize run result
     needs:
       - build-artifact
-      - ttnn-run-single-sweep
       - ttnn-run-sweeps-parallel
-    if: ${{ always() && (needs.ttnn-run-single-sweep.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'success') }}
+    if: ${{ always() && needs.ttnn-run-sweeps-parallel.result != 'skipped' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -837,12 +832,12 @@ jobs:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
-
   ttnn-upload-results:
     name: Upload sweep results to SFTP server
     needs:
-      - ttnn-homogenize-and-publish-run-result
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+      - ttnn-homogenize-run-result
+      - ttnn-run-single-sweep
+    if: ${{ always() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
@@ -850,7 +845,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions
-      - name: Download homogenized results
+      - name: Download sweep results
         uses: actions/download-artifact@v4
         with:
           name: sweeps-run-result
@@ -858,26 +853,6 @@ jobs:
       - name: List all downloaded files
         run: |
           ls -hal tests/sweep_framework/results_export
-      - name: Generate dynamic SFTP batchfile
-        run: |
-          # Create a dynamic batchfile with individual put commands
-          echo "# Dynamic batchfile for uploading oprun files" > dynamic_batchfile.txt
-          echo "# Generated at runtime to avoid wildcard limitations" >> dynamic_batchfile.txt
-          echo "" >> dynamic_batchfile.txt
-
-          # Add individual put commands for each file
-          for file in tests/sweep_framework/results_export/oprun_*.json; do
-            if [ -f "$file" ]; then
-              echo "put $file" >> dynamic_batchfile.txt
-            fi
-          done
-
-          echo "" >> dynamic_batchfile.txt
-          echo "# List files to verify upload" >> dynamic_batchfile.txt
-          echo "ls -hal" >> dynamic_batchfile.txt
-
-          echo "Generated batchfile contents:"
-          cat dynamic_batchfile.txt
       - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
