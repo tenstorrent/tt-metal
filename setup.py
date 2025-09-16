@@ -99,11 +99,6 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
-def _base_release_str(version):
-    # robust X.Y.Z from parsed version
-    return ".".join(str(x) for x in version.version.release)
-
-
 def get_metal_local_version_scheme(metal_build_config, version):
     if version.dirty:
         return f"+g{version.node}"
