@@ -78,11 +78,22 @@ def test_resnet_block_2d_512x512(
     block_name,
     block_index,
     resnet_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     load_from_disk = False
     if not load_from_disk:
         # setup pytorch model
-        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+
+        model_location = model_location_generator(
+            "stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+        )
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+            torch_dtype=torch.float32,
+            local_files_only=is_ci_env or is_ci_v2_env,
+        )
 
         model = pipe.unet
         model.eval()

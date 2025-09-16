@@ -84,10 +84,21 @@ def test_cross_attn_up_block_2d_512x512(
     out_channels,
     shard_end_core,
     shard_shape,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    # TODO
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/unet",
+        download_if_ci_v2=True,
+        ci_v2_timeout_in_s=1800,
+    )
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     unet = pipe.unet
     unet.eval()
     config = unet.config

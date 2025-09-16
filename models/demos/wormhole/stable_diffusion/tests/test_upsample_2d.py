@@ -39,9 +39,25 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index):
+def test_upsample2d_512x512(
+    device,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    torch.manual_seed(0)
+    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
 
     unet = pipe.unet
     unet.eval()

@@ -23,11 +23,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
     TRANSFORMER_PARAMETERIZATIONS,
 )
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_transformer_2d_model_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -37,6 +35,9 @@ def test_transformer_2d_model_512x512(
     block_index,
     attention_index,
     reset_seeds,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
@@ -57,13 +58,21 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.rand(encoder_hidden_states)
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
+    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     unet = pipe.unet
     unet.eval()
     config = unet.config
 
     parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name="CompVis/stable-diffusion-v1-4",
+        initialize_model=lambda: unet,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
 
     if block == "up":

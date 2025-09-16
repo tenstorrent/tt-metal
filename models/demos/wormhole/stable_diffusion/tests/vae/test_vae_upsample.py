@@ -32,8 +32,18 @@ def test_upsample(
     output_width,
     conv_channel_split_factor,
     block_id,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    model_location = model_location_generator(
+        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     torch_upsample = vae.decoder.up_blocks[block_id].upsamplers[0]
 
     # Run pytorch model
