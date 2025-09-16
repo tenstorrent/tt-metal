@@ -10,7 +10,7 @@ from transformers import VisionEncoderDecoderModel
 
 
 from models.experimental.trocr.tt.trocr_learned_positional_embeddings import TtTrOCRLearnedPositionalEmbedding
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     comp_pcc,
     comp_allclose,

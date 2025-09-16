@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from models.utility_functions import pad_by_zero
+from models.common.utility_functions import pad_by_zero
 
 import ttnn
 
