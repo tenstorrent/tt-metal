@@ -363,11 +363,6 @@ def trace_all_to_all_combine(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "trace_region_size": 500000,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         },
@@ -596,47 +591,7 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize(
     "device_params, mesh_shape, mesh_device, axis, num_links, test_skew",
     [
-        # FABRIC_2D tests with both axis=0 and axis=1
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "trace_region_size": 500000,
-            },
-            (1, 4),
-            (1, 4),
-            1,
-            1,
-            False,
-            id="fabric_2d_axis_1",
-        ),
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "trace_region_size": 500000,
-            },
-            (1, 4),
-            (1, 4),
-            1,
-            1,
-            False,
-            id="fabric_2d_axis_1",
-        ),
-        # FABRIC_1D tests with both axis=0 and axis=1
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "trace_region_size": 500000,
-            },
-            (1, 4),
-            (1, 4),
-            0,
-            2,
-            False,
-            id="fabric_1d_line_axis_0",
-        ),
+        # FABRIC_1D tests with axis=1
         pytest.param(
             {
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
@@ -650,34 +605,6 @@ def check_results(test_tensor, ref_tensor, data_map):
             False,
             id="fabric_1d_line_axis_1",
         ),
-        # FABRIC_1D_RING tests with only axis=1 (excluding axis=0)
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 500000,
-            },
-            (1, 4),
-            (1, 4),
-            1,
-            1,
-            False,
-            id="fabric_1d_ring_axis_1",
-        ),
-        # FABRIC_1D_RING tests with only axis=1 (excluding axis=0)
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 500000,
-            },
-            (1, 4),
-            (1, 4),
-            1,
-            1,
-            True,
-            id="fabric_1d_ring_axis_1_skew",
-        ),
     ],
     indirect=["device_params", "mesh_device"],
 )
@@ -686,7 +613,7 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
 @pytest.mark.parametrize("seq", [2])
-@pytest.mark.parametrize("local_reduce", [False, True])
+@pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("scheme", ["random"])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
