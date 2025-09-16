@@ -36,7 +36,7 @@ BidirectionalFabricSocket::get_distributed_context() const {
 std::unique_ptr<BidirectionalFabricSocket> BidirectionalFabricSocket::create(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank rank,
-    tt::tt_metal::distributed::SocketConfig socket_config) {
+    const tt::tt_metal::distributed::SocketConfig& socket_config) {
     auto sender_socket_config = socket_config;
     sender_socket_config.sender_rank = socket_config.distributed_context->rank();
     sender_socket_config.receiver_rank = rank;

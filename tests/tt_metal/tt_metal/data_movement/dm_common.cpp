@@ -19,7 +19,7 @@ uint32_t runtime_host_id = 0;
 static uint32_t obtain_page_size_bytes(ARCH arch) { return (arch == ARCH::BLACKHOLE) ? 64 : 32; }
 
 L1AddressInfo get_l1_address_and_size(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& core_coord) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& core_coord) {
     // Obtaining L1 address and size for a specific core //
     const IDevice* device = mesh_device->get_device(0);
 
@@ -35,7 +35,7 @@ L1AddressInfo get_l1_address_and_size(
     // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
 }
 
-DramAddressInfo get_dram_address_and_size(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Obtaining DRAM address and size //
 
     auto dram_base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -45,7 +45,7 @@ DramAddressInfo get_dram_address_and_size(std::shared_ptr<distributed::MeshDevic
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
-    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const IDevice* device = mesh_device->get_device(0);
     ARCH arch = device->arch();
 

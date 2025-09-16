@@ -52,7 +52,7 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -192,7 +192,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool single_tile_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -320,7 +320,8 @@ bool single_tile_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
-bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t M, uint32_t K, uint32_t N) {
+bool single_block_matmul(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -481,7 +482,7 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);

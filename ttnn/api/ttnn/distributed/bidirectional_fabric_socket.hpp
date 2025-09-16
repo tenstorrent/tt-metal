@@ -35,7 +35,7 @@ public:
     static std::unique_ptr<BidirectionalFabricSocket> create(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
         tt::tt_metal::distributed::multihost::Rank rank,
-        tt::tt_metal::distributed::SocketConfig socket_config);
+        const tt::tt_metal::distributed::SocketConfig& socket_config);
 
 private:
     tt::tt_metal::distributed::MeshSocket send_socket_;

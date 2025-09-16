@@ -113,7 +113,7 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<uint32_t> get_eth_receiver_rt_args(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -156,7 +156,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 }
 
 std::vector<uint32_t> get_eth_sender_rt_args(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,

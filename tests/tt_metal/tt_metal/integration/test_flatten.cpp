@@ -86,7 +86,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
 
 bool flatten(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_tiles_r = 5,
     uint32_t num_tiles_c = 5) {
     bool pass = true;
@@ -204,7 +204,7 @@ bool flatten(
 }
 
 bool flatten_stress(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops

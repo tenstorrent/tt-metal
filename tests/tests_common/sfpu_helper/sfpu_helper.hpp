@@ -48,7 +48,7 @@ float ref_abs(float x) { return std::abs(x); }
 
 float ref_identity(float x) { return x; }
 
-std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, std::function<float(float)> sfpu_func) {
+std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, const std::function<float(float)>& sfpu_func) {
     std::vector<uint32_t> dst;
 
     for (uint32_t el : src) {

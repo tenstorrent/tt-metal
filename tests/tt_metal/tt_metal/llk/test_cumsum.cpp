@@ -82,7 +82,8 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CumsumConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

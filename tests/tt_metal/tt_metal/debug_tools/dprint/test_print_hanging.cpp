@@ -40,7 +40,7 @@ const std::string golden_output =
     R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 0, waiting on a RAISE signal: 1
 )";
 
-void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

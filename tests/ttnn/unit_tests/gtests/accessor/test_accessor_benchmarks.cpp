@@ -80,7 +80,7 @@ std::vector<tensor_accessor::ArgsConfig> get_all_static_args_config() {
 
 void benchmark_args_combinations_single_core(
     const InputBufferParams& params,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     const std::string& res_path,
     const std::string& kernel_path,
     const std::vector<tensor_accessor::ArgsConfig>& args_combinations) {
@@ -142,7 +142,7 @@ void benchmark_args_combinations_single_core(
 
 void benchmark_all_args_combinations_single_core(
     const InputBufferParams& params,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     const std::string& res_path,
     const std::string& kernel_path) {
     auto all_args_combinations = get_all_sharded_args_configs();

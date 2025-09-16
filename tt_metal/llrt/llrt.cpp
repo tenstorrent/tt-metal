@@ -42,7 +42,9 @@ using std::uint32_t;
 using std::uint64_t;
 
 const ll_api::memory& get_risc_binary(
-    const std::string& path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
+    const std::string& path,
+    ll_api::memory::Loading loading,
+    const std::function<void(ll_api::memory&)>& update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
