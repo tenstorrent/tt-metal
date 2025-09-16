@@ -4,6 +4,8 @@
 
 import threading
 from pathlib import Path
+from shutil import copyfile
+
 
 from tracy import *
 from tracy.serve_wasm import launch_server_subprocess
@@ -278,6 +280,15 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
+                # Copy the generated .tracy file to the server build folder as embed.tracy
+                tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+                tracy_dst = PROFILER_WASM_DIR / PROFILER_WASM_TRACE_FILE_NAME
+                logger.info(f"Copying {tracy_src} to {tracy_dst}")
+                try:
+                    copyfile(tracy_src, tracy_dst)
+                    logger.info(f"Copied {tracy_src} to {tracy_dst}")
+                except Exception as e:
+                    logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
                 launch_server_subprocess()
                 # Start the WASM server as a daemon with defaults
                 if options.report:
