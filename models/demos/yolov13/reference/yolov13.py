@@ -101,9 +101,9 @@ class DsConv(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    def __init__(self, channel_in, channel_out, shortcut=True, groups=1, kernel=(3, 3), expasion_ration=0.5):
+    def __init__(self, channel_in, channel_out, shortcut=True, groups=1, kernel=(3, 3), expasion_ratio=0.5):
         super().__init__()
-        hidden_channel = int(channel_out * expasion_ration)  # hidden channels
+        hidden_channel = int(channel_out * expasion_ratio)  # hidden channels
         self.cv1 = Conv(channel_in, hidden_channel, kernel[0], 1)
         self.cv2 = Conv(hidden_channel, channel_out, kernel[1], 1, groups=groups)
         self.add = shortcut and channel_in == channel_out
@@ -123,7 +123,7 @@ class C3(nn.Module):
         self.m = nn.Sequential(
             *(
                 Bottleneck(
-                    hidden_channel, hidden_channel, shortcut, groups, kernel=((3, 3), (1, 1)), expasion_ration=1.0
+                    hidden_channel, hidden_channel, shortcut, groups, kernel=((3, 3), (1, 1)), expasion_ratio=1.0
                 )
                 for _ in range(n)
             )
@@ -139,13 +139,13 @@ class DSBottleneck(nn.Module):
         channel_in,
         channel_out,
         shortcut=True,
-        expasion_ration=0.5,
+        expasion_ratio=0.5,
         kernel_size_dsconv_1=3,
         kernel_size_dsconv_2=5,
         dilatation_dsconv_2=1,
     ):
         super().__init__()
-        hidden_channel = int(channel_out * expasion_ration)
+        hidden_channel = int(channel_out * expasion_ratio)
         self.cv1 = DsConv(channel_in, hidden_channel, kernel_size_dsconv_1, stride=1, padding=None, dilation=1)
         self.cv2 = DsConv(
             hidden_channel, channel_out, kernel_size_dsconv_2, stride=1, padding=None, dilation=dilatation_dsconv_2
@@ -179,7 +179,7 @@ class DSC3k(C3):
                     hidden_channel,
                     hidden_channel,
                     shortcut=shortcut,
-                    expasion_ration=1.0,
+                    expasion_ratio=1.0,
                     kernel_size_dsconv_1=kernel_size_dsconv_1,
                     kernel_size_dsconv_2=kernel_size_dsconv_2,
                     dilatation_dsconv_2=dilatation_dsconv_2,
@@ -199,7 +199,7 @@ class C2f(nn.Module):
         self.cv2 = Conv((2 + n) * self.hidden_channel, channel_out, 1)  # optional act=FReLU(c2)
         self.m = nn.ModuleList(
             Bottleneck(
-                self.hidden_channel, self.hidden_channel, shortcut, groups, kernel=((3, 3), (3, 3)), expasion_ration=1.0
+                self.hidden_channel, self.hidden_channel, shortcut, groups, kernel=((3, 3), (3, 3)), expasion_ratio=1.0
             )
             for _ in range(n)
         )
@@ -254,7 +254,7 @@ class DSC3k2(C2f):
                     self.hidden_channel,
                     self.hidden_channel,
                     shortcut=shortcut,
-                    expasion_ration=1.0,
+                    expasion_ratio=1.0,
                     kernel_size_dsconv_1=kernel_size_dsconv_1,
                     kernel_size_dsconv_2=kernel_size_dsconv_2,
                     dilatation_dsconv_2=dilatation_dsconv_2,
@@ -783,19 +783,89 @@ class Detect(nn.Module):
 
 
 class YoloV13(nn.Module):
-    def __init__(self):
+    model_size_dict = {
+        # [depth, width, max_channels]
+        "n": {"depth": 0.5, "width": 0.25, "max_channels": 1024},  # nano
+        "s": {"depth": 0.5, "width": 0.5, "max_channels": 1024},  # small
+        "l": {"depth": 1.0, "width": 1.0, "max_channels": 512},  # large
+        "x": {"depth": 1.0, "width": 1.5, "max_channels": 512},  # xlarge
+    }
+
+    def __init__(self, model_size="l"):
         super().__init__()
         self.model = nn.Sequential(
-            Conv(3, 96, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1)),  # 0
-            Conv(96, 192, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=2),  # 1
-            DSC3k2(192, 384, n=2, expasion_ratio=0.25, dsc3k=True),  # 2
-            Conv(384, 384, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), groups=4),  # 3
-            DSC3k2(384, 768, n=2, expasion_ratio=0.25, dsc3k=True),  # 4
-            DsConv(768, 768, kernel_size=3, stride=2),  # 5
-            A2C2f(768, 768, n=4, mlp_ratio=1.5, residual=True),  # 6
-            DsConv(768, 768, kernel_size=3, stride=2),  # 7
-            A2C2f(768, 768, n=4, mlp_ratio=1.5, residual=True),  # 8
-            HyperACE(768, 768, n=2, dsc3k=True, shortcut=True, num_hyperedges=12, channel_adjust=False),  # 9
+            Conv(
+                3,
+                int(64 * self.model_size_dict[model_size]["width"]),
+                kernel_size=(3, 3),
+                stride=(2, 2),
+                padding=(1, 1),
+            ),  # 0
+            Conv(
+                int(64 * self.model_size_dict[model_size]["width"]),
+                int(128 * self.model_size_dict[model_size]["width"]),
+                kernel_size=(3, 3),
+                stride=(2, 2),
+                padding=(1, 1),
+                groups=2,
+            ),  # 1
+            DSC3k2(
+                int(128 * self.model_size_dict[model_size]["width"]),
+                int(256 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                expasion_ratio=0.25,
+                dsc3k=True,
+            ),  # 2
+            Conv(
+                int(256 * self.model_size_dict[model_size]["width"]),
+                int(256 * self.model_size_dict[model_size]["width"]),
+                kernel_size=(3, 3),
+                stride=(2, 2),
+                padding=(1, 1),
+                groups=4,
+            ),  # 3
+            DSC3k2(
+                int(256 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                expasion_ratio=0.25,
+                dsc3k=True,
+            ),  # 4
+            DsConv(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                kernel_size=3,
+                stride=2,
+            ),  # 5
+            A2C2f(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=4,
+                mlp_ratio=1.5,
+                residual=True,
+            ),  # 6
+            DsConv(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                kernel_size=3,
+                stride=2,
+            ),  # 7
+            A2C2f(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=4,
+                mlp_ratio=1.5,
+                residual=True,
+            ),  # 8
+            HyperACE(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                dsc3k=True,
+                shortcut=True,
+                num_hyperedges=int(8 * self.model_size_dict[model_size]["width"]),
+                channel_adjust=False,
+            ),  # 9
             Upsample(scale_factor=2.0, mode="nearest"),  # 10
             DownsampleConv(),  # 11
             FullPAD_Tunnel(),  # 12
@@ -803,22 +873,66 @@ class YoloV13(nn.Module):
             FullPAD_Tunnel(),  # 14
             Upsample(scale_factor=2.0, mode="nearest"),  # 15
             Concat(),  # 16
-            DSC3k2(1536, 768, n=2, dsc3k=True),  # 17
+            DSC3k2(
+                int(1024 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                dsc3k=True,
+            ),  # 17
             FullPAD_Tunnel(),  # 18
             Upsample(scale_factor=2.0, mode="nearest"),  # 19
             Concat(),  # 20
-            DSC3k2(1536, 384, n=2, dsc3k=True),  # 21
-            Conv(768, 384, kernel_size=1, stride=1),  # 22
+            DSC3k2(
+                int(1024 * self.model_size_dict[model_size]["width"]),
+                int(256 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                dsc3k=True,
+            ),  # 21
+            Conv(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(256 * self.model_size_dict[model_size]["width"]),
+                kernel_size=1,
+                stride=1,
+            ),  # 22
             FullPAD_Tunnel(),  # 23
-            Conv(384, 384, kernel_size=3, stride=2, padding=1),  # 24
+            Conv(
+                int(256 * self.model_size_dict[model_size]["width"]),
+                int(256 * self.model_size_dict[model_size]["width"]),
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),  # 24
             Concat(),  # 25
-            DSC3k2(1152, 768, n=2, dsc3k=True),  # 26
+            DSC3k2(
+                int(768 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                dsc3k=True,
+            ),  # 26
             FullPAD_Tunnel(),  # 27
-            Conv(768, 768, kernel_size=3, stride=2, padding=1),  # 28 - Keep as 768->768
+            Conv(
+                int(512 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),
             Concat(),  # 29
-            DSC3k2(1536, 768, n=2, dsc3k=True),  # 30
+            DSC3k2(
+                int(1024 * self.model_size_dict[model_size]["width"]),
+                int(512 * self.model_size_dict[model_size]["width"]),
+                n=2,
+                dsc3k=True,
+            ),  # 30
             FullPAD_Tunnel(),  # 31
-            Detect(nc=80, ch=(384, 768, 768)),  # 32
+            Detect(
+                nc=80,
+                ch=(
+                    int(256 * self.model_size_dict[model_size]["width"]),
+                    int(512 * self.model_size_dict[model_size]["width"]),
+                    int(512 * self.model_size_dict[model_size]["width"]),
+                ),
+            ),  # 32
         )
 
     def forward(self, x):
