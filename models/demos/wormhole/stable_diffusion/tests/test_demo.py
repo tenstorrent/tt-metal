@@ -29,10 +29,30 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_size",
     ((512, 512),),
 )
-def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
+def test_demo_sd_db(
+    device,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
     if device.core_grid.y != 8:
         pytest.skip("Needs 8x8 Grid")
-    demo_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
+    demo_db(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
+        reset_seeds,
+        input_path,
+        num_prompts,
+        num_inference_steps,
+        image_size,
+    )
 
 
 @pytest.mark.timeout(600)
@@ -44,14 +64,18 @@ def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
     ids=["default_input"],
 )
-def test_demo_sd(device, reset_seeds, input_path):
+def test_demo_sd(device, reset_seeds, input_path, is_ci_env, is_ci_v2_env, model_location_generator):
     num_prompts = 1
     num_inference_steps = 50
     image_size = (512, 512)
 
     inputs = load_inputs(input_path)
     input_prompts = inputs[:1]
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4")
+    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+    )
     pipe = pipe.to("cpu")
 
     import torch
@@ -69,6 +93,9 @@ def test_demo_sd(device, reset_seeds, input_path):
 
     ttnn_image = demo(
         device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
         reset_seeds,
         input_path,
         num_prompts,
