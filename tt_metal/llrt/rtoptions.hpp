@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "llrt/hal.hpp"
@@ -279,7 +280,7 @@ public:
         return feature_targets[feature].cores;
     }
     void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
-        feature_targets[feature].cores = cores;
+        feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
@@ -301,7 +302,7 @@ public:
         return feature_targets[feature].chip_ids;
     }
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
-        feature_targets[feature].chip_ids = chip_ids;
+        feature_targets[feature].chip_ids = std::move(chip_ids);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
@@ -316,7 +317,7 @@ public:
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = file_name;
+        feature_targets[feature].file_name = std::move(file_name);
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -332,7 +333,7 @@ public:
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = targets;
+        feature_targets[feature] = std::move(targets);
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }

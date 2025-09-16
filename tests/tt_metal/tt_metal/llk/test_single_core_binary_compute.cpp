@@ -112,7 +112,7 @@ void set_math_fid_masks(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_binary(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const SingleCoreBinaryConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

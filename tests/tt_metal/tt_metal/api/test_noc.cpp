@@ -45,7 +45,7 @@ namespace unit_tests::basic::test_noc {
 const uint32_t init_value = 0x1234B33F;
 
 uint32_t ReadRegFromDevice(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t& regval) {
@@ -56,7 +56,7 @@ uint32_t ReadRegFromDevice(
     return regval;
 }
 
-uint32_t read_reg(std::shared_ptr<distributed::MeshDevice> device, CoreCoord logical_node, uint32_t reg_addr) {
+uint32_t read_reg(const std::shared_ptr<distributed::MeshDevice>& device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
     ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
@@ -64,7 +64,7 @@ uint32_t read_reg(std::shared_ptr<distributed::MeshDevice> device, CoreCoord log
 }
 
 void read_translation_table(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     CoreCoord logical_node,
     std::vector<unsigned int>& x_remap,
     std::vector<unsigned int>& y_remap) {

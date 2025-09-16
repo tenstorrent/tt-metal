@@ -68,7 +68,9 @@ static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, Buf
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
 static void BM_write(
-    benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device, const std::vector<ElementType>& host_buffer) {
+    benchmark::State& state,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const std::vector<ElementType>& host_buffer) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
@@ -94,7 +96,7 @@ static void BM_write(
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = state.range(0);
     uint64_t transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];

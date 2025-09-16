@@ -39,7 +39,7 @@ struct OneFromOneConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromOneConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
@@ -138,7 +138,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -169,7 +169,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -210,7 +210,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
@@ -256,7 +256,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
