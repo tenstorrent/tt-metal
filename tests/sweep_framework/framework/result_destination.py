@@ -393,19 +393,14 @@ class FileResultDestination(ResultDestination):
                 else:
                     op_param_list.append(OpParam(param_name=k, param_value_text=str(coerced_value)))
 
-            # Derive op_kind/op_name from full_test_name (sweep_name): first and second segments before dots
+            # Derive op_kind/op_name from full_test_name (sweep_name): first and last string segments
             full_name = header.get("sweep_name")
             try:
                 _parts = str(full_name).split(".") if full_name is not None else []
             except Exception:
                 _parts = []
             _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
-            if len(_parts) > 1 and _parts[1]:
-                _op_name = _parts[1]
-            elif len(_parts) > 0 and _parts[0]:
-                _op_name = _parts[0]
-            else:
-                _op_name = header.get("op_name") or "unknown"
+            _op_name = _parts[-1] if len(_parts) > 0 and _parts[-1] else (header.get("op_name") or "unknown")
 
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
