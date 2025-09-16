@@ -83,7 +83,7 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
       - name: yolov11m tests
-        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           model_name: "yolov11m"
           commands: |
