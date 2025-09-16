@@ -14,11 +14,11 @@
 
 namespace NAMESPACE {
 
-constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
-constexpr auto kGradCbIndex = tt::CBIndex::c_1;
-constexpr auto kUpdateCbIndex = tt::CBIndex::c_3;
+constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
+constexpr auto cb_grad_idx = tt::CBIndex::c_1;
+constexpr auto cb_update_idx = tt::CBIndex::c_3;
 
-constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
+constexpr auto cb_output_idx = tt::CBIndex::c_16;
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -28,35 +28,35 @@ void MAIN {
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    init_sfpu(kGradCbIndex, kUpdateCbIndex);
+    init_sfpu(cb_grad_idx, cb_update_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_wait_front(kGradCbIndex, block_size);
+            cb_wait_front(cb_grad_idx, block_size);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile_init(kGradCbIndex);
-                copy_tile(kGradCbIndex, /* tile_idx */ block_idx, /* register_idx */ block_idx);
+                copy_tile_init(cb_grad_idx);
+                copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ block_idx);
                 binop_with_scalar_tile_init();
                 mul_unary_tile(block_idx, lr);
             }
             tile_regs_commit();
-            pack_and_push_block(kUpdateCbIndex, block_size);
+            pack_and_push_block(cb_update_idx, block_size);
 
-            cb_pop_front(kGradCbIndex, block_size);
+            cb_pop_front(cb_grad_idx, block_size);
 
-            cb_wait_front(kParamInCbIndex, block_size);
-            cb_wait_front(kUpdateCbIndex, block_size);
+            cb_wait_front(cb_param_in_idx, block_size);
+            cb_wait_front(cb_update_idx, block_size);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                sub_tiles_init(kParamInCbIndex, kUpdateCbIndex);  // TODO: Check if here or outside loop
-                sub_tiles(kParamInCbIndex, kUpdateCbIndex, block_idx, block_idx, block_idx);
+                sub_tiles_init(cb_param_in_idx, cb_update_idx);  // TODO: Check if here or outside loop
+                sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
             }
             tile_regs_commit();
-            pack_and_push_block(kOutputCbIndex, block_size);
+            pack_and_push_block(cb_output_idx, block_size);
 
-            cb_pop_front(kParamInCbIndex, block_size);
-            cb_pop_front(kUpdateCbIndex, block_size);
+            cb_pop_front(cb_param_in_idx, block_size);
+            cb_pop_front(cb_update_idx, block_size);
         }
     }
 }
