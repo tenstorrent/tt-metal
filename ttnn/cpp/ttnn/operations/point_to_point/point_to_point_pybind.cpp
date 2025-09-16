@@ -64,7 +64,7 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& receiver_coord,
                const MeshCoordinate& sender_coord,
                const ccl::Topology topology,
-               const std::optional<ttnn::Tensor> optional_output_tensor,
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
                QueueId queue_id) {
                 return self(queue_id, input_tensor, receiver_coord, sender_coord, topology, optional_output_tensor);
             },

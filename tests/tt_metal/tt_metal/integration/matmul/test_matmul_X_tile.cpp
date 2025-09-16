@@ -119,7 +119,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void matmul_tile(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
     vector<uint32_t> weights,

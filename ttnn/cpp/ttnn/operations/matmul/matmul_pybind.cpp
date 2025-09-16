@@ -829,7 +829,7 @@ void py_module(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
-               const std::optional<Tensor> optional_output_tensor,
+               const std::optional<Tensor>& optional_output_tensor,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     input_tensor,

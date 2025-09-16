@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "device/concatenate_heads_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -23,7 +25,7 @@ struct ConcatenateHeadsOperation {
                        compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
                    {input_tensor},
                    {},
-                   {optional_output_tensor},
+                   {std::move(optional_output_tensor)},
                    queue_id)
             .at(0);
     }

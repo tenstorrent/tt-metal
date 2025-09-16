@@ -50,7 +50,7 @@ template <typename ValueType>
 bool is_close_vectors(
     const std::vector<ValueType>& vec_a,
     const std::vector<ValueType>& vec_b,
-    std::function<bool(ValueType, ValueType)> comparison_function,
+    const std::function<bool(ValueType, ValueType)>& comparison_function,
     int* argfail = nullptr) {
     TT_FATAL(
         vec_a.size() == vec_b.size(),
@@ -73,7 +73,7 @@ template <typename ValueType, typename PackType>
 bool is_close_packed_vectors(
     const std::vector<PackType>& vec_a,
     const std::vector<PackType>& vec_b,
-    std::function<bool(ValueType, ValueType)> comparison_function,
+    const std::function<bool(ValueType, ValueType)>& comparison_function,
     int* argfail = nullptr) {
     return is_close_vectors(
         unpack_vector<ValueType, PackType>(vec_a),

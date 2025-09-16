@@ -39,7 +39,7 @@ struct Conv3dConfig {
         const std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
         const std::array<uint32_t, 3> stride_ = {1, 1, 1},
         const std::array<uint32_t, 3> padding_ = {0, 0, 0},
-        const std::string padding_mode_ = "zeros",
+        const std::string& padding_mode_ = "zeros",
         uint32_t groups_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         dtype(dtype_),

@@ -146,7 +146,8 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);

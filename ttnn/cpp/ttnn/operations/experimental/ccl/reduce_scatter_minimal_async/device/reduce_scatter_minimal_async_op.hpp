@@ -19,6 +19,7 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -62,10 +63,10 @@ struct ReduceScatterMinimalAsync {
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
-        output_mem_config(output_mem_config),
-        intermediate_mem_config(intermediate_mem_config),
+        output_mem_config(std::move(output_mem_config)),
+        intermediate_mem_config(std::move(intermediate_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
         sub_device_id(sub_device_id),

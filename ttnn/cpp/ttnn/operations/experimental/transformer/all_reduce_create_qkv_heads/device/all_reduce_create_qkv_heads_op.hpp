@@ -19,6 +19,7 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 constexpr int MAX_HEAD = 32;
@@ -62,9 +63,9 @@ struct AllReduceCreateQkvHeads {
         const uint32_t cluster_axis) :
         num_links(num_links),
         ring_size(ring_size),
-        all_reduce_mem_config(all_reduce_mem_config),
+        all_reduce_mem_config(std::move(all_reduce_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         head_dim(head_dim),
         use_noc1_only(use_noc1_only),
@@ -72,7 +73,7 @@ struct AllReduceCreateQkvHeads {
         num_kv_heads(num_kv_heads),
         input_on_subcoregrids(input_on_subcoregrids),
         slice_size(slice_size),
-        final_mem_config(final_mem_config),
+        final_mem_config(std::move(final_mem_config)),
         dtype(dtype),
         cluster_axis(cluster_axis) {}
 

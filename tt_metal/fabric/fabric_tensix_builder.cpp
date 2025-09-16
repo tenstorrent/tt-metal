@@ -18,6 +18,7 @@
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_fabric {
 
@@ -360,7 +361,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     risc_id_(risc_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
-    fabric_mux_config_(fabric_mux_config),
+    fabric_mux_config_(std::move(fabric_mux_config)),
     direction_(direction) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
