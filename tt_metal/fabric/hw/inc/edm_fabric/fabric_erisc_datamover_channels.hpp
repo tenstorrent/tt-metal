@@ -202,18 +202,16 @@ struct EdmChannelWorkerInterface {
     }
 
     // Only used for persistent connections (i.e. upstream is EDM)
-    template <bool enable_deadlock_avoidance>
+    template <bool enable_deadlock_avoidance, bool posted = true>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
         auto packed_inc_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-            this->cached_worker_semaphore_address,
-            packed_inc_val,
-            0xf,
-            WORKER_HANDSHAKE_NOC);
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+            this->cached_worker_semaphore_address, packed_inc_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
+    template <bool posted = true>
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
             this->cached_worker_semaphore_address, local_read_counter.counter, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
