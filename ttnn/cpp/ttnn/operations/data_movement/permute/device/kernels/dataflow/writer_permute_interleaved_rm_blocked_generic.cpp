@@ -9,26 +9,26 @@
 
 void kernel_main() {
     // Compile-time constants
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(2);
+    constexpr uint32_t N = get_named_compile_time_arg_val("N");
+    constexpr uint32_t output_cb_page_size = get_named_compile_time_arg_val("output_page_size");
+    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
 
-    constexpr uint32_t X = get_compile_time_arg_val(3);
-    constexpr uint32_t X_stride = get_compile_time_arg_val(4);
-    constexpr uint32_t x_dim = get_compile_time_arg_val(5);
+    constexpr uint32_t X = get_named_compile_time_arg_val("X");
+    constexpr uint32_t X_stride = get_named_compile_time_arg_val("X_stride");
+    constexpr uint32_t x_dim = get_named_compile_time_arg_val("x_dim");
 
-    constexpr uint32_t W_stride = get_compile_time_arg_val(6);
-    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(7);
-    constexpr uint32_t element_size = get_compile_time_arg_val(8);
+    constexpr uint32_t W_stride = get_named_compile_time_arg_val("W_stride");
+    constexpr uint32_t input_cb_page_size = get_named_compile_time_arg_val("input_page_size");
+    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
 
-    constexpr uint32_t num_blocks_total = get_compile_time_arg_val(9);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(11);
-    constexpr uint32_t x_block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t w_block_size = get_compile_time_arg_val(13);
-    constexpr uint32_t W = get_compile_time_arg_val(14);
-    constexpr uint32_t output_tensor_page_size = get_compile_time_arg_val(15);
-    constexpr auto dst_args = TensorAccessorArgs<16>();
+    constexpr uint32_t num_blocks_total = get_named_compile_time_arg_val("num_blocks_total");
+    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
+    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
+    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
+    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t output_tensor_page_size = get_named_compile_time_arg_val("output_tensor_page_size");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
 
