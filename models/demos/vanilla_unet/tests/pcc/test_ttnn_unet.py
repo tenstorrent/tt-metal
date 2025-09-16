@@ -8,7 +8,8 @@ from loguru import logger
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
 
 import ttnn
-from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
+from models.common.utility_functions import skip_for_grayskull
+from models.demos.vanilla_unet.common import load_torch_model
 from models.demos.vanilla_unet.reference.unet import UNet
 from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -71,7 +72,7 @@ def create_custom_preprocessor(device):
                     torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
-            for i in range(4, 1, -1):
+            for i in range(4, 0, -1):
                 parameters[f"decoder{i}"] = {}
                 parameters[f"decoder{i}"][0] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
@@ -99,10 +100,10 @@ def create_custom_preprocessor(device):
                     dtype=ttnn.bfloat16,
                 )
 
-            parameters[f"decoder1"] = {}
-            parameters[f"decoder1"][0] = {}
-            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(model.decoder1[0].weight, dtype=ttnn.bfloat16)
-            parameters[f"decoder1"][0]["bias"] = None
+            # parameters[f"decoder1"] = {}
+            # parameters[f"decoder1"][0] = {}
+            # parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(model.decoder1[0].weight, dtype=ttnn.bfloat16)
+            # parameters[f"decoder1"][0]["bias"] = None
 
             bn_layer = model.decoder1[1]  # BatchNorm2d layer
             channel_size = bn_layer.num_features
@@ -171,7 +172,8 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 2000}], indirect=True)
+@skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
     reference_model = load_torch_model(model_location_generator)
 
