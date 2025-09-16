@@ -28,6 +28,10 @@ script_config = ScriptConfig(
 )
 
 
+def log_check_with_loc(loc: OnChipCoordinate, ok: bool, message: str):
+    log_check(ok, f"{loc._device._id} {loc.to_user_str()}: {message}")
+
+
 @dataclass
 class EthCoreDefinitions:
     """Arch specific addresses of various ethernet core fields"""
@@ -83,7 +87,7 @@ class EthCore(ABC):
             if read_data != previous_data:
                 return True
             previous_data = read_data
-        log_check(False, f"No heartbeat detected for {self.location.to_user_str()}")
+        log_check_with_loc(self.location, False, f"No heartbeat detected for {self.location.to_user_str()}")
         return False
 
     def get_results(self):
@@ -102,13 +106,13 @@ class EthCore(ABC):
                 output.port_status = "Unknown"
             else:
                 output.port_status = port_status_str
-            log_check(port_status_str != "Down", f"{self.location.to_user_str()} port is down")
+            log_check_with_loc(self.location, port_status_str != "Down", f"{self.location.to_user_str()} port is down")
 
         # RETRAIN COUNT
         output.retrain_count = int(
             read_word_from_device(self.location, self.eth_core_definitions.retrain_count, context=self.context)
         )
-        log_check(not output.retrain_count, f"{self.location.to_user_str()} retrain count is {output.retrain_count}")
+        log_check_with_loc(self.location, not output.retrain_count, f"{self.location.to_user_str()} retrain count is {output.retrain_count}")
 
         # RX LINK UP
         output.rx_link_up = (
@@ -116,7 +120,7 @@ class EthCore(ABC):
             if read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
             else "Down"
         )
-        log_check(output.rx_link_up != "Down", f"{self.location.to_user_str()} RX link is Down")
+        log_check_with_loc(self.location, output.rx_link_up != "Down", f"{self.location.to_user_str()} RX link is Down")
 
         # MAILBOX
         if self.eth_core_definitions.mailbox is not None:
@@ -130,8 +134,8 @@ class EthCore(ABC):
                 output.mailbox.append(f"0x{mailbox_value:08X}")
                 if mailbox_value & 0xFFFF0000 == 0xCA110000:
                     any_pending_message = True
-                log_check(
-                    any_pending_message, f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)"
+                log_check_with_loc(self.location,
+                    not any_pending_message, f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)"
                 )
         else:
             output.mailbox = ["None"]
@@ -200,7 +204,6 @@ def run_checks(device: Device, context: Context):
         if noc_block not in device.active_eth_blocks:
             continue
         get_eth_core_data(device, loc, context)
-        print()
 
 
 def run(args, context: Context):
