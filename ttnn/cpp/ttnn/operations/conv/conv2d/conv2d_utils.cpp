@@ -1116,10 +1116,12 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         }
         return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
     } else {
-        if (input_width < 130) {
+        // TODO: A more sophisticated logic is needed to balance between the increased size of halo with width slicing
+        // and the smaller slice size of height slicing for tiled layout.
+        if (input_width < 200) {
             return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
         } else {
-            float threshold_ratio = 0.9;
+            float threshold_ratio = 1;
             if (input_height > input_width * threshold_ratio) {
                 return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
             }
