@@ -30,13 +30,13 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kParamInAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
-constexpr uint32_t kLrIdx = 2U;
+// compute runtime args
+constexpr uint32_t kLrIdx = 0;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 
 constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
-constexpr auto kLrCbIndex = tt::CBIndex::c_2;
 constexpr auto kUpdateCbIndex = tt::CBIndex::c_3;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
@@ -91,17 +91,13 @@ void assign_per_core_runtime_args(
             program,
             kernels.reader,
             core,
-            {param_in_buffer->address(),
-             grad_buffer->address(),
-             std::bit_cast<uint32_t>(lr),
-             num_rows_per_core,
-             num_rows_written});
+            {param_in_buffer->address(), grad_buffer->address(), num_rows_per_core, num_rows_written});
 
         // Compute kernel: (learning_rate)
-        SetRuntimeArgs(program, kernels.compute_group_1, core, {});
+        SetRuntimeArgs(program, kernels.compute_group_1, core, {std::bit_cast<uint32_t>(lr)});
 
         if (!core_group_2.ranges().empty()) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, {});
+            SetRuntimeArgs(program, kernels.compute_group_2, core, {std::bit_cast<uint32_t>(lr)});
         }
 
         // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
@@ -175,9 +171,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
         program, all_cores, kGradCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-
-    [[maybe_unused]] auto cb_lr = create_circular_buffer(
-        program, all_cores, kLrCbIndex, tt::DataFormat::Float32, float32_single_tile_size_bytes, 1U);
 
     [[maybe_unused]] auto cb_update = create_circular_buffer(
         program, all_cores, kUpdateCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
@@ -312,6 +305,12 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kParamInAddrIdx] = param_in_buffer->address();
             runtime_args[kGradAddrIdx] = grad_buffer->address();
+        }
+        if (core_group_1.contains(core)) {
+            auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
+            runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
+        } else if (core_group_2.contains(core)) {
+            auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
         }
         // Update output buffer for the writer kernel
