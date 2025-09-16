@@ -77,32 +77,22 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     auto key_shape = key.padded_shape();
     auto value_shape = value.padded_shape();
 
-    const uint32_t q_heads = args.q_heads;    // will be passed by user into args
-    const uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
+    auto [qBt, qHt, qSt, qEt] = query_shape.to_array_4D();
+    auto [kBt, kHt, kSt, kEt] = key_shape.to_array_4D();
+    auto [vBt, vHt, vSt, vEt] = value_shape.to_array_4D();
+
+    TT_FATAL(qHt > 0 && kHt > 0, "Number of heads must be greater than zero. Got heads={}, groups={}", qHt, kHt);
     TT_FATAL(
-        q_heads > 0 && kv_heads > 0,
-        "Number of heads must be greater than zero. Got heads={}, groups={}",
-        q_heads,
-        kv_heads);
-    TT_FATAL(
-        q_heads % kv_heads == 0,
+        qHt % kHt == 0,
         "Number of query heads ({}) must be divisible by number of key/value heads ({}) for grouped attention. "
         "This ensures each key/value group serves an integer number of query heads.",
-        q_heads,
-        kv_heads);
-
-    auto [qBt, qHt, qSt, qEt] = query_shape.to_array_4D();
-    TT_FATAL(qEt % q_heads == 0, "Query embedding dim must be divisible by number of heads");
-
-    auto [kBt, kHt, kSt, kEt] = key_shape.to_array_4D();
-    TT_FATAL(kEt % kv_heads == 0, "Key embedding dim must be divisible by number of key/value groups");
-
-    auto [vBt, vHt, vSt, vEt] = value_shape.to_array_4D();
-    TT_FATAL(vEt % kv_heads == 0, "Value embedding dim must be divisible by number of key/value groups");
+        qHt,
+        kHt);
 
     TT_FATAL(
-        qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qHt == 1U && kHt == 1U && vHt == 1U,
-        "Query, Key and Value must have the same shape, except for the inner dim. Got shapes: Query={}, Key={}, "
+        qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qEt == kEt && qEt == vEt,
+        "Query, Key and Value must have the same batch size and sequence length, except for  number of heads. Got "
+        "shapes: Query={}, Key={}, "
         "Value={}",
         query_shape,
         key_shape,
@@ -123,9 +113,15 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
 
         auto output_shape = preallocated_output->padded_shape();
         TT_FATAL(
-            output_shape == query_shape,
-            "Preallocated output shape must be the same as query shape. Got preallocated output shape={}, query "
-            "shape={}",
+            output_shape[0] == query_shape[0] &&          // B
+                output_shape[1] == 1U &&                  // fused heads
+                output_shape[2] == query_shape[2] &&      // S
+                output_shape[3] == query_shape[3] * qHt,  // qHt * d
+            "Invalid preallocated output shape. Expected (B, 1, S, qHt*d) = ({}, {}, {}, {}), got {}. Query shape={}",
+            query_shape[0],
+            1U,
+            query_shape[2],
+            query_shape[3] * qHt,
             output_shape,
             query_shape);
     }
@@ -150,11 +146,11 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         auto interm_shape = preallocated_intermediate.padded_shape();
         // intermediate shape: (B, q_heads, S, 1U) - one value per head
         TT_FATAL(
-            interm_shape[0] == qBt && interm_shape[1] == q_heads && interm_shape[2] == qSt && interm_shape[3] == 1U,
+            interm_shape[0] == qBt && interm_shape[1] == qHt && interm_shape[2] == qSt && interm_shape[3] == 1U,
             "Preallocated intermediate shape must be (B, q_heads, S, 1U). Got preallocated intermediate shape={}, "
             "q_heads={}",
             interm_shape,
-            q_heads);
+            qHt);
     }
 }
 
@@ -167,6 +163,8 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
         auto shape = tensor_args.query.logical_shape();  // output shape is the same as query shape
+        shape[3] = shape[3] * shape[1];                  // fused heads in last dim
+        shape[1] = 1U;
         output_specs.emplace_back(
             shape,
             tt::tt_metal::TensorLayout(
@@ -180,8 +178,7 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
         } else {
             auto shape = tensor_args.query.logical_shape();
             // intermediate shape: (B, q_heads, S, 1U) - one value per head
-            shape[-1] = 1U;           // intermediate is a scaler
-            shape[1] = args.q_heads;  // intermediate is per head
+            shape[-1] = 1U;  // intermediate is 1 element in inner dim
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(
@@ -235,17 +232,12 @@ SDPAForwardDeviceOperation::invoke(
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     const std::optional<ttnn::Tensor>& mask,  // attention mask
-    const uint32_t q_heads,                   // num of query heads
-    const uint32_t kv_heads,                  // num of key/value heads
     const float dropout_probability,          // default value
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     operation_attributes_t operation_attributes{
-        .q_heads = q_heads,
-        .kv_heads = kv_heads,
-        .return_intermediates = return_intermediates,
-        .dropout_probability = dropout_probability};
+        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
     tensor_args_t tensor_args{
         .query = query_tensor,
         .key = key_tensor,

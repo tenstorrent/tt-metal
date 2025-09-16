@@ -141,10 +141,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& attn_mask = tensor_args.mask;
     /*
     Shape note:
-    Q: B x 1U x S x E
-    K: B x 1U x S x E
-    V: B x 1U x S x E
-    attn_mask: B x 1U x S x S
+    Q: B x qNH x S x qE
+    K: B x kNH x S x kE
+    V: B x vNH x S x vE
+    attn_mask: B x qNH x S x S
     */
 
     auto* device = query.device();
@@ -154,19 +154,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
-    /*
-     * Split embedding dim into heads and groups
-     * Two cases:
-     * 1) H_q == H_k == H_v == G: each head has its own K and V:
-     *    For this case we read and process data by heads: Edim/H_q
-     * 2) H_q == n * G, n > 1: each group of K and V is shared across n heads
-     *    For this case we read and process data by heads: Edim/H_q
-     */
-
     // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
-    auto [qBt, qHt, qSt, qDt] = query.padded_shape().to_array_4D();
-    auto [kBt, kHt, kSt, kDt] = key.padded_shape().to_array_4D();
-    auto [vBt, vHt, vSt, vDt] = value.padded_shape().to_array_4D();
+    auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
+    auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
+    auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
     TT_FATAL(
         query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
@@ -176,36 +167,29 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         key.physical_volume(),
         value.physical_volume());
 
-    uint32_t Wt = qDt / tt::constants::TILE_WIDTH;    // num of tiles in inner dim
-    uint32_t Ht_ = qSt / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    uint32_t NC = qBt * qHt;
-    uint32_t total_rows_to_process = NC * Ht_;
+    TT_FATAL(qEmbd == kEmbd && qEmbd == vEmbd, "Embedding dims of Q, K, V must be the same");
+    TT_FATAL(qB == kB, "Query and Key batch sizes must be the same");
+    TT_FATAL(qS == kS, "Query and Key sequence lengths must be the same");
 
-    uint32_t q_heads = args.q_heads;    // will be passed by user into args
-    uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
+    uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
+    uint32_t NC = qB * qNH;
+    uint32_t total_rows_to_process = NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+
+    TT_FATAL(kNH == vNH, "Number of heads in Key and Value must be the same");
+    uint32_t kv_heads = kNH;  // number of heads in Key and Value
+
     TT_FATAL(
-        q_heads % kv_heads == 0,
+        qNH % kv_heads == 0,
         "Number of heads must be divisible by number of groups, got heads={}, groups={}",
-        q_heads,
+        qNH,
         kv_heads);
 
-    TT_FATAL(qBt == kBt, "Query and Key batch sizes must be the same");
-    TT_FATAL(qSt == kSt, "Query and Key sequence lengths must be the same");
+    uint32_t heads_per_group = qNH / kv_heads;         // we read heads_per_group heads from Q for one group of K and V
+    uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
+    uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
+    uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
-    uint32_t heads_per_group = q_heads / kv_heads;   // we read heads_per_group heads from Q for one group of K and V
-    uint32_t qWt = qDt / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    uint32_t kWt = kDt / tt::constants::TILE_WIDTH;
-    uint32_t vWt = vDt / tt::constants::TILE_WIDTH;
-    uint32_t q_tiles_per_head = qWt / q_heads;   // number of tiles per head in query
-    uint32_t k_tiles_per_head = kWt / kv_heads;  // number of tiles per group in key
-    uint32_t v_tiles_per_head = vWt / kv_heads;  // number of tiles per group in value
-
-    TT_FATAL(
-        q_tiles_per_head == k_tiles_per_head && q_tiles_per_head == v_tiles_per_head,
-        "Number of tiles per head in Query, Key, and Value must be the same");
-
-    float per_head_dim = static_cast<float>(qDt) / static_cast<float>(q_heads);
-    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));  // calculate scale factor
+    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(qEmbd)));  // calculate scale factor
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
@@ -222,22 +206,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    uint32_t block_size = get_block_size(q_tiles_per_head, 4U);
+    uint32_t block_size = get_block_size(qWt, 4U);
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
+        "SDPA FW: NC={}, St={}, qWt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
         "{},total_rows_to_process "
         "= {}, num_cores={} ({}x{}), "
         "group1 cores={} rows/core={}, group2 "
-        "cores={} "
-        "rows/core={}\n",
+        "cores={} rows/core={}\n",
         NC,
-        Ht_,
-        Wt,
+        St,
+        qWt,
         scaler,
         block_size,
-        q_heads,
+        qNH,
         kv_heads,
         heads_per_group,
         total_rows_to_process,
@@ -257,13 +240,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // -------------------------------------------------------------------------
 
     auto cb_query = create_circular_buffer(
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * q_tiles_per_head);
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    auto cb_key = create_circular_buffer(
-        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * k_tiles_per_head);
+    auto cb_key =
+        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
     auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * v_tiles_per_head);
+        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
     auto cb_attn_mask = create_circular_buffer(
         program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
@@ -297,16 +280,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
+        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
+    auto cb_cur_mm_out =
+        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
+    auto cb_output =
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, q_tiles_per_head);
+        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -366,17 +349,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,               // num tile in inner dim in query(d/TILE_W)
-        kWt,               // num tile in inner dim in key and value (d/TILE_W)
-        Ht_,               // num tile in seq len dim (S/TILE_H)
-        block_size,        // block size (dst_reg_count)
-        q_tiles_per_head,  // number of tiles per head in query
-        q_heads,           // number of heads in query
-        k_tiles_per_head,  // number of tiles per group in key and value
-        heads_per_group,   // number of heads per group
-        scaler,            // sqrt(Et) - sdpa scale factor
-        minus_one,         // used to transform mask from 1/0 to 0/-1
-        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
+        qWt,              // num tile in inner dim in query(d/TILE_W)
+        kWt,              // num tile in inner dim in key and value (d/TILE_W)
+        St,               // num tile in seq len dim (S/TILE_H)
+        block_size,       // block size (dst_reg_count)
+        qNH,              // number of heads in query
+        heads_per_group,  // number of heads per group
+        qB,               // num of batches
+        scaler,           // sqrt(Et) - sdpa scale factor
+        minus_one,        // used to transform mask from 1/0 to 0/-1
+        custom_inf        // used to transform mask from 0/-1 to 0/-1e9F
     };
     kernels.reader = create_reader_kernel(
         program,
@@ -386,12 +368,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,               // num tile in inner dim in query(d/TILE_W)
-        Ht_,               // num tile in seq len dim (S/TILE_H)
-        block_size,        // block size (dst_reg_count)
-        q_tiles_per_head,  // number of tiles per head in query
-        q_heads,           // number of heads in query
-        heads_per_group    // number of heads per group
+        qWt,             // num tile in inner dim in query(d/TILE_W)
+        St,              // num tile in seq len dim (S/TILE_H)
+        block_size,      // block size (dst_reg_count)
+        qNH,             // number of heads in query
+        heads_per_group  // number of heads per group
     };
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
@@ -406,10 +387,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         block_size,                 // per_core_block_size
         qWt,                        // num tile in inner dim in query(d/TILE_W)
         kWt,                        // num tile in inner dim in key and value (d/TILE_W)
-        Ht_,                        // num_seq_len / TILE_H
-        q_tiles_per_head,           // number of tiles per head in query
-        q_heads,                    // number of heads in query
-        k_tiles_per_head,           // number of tiles per group in key and value
+        St,                         // num_seq_len / TILE_H
+        qNH,                        // number of heads in query
         heads_per_group,            // number of heads per group
         scaler,                     // sqrt(Et) - sdpa scaler factor
         minus_one,                  // used to transform mask from 1/0 to 0/-1
@@ -426,10 +405,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             block_size,                 // per_core_block_size
             qWt,                        // num tile in inner dim in query(d/TILE_W)
             kWt,                        // num tile in inner dim in key and value (d/TILE_W)
-            Ht_,                        // num_seq_len / TILE_H
-            q_tiles_per_head,           // number of tiles per head in query
-            q_heads,                    // number of heads in query
-            k_tiles_per_head,           // number of tiles per group in key and value
+            St,                         // num_seq_len / TILE_H
+            qNH,                        // number of heads in query
             heads_per_group,            // number of heads per group
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
