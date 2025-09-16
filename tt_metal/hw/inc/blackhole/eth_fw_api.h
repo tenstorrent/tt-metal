@@ -20,6 +20,9 @@
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
 #define NUM_SERDES_LANES 8
 
+#define ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR 0xFFB14020
+#define ETH_RISC_NUM_INTERRUPT_VECS 5
+
 enum link_train_status_e : uint32_t {
     LINK_TRAIN_TRAINING,
     LINK_TRAIN_SKIP,
@@ -208,6 +211,18 @@ struct boot_results_t {
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "risc_common.h"
+
+void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
+    auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
+    *reg_ptr = mode_val;
+}
+
+void disable_interrupts() {
+    for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
+        eth_set_interrupt_mode(i, 0);
+    }
+}
 
 FORCE_INLINE bool is_link_up() {
     // Collect current link states

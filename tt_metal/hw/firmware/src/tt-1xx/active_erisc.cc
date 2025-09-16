@@ -121,6 +121,8 @@ void __attribute__((noinline)) Application(void) {
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
+    disable_interrupts();
+
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
