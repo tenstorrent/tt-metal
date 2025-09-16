@@ -27,7 +27,11 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 }
 namespace NAMESPACE {
 void MAIN {
+#ifdef ARCH_BLACKHOLE
+    constexpr int BATCH_SIZE = 1;
+#else
     constexpr int BATCH_SIZE = 8;
+#endif
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_batches = total_tiles / BATCH_SIZE;
     const uint32_t leftover = total_tiles % BATCH_SIZE;
