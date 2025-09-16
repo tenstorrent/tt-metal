@@ -207,12 +207,10 @@ jobs:
             command="$2"
             pids=()
             for tray in tray-1 tray-2 tray-3 tray-4; do
-              cname="multi-user-$tray"
-              echo ">>> Running $testname in $cname"
+              echo ">>> Running $testname in $tray"
               (
-              docker exec "$cname" bash -c "$command" \
-              | sed "s/^/[$cname] /"
-              exit ${PIPESTATUS[0]}
+                docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
+                exit ${PIPESTATUS[0]}
               ) &
               pids+=($!)
             done
