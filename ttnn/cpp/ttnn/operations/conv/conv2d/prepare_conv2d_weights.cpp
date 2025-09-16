@@ -1289,7 +1289,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
     weight_tensor_ =
         ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
     // for conv op, pad the weights to block shape
-    if (params.interlaved_mm_conv) {
+    if (params.interleaved_mm_conv) {
         // Use interleaved MM layout conversion: [Co, Ci, Kh, Kw] -> [1, 1, KhKwCi, Co] and tilize
         weight_tensor_ = convert_conv_weight_tensor_to_interleaved_mm_layout(weight_tensor_, weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {

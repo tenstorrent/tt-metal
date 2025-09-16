@@ -360,7 +360,7 @@ def run_conv(
         if pcc_msg == 1:
             # Conv2d with randomized input and weights can't legitimately return PCC of 1
             # Edge case can happen rarely if activation function like ReLU zeros out all values
-            # in this case tensors have to match.
+            # In this case, tensors have to match.
             assert_equal(out, ref)
 
     if memory_config:

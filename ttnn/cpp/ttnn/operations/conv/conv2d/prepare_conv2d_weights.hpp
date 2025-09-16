@@ -129,7 +129,7 @@ struct Conv2dWeightsBiasPrepConfig {
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
-        bool interlaved_mm_conv_,
+        bool interlaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
@@ -155,7 +155,7 @@ struct Conv2dWeightsBiasPrepConfig {
         kernel_size(kernel_size_),
         stride(stride_),
         padding_n4(padding_n4_),
-        interlaved_mm_conv(interlaved_mm_conv_) {}
+        interleaved_mm_conv(interlaved_mm_conv) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -178,8 +178,8 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 2> kernel_size;
     const std::array<uint32_t, 2> stride;
     const std::array<uint32_t, 4> padding_n4;
-    // This conv will go through auto shard codepath for matmul basec convs
-    const bool interlaved_mm_conv;
+    // This conv will go through auto shard codepath for matmul based convs
+    const bool interleaved_mm_conv;
 };
 
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
