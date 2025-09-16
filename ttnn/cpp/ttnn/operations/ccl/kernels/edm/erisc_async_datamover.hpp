@@ -14,28 +14,24 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 
-using ttnn::ccl::EriscDataMoverBufferSharingMode;
-using ttnn::ccl::EriscDataMoverTerminationMode;
-using ttnn::ccl::EriscDataMoverWorkerSignal;
-
 namespace erisc {
 namespace datamover {
 
 template <
-    EriscDataMoverBufferSharingMode buffer_sharing_mode,
-    EriscDataMoverTerminationMode termination_mode,
+    ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
+    ttnn::ccl::EriscDataMoverTerminationMode termination_mode,
     uint8_t num_buffers_per_channel>
 struct EriscDatamoverConfig {
-    static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = buffer_sharing_mode;
-    static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = termination_mode;
+    static constexpr ttnn::ccl::EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = buffer_sharing_mode;
+    static constexpr ttnn::ccl::EriscDataMoverTerminationMode TERMINATION_MODE = termination_mode;
     static constexpr uint8_t NUM_BUFFERS_PER_CHANNEL = num_buffers_per_channel;
 };
 
-template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
+template <ttnn::ccl::EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
 struct edm_worker_index {};
 
 template <>
-struct edm_worker_index<EriscDataMoverBufferSharingMode::ROUND_ROBIN> {
+struct edm_worker_index<ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN> {
     uint16_t worker_index = 0;
 };
 
@@ -50,11 +46,11 @@ using ttnn::ccl::WorkerXY;
 // template <EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE>
 template <typename EDM_CONFIG>
 class ChannelBuffer final {
-    static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = EDM_CONFIG::BUFFER_SHARING_MODE;
-    static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = EDM_CONFIG::TERMINATION_MODE;
+    static constexpr ttnn::ccl::EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = EDM_CONFIG::BUFFER_SHARING_MODE;
+    static constexpr ttnn::ccl::EriscDataMoverTerminationMode TERMINATION_MODE = EDM_CONFIG::TERMINATION_MODE;
     static_assert(
-        BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::NOT_SHARED ||
-            BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN,
+        BUFFER_SHARING_MODE == ttnn::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED ||
+            BUFFER_SHARING_MODE == ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN,
         "The only BufferSharding modes supported are NOT_SHARED and ROUND_ROBIN");
 
 public:
@@ -161,7 +157,7 @@ public:
 
     // Increment the semaphore in the remote L1s of every worker associated with this ChannelBuffer
     FORCE_INLINE void increment_worker_semaphores() {
-        if constexpr (BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::NOT_SHARED) {
+        if constexpr (BUFFER_SHARING_MODE == ttnn::ccl::EriscDataMoverBufferSharingMode::NOT_SHARED) {
             // We have to be careful that the worker x/y matches for the `noc_index`
             // active on the erisc
             for (std::size_t i = 0; i < this->num_workers; i++) {
@@ -171,7 +167,7 @@ public:
 
                 noc_semaphore_inc(worker_semaphore_address, 1);
             }
-        } else if (BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN) {
+        } else if (BUFFER_SHARING_MODE == ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN) {
             WorkerXY worker_xy = this->worker_coords[this->worker_index.worker_index];
             uint64_t worker_semaphore_address =
                 get_noc_addr((uint32_t)worker_xy.x, (uint32_t)worker_xy.y, this->worker_semaphore_l1_address);
@@ -188,7 +184,7 @@ public:
 
     [[nodiscard]] FORCE_INLINE bool is_local_semaphore_full() const {
         invalidate_l1_cache();
-        if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+        if constexpr (EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
             ASSERT(*(this->local_semaphore_address) <= this->num_workers);
         }
         return *(this->local_semaphore_address) == this->num_workers;
@@ -425,9 +421,9 @@ template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
     ChannelBuffer<EDM_CONFIG>& sender_buffer_channel, uint32_t& num_senders_complete) {
     bool channel_done = false;
-    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
         channel_done = sender_buffer_channel.all_messages_moved();
-    } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+    } else if constexpr (EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
         // Nothing to do here because in this termination mode, we must check the signal in a different state
     } else {
         ASSERT(false);
@@ -472,8 +468,9 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
     ChannelBuffer<EDM_CONFIG>& sender_channel_buffer, uint32_t& num_senders_complete) {
     bool did_something = false;
 
-    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
-        if (*sender_channel_buffer.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY) {
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
+        if (*sender_channel_buffer.local_semaphore_address ==
+            ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY) {
             sender_channel_buffer.clear_local_semaphore();
             sender_channel_buffer.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
             num_senders_complete++;
@@ -550,11 +547,11 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
 
-    if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+    if constexpr (EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
         // May have already gotten final termination signal by this point so check for that too
         workers_are_finished_reading =
             workers_are_finished_reading ||
-            (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+            (*buffer_channel.local_semaphore_address == ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
     }
 
     bool can_notify_sender_of_buffer_available = workers_are_finished_reading;
@@ -566,11 +563,14 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
             buffer_channel.advance_buffer_index();
 
             bool channel_done = false;
-            if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
+            if constexpr (
+                EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
                 channel_done = buffer_channel.all_messages_moved();
-            } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
+            } else if constexpr (
+                EDM_CONFIG::TERMINATION_MODE == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
                 channel_done =
-                    (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+                    (*buffer_channel.local_semaphore_address ==
+                     ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
             } else {
                 ASSERT(false);
             }
