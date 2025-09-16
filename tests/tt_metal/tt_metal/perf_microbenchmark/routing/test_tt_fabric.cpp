@@ -72,12 +72,16 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
+    bool benchmark_mode = false;
     for (const auto& config : raw_test_configs) {
         if (config.benchmark_mode) {
-            test_context.initialize_csv_file();
+            benchmark_mode = true;
             break;
         }
+    }
+    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
+    if (benchmark_mode) {
+        test_context.initialize_bandwidth_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -201,11 +205,11 @@ int main(int argc, char** argv) {
     test_context.close_devices();
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
-    // If any tests ran multiple iterations of high-level patterns, gather statistics
-    // TODO: Put this in an if statement
-    // Problem: Reset_devices resets benchmark mode to false
-    test_context.generate_multirun_statistics();
 
+    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
+    if (benchmark_mode) {
+        test_context.generate_bandwidth_summary();
+    }
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {
