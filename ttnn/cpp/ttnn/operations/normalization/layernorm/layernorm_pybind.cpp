@@ -13,17 +13,25 @@ namespace py = pybind11;
 void bind_normalization_layernorm_program_config(py::module& module) {
     py::class_<LayerNormProgramConfig>(module, "LayerNormProgramConfig").def(py::init<>());
 
-    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig").def(py::init<>());
+    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
+        .def(
+            py::init<bool, bool>(),
+            py::kw_only(),
+            py::arg("legacy_reduction").noconvert() = true,
+            py::arg("legacy_rsqrt").noconvert() = true)
+        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
             py::arg("block_h").noconvert(),
             py::arg("block_w").noconvert(),
-            py::arg("inplace").noconvert())
+            py::arg("inplace").noconvert(),
+            py::arg("legacy_reduction").noconvert() = true,
+            py::arg("legacy_rsqrt").noconvert() = true)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
