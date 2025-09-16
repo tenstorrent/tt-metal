@@ -31,6 +31,9 @@ class TtnnCIB:
             device,
             parameters.cv1[1],
             self.conv_pt.cv1[1],
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.conv2 = Conv(
@@ -45,6 +48,9 @@ class TtnnCIB:
             parameters.cv1[3],
             self.conv_pt.cv1[3],
             deallocate_activation=True,
+            use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.conv4 = Conv(
