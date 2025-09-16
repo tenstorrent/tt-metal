@@ -28,7 +28,7 @@ This flag ensures that the overhead is only incurred when you are actively profi
 
 .. note::
 
-    Profiling and kernel debug prints cannot be used at the same time, as both features use a significant amount of SRAM for data storage and will conflict with each other. Ensure that ``TT_METAL_DPRINT_CORES`` is not set when ``TT_METAL_DEVICE_PROFILER`` is enabled.
+    Profiling, kernel debug print and watcher cannot be used at the same time, as both features use a significant amount of SRAM for data storage and will conflict with each other. Ensure that ``TT_METAL_DPRINT_CORES``, ``TT_METAL_WATCHER`` and ``TT_METAL_DEVICE_PROFILER`` are not set simultaneously.
 
 Instrumenting Kernel Code
 -------------------------
