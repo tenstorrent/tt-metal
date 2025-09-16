@@ -118,4 +118,15 @@ core::TTProfiler& AutoContext::get_profiler() {
     return *m_ccl_resources;
 }
 
+void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket_type) {
+    m_socket_manager = std::make_unique<core::distributed::SocketManager>(socket_type);
+}
+
+[[nodiscard]] core::distributed::SocketManager& AutoContext::get_socket_manager() {
+    if (!m_socket_manager) {
+        throw std::runtime_error("SocketManager is not initialized. Do not forget to call initialize_socket_manager.");
+    }
+    return *m_socket_manager;
+}
+
 }  // namespace ttml::autograd
