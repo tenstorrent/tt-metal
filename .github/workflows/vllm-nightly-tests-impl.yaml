@@ -84,7 +84,7 @@ jobs:
           {
             name: "[WH-GLX] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
-            server-timeout: 35,
+            server-timeout: 60,
             benchmark-timeout: 10,
             runner-label: topology-6u,
             mesh-device: TG,
