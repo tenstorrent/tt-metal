@@ -55,8 +55,8 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
         std::vector<int64_t> numpy_strides(tensor_strides.rank());
         std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
 
-        auto cpu_tensor = t.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
-        auto tensor_data = tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor);
+        const auto cpu_tensor = t.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
+        const auto tensor_data = tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor);
 
         const auto return_data_copy_with_capsule = [&](const auto& src) {
             T* numpy_data = new T[src.size()];
@@ -70,8 +70,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
         if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor.tensor_spec())) {
             return return_data_copy_with_capsule(tensor_data);
         }
-        auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(
-            tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor), cpu_tensor.tensor_spec());
+        const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(tensor_data, cpu_tensor.tensor_spec());
         return return_data_copy_with_capsule(decoded_data);
     };
 
