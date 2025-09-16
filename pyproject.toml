@@ -54,6 +54,7 @@ line-length = 120
 # Supported tag formats:
 # v1.2.3, v1.2.3-rc1, v1.2.3-dev20240101, v1.2.3-dev123
 tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-(?:rc\d+|dev(?:\d{8}|\d+)))?)$'
+#Only look for release tags for calculating distance for wheel name
 git_describe_command = [
   "git","describe","--dirty","--tags","--long",
   "--match","v[0-9]*.[0-9]*.[0-9]*",
