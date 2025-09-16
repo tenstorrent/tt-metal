@@ -262,7 +262,12 @@ MetalContext::MetalContext() {
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     rtoptions_.ParseAllFeatureEnv(*hal_);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    if (rtoptions_.get_mock_enabled()) {
+        distributed_context_ = distributed::multihost::DistributedContext::get_mock_context(cluster_desc.get());
+    } else {
+        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.

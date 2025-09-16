@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/tt-metalium/distributed_context.hpp"
+#include "mock_distributed_context.hpp"
+#include <umd/device/cluster_descriptor.hpp>
 
 #if defined(OPEN_MPI)
 #include "mpi_distributed_context.hpp"
@@ -26,6 +28,10 @@ const ContextPtr& DistributedContext::get_current_world() { return ContextImpl::
 void DistributedContext::set_current_world(const ContextPtr& ctx) { ContextImpl::set_current_world(ctx); }
 
 bool DistributedContext::is_initialized() { return ContextImpl::is_initialized(); }
+
+const ContextPtr DistributedContext::get_mock_context(const tt_ClusterDescriptor* cluster_desc) {
+    return std::make_shared<MockDistributedContext>(cluster_desc);
+}
 
 DistributedContextId DistributedContext::id() const { return id_; }
 

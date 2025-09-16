@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <complex>
+#include <umd/device/cluster_descriptor.hpp>
 
 namespace tt::tt_metal::distributed::multihost {
 
@@ -151,6 +152,7 @@ public:
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
     static void set_current_world(const ContextPtr& ctx);
+    static const ContextPtr get_mock_context(const tt_ClusterDescriptor* cluster_desc);
 
     // Returns true if the distributed context has already been initialized
     static bool is_initialized();

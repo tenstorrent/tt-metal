@@ -74,6 +74,7 @@ else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")
     set(USE_MPI FALSE)
     list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mock_distributed_context.cpp)
 endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
