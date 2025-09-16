@@ -308,7 +308,6 @@ class resnetBlock2D:
             reshard_if_not_optimal=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
@@ -333,6 +332,7 @@ class resnetBlock2D:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.conv1_weight, self.conv1_bias] = ttnn.conv2d(
@@ -438,6 +438,7 @@ class resnetBlock2D:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.conv2_weights, self.conv2_bias] = ttnn.conv2d(
@@ -448,7 +449,6 @@ class resnetBlock2D:
             compute_config=compute_config,
             return_weights_and_bias=True,
             dtype=ttnn.bfloat8_b,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hidden_states = reshard_for_output_channels_divisibility(hidden_states, self.conv2_out_channels)
 
@@ -493,6 +493,7 @@ class resnetBlock2D:
                 "groups": 1,
                 "device": self.device,
                 "conv_config": conv_config,
+                "slice_config": ttnn.Conv2dL1FullSliceConfig,
             }
 
             input_tensor, [self.conv_shortcut_weights, self.conv_shortcut_bias] = ttnn.conv2d(
@@ -503,7 +504,6 @@ class resnetBlock2D:
                 compute_config=compute_config,
                 return_weights_and_bias=True,
                 dtype=ttnn.bfloat8_b,
-                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
             is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
