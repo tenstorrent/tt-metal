@@ -18,11 +18,13 @@ class TtStem(nn.Module):
     """
     TTNN implementation of DeepLabStem with fused Conv+BatchNorm.
 
-    Based on the model structure, DeepLabStem contains:
-    - conv1: Conv2d(3, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=True)
-    - conv2: Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=True)
-    - conv3: Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=True)
-    Each with ReLU activation. BatchNorm operations are fused into the Conv weights and biases.
+    Architecture:
+    - conv1: 3→64 channels, stride=2, 3x3 kernel
+    - conv2: 64→64 channels, stride=1, 3x3 kernel
+    - conv3: 64→128 channels, stride=1, 3x3 kernel
+    - maxpool: 3x3 kernel, stride=2
+
+    All conv layers include fused BatchNorm and ReLU activation.
     """
 
     def __init__(
@@ -36,42 +38,20 @@ class TtStem(nn.Module):
         self.device = device
         self.channel_slice_factor = channel_slice_factor
 
-        logger.debug(f"Initializing TtStem with unified parameters, channel_slice_factor: {channel_slice_factor}")
+        logger.debug(f"Initializing TtStem - channel_slice_factor: {channel_slice_factor}")
 
-        # Parameters are now organized as parameters["conv1"], parameters["conv2"], parameters["conv3"]
+        # Extract layer parameters
         conv1_params = parameters["conv1"]
         conv2_params = parameters["conv2"]
         conv3_params = parameters["conv3"]
 
-        # Initialize conv layers with width slicing (4 slices)
+        # Configure width slicing for all conv layers
         width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
 
-        self.conv1 = TtConv2d(
-            TtConv2dParameters.from_preprocessed_parameters(
-                conv1_params, device=device, dtype=dtype, slice_config=width_slice_config
-            ),
-            stride=(2, 2),
-            padding=(1, 1),
-        )
-
-        self.conv2 = TtConv2d(
-            TtConv2dParameters.from_preprocessed_parameters(
-                conv2_params, device=device, dtype=dtype, slice_config=width_slice_config
-            ),
-            stride=(1, 1),
-            padding=(1, 1),
-        )
-
-        self.conv3 = TtConv2d(
-            TtConv2dParameters.from_preprocessed_parameters(
-                conv3_params, device=device, dtype=dtype, slice_config=width_slice_config
-            ),
-            stride=(1, 1),
-            padding=(1, 1),
-        )
-
-        # With fused Conv+BN, we no longer need separate normalization parameters
-        # All BatchNorm operations are now fused into the Conv weights and biases
+        # Initialize conv layers
+        self.conv1 = self._create_conv_layer(conv1_params, device, dtype, width_slice_config, stride=(2, 2))
+        self.conv2 = self._create_conv_layer(conv2_params, device, dtype, width_slice_config, stride=(1, 1))
+        self.conv3 = self._create_conv_layer(conv3_params, device, dtype, width_slice_config, stride=(1, 1))
 
         # Initialize maxpool with channel slicing
         self.maxpool = TtMaxPool2d.create_with_channel_slicing(
@@ -79,25 +59,37 @@ class TtStem(nn.Module):
         )
         logger.debug("TtStem initialization complete")
 
+    def _create_conv_layer(self, params, device, dtype, slice_config, stride):
+        """Helper method to create conv layers with consistent configuration"""
+        return TtConv2d(
+            TtConv2dParameters.from_preprocessed_parameters(
+                params, device=device, dtype=dtype, slice_config=slice_config
+            ),
+            stride=stride,
+            padding=(1, 1),
+        )
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        logger.debug(f"TtStem forward pass starting - input shape: {x.shape}")
+        logger.debug(f"TtStem forward - input: {x.shape}")
 
-        # Conv1 + ReLU (BatchNorm is now fused into Conv1 weights)
-        x = self.conv1(x)
-        x = ttnn.relu(x)
-        logger.debug(f"Conv1 + ReLU complete, output shape: {x.shape}")
+        # Conv1 + ReLU
+        x = self._conv_relu_block(self.conv1, x, "Conv1")
 
-        # Conv2 + ReLU (BatchNorm is now fused into Conv2 weights)
-        x = self.conv2(x)
-        x = ttnn.relu(x)
-        logger.debug(f"Conv2 + ReLU complete, output shape: {x.shape}")
+        # Conv2 + ReLU
+        x = self._conv_relu_block(self.conv2, x, "Conv2")
 
-        # Conv3 + ReLU (BatchNorm is now fused into Conv3 weights)
-        x = self.conv3(x)
-        x = ttnn.relu(x)
-        logger.debug(f"Conv3 + ReLU complete, output shape: {x.shape}")
+        # Conv3 + ReLU
+        x = self._conv_relu_block(self.conv3, x, "Conv3")
 
-        # Max pooling with kernel_size=3, stride=2, padding=1
+        # MaxPool
         x = self.maxpool(x)
-        logger.debug(f"TtStem forward pass complete - output shape: {x.shape}")
+        logger.debug(f"TtStem complete - output: {x.shape}")
+
+        return x
+
+    def _conv_relu_block(self, conv_layer, x: ttnn.Tensor, layer_name: str) -> ttnn.Tensor:
+        """Helper method for conv + relu operations"""
+        x = conv_layer(x)
+        x = ttnn.relu(x)
+        logger.debug(f"{layer_name} + ReLU - output: {x.shape}")
         return x
