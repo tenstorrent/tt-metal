@@ -61,7 +61,8 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        if self.args.is_mixture_of_experts:
+
+        if hasattr(self.args, "is_mixture_of_experts"):
             self.feed_forward = TtMoeLayer(
                 mesh_device=mesh_device,
                 state_dict=state_dict,

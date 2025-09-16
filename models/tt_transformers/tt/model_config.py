@@ -476,7 +476,6 @@ class ModelArgs:
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
         self.num_experts_per_tok = 2
-        self.is_mixture_of_experts = False
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
@@ -1734,7 +1733,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling.factor},
+    rope_scaling_factor={self.rope_scaling.factor if self.rope_scaling is not None else None},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
@@ -1789,7 +1788,6 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
-        self.is_mixture_of_experts = False
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
