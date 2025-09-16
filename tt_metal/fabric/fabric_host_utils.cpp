@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "erisc_datamover_builder.hpp"
@@ -115,33 +115,14 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
     // the subset of routers that support forwarding b/w those chips
     std::vector<chan_id_t> forwarding_channels;
-    if (is_2d_fabric) {
-        forwarding_channels =
-            control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
-    } else {
-        // TODO: not going to work for Big Mesh
-        const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-        // for 1D check if each port has an active connection to the dst_chip_id
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
-
-        for (const auto& channel : fabric_channels) {
-            const auto eth_core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-            auto [connected_chip_id, connected_eth_core] =
-                cluster.get_connected_ethernet_core(std::make_tuple(src_chip_id, CoreCoord{eth_core.x, eth_core.y}));
-            if (connected_chip_id == dst_chip_id) {
-                forwarding_channels.push_back(channel);
-            }
-        }
-    }
+    forwarding_channels =
+        control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
 
     std::vector<uint32_t> link_indices;
     for (uint32_t i = 0; i < fabric_channels.size(); i++) {

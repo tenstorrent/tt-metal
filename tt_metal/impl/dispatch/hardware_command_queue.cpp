@@ -38,7 +38,7 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
@@ -709,7 +709,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
 
     // Record commands using bypass mode
     this->tid_ = tid;
-    this->trace_ctx_ = std::move(ctx);
+    this->trace_ctx_ = ctx;
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);

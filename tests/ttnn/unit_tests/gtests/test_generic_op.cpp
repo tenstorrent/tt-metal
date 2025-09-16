@@ -20,7 +20,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace ttnn::operations::generic::test {
 

@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package tt.scaleout_tools.deployment.proto;
+
+
+// Represents a single host in the deployment
+message Host {
+  string hall = 1;
+  string aisle = 2;
+  uint32 rack = 3;
+  uint32 shelf_u = 4;
+  string node_type = 5;
+  string host = 6;
+}
+
+// Represents the overall deployment configuration
+message DeploymentDescriptor {
+  uint32 rack_capacity = 1;
+  repeated Host hosts = 2;
+}

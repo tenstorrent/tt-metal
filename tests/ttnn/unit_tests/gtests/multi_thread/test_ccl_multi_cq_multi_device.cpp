@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mesh_coord.hpp"
-#include "test_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 #include <cmath>
@@ -203,7 +202,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });
@@ -401,7 +400,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });
@@ -597,7 +596,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
                 for (int j = 0; j < device_tensor.physical_volume(); j++) {
                     int base = j / num_elems;  // dev_idx
-                    ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
                 }
                 log_info(LogTest, "Device{} Compare Success", device->id());
             });
