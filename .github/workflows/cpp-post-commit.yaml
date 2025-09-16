@@ -74,7 +74,7 @@ jobs:
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
