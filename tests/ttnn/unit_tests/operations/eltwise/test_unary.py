@@ -16,6 +16,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
+import numpy as np
+
 
 def create_full_range_tensor(input_shapes, dtype):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
@@ -1743,20 +1745,15 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
     ],
 )
-@pytest.mark.parametrize(
-    "input_range",
-    [
-        (-100, 100),
-        (-2, 2),
-        (-1, 1),
-        (-200, 0),
-        (0, 200),
-    ],
-)
-def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, input_range, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(input_range[0], input_range[1])
+def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data1 = create_full_range_tensor(input_shapes, torch_dtype)
+
+    # limit the range to avoid overfow in hardmish
+    in_data1 = in_data1[(in_data1 + 2.8).abs() < 3.3e38 / 5]
+
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.hardmish(input_tensor1)
@@ -1765,5 +1762,5 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, input_range, devi
     golden_tensor = golden_function(in_data1, device=device)
     tt_res = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, golden_tensor)
     assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
+    assert_with_ulp(tt_res, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
