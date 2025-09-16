@@ -238,6 +238,8 @@ public:
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
+    using SetIRAMTextSizeFunc = std::function<void(
+        dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -294,6 +296,7 @@ private:
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
+    SetIRAMTextSizeFunc set_iram_text_size_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -442,6 +445,19 @@ public:
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
     uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+
+    // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
+    void set_iram_text_size(
+        dev_msgs::launch_msg_t::View launch_msg,
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx,
+        uint32_t iram_text_size) const {
+        if (this->set_iram_text_size_func_) {
+            this->set_iram_text_size_func_(
+                launch_msg, programmable_core_type, processor_class, processor_type_idx, iram_text_size);
+        }
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
