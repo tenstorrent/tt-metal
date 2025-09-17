@@ -20,7 +20,6 @@
 #include <tt-metalium/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
-#include <telemetry/telemetry_data_store.hpp>
 #include <server/web_server.hpp>
 
 using json = nlohmann::json;
@@ -36,8 +35,8 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     std::string metal_home_;
 
-    // Telemetry data store
-    TelemetryDataStore telemetry_data_store_;
+    // Accumulated telemetry data
+    TelemetrySnapshot telemetry_state_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -49,8 +48,8 @@ private:
             return;
         }
 
-        // Construct snapshot from current data using data store
-        TelemetrySnapshot full_snapshot = telemetry_data_store_.create_full_snapshot();
+        // Use current accumulated telemetry data
+        TelemetrySnapshot full_snapshot = telemetry_state_;
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
 
@@ -81,10 +80,6 @@ private:
         return snapshot;
     }
 
-    void update_telemetry_state_from_snapshot(std::shared_ptr<TelemetrySnapshot> snapshot) {
-        telemetry_data_store_.update_from_snapshot(*snapshot);
-    }
-
     void send_snapshot_to_clients(std::shared_ptr<TelemetrySnapshot> snapshot) {
         // Serialize
         json j = *snapshot;
@@ -113,7 +108,7 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
-            update_telemetry_state_from_snapshot(snapshot);
+            telemetry_state_.merge_from(*snapshot);
             send_snapshot_to_clients(snapshot);
         }
     }

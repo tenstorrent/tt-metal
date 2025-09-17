@@ -25,7 +25,7 @@ class EthernetEndpointUpMetric: public BoolMetric {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
 
-    EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint, const std::unique_ptr<tt::tt_metal::Hal> &hal);
+    EthernetEndpointUpMetric(const EthernetEndpoint& endpoint, const std::unique_ptr<tt::tt_metal::Hal>& hal);
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
@@ -40,7 +40,9 @@ private:
 class EthernetCRCErrorCountMetric: public UIntMetric {
 public:
     EthernetCRCErrorCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
+        const EthernetEndpoint& endpoint,
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -56,7 +58,9 @@ private:
 class EthernetRetrainCountMetric: public UIntMetric {
 public:
     EthernetRetrainCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
+        const EthernetEndpoint& endpoint,
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -72,7 +76,9 @@ private:
 class EthernetCorrectedCodewordCountMetric: public UIntMetric {
 public:
     EthernetCorrectedCodewordCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
+        const EthernetEndpoint& endpoint,
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -88,7 +94,9 @@ private:
 class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
 public:
     EthernetUncorrectedCodewordCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
+        const EthernetEndpoint& endpoint,
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -101,10 +109,9 @@ private:
     uint32_t uncorr_addr_;
 };
 
-size_t create_ethernet_metrics(
+void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
-    size_t start_id,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);

@@ -21,7 +21,6 @@
 #include <tt-metalium/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
-#include <telemetry/telemetry_data_store.hpp>
 #include <server/websocket_server.hpp>
 
 using json = nlohmann::json;
@@ -41,8 +40,8 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     uint16_t port_;
 
-    // Telemetry data store
-    TelemetryDataStore telemetry_data_store_;
+    // Accumulated telemetry data
+    TelemetrySnapshot telemetry_state_;
 
     // Telemetry data
     std::mutex snapshot_mutex_;
@@ -84,8 +83,8 @@ private:
                 continue;
             }
 
-            // Update data store from snapshot
-            telemetry_data_store_.update_from_snapshot(*snapshot);
+            // Merge snapshot into telemetry state
+            telemetry_state_.merge_from(*snapshot);
 
             // Send the delta snapshot directly to clients
             json j = *snapshot;
@@ -103,7 +102,7 @@ private:
 
         // Send full snapshot to the new client
         try {
-            TelemetrySnapshot full_snapshot = telemetry_data_store_.create_full_snapshot();
+            TelemetrySnapshot full_snapshot = telemetry_state_;
             json j = full_snapshot;
             std::string message = j.dump();
             ws_server_.send(hdl, message, websocketpp::frame::opcode::text);

@@ -152,6 +152,13 @@ void WebSocketClients::event_loop() {
 
 WebSocketClients::WebSocketClients(const std::vector<std::string>& endpoints, TelemetryCallback callback) :
     endpoints_(endpoints), callback_(std::move(callback)) {
+    // Exit early if no endpoints provided
+    if (endpoints_.empty()) {
+        running_ = false;
+        std::cout << "🔌 [WebSocketClients] No endpoints provided, skipping initialization" << std::endl;
+        return;
+    }
+
     // Disable all websocketpp logging for clean output
     ws_client_.clear_access_channels(websocketpp::log::alevel::all);
     ws_client_.clear_error_channels(websocketpp::log::elevel::all);
@@ -184,6 +191,12 @@ WebSocketClients::WebSocketClients(const std::vector<std::string>& endpoints, Te
 
 WebSocketClients::~WebSocketClients() {
     std::cout << "🛑 [WebSocketClients] Shutting down..." << std::endl;
+
+    // If we exited early in constructor (no endpoints), skip cleanup
+    if (endpoints_.empty()) {
+        std::cout << "✅ [WebSocketClients] No cleanup needed - was not initialized" << std::endl;
+        return;
+    }
 
     running_ = false;
 
