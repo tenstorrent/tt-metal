@@ -65,7 +65,7 @@ public:
     std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> core_groups_tuple() const;
 
     UncompressedBufferPageMapping compute_page_mapping() const {
-        return detail::compute_page_mapping(tensor_shape_in_pages_, shard_shape_in_pages_, cores_);
+        return detail::compute_page_mapping(tensor_shape_in_pages_, shard_shape_in_pages_, cores_with_data_);
     }
 
 private:
