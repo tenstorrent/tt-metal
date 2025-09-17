@@ -251,7 +251,7 @@ def test_stable_diffusion_vae_trace(device):
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 6.31),  # Issue 7816 Inference time
+        (1, 50, 3600, 6.31) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
@@ -408,7 +408,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((12.8),),
+    ((12.8) if is_wormhole_b0() else (20.0),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
