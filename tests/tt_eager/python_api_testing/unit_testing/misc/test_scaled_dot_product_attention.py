@@ -760,7 +760,7 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
+from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
 @pytest.mark.skip()
