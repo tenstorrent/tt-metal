@@ -39,8 +39,8 @@ jobs:
         id: fetch
         uses: ./.github/actions/fetch-workflow-data
         with:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}
-          days: ${{ github.event.inputs.days || 15 }}
+          GITHUB_TOKEN: "${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}"
+          days: "${{ github.event.inputs.days || 15 }}"
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -118,14 +118,37 @@ jobs:
           TOKEN_SOURCE: ${{ secrets.ACTIONS_READ_TOKEN != '' && 'ACTIONS_READ_TOKEN' || 'GITHUB_TOKEN' }}
         run: |
           echo "Using token: ${TOKEN_SOURCE}"
+
+      - name: "Diagnostics: can this token see jobs/checks?"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run_id = 17781508234;
+            const run = await github.rest.actions.getWorkflowRun({ owner, repo, run_id });
+            core.info(`run_attempt=${run.data.run_attempt} check_suite_id=${run.data.check_suite_id}`);
+
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id, per_page: 100 });
+            core.info(`jobs.total_count=${jobs.data.total_count}`);
+            for (const j of jobs.data.jobs) core.info(`job: id=${j.id} name=${j.name} check_run_url=${j.check_run_url}`);
+
+            if (run.data.check_suite_id) {
+              const crs = await github.rest.checks.listForSuite({ owner, repo, check_suite_id: run.data.check_suite_id, per_page: 100 });
+              core.info(`check_runs.count=${crs.data.total_count || crs.data.check_runs?.length || 0}`);
+              for (const cr of (crs.data.check_runs || [])) core.info(`check_run: id=${cr.id} name=${cr.name} details_url=${cr.details_url}`);
+            }
+        env:
+          GITHUB_TOKEN: "${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}"
+
       - name: Analyze workflow data
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
         with:
           days: ${{ github.event.inputs.days || 15 }}
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
-          previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+          GITHUB_TOKEN: "${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}"
+          cache-path: "${{ github.workspace }}/workflow-data.json"
+          previous-cache-path: "${{ github.workspace }}/prev/workflow-data.json"
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
