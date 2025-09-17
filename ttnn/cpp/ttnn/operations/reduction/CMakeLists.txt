@@ -20,13 +20,13 @@ target_sources(
     ttnn_op_reduction
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES generic/generic_reductions.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES generic/generic_reductions.hpp
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         argmax/device/argmax_op.cpp
         argmax/device/argmax_program_factory.cpp
@@ -70,11 +70,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_reduction
-    FILE_SET
-    api
+    FILE_SET api
         COMPONENT ttnn-dev
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/reduction
         COMPONENT ttnn-runtime
 )

@@ -124,20 +124,19 @@ target_sources(
     metalium_test_files
     PUBLIC
         FILE_SET jit_api
-        TYPE HEADERS
-        BASE_DIRS
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES
-            ${kernels}
-            perf_microbenchmark/common/kernel_utils.hpp
-            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
+            TYPE HEADERS
+            BASE_DIRS
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
+            FILES
+                ${kernels}
+                perf_microbenchmark/common/kernel_utils.hpp
+                perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(
     TARGETS
         metalium_test_files
-    FILE_SET
-    jit_api
+    FILE_SET jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation

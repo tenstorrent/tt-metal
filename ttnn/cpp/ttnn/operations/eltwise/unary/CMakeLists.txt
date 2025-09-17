@@ -15,13 +15,13 @@ target_sources(
     ttnn_op_eltwise_unary
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES common/unary_op_types.hpp device/unary_composite_op.hpp unary.hpp unary_composite.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES common/unary_op_types.hpp device/unary_composite_op.hpp unary.hpp unary_composite.hpp
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         common/unary_op_utils.cpp
         device/unary_composite_op.cpp
@@ -46,11 +46,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_eltwise_unary
-    FILE_SET
-    api
+    FILE_SET api
         COMPONENT ttnn-dev
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/unary
         COMPONENT ttnn-runtime
 )

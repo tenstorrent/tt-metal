@@ -16,9 +16,9 @@ target_sources(
     ttnn_op_conv
     PUBLIC
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         conv2d/conv2d.cpp
         conv2d/conv2d_utils.cpp
@@ -43,8 +43,7 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_conv
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/conv
         COMPONENT ttnn-runtime
 )

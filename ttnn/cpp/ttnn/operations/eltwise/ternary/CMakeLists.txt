@@ -16,13 +16,13 @@ target_sources(
     ttnn_op_eltwise_ternary
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES where/where.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES where/where.hpp
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         ternary_composite_op.cpp
         where/where.cpp
@@ -42,11 +42,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_eltwise_ternary
-    FILE_SET
-    api
+    FILE_SET api
         COMPONENT ttnn-dev
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/ternary
         COMPONENT ttnn-runtime
 )

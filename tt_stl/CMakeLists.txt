@@ -11,22 +11,22 @@ target_sources(
     tt_stl
     INTERFACE
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS .
-        FILES
-            tt_stl/aligned_allocator.hpp
-            tt_stl/cleanup.hpp
-            tt_stl/concepts.hpp
-            tt_stl/indestructible.hpp
-            tt_stl/optional_reference.hpp
-            tt_stl/overloaded.hpp
-            tt_stl/reflection.hpp
-            tt_stl/small_vector.hpp
-            tt_stl/llvm/llvm_small_vector.hpp
-            tt_stl/span.hpp
-            tt_stl/strong_type.hpp
-            tt_stl/type_name.hpp
-            tt_stl/unique_any.hpp
+            TYPE HEADERS
+            BASE_DIRS .
+            FILES
+                tt_stl/aligned_allocator.hpp
+                tt_stl/cleanup.hpp
+                tt_stl/concepts.hpp
+                tt_stl/indestructible.hpp
+                tt_stl/optional_reference.hpp
+                tt_stl/overloaded.hpp
+                tt_stl/reflection.hpp
+                tt_stl/small_vector.hpp
+                tt_stl/llvm/llvm_small_vector.hpp
+                tt_stl/span.hpp
+                tt_stl/strong_type.hpp
+                tt_stl/type_name.hpp
+                tt_stl/unique_any.hpp
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/llvm/llvm_small_vector.cpp
 )

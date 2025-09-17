@@ -23,14 +23,14 @@ target_sources(
     scaleout_tools
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            board/board.hpp
-            cabling_generator/cabling_generator.hpp
-            connector/connector.hpp
-            factory_system_descriptor/utils.hpp
-            node/node_types.hpp
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES
+                board/board.hpp
+                cabling_generator/cabling_generator.hpp
+                connector/connector.hpp
+                factory_system_descriptor/utils.hpp
+                node/node_types.hpp
     PRIVATE
         node/node.cpp
         node/node_types.cpp

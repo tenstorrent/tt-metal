@@ -8,14 +8,14 @@ target_sources(
     ttnn_op_core
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            core.hpp
-            to_dtype/to_dtype_op.hpp
-            to_layout/to_layout_op.hpp
-            compute_kernel/compute_kernel_config.hpp
-            to_memory_config/to_memory_config_op.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES
+                core.hpp
+                to_dtype/to_dtype_op.hpp
+                to_layout/to_layout_op.hpp
+                compute_kernel/compute_kernel_config.hpp
+                to_memory_config/to_memory_config_op.hpp
     PRIVATE
         compute_kernel/compute_kernel_config.cpp
         core.cpp

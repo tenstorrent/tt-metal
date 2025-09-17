@@ -8,9 +8,9 @@ target_sources(
     ttnn_op_experimental_auto_format
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES auto_format.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES auto_format.hpp
     PRIVATE
         auto_format.cpp
 )

@@ -12,24 +12,24 @@ target_sources(
     fabric
     PUBLIC
         FILE_SET jit_api
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            hw/inc/tt_fabric_api.h
-            hw/inc/tt_fabric_mux.hpp
-            hw/inc/tt_fabric_mux_interface.hpp
-            hw/inc/fabric_routing_mode.h
-            hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
-            hw/inc/edm_fabric/edm_fabric_utils.hpp
-            hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
-            hw/inc/edm_fabric/edm_handshake.hpp
-            hw/inc/edm_fabric/fabric_connection_manager.hpp
-            hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
-            hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
-            hw/inc/edm_fabric/fabric_txq_setup.h
-            hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-            hw/inc/fabric_routing_table_interface.h
-            fabric_edm_packet_header.hpp
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES
+                hw/inc/tt_fabric_api.h
+                hw/inc/tt_fabric_mux.hpp
+                hw/inc/tt_fabric_mux_interface.hpp
+                hw/inc/fabric_routing_mode.h
+                hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
+                hw/inc/edm_fabric/edm_fabric_utils.hpp
+                hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
+                hw/inc/edm_fabric/edm_handshake.hpp
+                hw/inc/edm_fabric/fabric_connection_manager.hpp
+                hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
+                hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+                hw/inc/edm_fabric/fabric_txq_setup.h
+                hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+                hw/inc/fabric_routing_table_interface.h
+                fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
         mesh_graph_descriptor.cpp
@@ -117,8 +117,7 @@ target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 install(
     TARGETS
         fabric
-    FILE_SET
-    jit_api
+    FILE_SET jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime

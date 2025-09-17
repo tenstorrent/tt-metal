@@ -60,8 +60,7 @@ install(
     # magic doc handling is missing. For now keep it out of 'doc'.
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
     COMPONENT metalium-examples
-    REGEX
-    "/kernels/"
+    REGEX "/kernels/"
         EXCLUDE
 )
 
@@ -82,6 +81,5 @@ install(
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
-    REGEX
-    "/kernels/"
+    REGEX "/kernels/"
 )

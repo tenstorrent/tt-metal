@@ -5,27 +5,27 @@ target_sources(
     ttmetalium_hostdevcommon
     PUBLIC
         FILE_SET jit_api
-        TYPE HEADERS
-        BASE_DIRS api
-        FILES
-            api/hostdevcommon/common_values.hpp
-            api/hostdevcommon/dprint_common.h
-            api/hostdevcommon/kernel_structs.h
-            api/hostdevcommon/profiler_common.h
-            api/hostdevcommon/flags.hpp
-            api/hostdevcommon/fabric_common.h
-            api/hostdevcommon/tensor_accessor/arg_config.hpp
+            TYPE HEADERS
+            BASE_DIRS api
+            FILES
+                api/hostdevcommon/common_values.hpp
+                api/hostdevcommon/dprint_common.h
+                api/hostdevcommon/kernel_structs.h
+                api/hostdevcommon/profiler_common.h
+                api/hostdevcommon/flags.hpp
+                api/hostdevcommon/fabric_common.h
+                api/hostdevcommon/tensor_accessor/arg_config.hpp
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS api
-        FILES
-            api/hostdevcommon/common_values.hpp
-            api/hostdevcommon/dprint_common.h
-            api/hostdevcommon/kernel_structs.h
-            api/hostdevcommon/profiler_common.h
-            api/hostdevcommon/flags.hpp
-            api/hostdevcommon/fabric_common.h
-            api/hostdevcommon/tensor_accessor/arg_config.hpp
+            TYPE HEADERS
+            BASE_DIRS api
+            FILES
+                api/hostdevcommon/common_values.hpp
+                api/hostdevcommon/dprint_common.h
+                api/hostdevcommon/kernel_structs.h
+                api/hostdevcommon/profiler_common.h
+                api/hostdevcommon/flags.hpp
+                api/hostdevcommon/fabric_common.h
+                api/hostdevcommon/tensor_accessor/arg_config.hpp
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
@@ -41,12 +41,10 @@ install(
     TARGETS
         ttmetalium_hostdevcommon
     EXPORT Metalium
-    FILE_SET
-    jit_api
+    FILE_SET jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hostdevcommon/api # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
-    FILE_SET
-    api
+    FILE_SET api
         COMPONENT metalium-dev
 )

@@ -16,9 +16,9 @@ target_sources(
     ttnn_op_sliding_window
     PUBLIC
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         halo/device/halo_device_operation.cpp
         halo/device/untilize_with_halo_program_factory.cpp
@@ -37,8 +37,7 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_sliding_window
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/sliding_window
         COMPONENT ttnn-runtime
 )

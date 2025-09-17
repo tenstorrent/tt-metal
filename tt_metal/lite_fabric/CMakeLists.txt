@@ -12,19 +12,19 @@ target_sources(
     lite_fabric
     PUBLIC
         FILE_SET jit_api
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            hw/inc/channel_util.hpp
-            hw/inc/channels.hpp
-            hw/inc/constants.hpp
-            hw/inc/lf_dev_mem_map.hpp
-            hw/inc/header.hpp
-            hw/inc/host_interface.hpp
-            hw/inc/init-fsm-basic.hpp
-            hw/inc/risc_interface.hpp
-            hw/inc/types.hpp
-            hw/inc/kernel_api.hpp
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES
+                hw/inc/channel_util.hpp
+                hw/inc/channels.hpp
+                hw/inc/constants.hpp
+                hw/inc/lf_dev_mem_map.hpp
+                hw/inc/header.hpp
+                hw/inc/host_interface.hpp
+                hw/inc/init-fsm-basic.hpp
+                hw/inc/risc_interface.hpp
+                hw/inc/types.hpp
+                hw/inc/kernel_api.hpp
     PRIVATE
         build.cpp
         host_util.cpp
@@ -63,8 +63,7 @@ target_compile_options(lite_fabric PRIVATE -Wno-int-to-pointer-cast)
 install(
     TARGETS
         lite_fabric
-    FILE_SET
-    jit_api
+    FILE_SET jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/lite_fabric # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime

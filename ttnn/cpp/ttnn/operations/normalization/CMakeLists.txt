@@ -20,20 +20,20 @@ target_sources(
     ttnn_op_normalization
     PUBLIC
         FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            layernorm/layernorm.hpp
-            layernorm/device/layernorm_types.hpp
-            rmsnorm/rmsnorm.hpp
-            softmax/device/softmax_operation_types.hpp
-            softmax/device/softmax_device_operation.hpp
-            softmax/device/softmax_program_factory.hpp
-            softmax/softmax.hpp
+            TYPE HEADERS
+            BASE_DIRS ${FixmeOpAPIDir}
+            FILES
+                layernorm/layernorm.hpp
+                layernorm/device/layernorm_types.hpp
+                rmsnorm/rmsnorm.hpp
+                softmax/device/softmax_operation_types.hpp
+                softmax/device/softmax_device_operation.hpp
+                softmax/device/softmax_program_factory.hpp
+                softmax/softmax.hpp
         FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES ${kernels}
     PRIVATE
         batch_norm/batch_norm.cpp
         batch_norm/device/batch_norm_device_operation.cpp
@@ -70,11 +70,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_normalization
-    FILE_SET
-    api
+    FILE_SET api
         COMPONENT ttnn-dev
-    FILE_SET
-    kernels
+    FILE_SET kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/normalization
         COMPONENT ttnn-runtime
 )
