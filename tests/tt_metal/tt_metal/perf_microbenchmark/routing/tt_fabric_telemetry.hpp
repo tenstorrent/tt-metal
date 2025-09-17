@@ -19,19 +19,19 @@ struct RiscTimestamp {
 };
 
 struct LowResolutionBandwidthTelemetryResult {
-    RiscTimestamp duration;
-    uint64_t reserved;
-    uint64_t num_words_sent;
-    uint64_t num_packets_sent;
+    RiscTimestamp duration{};
+    uint64_t reserved{};
+    uint64_t num_words_sent{};
+    uint64_t num_packets_sent{};
 };
 
 struct TelemetryEntry {
     ::tt::tt_metal::distributed::MeshCoordinate coord;
-    uint32_t eth_channel;
-    double bw_gbps;
-    double pps;
+    uint32_t eth_channel{};
+    double bw_gbps{};
+    double pps{};
     ::tt::tt_metal::distributed::MeshCoordinate connected_coord;
-    uint32_t connected_eth_channel;
+    uint32_t connected_eth_channel{};
 };
 
 const uint32_t telemetry_addr = ::tt::tt_metal::hal::get_erisc_l1_unreserved_base();
