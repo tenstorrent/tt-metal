@@ -1586,15 +1586,6 @@ void Matmul::validate(
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
 
-    if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
-        TT_FATAL(
-            (in0_tile_shape[1] == TILE_WIDTH && in0_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-        TT_FATAL(
-            (in1_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-    }
-
     TT_FATAL(
         (in0_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
         "Input tile dims must have inner dim equal to 32 due to llk constraints");
@@ -1688,6 +1679,15 @@ void Matmul::validate(
         input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+
+    if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
+        TT_FATAL(
+            (in0_tile_shape[1] == TILE_WIDTH && in0_tile_shape[0] == TILE_HEIGHT),
+            "Grayskull does not support tiny tile");
+        TT_FATAL(
+            (in1_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_HEIGHT),
+            "Grayskull does not support tiny tile");
+    }
 
     const auto& optional_bias = optional_input_tensors.at(0);
     uint32_t bias_single_tile_size = 0;
