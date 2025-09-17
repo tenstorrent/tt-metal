@@ -74,130 +74,63 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
 }
 
 /**
- * Download workflow run logs and extract up to N error snippets.
- * Returns an array of strings (snippets).
+ * Fetch up to N error snippets for a workflow run using check run annotations.
+ * Falls back to an empty array if no annotations are found.
  */
 async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3) {
   const owner = context.repo.owner;
   const repo = context.repo.repo;
   try {
-    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`));
-    const zipPath = path.join(tmpDir, 'run_logs.zip');
-    fs.writeFileSync(zipPath, Buffer.from(data));
-    const extractDir = path.join(tmpDir, 'extract');
-    fs.mkdirSync(extractDir, { recursive: true });
-    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-    return findErrorSnippetsInDir(extractDir, maxSnippets);
+    // Get all jobs for the workflow run
+    const jobs = await octokit.paginate(
+      octokit.rest.actions.listJobsForWorkflowRun,
+      { owner, repo, run_id: runId, per_page: 100 },
+      (res) => (res.data?.jobs) || []
+    );
+
+    const snippets = [];
+    for (const job of jobs) {
+      if (snippets.length >= maxSnippets) break;
+
+      // Try to extract check_run_id from URL or field if provided
+      let checkRunId = job.check_run_id;
+      if (!checkRunId && job.check_run_url) {
+        const m = String(job.check_run_url).match(/check-runs\/(\d+)/);
+        if (m) checkRunId = parseInt(m[1], 10);
+      }
+      if (!checkRunId) continue;
+
+      try {
+        const annotations = await octokit.paginate(
+          octokit.rest.checks.listAnnotations,
+          { owner, repo, check_run_id: checkRunId, per_page: 100 },
+          (res) => res.data || []
+        );
+
+        for (const ann of annotations) {
+          if (snippets.length >= maxSnippets) break;
+          if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+
+          const labelParts = [];
+          if (job.name) labelParts.push(job.name);
+          if (ann.path) labelParts.push(`${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}`);
+          const label = labelParts.join(' - ') || undefined;
+
+          const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+          if (!text) continue;
+          const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
+          snippets.push({ snippet, label });
+        }
+      } catch (e) {
+        core.info(`Failed to fetch annotations for job ${job.id} in run ${runId}: ${e.message}`);
+      }
+    }
+
+    return snippets;
   } catch (e) {
-    core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
+    core.info(`Failed to list jobs or annotations for run ${runId}: ${e.message}`);
     return [];
   }
-}
-
-/**
- * Recursively find up to maxCount error snippets in a directory of text logs.
- */
-function findErrorSnippetsInDir(rootDir, maxCount) {
-  // Match any occurrence of 'error:' regardless of position/casing
-  const errorLineRegex = /error:/i;
-  const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
-  const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
-
-  const collected = [];
-  const stack = [rootDir];
-
-  while (stack.length && collected.length < maxCount) {
-    const dir = stack.pop();
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      const p = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        stack.push(p);
-      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-        try {
-          const content = fs.readFileSync(p, 'utf8');
-          const lines = content.split(/\r?\n/);
-          const used = new Set();
-
-          // Pass 1: capture info..backtrace blocks (include nearest previous non-blank error line if present)
-          for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
-            if (infoRegex.test(lines[i])) {
-              const block = [];
-              // Find nearest previous non-blank line
-              let prev = i - 1;
-              while (prev >= 0 && lines[prev].trim() === '') prev--;
-              if (prev >= 0 && errorLineRegex.test(lines[prev])) {
-                block.push(lines[prev].trim());
-                used.add(prev);
-              }
-              // Add the info: line
-              block.push(lines[i].trim());
-              used.add(i);
-              // Collect until backtrace:, skipping blank lines
-              let j = i + 1;
-              while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
-                if (lines[j].trim() !== '') {
-                  block.push(lines[j].trim());
-                  used.add(j);
-                }
-                j++;
-              }
-              const snippetText = block.join('\n').trim();
-              if (snippetText.length > 0) {
-                const label = extractTestLabel(lines, Math.max(0, i - 15), Math.min(lines.length - 1, j + 15), p);
-                const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
-                collected.push({ snippet, label });
-              }
-              i = j; // advance past this block (backtrace line is not included)
-            }
-          }
-
-          // Pass 2: capture standalone error lines not already included (skip blanks), include 1 following context line if present
-          for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
-            if (!used.has(k) && lines[k].trim() !== '' && errorLineRegex.test(lines[k])) {
-              const block = [lines[k].trim()];
-              // include immediate next non-blank line (if not info/backtrace)
-              let nxt = k + 1;
-              while (nxt < lines.length && lines[nxt].trim() === '') nxt++;
-              if (nxt < lines.length && !infoRegex.test(lines[nxt]) && !backtraceRegex.test(lines[nxt])) {
-                block.push(lines[nxt].trim());
-              }
-              const snippetText = block.join('\n');
-              const label = extractTestLabel(lines, Math.max(0, k - 15), Math.min(lines.length - 1, (nxt || k) + 15), p);
-              const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
-              collected.push({ snippet, label });
-            }
-          }
-        } catch (_) { /* ignore file errors */ }
-      }
-      if (collected.length >= maxCount) break;
-    }
-  }
-
-  return collected;
-}
-
-/**
- * Try to extract a test identifier from the nearby log lines or path.
- */
-function extractTestLabel(lines, startIdx, endIdx, filePath) {
-  const window = lines.slice(startIdx, endIdx + 1).join('\n');
-  // PyTest-like: FAILED tests/path::test_name[...] - ...
-  const m1 = window.match(/FAILED\s+([^\s]+::[^\s]+(?:\[[^\]]+\])?)/);
-  if (m1) return m1[1];
-  // Lines like: Error: test_sdxl_unet_perf_device
-  const m2 = window.match(/Error:\s*([A-Za-z0-9_:.+\-\[\]\/\\]+)/i);
-  if (m2) return m2[1];
-  // GTest: [  FAILED  ] Suite.Test
-  const m3 = window.match(/\[\s*FAILED\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
-  if (m3) return m3[1];
-  // Benchmark: Benchmark NAME ... error/failed
-  const m4 = window.match(/Benchmark\s+([^\s]+)\b.*?(error|failed)/i);
-  if (m4) return m4[1];
-  // As fallback, infer job/step from path
-  const base = path.basename(filePath);
-  return base && base.length <= 80 ? base : undefined;
 }
 
 /**
@@ -886,6 +819,8 @@ async function run() {
                 return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
               });
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
+            } else {
+              errorsList = ['','  - Errors: error info couldn\'t be found'].join('\n');
             }
             let repeatedList = '';
             if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
@@ -927,6 +862,8 @@ async function run() {
                 return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
               });
               errorsList = ['', '  - Errors:', ...errLines].join('\n');
+            } else {
+              errorsList = ['','  - Errors: error info couldn\'t be found'].join('\n');
             }
             let repeatedList = '';
             if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
