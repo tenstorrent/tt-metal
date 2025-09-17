@@ -188,7 +188,7 @@ public:
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                             .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
-                        };
+                            .topology = this->fixture_->get_topology()};
 
                         // For sync patterns, we use a dummy destination core and fixed sync address
                         // The actual sync will be handled by atomic operations
@@ -272,7 +272,7 @@ public:
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                     .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
-                };
+                    .topology = this->fixture_->get_topology()};
 
                 TestTrafficConfig traffic_config = {
                     .parameters = traffic_parameters,
