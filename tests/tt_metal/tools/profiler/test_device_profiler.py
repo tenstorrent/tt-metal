@@ -233,7 +233,6 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     for _, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in refCountDict.items():
             matching_refs = wildcard_match(ref, deviceData["cores"]["DEVICE"]["analysis"].keys())
-            print(matching_refs)
             if matching_refs:
                 readCount = 0
                 for matching_ref in matching_refs:
@@ -334,7 +333,7 @@ def test_device_trace_run():
             setupAutoExtract=False,
             doDeviceTrace=True,
         ),
-        statTypes=["kernel"],
+        statTypes=["kernel", "fw"],
         allowedRange=0,
         refCountDict={
             "trace_fw_duration": [5],
