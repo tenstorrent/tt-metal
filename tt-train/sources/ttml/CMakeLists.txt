@@ -352,8 +352,9 @@ add_library(ttml STATIC ${SOURCES})
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 find_package(
-    Python
+    Python3
     COMPONENTS
+        Development
         Development.Module
         Interpreter
     REQUIRED

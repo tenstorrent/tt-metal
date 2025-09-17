@@ -53,7 +53,7 @@ namespace unit_tests_common::matmul::test_matmul_single_core {
 
 bool matmul_single_core(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     int M,
     int N,
     int K,

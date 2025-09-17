@@ -31,7 +31,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -46,7 +46,8 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;

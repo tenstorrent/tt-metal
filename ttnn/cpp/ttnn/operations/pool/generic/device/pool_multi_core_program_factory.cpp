@@ -3,10 +3,13 @@
 
 #include "pool_op.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -88,7 +91,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 scalars.back().end = i;
             }
             // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
+            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -235,7 +238,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     std::optional<int32_t> divisor_override,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    const Layout& output_layout) {
     distributed::MeshDevice* device = inputs[0].device();
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
@@ -247,15 +251,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    FactoryParameters params =
-        get_factory_parameters(num_shards_c, inputs[0], kernel_h, kernel_w, in_c, pool_type, return_indices);
+    FactoryParameters params = get_factory_parameters(
+        num_shards_c, inputs[0].dtype(), outputs[0].dtype(), kernel_h, kernel_w, in_c, pool_type, return_indices, output_layout);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     const auto& input_shape = inputs[0].padded_shape();
-    const auto& output_shape = outputs[0].padded_shape();
+    [[maybe_unused]] const auto& output_shape = outputs[0].padded_shape();
+
     const uint32_t in_nbytes_c = in_c / num_shards_c * params.nbytes;  // row of input (channels)
     const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * params.nbytes;
 
@@ -411,17 +416,45 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
     }
 
-    // output of reduce == writer to write
-    // output rows in RM
-    // after reduction
-    const uint32_t out_cb_pagesize =
-        std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
-        params.nbytes;  // there is just one row of channels after each reduction (or 1
-                        // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
+    const bool is_output_tiled = output_layout == Layout::TILE;
+    const bool is_output_block_format = is_block_float(outputs[0].dtype());
+
+    // Conditionally allocate temporary CB - only needed for TILED output
+    uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
+
+    if (is_output_tiled) {
+        pre_tilize_cb_id = next_cb_index++;
+        const uint32_t pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
+        const uint32_t pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
+        tt::tt_metal::create_cb(
+            pre_tilize_cb_id, program, all_cores, pre_tilize_cb_pagesize, pre_tilize_cb_npages, params.data_format);
+        log_debug(
+            tt::LogOp, "CB {} :: PS = {}, NP = {}", pre_tilize_cb_id, pre_tilize_cb_pagesize, pre_tilize_cb_npages);
+    }
+
+    uint32_t out_cb_pagesize;
+    uint32_t out_cb_npages;
+
+    if (is_output_tiled) {
+        out_cb_pagesize = tt::tile_size(params.output_data_format);
+        out_cb_npages =
+            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
+    } else {
+        out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
+            params.nbytes;  // there is just one row of channels after each reduction (or 1
+                            // block of c if its greater than 8 tiles)
+        out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
+    }
 
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, outputs[0].buffer());
+        next_cb_index++,
+        program,
+        all_cores,
+        out_cb_pagesize,
+        out_cb_npages,
+        params.output_data_format,
+        outputs[0].buffer());
 
     uint32_t out_idx_cb_id = 32;
     tt::tt_metal::CBHandle out_idx_cb = 0;
@@ -582,7 +615,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,                      // 15
         out_idx_cb_id,                  // 16
         one_scalar_per_core,            // 17
-        (uint32_t)return_indices};      // 18
+        (uint32_t)return_indices,       // 18
+        pre_tilize_cb_id,               // 19
+        is_output_tiled,                // 20
+        is_output_block_format};        // 21
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -619,7 +655,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         outputs[0].memory_config(),
         pool_type,
         count_include_pad,
-        divisor_override);
+        divisor_override,
+        output_layout,
+        outputs[0].dtype());
+
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
@@ -693,6 +732,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
     bool return_indices = op_attr.return_indices_;
@@ -771,7 +811,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         num_shards_c,
         out_mem_config,
         divisor_override,
-        op_attr.memory_used);
+        op_attr.memory_used,
+        output_layout);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

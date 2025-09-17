@@ -11,7 +11,7 @@ class TtConv2D:
         conv,
         conv_pth,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -42,7 +42,6 @@ class TtConv2D:
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True,
             activation=activation,
         )

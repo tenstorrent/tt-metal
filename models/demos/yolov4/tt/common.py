@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class Conv:
-    def __init__(self, device, conv_param, conv_pth, activation="") -> None:
+    def __init__(self, device, conv_param, conv_pth, activation=None) -> None:
         self.conv_param = conv_param
         self.conv_pth = conv_pth
         self.device = device
@@ -27,21 +28,23 @@ class Conv:
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=True,
-            enable_split_reader=True if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else False,
             output_layout=ttnn.TILE_LAYOUT,
         )
         config_override = None
         if conv_param.act_block_h is not None:
             self.conv_config.act_block_h_override = conv_param.act_block_h
 
+        if conv_param.num_cores_nhw is not None:
+            shard_grid = get_shard_grid_from_num_cores(conv_param.num_cores_nhw, device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
+
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
+            self.bias = conv_pth.bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        self.weight = conv_pth.weight
 
         if conv_param.shard_layout is None:
             self.input_memory_config = ttnn.L1_MEMORY_CONFIG

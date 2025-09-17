@@ -7,12 +7,12 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_torch_model
 from models.demos.segformer.reference.segformer_overlap_patch_embeddings import SegformerOverlapPatchEmbeddings
 from models.demos.segformer.tt.common import preprocess_layernorm_parameter
 from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import TtSegformerOverlapPatchEmbeddings
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

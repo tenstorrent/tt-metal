@@ -876,7 +876,7 @@ void bind_unary_rdiv(
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
-    const std::string parameter_b_value,
+    const std::string& parameter_b_value,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -936,7 +936,7 @@ void bind_unary_rdiv(
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) {
@@ -2042,6 +2042,12 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
+        ttnn::rsqrt,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|rsqrt|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
@@ -2114,7 +2120,6 @@ void py_module(py::module& module) {
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(
         module, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
     bind_unary_operation_with_fast_and_approximate_mode(
