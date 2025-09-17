@@ -1868,7 +1868,7 @@ private:
     }
 
     void expand_sync_patterns(ParsedTestConfig& test) {
-        log_info(
+        log_debug(
             LogTest,
             "Expanding line sync patterns for test: {} with topology: {}",
             test.name,
@@ -1893,7 +1893,7 @@ private:
             test.global_sync_val = sync_val;
         }
 
-        log_info(
+        log_debug(
             LogTest,
             "Generated {} line sync configurations, line_syn_val: {}",
             test.global_sync_configs.size(),
