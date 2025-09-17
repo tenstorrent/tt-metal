@@ -63,11 +63,10 @@ FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
     TT_THROW("Invalid torus topology");
     return FabricType::MESH;
 }
-} // namespace
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-    MeshGraph::cluster_type_to_mesh_graph_descriptor =
-        *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+    cluster_type_to_mesh_graph_descriptor =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
             std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
                 {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
@@ -86,6 +85,28 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
             });
+
+const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
+    cluster_type_to_mesh_graph_descriptor_mgd2 =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+            std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
+                {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+            });
+}  // namespace
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -201,7 +222,6 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
-
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -211,7 +231,9 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
-        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE) ? mgd.get_num_eth_ports_per_direction() : 0, // Z set to the same number as xy if in black hole
+        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE)
+                           ? mgd.get_num_eth_ports_per_direction()
+                           : 0,  // Z set to the same number as xy if in black hole
     };
 
     // Make intramesh connectivity
@@ -224,7 +246,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
     }
 
-    for (const auto & connection : mgd.connections_by_type("MESH")) {
+    for (const auto& connection : mgd.connections_by_type("MESH")) {
         const auto& connection_data = mgd.get_connection(connection);
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
         const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
@@ -312,7 +334,10 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
 
     for (const auto& mesh : all_meshes) {
         const auto& mesh_instance = mgd.get_instance(mesh);
-        TT_FATAL(std::holds_alternative<const proto::MeshDescriptor*>(mesh_instance.desc), "MeshGraph: Instance {} is not a mesh", mesh_instance.name);
+        TT_FATAL(
+            std::holds_alternative<const proto::MeshDescriptor*>(mesh_instance.desc),
+            "MeshGraph: Instance {} is not a mesh",
+            mesh_instance.name);
         const auto& mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
 
         MeshId mesh_id(mesh_instance.local_id);
@@ -327,7 +352,13 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
             std::uint32_t board_ns_size = mesh_shape[0] / host_shape[0];
             std::uint32_t board_ew_size = mesh_shape[1] / host_shape[1];
 
-            TT_FATAL(mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0, "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}", mesh_shape[0], mesh_shape[1], host_shape[0], host_shape[1]);
+            TT_FATAL(
+                mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0,
+                "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}",
+                mesh_shape[0],
+                mesh_shape[1],
+                host_shape[0],
+                host_shape[1]);
 
             // Populate mesh_host_rank_coord_ranges_
             this->mesh_host_rank_coord_ranges_.emplace(
@@ -699,9 +730,12 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 }
 
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-    tt::tt_metal::ClusterType cluster_type, const std::string& root_dir) {
-    auto it = cluster_type_to_mesh_graph_descriptor.get().find(cluster_type);
-    if (it != cluster_type_to_mesh_graph_descriptor.get().end()) {
+    tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2) {
+    auto & descriptor_map = version_2
+        ? cluster_type_to_mesh_graph_descriptor_mgd2.get()
+        : cluster_type_to_mesh_graph_descriptor.get();
+    auto it = descriptor_map.find(cluster_type);
+    if (it != descriptor_map.end()) {
         return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
     }
     TT_THROW("Cannot find mesh graph descriptor for cluster type {}", cluster_type);
