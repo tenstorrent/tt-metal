@@ -31,19 +31,6 @@ static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
 
-// Only when aggregating: maps metric IDs of a given host to the global (cluster-wide) space
-// of this tt_telemetry instance.
-struct StringAndSizeTPairHash {
-    size_t operator()(const std::pair<std::string, size_t>& p) const {
-        size_t seed = 0;
-        boost::hash_combine(seed, p.first);
-        boost::hash_combine(seed, p.second);
-        return seed;
-    }
-};
-static std::unordered_map<std::pair<std::string, size_t>, size_t, StringAndSizeTPairHash>
-    endpoint_and_local_id_to_global_id_;
-
 // Only when aggregating: accumulated state of all remote tt_telemetry instances
 static TelemetrySnapshot remote_telemetry_state;
 
