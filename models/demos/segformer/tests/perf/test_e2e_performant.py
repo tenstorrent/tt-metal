@@ -58,5 +58,6 @@ def test_segformer_e2e(device, batch_size, model_location_generator):
     ((1),),
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_segformer_e2e_dp(mesh_device, device_batch_size, model_location_generator):
     run_segformer_trace_2cqs_inference(mesh_device, device_batch_size, model_location_generator)

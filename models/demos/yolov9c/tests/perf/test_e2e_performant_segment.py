@@ -25,7 +25,6 @@ from models.demos.yolov9c.tests.perf.test_e2e_performant_detect import run_yolov
         ),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_e2e_performant(
     model_location_generator,
     device,
