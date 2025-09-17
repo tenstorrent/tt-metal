@@ -135,7 +135,7 @@ def test_vision_block_inference(
         # Run our model
         tt_out = tt_model(
             tt_input,
-            cu_seqlens=cu_seqlens,
+            cu_seqlens=ttnn.from_torch(cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
             rot_mats=rot_mats,
         )
 
