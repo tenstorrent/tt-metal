@@ -80,56 +80,148 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
 async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3) {
   const owner = context.repo.owner;
   const repo = context.repo.repo;
+  await core.startGroup(`Collecting error annotations for run ${runId}`);
   try {
-    // Get all jobs for the workflow run
-    const jobs = await octokit.paginate(
-      octokit.rest.actions.listJobsForWorkflowRun,
-      { owner, repo, run_id: runId, per_page: 100 },
-      (res) => (res.data?.jobs) || []
-    );
-
-    const snippets = [];
-    for (const job of jobs) {
-      if (snippets.length >= maxSnippets) break;
-
-      // Try to extract check_run_id from URL or field if provided
-      let checkRunId = job.check_run_id;
-      if (!checkRunId && job.check_run_url) {
-        const m = String(job.check_run_url).match(/check-runs\/(\d+)/);
-        if (m) checkRunId = parseInt(m[1], 10);
+    core.info(`[run ${runId}] Starting annotation collection (max ${maxSnippets}).`);
+    // 1) Try the workflow-run annotations endpoint (aggregated across jobs)
+    try {
+      core.info(`[run ${runId}] Attempt 1: workflow-run annotations endpoint`);
+      const runAnnotations = await octokit.paginate(
+        'GET /repos/{owner}/{repo}/actions/runs/{run_id}/annotations',
+        { owner, repo, run_id: runId, per_page: 100 },
+        (res) => res.data || []
+      );
+      core.info(`[run ${runId}] Attempt 1: fetched ${runAnnotations.length} annotations`);
+      const fromRun = [];
+      for (const ann of runAnnotations) {
+        if (fromRun.length >= maxSnippets) break;
+        if (ann.annotation_level && ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+        const label = ann.path ? `${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}` : undefined;
+        const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+        if (!text) continue;
+        const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
+        fromRun.push({ snippet, label });
       }
-      if (!checkRunId) continue;
-
-      try {
-        const annotations = await octokit.paginate(
-          octokit.rest.checks.listAnnotations,
-          { owner, repo, check_run_id: checkRunId, per_page: 100 },
-          (res) => res.data || []
-        );
-
-        for (const ann of annotations) {
-          if (snippets.length >= maxSnippets) break;
-          if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
-
-          const labelParts = [];
-          if (job.name) labelParts.push(job.name);
-          if (ann.path) labelParts.push(`${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}`);
-          const label = labelParts.join(' - ') || undefined;
-
-          const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
-          if (!text) continue;
-          const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
-          snippets.push({ snippet, label });
-        }
-      } catch (e) {
-        core.info(`Failed to fetch annotations for job ${job.id} in run ${runId}: ${e.message}`);
+      if (fromRun.length > 0) {
+        core.info(`[run ${runId}] Attempt 1: returning ${fromRun.length} snippets`);
+        return fromRun;
       }
+      core.info(`[run ${runId}] Attempt 1: no qualifying annotations found`);
+    } catch (e) {
+      core.info(`Workflow-run annotations endpoint failed for ${runId}: ${e.message}`);
     }
 
-    return snippets;
+    // 2) Fall back to jobs → check run annotations
+    try {
+      core.info(`[run ${runId}] Attempt 2: list jobs for workflow run`);
+      const jobs = await octokit.paginate(
+        octokit.rest.actions.listJobsForWorkflowRun,
+        { owner, repo, run_id: runId, per_page: 100 },
+        (res) => (res.data?.jobs) || []
+      );
+      core.info(`[run ${runId}] Attempt 2: fetched ${jobs.length} jobs`);
+      const snippets = [];
+      for (const job of jobs) {
+        if (snippets.length >= maxSnippets) break;
+        let checkRunId = job.check_run_id;
+        if (!checkRunId && job.check_run_url) {
+          const m = String(job.check_run_url).match(/check-runs\/(\d+)/);
+          if (m) checkRunId = parseInt(m[1], 10);
+        }
+        if (!checkRunId) {
+          core.info(`[run ${runId}] Job ${job.id} (${job.name}) has no check_run_id; skipping`);
+          continue;
+        }
+        core.info(`[run ${runId}] Fetching annotations for job ${job.id} (${job.name}), check_run_id=${checkRunId}`);
+        try {
+          const annotations = await octokit.paginate(
+            octokit.rest.checks.listAnnotations,
+            { owner, repo, check_run_id: checkRunId, per_page: 100 },
+            (res) => res.data || []
+          );
+          core.info(`[run ${runId}] Job ${job.id}: received ${annotations.length} annotations`);
+          for (const ann of annotations) {
+            if (snippets.length >= maxSnippets) break;
+            if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+            const labelParts = [];
+            if (job.name) labelParts.push(job.name);
+            if (ann.path) labelParts.push(`${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}`);
+            const label = labelParts.join(' - ') || undefined;
+            const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+            if (!text) continue;
+            const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
+            snippets.push({ snippet, label });
+          }
+        } catch (e) {
+          core.info(`Failed to fetch annotations for job ${job.id} in run ${runId}: ${e.message}`);
+        }
+      }
+      if (snippets.length > 0) {
+        core.info(`[run ${runId}] Attempt 2: returning ${snippets.length} snippets`);
+        return snippets;
+      }
+      core.info(`[run ${runId}] Attempt 2: no qualifying annotations found`);
+    } catch (e) {
+      core.info(`Failed to list jobs for run ${runId}: ${e.message}`);
+    }
+
+    // 3) Final fallback: list check runs for the commit and filter by details_url containing the runId
+    try {
+      core.info(`[run ${runId}] Attempt 3: derive check runs from commit sha`);
+      const run = await octokit.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+      const ref = run?.data?.head_sha;
+      if (ref) {
+        core.info(`[run ${runId}] Retrieved head_sha ${ref}`);
+        const checkRuns = await octokit.paginate(
+          octokit.rest.checks.listForRef,
+          { owner, repo, ref, per_page: 100 },
+          (res) => (res.data?.check_runs) || []
+        );
+        core.info(`[run ${runId}] Found ${checkRuns.length} check runs for ref`);
+        const snippets = [];
+        for (const cr of checkRuns) {
+          if (snippets.length >= maxSnippets) break;
+          const url = cr.details_url || '';
+          if (!String(url).includes(`/runs/${runId}`)) continue;
+          core.info(`[run ${runId}] Fetching annotations for check run ${cr.id} (${cr.name}) linked to run`);
+          try {
+            const annotations = await octokit.paginate(
+              octokit.rest.checks.listAnnotations,
+              { owner, repo, check_run_id: cr.id, per_page: 100 },
+              (res) => res.data || []
+            );
+            core.info(`[run ${runId}] Check run ${cr.id}: received ${annotations.length} annotations`);
+            for (const ann of annotations) {
+              if (snippets.length >= maxSnippets) break;
+              if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+              const label = ann.path ? `${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}` : undefined;
+              const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+              if (!text) continue;
+              const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
+              snippets.push({ snippet, label });
+            }
+          } catch (e) {
+            core.info(`Failed to fetch annotations for check run ${cr.id} (run ${runId}): ${e.message}`);
+          }
+        }
+        if (snippets.length > 0) {
+          core.info(`[run ${runId}] Attempt 3: returning ${snippets.length} snippets`);
+          return snippets;
+        }
+        core.info(`[run ${runId}] Attempt 3: no qualifying annotations found`);
+      }
+    } catch (e) {
+      core.info(`Fallback via check-runs failed for ${runId}: ${e.message}`);
+    }
+
+    core.info(`[run ${runId}] No annotations found via any method`);
+    return [];
   } catch (e) {
     core.info(`Failed to list jobs or annotations for run ${runId}: ${e.message}`);
     return [];
+  }
+  finally {
+    core.endGroup();
   }
 }
 
