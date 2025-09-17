@@ -118,9 +118,9 @@ if(reflect_ADDED)
         reflect
         INTERFACE
             FILE_SET api
-                TYPE HEADERS
-                BASE_DIRS ${reflect_SOURCE_DIR}
-                FILES ${reflect_SOURCE_DIR}/reflect
+            TYPE HEADERS
+            BASE_DIRS ${reflect_SOURCE_DIR}
+            FILES ${reflect_SOURCE_DIR}/reflect
     )
 endif()
 

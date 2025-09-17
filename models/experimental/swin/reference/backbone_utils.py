@@ -38,29 +38,19 @@ def verify_out_features_out_indices(
         if not isinstance(out_features, (list,)):
             raise ValueError(f"out_features must be a list {type(out_features)}")
         if any(feat not in stage_names for feat in out_features):
-            raise ValueError(
-                f"out_features must be a subset of stage_names: {stage_names} got {out_features}"
-            )
+            raise ValueError(f"out_features must be a subset of stage_names: {stage_names} got {out_features}")
 
     if out_indices is not None:
         if not isinstance(out_indices, (list, tuple)):
-            raise ValueError(
-                f"out_indices must be a list or tuple, got {type(out_indices)}"
-            )
+            raise ValueError(f"out_indices must be a list or tuple, got {type(out_indices)}")
         if any(idx >= len(stage_names) for idx in out_indices):
-            raise ValueError(
-                "out_indices must be valid indices for stage_names {stage_names}, got {out_indices}"
-            )
+            raise ValueError("out_indices must be valid indices for stage_names {stage_names}, got {out_indices}")
 
     if out_features is not None and out_indices is not None:
         if len(out_features) != len(out_indices):
-            raise ValueError(
-                "out_features and out_indices should have the same length if both are set"
-            )
+            raise ValueError("out_features and out_indices should have the same length if both are set")
         if out_features != [stage_names[idx] for idx in out_indices]:
-            raise ValueError(
-                "out_features and out_indices should correspond to the same stages if both are set"
-            )
+            raise ValueError("out_features and out_indices should correspond to the same stages if both are set")
 
 
 def _align_output_features_output_indices(
@@ -88,9 +78,7 @@ def _align_output_features_output_indices(
         out_indices = [len(stage_names) - 1]
         out_features = [stage_names[-1]]
     elif out_indices is None and out_features is not None:
-        out_indices = [
-            stage_names.index(layer) for layer in stage_names if layer in out_features
-        ]
+        out_indices = [stage_names.index(layer) for layer in stage_names if layer in out_features]
     elif out_features is None and out_indices is not None:
         out_features = [stage_names[idx] for idx in out_indices]
     return out_features, out_indices
@@ -118,9 +106,7 @@ def get_aligned_output_features_output_indices(
         stage_names (`List[str]`): The names of the stages of the backbone.
     """
     # First verify that the out_features and out_indices are valid
-    verify_out_features_out_indices(
-        out_features=out_features, out_indices=out_indices, stage_names=stage_names
-    )
+    verify_out_features_out_indices(out_features=out_features, out_indices=out_indices, stage_names=stage_names)
     output_features, output_indices = _align_output_features_output_indices(
         out_features=out_features, out_indices=out_indices, stage_names=stage_names
     )
@@ -156,9 +142,7 @@ class BackboneMixin:
         output_attentions: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ):
-        raise NotImplementedError(
-            "This method should be implemented by the derived class."
-        )
+        raise NotImplementedError("This method should be implemented by the derived class.")
 
     @property
     def out_features(self):

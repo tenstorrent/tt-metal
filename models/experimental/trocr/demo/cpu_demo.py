@@ -18,9 +18,7 @@ def test_cpu_demo(model_name):
     processor = TrOCRProcessor.from_pretrained(model_name)
     model = VisionEncoderDecoderModel.from_pretrained(model_name)
     iam_ocr_sample_input = Image.open("models/sample_data/iam_ocr_image.jpg")
-    pixel_values = processor(
-        images=iam_ocr_sample_input, return_tensors="pt"
-    ).pixel_values
+    pixel_values = processor(images=iam_ocr_sample_input, return_tensors="pt").pixel_values
 
     with torch.no_grad():
         generated_ids = model.generate(pixel_values)

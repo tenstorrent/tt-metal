@@ -13,15 +13,16 @@ target_sources(
     ttnn_deprecated
     INTERFACE
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
 )
 
 install(
     TARGETS
         ttnn_deprecated
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/deprecated
         COMPONENT ttnn-runtime
 )

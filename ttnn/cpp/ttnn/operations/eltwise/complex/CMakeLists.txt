@@ -8,9 +8,9 @@ target_sources(
     ttnn_op_eltwise_complex
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${FixmeOpAPIDir}
-            FILES complex.hpp
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES complex.hpp
     PRIVATE
         complex.cpp
 )

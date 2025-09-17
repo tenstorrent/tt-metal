@@ -15,14 +15,14 @@ target_sources(
     ttnn_op_experimental_ccl
     PUBLIC
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                send_recv_async/send_async/device/kernels/sender_reader.cpp
-                send_recv_async/send_async/device/kernels/sender_writer.cpp
-                send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
-                send_recv_async/recv_async/device/kernels/receiver_writer.cpp
-                send_recv_async/recv_async/device/kernels/receiver_reader.cpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            send_recv_async/send_async/device/kernels/sender_reader.cpp
+            send_recv_async/send_async/device/kernels/sender_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
         common.cpp
@@ -93,7 +93,8 @@ install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 install(
     TARGETS
         ttnn_op_experimental_ccl
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl
         COMPONENT ttnn-runtime
 )

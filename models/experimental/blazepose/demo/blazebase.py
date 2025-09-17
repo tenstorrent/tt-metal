@@ -206,9 +206,7 @@ class BlazeLandmark(BlazeBase):
 
     def extract_roi(self, frame, xc, yc, theta, scale):
         # take points on unit square and transform them according to the roi
-        points = torch.tensor(
-            [[-1, -1, 1, 1], [-1, 1, -1, 1]], device=scale.device
-        ).view(1, 2, 4)
+        points = torch.tensor([[-1, -1, 1, 1], [-1, 1, -1, 1]], device=scale.device).view(1, 2, 4)
         points = points * scale.view(-1, 1, 1) / 2
         theta = theta.view(-1, 1, 1)
         R = torch.cat(
@@ -237,9 +235,7 @@ class BlazeLandmark(BlazeBase):
             affine = torch.tensor(affine, device=scale.device)
             affines.append(affine)
         if imgs:
-            imgs = (
-                torch.stack(imgs).permute(0, 3, 1, 2).float() / 255.0
-            )  # / 127.5 - 1.0
+            imgs = torch.stack(imgs).permute(0, 3, 1, 2).float() / 255.0  # / 127.5 - 1.0
             affines = torch.stack(affines)
         else:
             imgs = torch.zeros((0, 3, res, res), device=scale.device)
@@ -265,9 +261,7 @@ class BlazeDetector(BlazeBase):
     """
 
     def load_anchors(self, path):
-        self.anchors = torch.tensor(
-            np.load(path), dtype=torch.float32, device=self._device()
-        )
+        self.anchors = torch.tensor(np.load(path), dtype=torch.float32, device=self._device())
         assert self.anchors.ndimension() == 2
         assert self.anchors.shape[0] == self.num_anchors
         assert self.anchors.shape[1] == 4
@@ -331,11 +325,7 @@ class BlazeDetector(BlazeBase):
         filtered_detections = []
         for i in range(len(detections)):
             faces = self._weighted_non_max_suppression(detections[i])
-            faces = (
-                torch.stack(faces)
-                if len(faces) > 0
-                else torch.zeros((0, self.num_coords + 1))
-            )
+            faces = torch.stack(faces) if len(faces) > 0 else torch.zeros((0, self.num_coords + 1))
             filtered_detections.append(faces)
 
         return filtered_detections
@@ -368,9 +358,7 @@ class BlazeDetector(BlazeBase):
             y1 = detection[:, 4 + 2 * self.kp2 + 1]
             scale = ((xc - x1) ** 2 + (yc - y1) ** 2).sqrt() * 2
         else:
-            raise NotImplementedError(
-                "detection2roi_method [%s] not supported" % self.detection2roi_method
-            )
+            raise NotImplementedError("detection2roi_method [%s] not supported" % self.detection2roi_method)
 
         yc += self.dy * scale
         scale *= self.dscale
@@ -447,13 +435,8 @@ class BlazeDetector(BlazeBase):
 
         for k in range(self.num_keypoints):
             offset = 4 + k * 2
-            keypoint_x = (
-                raw_boxes[..., offset] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-            )
-            keypoint_y = (
-                raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3]
-                + anchors[:, 1]
-            )
+            keypoint_x = raw_boxes[..., offset] / self.x_scale * anchors[:, 2] + anchors[:, 0]
+            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
             boxes[..., offset] = keypoint_x
             boxes[..., offset + 1] = keypoint_y
 
@@ -559,16 +542,8 @@ def jaccard(box_a, box_b):
         jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
     """
     inter = intersect(box_a, box_b)
-    area_a = (
-        ((box_a[:, 2] - box_a[:, 0]) * (box_a[:, 3] - box_a[:, 1]))
-        .unsqueeze(1)
-        .expand_as(inter)
-    )  # [A,B]
-    area_b = (
-        ((box_b[:, 2] - box_b[:, 0]) * (box_b[:, 3] - box_b[:, 1]))
-        .unsqueeze(0)
-        .expand_as(inter)
-    )  # [A,B]
+    area_a = ((box_a[:, 2] - box_a[:, 0]) * (box_a[:, 3] - box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
+    area_b = ((box_b[:, 2] - box_b[:, 0]) * (box_b[:, 3] - box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
     union = area_a + area_b - inter
     return inter / union  # [A,B]
 

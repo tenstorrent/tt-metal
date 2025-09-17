@@ -15,13 +15,13 @@ target_sources(
     ttnn_op_matmul
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${FixmeOpAPIDir}
-            FILES matmul.hpp device/matmul_op.hpp
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES matmul.hpp device/matmul_op.hpp
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         device/matmul_op.cpp
         device/matmul_op_multi_core_program_factory.cpp
@@ -44,9 +44,11 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_matmul
-    FILE_SET api
+    FILE_SET
+    api
         COMPONENT ttnn-dev
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul
         COMPONENT ttnn-runtime
 )

@@ -47,12 +47,9 @@ target_sources(
     ttnn_core
     PUBLIC
         FILE_SET jit_api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                cpp/ttnn/kernel/kernel_common_utils.hpp
-                cpp/ttnn/kernel/kernel_utils.hpp
-                api/ttnn/tensor/layout/layout.hpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -123,7 +120,8 @@ install(
         ttnn_core
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    FILE_SET jit_api
+    FILE_SET
+    jit_api
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
         COMPONENT ttnn-runtime
 )
@@ -434,22 +432,22 @@ target_sources(
     ttnncpp
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-            FILES
-                ${api}
-                cpp/ttnn/operations/copy/typecast/typecast.hpp
-                cpp/ttnn/operations/creation.hpp
-                cpp/ttnn/operations/functions.hpp
-                cpp/ttnn/operations/compute_throttle_utils.hpp
-                cpp/ttnn/operations/cb_utils.hpp
-                cpp/ttnn/operations/math.hpp
-                cpp/ttnn/operations/sharding_utilities.hpp
-                cpp/ttnn/operations/trace.hpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+        FILES
+            ${api}
+            cpp/ttnn/operations/copy/typecast/typecast.hpp
+            cpp/ttnn/operations/creation.hpp
+            cpp/ttnn/operations/functions.hpp
+            cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/cb_utils.hpp
+            cpp/ttnn/operations/math.hpp
+            cpp/ttnn/operations/sharding_utilities.hpp
+            cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${ttnn_kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${ttnn_kernels}
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
@@ -560,9 +558,11 @@ if(TT_INSTALL)
         TARGETS
             ttnncpp
         EXPORT TT-NN
-        FILE_SET api
+        FILE_SET
+        api
             COMPONENT ttnn-dev
-        FILE_SET kernels
+        FILE_SET
+        kernels
             DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
             COMPONENT ttnn-runtime
         LIBRARY
@@ -635,7 +635,14 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT tar
     )
 
-    install(TARGETS ttnn DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn COMPONENT tt_pybinds)
+    install(
+        TARGETS
+            ttnn
+            DESTINATION
+            ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+            COMPONENT
+            tt_pybinds
+    )
 endif()
 if(TT_INSTALL)
     install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)

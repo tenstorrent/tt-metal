@@ -290,106 +290,106 @@ target_sources(
     hw
     PUBLIC
         FILE_SET jit_api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                ${blackhole_kernels}
-                ${wormhole_kernels}
-                inc/accessor/array_wrapper.h
-                inc/accessor/const.h
-                inc/accessor/dspec.h
-                inc/accessor/helpers.h
-                inc/accessor/tensor_accessor.h
-                inc/accessor/tensor_accessor_args.h
-                inc/accessor/shard_pages_address_iterator.h
-                inc/accessor/pages_address_iterator.h
-                inc/accessor/page.h
-                inc/atomic_rwptr.h
-                inc/bit_utils.h
-                inc/blackhole/c_tensix_core.h
-                inc/blackhole/cfg_defines.h
-                inc/blackhole/core_config.h
-                inc/blackhole/dev_mem_map.h
-                inc/blackhole/eth_chan_noc_mapping.h
-                inc/blackhole/eth_fw_api.h
-                inc/blackhole/eth_l1_address_map.h
-                inc/blackhole/noc/noc.h
-                inc/blackhole/noc/noc_overlay_parameters.h
-                inc/blackhole/noc/noc_parameters.h
-                inc/blackhole/noc_nonblocking_api.h
-                inc/blackhole/stream_interface.h
-                inc/blackhole/stream_io_map.h
-                inc/blackhole/tdma_xmov.h
-                inc/blackhole/tensix.h
-                inc/blackhole/tensix_dev_map.h
-                inc/blackhole/tensix_types.h
-                inc/circular_buffer.h
-                inc/circular_buffer_init.h
-                inc/cmd_defs.h
-                inc/compile_time_args.h
-                inc/dataflow_api.h
-                inc/dataflow_cmd_bufs.h
-                inc/dataflow_internal.h
-                inc/debug/assert.h
-                inc/debug/dprint.h
-                inc/debug/dprint_buffer.h
-                inc/debug/dprint_pages.h
-                inc/debug/dprint_tile.h
-                inc/debug/eth_link_status.h
-                inc/debug/fw_debug.h
-                inc/debug/noc_logging.h
-                inc/debug/ring_buffer.h
-                inc/debug/sanitize_noc.h
-                inc/debug/stack_usage.h
-                inc/debug/watcher_common.h
-                inc/debug/waypoint.h
-                inc/dev_msgs.h
-                inc/ethernet/dataflow_api.h
-                inc/ethernet/erisc.h
-                inc/ethernet/tt_eth_api.h
-                inc/ethernet/tt_eth_ss_regs.h
-                inc/ethernet/tunneling.h
-                inc/firmware_common.h
-                inc/mod_div_lib.h
-                inc/remote_circular_buffer_api.h
-                inc/risc_attribs.h
-                inc/risc_common.h
-                inc/tensix_functions.h
-                inc/utils/bfloat16.h
-                inc/utils/float32.h
-                inc/utils/int32.h
-                inc/utils/utils.h
-                inc/vptr_uint.h
-                inc/wormhole/c_tensix_core.h
-                inc/wormhole/core_config.h
-                inc/wormhole/dev_mem_map.h
-                inc/wormhole/eth_chan_noc_mapping.h
-                inc/wormhole/eth_fw_api.h
-                inc/wormhole/eth_l1_address_map.h
-                inc/wormhole/noc/noc.h
-                inc/wormhole/noc/noc_overlay_parameters.h
-                inc/wormhole/noc/noc_parameters.h
-                inc/wormhole/noc_nonblocking_api.h
-                inc/wormhole/stream_interface.h
-                inc/wormhole/stream_io_map.h
-                inc/wormhole/tdma_xmov.h
-                inc/wormhole/tensix.h
-                inc/wormhole/tensix_dev_map.h
-                inc/wormhole/wormhole_b0_defines/cfg_defines.h
-                inc/wormhole/wormhole_b0_defines/tensix_types.h
-                inc/dataflow_api_addrgen.h
-                inc/dataflow_api_common.h
-                inc/socket_api.h
-                inc/socket.h
-                # Toolchain
-                toolchain/erisc-b0-app.ld
-                toolchain/erisc-b0-app-sections.ld
-                toolchain/erisc-b0-memory.ld
-                toolchain/erisc-b0-kernel.ld
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${blackhole_kernels}
+            ${wormhole_kernels}
+            inc/accessor/array_wrapper.h
+            inc/accessor/const.h
+            inc/accessor/dspec.h
+            inc/accessor/helpers.h
+            inc/accessor/tensor_accessor.h
+            inc/accessor/tensor_accessor_args.h
+            inc/accessor/shard_pages_address_iterator.h
+            inc/accessor/pages_address_iterator.h
+            inc/accessor/page.h
+            inc/atomic_rwptr.h
+            inc/bit_utils.h
+            inc/blackhole/c_tensix_core.h
+            inc/blackhole/cfg_defines.h
+            inc/blackhole/core_config.h
+            inc/blackhole/dev_mem_map.h
+            inc/blackhole/eth_chan_noc_mapping.h
+            inc/blackhole/eth_fw_api.h
+            inc/blackhole/eth_l1_address_map.h
+            inc/blackhole/noc/noc.h
+            inc/blackhole/noc/noc_overlay_parameters.h
+            inc/blackhole/noc/noc_parameters.h
+            inc/blackhole/noc_nonblocking_api.h
+            inc/blackhole/stream_interface.h
+            inc/blackhole/stream_io_map.h
+            inc/blackhole/tdma_xmov.h
+            inc/blackhole/tensix.h
+            inc/blackhole/tensix_dev_map.h
+            inc/blackhole/tensix_types.h
+            inc/circular_buffer.h
+            inc/circular_buffer_init.h
+            inc/cmd_defs.h
+            inc/compile_time_args.h
+            inc/dataflow_api.h
+            inc/dataflow_cmd_bufs.h
+            inc/dataflow_internal.h
+            inc/debug/assert.h
+            inc/debug/dprint.h
+            inc/debug/dprint_buffer.h
+            inc/debug/dprint_pages.h
+            inc/debug/dprint_tile.h
+            inc/debug/eth_link_status.h
+            inc/debug/fw_debug.h
+            inc/debug/noc_logging.h
+            inc/debug/ring_buffer.h
+            inc/debug/sanitize_noc.h
+            inc/debug/stack_usage.h
+            inc/debug/watcher_common.h
+            inc/debug/waypoint.h
+            inc/dev_msgs.h
+            inc/ethernet/dataflow_api.h
+            inc/ethernet/erisc.h
+            inc/ethernet/tt_eth_api.h
+            inc/ethernet/tt_eth_ss_regs.h
+            inc/ethernet/tunneling.h
+            inc/firmware_common.h
+            inc/mod_div_lib.h
+            inc/remote_circular_buffer_api.h
+            inc/risc_attribs.h
+            inc/risc_common.h
+            inc/tensix_functions.h
+            inc/utils/bfloat16.h
+            inc/utils/float32.h
+            inc/utils/int32.h
+            inc/utils/utils.h
+            inc/vptr_uint.h
+            inc/wormhole/c_tensix_core.h
+            inc/wormhole/core_config.h
+            inc/wormhole/dev_mem_map.h
+            inc/wormhole/eth_chan_noc_mapping.h
+            inc/wormhole/eth_fw_api.h
+            inc/wormhole/eth_l1_address_map.h
+            inc/wormhole/noc/noc.h
+            inc/wormhole/noc/noc_overlay_parameters.h
+            inc/wormhole/noc/noc_parameters.h
+            inc/wormhole/noc_nonblocking_api.h
+            inc/wormhole/stream_interface.h
+            inc/wormhole/stream_io_map.h
+            inc/wormhole/tdma_xmov.h
+            inc/wormhole/tensix.h
+            inc/wormhole/tensix_dev_map.h
+            inc/wormhole/wormhole_b0_defines/cfg_defines.h
+            inc/wormhole/wormhole_b0_defines/tensix_types.h
+            inc/dataflow_api_addrgen.h
+            inc/dataflow_api_common.h
+            inc/socket_api.h
+            inc/socket.h
+            # Toolchain
+            toolchain/erisc-b0-app.ld
+            toolchain/erisc-b0-app-sections.ld
+            toolchain/erisc-b0-memory.ld
+            toolchain/erisc-b0-kernel.ld
         FILE_SET toolchain
-            TYPE HEADERS
-            BASE_DIRS ${PROJECT_SOURCE_DIR}
-            FILES ${LD_FILES} ${OBJ_FILES}
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}
+        FILES ${LD_FILES} ${OBJ_FILES}
 )
 
 target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
@@ -399,11 +399,13 @@ add_subdirectory(firmware)
 install(
     TARGETS
         hw
-    FILE_SET jit_api
+    FILE_SET
+    jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
-    FILE_SET toolchain
+    FILE_SET
+    toolchain
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
         COMPONENT metalium-runtime
 )

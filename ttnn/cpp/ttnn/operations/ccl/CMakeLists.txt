@@ -20,27 +20,27 @@ target_sources(
     ttnn_op_ccl
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${FixmeOpAPIDir}
-            FILES ccl_op_fusion.hpp
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES ccl_op_fusion.hpp
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                ${kernels}
-                shared_with_host/hetergeneous_data_structs.hpp
-                shared_with_host/sharded_tensor_addr_gen.hpp
-                common/types/ccl_types.hpp
-                common/types/sharding_common.hpp
-                common/types/ccl_types_device.hpp
-                common/uops/ccl_command_device.hpp
-                common/uops/ccl_command.hpp
-                common/interpreter_backends/kernel_common/algorithms.hpp
-                common/interpreter_backends/kernel_common/io_descriptors.hpp
-                common/kernels/command_processor.hpp
-                common/kernels/ccl_send_reader_two_input.cpp
-                common/kernels/ccl_send.cpp
-                common/kernels/ccl_wait_completion.cpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            shared_with_host/hetergeneous_data_structs.hpp
+            shared_with_host/sharded_tensor_addr_gen.hpp
+            common/types/ccl_types.hpp
+            common/types/sharding_common.hpp
+            common/types/ccl_types_device.hpp
+            common/uops/ccl_command_device.hpp
+            common/uops/ccl_command.hpp
+            common/interpreter_backends/kernel_common/algorithms.hpp
+            common/interpreter_backends/kernel_common/io_descriptors.hpp
+            common/kernels/command_processor.hpp
+            common/kernels/ccl_send_reader_two_input.cpp
+            common/kernels/ccl_send.cpp
+            common/kernels/ccl_wait_completion.cpp
     PRIVATE
         # Common
         ccl_op_fusion.cpp
@@ -80,9 +80,11 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_ccl
-    FILE_SET api
+    FILE_SET
+    api
         COMPONENT ttnn-dev
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl
         COMPONENT ttnn-runtime
 )

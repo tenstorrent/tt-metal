@@ -31,35 +31,35 @@
 2024-09-23T15:06:44.9398146Z ##[endgroup]
 2024-09-23T15:06:44.9722204Z Current date / time is Mon Sep 23 15:06:44 UTC 2024
 2024-09-23T15:06:57.9939128Z tt-smi reset was successful
-2024-09-23T15:06:58.4588002Z 
+2024-09-23T15:06:58.4588002Z
 2024-09-23T15:06:58.4588995Z [95m Detected Chips: [93m1[0m
 2024-09-23T15:06:58.4603548Z [1A[J
 2024-09-23T15:06:58.4604188Z [95m Detected Chips: [93m1[0m
-2024-09-23T15:06:58.4604616Z 
+2024-09-23T15:06:58.4604616Z
 2024-09-23T15:06:58.4604951Z [94m Detecting ARC: [93m|[0m
-2024-09-23T15:06:58.4605373Z 
+2024-09-23T15:06:58.4605373Z
 2024-09-23T15:06:58.4605689Z [94m Detecting DRAM: [93m|[0m
-2024-09-23T15:06:58.4606158Z 
+2024-09-23T15:06:58.4606158Z
 2024-09-23T15:06:58.4606488Z  [95m[][94m [16/16] ETH: [93m|[0m
 2024-09-23T15:06:58.4608291Z [4A[J
 2024-09-23T15:06:58.4609076Z [95m Detected Chips: [93m2[0m
 2024-09-23T15:06:58.4722260Z [1A[J
 2024-09-23T15:06:58.4722851Z [95m Detected Chips: [93m2[0m
-2024-09-23T15:06:58.4723335Z 
+2024-09-23T15:06:58.4723335Z
 2024-09-23T15:06:58.4723670Z [94m Detecting ARC: [93m/[0m
-2024-09-23T15:06:58.4724115Z 
+2024-09-23T15:06:58.4724115Z
 2024-09-23T15:06:58.4724445Z [94m Detecting DRAM: [93m/[0m
-2024-09-23T15:06:58.4724836Z 
+2024-09-23T15:06:58.4724836Z
 2024-09-23T15:06:58.4725147Z  [95m[][94m [16/16] ETH: [93m/[0m
 2024-09-23T15:06:58.4780814Z [4A[J
 2024-09-23T15:06:58.4781320Z [95m Detected Chips: [93m3[0m
 2024-09-23T15:06:58.4880820Z [1A[J
 2024-09-23T15:06:58.4881442Z [95m Detected Chips: [93m3[0m
-2024-09-23T15:06:58.4881832Z 
+2024-09-23T15:06:58.4881832Z
 2024-09-23T15:06:58.4882167Z [94m Detecting ARC: [93m-[0m
-2024-09-23T15:06:58.4882542Z 
+2024-09-23T15:06:58.4882542Z
 2024-09-23T15:06:58.4882819Z [94m Detecting DRAM: [93m-[0m
-2024-09-23T15:06:58.4883256Z 
+2024-09-23T15:06:58.4883256Z
 2024-09-23T15:06:58.4883552Z  [95m[][94m [16/16] ETH: [93m-[0m
 2024-09-23T15:06:58.4915745Z [4A[J
 2024-09-23T15:06:58.4916353Z [95m Detected Chips: [93m2[0m
@@ -672,31 +672,31 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:07:58.1868215Z ##[group]Build container for action use: '/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile'.
 2024-09-23T15:07:58.1921486Z ##[command]/usr/bin/docker build -t d065f5:797cf0cf5f814f368b2f141c3be80509 -f "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile" "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3"
 2024-09-23T15:07:58.8383712Z #0 building with "default" instance using docker driver
-2024-09-23T15:07:58.8384735Z 
+2024-09-23T15:07:58.8384735Z
 2024-09-23T15:07:58.8386865Z #1 [internal] load build definition from Dockerfile
 2024-09-23T15:07:58.8387653Z #1 transferring dockerfile: 139B done
 2024-09-23T15:07:58.8388228Z #1 DONE 0.0s
-2024-09-23T15:07:58.8388497Z 
+2024-09-23T15:07:58.8388497Z
 2024-09-23T15:07:58.8388897Z #2 [internal] load metadata for docker.io/library/docker:20.10
 2024-09-23T15:07:59.0663729Z #2 DONE 0.4s
-2024-09-23T15:07:59.1494594Z 
+2024-09-23T15:07:59.1494594Z
 2024-09-23T15:07:59.1495202Z #3 [internal] load .dockerignore
 2024-09-23T15:07:59.1495814Z #3 transferring context: 2B done
 2024-09-23T15:07:59.1496343Z #3 DONE 0.0s
-2024-09-23T15:07:59.1496625Z 
+2024-09-23T15:07:59.1496625Z
 2024-09-23T15:07:59.1497336Z #4 [1/3] FROM docker.io/library/docker:20.10@sha256:2967f0819c84dd589ed0a023b9d25dcfe7a3c123d5bf784ffbb77edf55335f0c
 2024-09-23T15:07:59.1498374Z #4 DONE 0.0s
-2024-09-23T15:07:59.1498625Z 
+2024-09-23T15:07:59.1498625Z
 2024-09-23T15:07:59.1498892Z #5 [internal] load build context
 2024-09-23T15:07:59.1499425Z #5 transferring context: 35B done
 2024-09-23T15:07:59.1500170Z #5 DONE 0.0s
-2024-09-23T15:07:59.1500589Z 
+2024-09-23T15:07:59.1500589Z
 2024-09-23T15:07:59.1500787Z #6 [2/3] RUN apk add bash
 2024-09-23T15:07:59.1501274Z #6 CACHED
-2024-09-23T15:07:59.1501497Z 
+2024-09-23T15:07:59.1501497Z
 2024-09-23T15:07:59.1501730Z #7 [3/3] COPY entrypoint.sh /entrypoint.sh
 2024-09-23T15:07:59.1502305Z #7 CACHED
-2024-09-23T15:07:59.1502557Z 
+2024-09-23T15:07:59.1502557Z
 2024-09-23T15:07:59.1502745Z #8 exporting to image
 2024-09-23T15:07:59.1503393Z #8 exporting layers done
 2024-09-23T15:07:59.1504747Z #8 writing image sha256:e30a6c700c8e906fa2055dfe2a092d5701586b83b0f9d963ca185de4cf820d0b done
@@ -771,7 +771,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:08:01.6706108Z Login Succeeded
 2024-09-23T15:08:01.6706700Z Configure a credential helper to remove this warning. See
 2024-09-23T15:08:01.6708076Z https://docs.docker.com/engine/reference/commandline/login/#credentials-store
-2024-09-23T15:08:01.6708714Z 
+2024-09-23T15:08:01.6708714Z
 2024-09-23T15:08:08.2265786Z Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
 2024-09-23T15:08:08.2717196Z Processing ./metal_libs-0.52.0rc31.dev6+wormhole.b0-cp38-cp38-linux_x86_64.whl
 2024-09-23T15:08:14.5563772Z Collecting ipywidgets==8.1.1
@@ -1020,7 +1020,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:05.1046856Z 2024-09-23 15:09:05.103 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:05.1048391Z 2024-09-23 15:09:05.104 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:05.1178365Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:05.1616128Z 
+2024-09-23T15:09:05.1616128Z
 2024-09-23T15:09:05.1950608Z [32m2024-09-23 15:09:05.194[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:05.2095438Z [32m2024-09-23 15:09:05.208[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:05.2097986Z [32m2024-09-23 15:09:05.208[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1080,7 +1080,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:10.0936280Z 2024-09-23 15:09:10.092 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:10.0937975Z 2024-09-23 15:09:10.093 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:10.1068106Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:10.1461345Z 
+2024-09-23T15:09:10.1461345Z
 2024-09-23T15:09:10.1802259Z [32m2024-09-23 15:09:10.179[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:10.1941518Z [32m2024-09-23 15:09:10.193[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:10.1944375Z [32m2024-09-23 15:09:10.193[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1119,7 +1119,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:13.6041541Z 2024-09-23 15:09:13.603 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:13.6043766Z 2024-09-23 15:09:13.603 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:13.6182000Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:13.6594931Z 
+2024-09-23T15:09:13.6594931Z
 2024-09-23T15:09:13.6932764Z [32m2024-09-23 15:09:13.692[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:13.7072880Z [32m2024-09-23 15:09:13.706[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:13.7075682Z [32m2024-09-23 15:09:13.706[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1222,61 +1222,61 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:15.2599759Z 2024-09-23 15:09:15.258 | INFO     | ttnn.graph:_visualize:154 - Graph visualization saved to "graph.svg"
 2024-09-23T15:09:15.2601135Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
 2024-09-23T15:09:15.2605228Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
-2024-09-23T15:09:15.2612159Z Capture Start                                     
+2024-09-23T15:09:15.2612159Z Capture Start
 2024-09-23T15:09:15.2618668Z Function Start: tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
 2024-09-23T15:09:15.2619698Z Function End:   tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
-2024-09-23T15:09:15.2620726Z Add Tensor: 0                                     
-2024-09-23T15:09:15.2621388Z Function Start: ttnn::to_layout                   
-2024-09-23T15:09:15.2622077Z     Function Start: Tensor::reshape               
-2024-09-23T15:09:15.2622785Z     Function End:   Tensor::reshape               
-2024-09-23T15:09:15.2623581Z     Add Tensor: 1                                 
-2024-09-23T15:09:15.2624238Z     Function Start: Tensor::pad                   
-2024-09-23T15:09:15.2625055Z     Function End:   Tensor::pad                   
-2024-09-23T15:09:15.2625697Z     Add Tensor: 2                                 
-2024-09-23T15:09:15.2626927Z     Function Start: Tensor::to                    
-2024-09-23T15:09:15.2627564Z     Function End:   Tensor::to                    
-2024-09-23T15:09:15.2628170Z     Add Tensor: 3                                 
-2024-09-23T15:09:15.2628806Z Function End:   ttnn::to_layout                   
-2024-09-23T15:09:15.2629469Z Function Start: Tensor::to                        
-2024-09-23T15:09:15.2630103Z     Add Device Buffer                             
-2024-09-23T15:09:15.2630718Z     Allocate Device Buffer                        
-2024-09-23T15:09:15.2631362Z Function End:   Tensor::to                        
-2024-09-23T15:09:15.2631993Z Add Tensor: 4                                     
-2024-09-23T15:09:15.2632644Z Function Start: ttnn::add                         
-2024-09-23T15:09:15.2633262Z     Function Start: Tensor::to                    
-2024-09-23T15:09:15.2634121Z         Add Tensor: 5                             
-2024-09-23T15:09:15.2634733Z         Add Device Buffer                         
-2024-09-23T15:09:15.2635363Z         Allocate Device Buffer                    
-2024-09-23T15:09:15.2635966Z     Function End:   Tensor::to                    
-2024-09-23T15:09:15.2636573Z     Add Tensor: 6                                 
-2024-09-23T15:09:15.2637193Z     Function Start: ttnn::prim::binary            
-2024-09-23T15:09:15.2637832Z         Function Start: BinaryDeviceOperation     
+2024-09-23T15:09:15.2620726Z Add Tensor: 0
+2024-09-23T15:09:15.2621388Z Function Start: ttnn::to_layout
+2024-09-23T15:09:15.2622077Z     Function Start: Tensor::reshape
+2024-09-23T15:09:15.2622785Z     Function End:   Tensor::reshape
+2024-09-23T15:09:15.2623581Z     Add Tensor: 1
+2024-09-23T15:09:15.2624238Z     Function Start: Tensor::pad
+2024-09-23T15:09:15.2625055Z     Function End:   Tensor::pad
+2024-09-23T15:09:15.2625697Z     Add Tensor: 2
+2024-09-23T15:09:15.2626927Z     Function Start: Tensor::to
+2024-09-23T15:09:15.2627564Z     Function End:   Tensor::to
+2024-09-23T15:09:15.2628170Z     Add Tensor: 3
+2024-09-23T15:09:15.2628806Z Function End:   ttnn::to_layout
+2024-09-23T15:09:15.2629469Z Function Start: Tensor::to
+2024-09-23T15:09:15.2630103Z     Add Device Buffer
+2024-09-23T15:09:15.2630718Z     Allocate Device Buffer
+2024-09-23T15:09:15.2631362Z Function End:   Tensor::to
+2024-09-23T15:09:15.2631993Z Add Tensor: 4
+2024-09-23T15:09:15.2632644Z Function Start: ttnn::add
+2024-09-23T15:09:15.2633262Z     Function Start: Tensor::to
+2024-09-23T15:09:15.2634121Z         Add Tensor: 5
+2024-09-23T15:09:15.2634733Z         Add Device Buffer
+2024-09-23T15:09:15.2635363Z         Allocate Device Buffer
+2024-09-23T15:09:15.2635966Z     Function End:   Tensor::to
+2024-09-23T15:09:15.2636573Z     Add Tensor: 6
+2024-09-23T15:09:15.2637193Z     Function Start: ttnn::prim::binary
+2024-09-23T15:09:15.2637832Z         Function Start: BinaryDeviceOperation
 2024-09-23T15:09:15.2638514Z             Function Start: tt::tt_metal::create_device_tensor
-2024-09-23T15:09:15.2639161Z                 Add Device Buffer                 
-2024-09-23T15:09:15.2639754Z                 Allocate Device Buffer            
+2024-09-23T15:09:15.2639161Z                 Add Device Buffer
+2024-09-23T15:09:15.2639754Z                 Allocate Device Buffer
 2024-09-23T15:09:15.2640399Z             Function End:   tt::tt_metal::create_device_tensor
-2024-09-23T15:09:15.2641047Z             Add Tensor: 7                         
-2024-09-23T15:09:15.2641651Z             Deallocate All Circular Buffers       
-2024-09-23T15:09:15.2642265Z             Allocate Circular Buffer              
-2024-09-23T15:09:15.2642876Z             Allocate Circular Buffer              
-2024-09-23T15:09:15.2643471Z             Allocate Circular Buffer              
-2024-09-23T15:09:15.2644080Z         Function End:   BinaryDeviceOperation     
-2024-09-23T15:09:15.2644724Z     Function End:   ttnn::prim::binary            
-2024-09-23T15:09:15.2645353Z     Deallocate Device Buffer                      
-2024-09-23T15:09:15.2645978Z Function End:   ttnn::add                         
-2024-09-23T15:09:15.2646582Z Add Tensor: 8                                     
-2024-09-23T15:09:15.2647214Z Function Start: Tensor::cpu                       
-2024-09-23T15:09:15.2647835Z     Add Tensor: 9                                 
-2024-09-23T15:09:15.2648444Z Function End:   Tensor::cpu                       
-2024-09-23T15:09:15.2649059Z Add Tensor: 10                                    
-2024-09-23T15:09:15.2649687Z Function Start: Tensor::to                        
-2024-09-23T15:09:15.2650318Z Function End:   Tensor::to                        
-2024-09-23T15:09:15.2650946Z Add Tensor: 11                                    
+2024-09-23T15:09:15.2641047Z             Add Tensor: 7
+2024-09-23T15:09:15.2641651Z             Deallocate All Circular Buffers
+2024-09-23T15:09:15.2642265Z             Allocate Circular Buffer
+2024-09-23T15:09:15.2642876Z             Allocate Circular Buffer
+2024-09-23T15:09:15.2643471Z             Allocate Circular Buffer
+2024-09-23T15:09:15.2644080Z         Function End:   BinaryDeviceOperation
+2024-09-23T15:09:15.2644724Z     Function End:   ttnn::prim::binary
+2024-09-23T15:09:15.2645353Z     Deallocate Device Buffer
+2024-09-23T15:09:15.2645978Z Function End:   ttnn::add
+2024-09-23T15:09:15.2646582Z Add Tensor: 8
+2024-09-23T15:09:15.2647214Z Function Start: Tensor::cpu
+2024-09-23T15:09:15.2647835Z     Add Tensor: 9
+2024-09-23T15:09:15.2648444Z Function End:   Tensor::cpu
+2024-09-23T15:09:15.2649059Z Add Tensor: 10
+2024-09-23T15:09:15.2649687Z Function Start: Tensor::to
+2024-09-23T15:09:15.2650318Z Function End:   Tensor::to
+2024-09-23T15:09:15.2650946Z Add Tensor: 11
 2024-09-23T15:09:15.2651695Z Function Start: tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
 2024-09-23T15:09:15.2652568Z Function End:   tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
-2024-09-23T15:09:15.2653332Z Deallocate Device Buffer                          
-2024-09-23T15:09:15.2653966Z Capture End                                       
-2024-09-23T15:09:15.2654363Z 
+2024-09-23T15:09:15.2653332Z Deallocate Device Buffer
+2024-09-23T15:09:15.2653966Z Capture End
+2024-09-23T15:09:15.2654363Z
 2024-09-23T15:09:15.4577861Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
 2024-09-23T15:09:15.5801790Z [Info] Running ttnn example: ttnn/examples/usage/program_cache.py
 2024-09-23T15:09:16.8700269Z 2024-09-23 15:09:16.868 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
@@ -1300,7 +1300,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:16.8833958Z 2024-09-23 15:09:16.882 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:16.8838600Z 2024-09-23 15:09:16.883 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:16.8975724Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:16.9363077Z 
+2024-09-23T15:09:16.9363077Z
 2024-09-23T15:09:16.9674683Z [32m2024-09-23 15:09:16.966[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:16.9825767Z [32m2024-09-23 15:09:16.981[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:16.9828398Z [32m2024-09-23 15:09:16.981[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1342,7 +1342,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:20.3917674Z 2024-09-23 15:09:20.390 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:20.3919339Z 2024-09-23 15:09:20.391 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:20.4048488Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:20.4459698Z 
+2024-09-23T15:09:20.4459698Z
 2024-09-23T15:09:20.4752112Z [32m2024-09-23 15:09:20.474[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:20.4892128Z [32m2024-09-23 15:09:20.488[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:20.4894651Z [32m2024-09-23 15:09:20.488[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1402,7 +1402,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:25.4908635Z 2024-09-23 15:09:25.490 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:25.4910229Z 2024-09-23 15:09:25.490 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:25.5040281Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:25.5467039Z 
+2024-09-23T15:09:25.5467039Z
 2024-09-23T15:09:25.5763405Z [32m2024-09-23 15:09:25.575[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:25.5905022Z [32m2024-09-23 15:09:25.589[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:25.5907518Z [32m2024-09-23 15:09:25.589[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
@@ -1441,7 +1441,7 @@ pip3 install --user $WHEEL_FILENAME
 2024-09-23T15:09:28.9334021Z 2024-09-23 15:09:28.932 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
 2024-09-23T15:09:28.9336216Z 2024-09-23 15:09:28.932 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
 2024-09-23T15:09:28.9464652Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
-2024-09-23T15:09:28.9881965Z 
+2024-09-23T15:09:28.9881965Z
 2024-09-23T15:09:29.0204485Z [32m2024-09-23 15:09:29.019[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
 2024-09-23T15:09:29.0347122Z [32m2024-09-23 15:09:29.034[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
 2024-09-23T15:09:29.0349615Z [32m2024-09-23 15:09:29.034[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)

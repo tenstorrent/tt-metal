@@ -16,9 +16,9 @@ target_sources(
     ttnn_op_experimental_bcast_to
     PUBLIC
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         bcast_to.cpp
         device/bcast_to_device_operation.cpp
@@ -37,7 +37,8 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_experimental_bcast_to
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/bcast_to
         COMPONENT ttnn-runtime
 )

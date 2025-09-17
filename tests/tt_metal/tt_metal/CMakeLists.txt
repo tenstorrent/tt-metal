@@ -6,13 +6,16 @@ target_link_libraries(
         test_common_libs
 )
 
-check_function_exists(backtrace HAVE_BACKTRACE)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
 
 if(NOT HAVE_BACKTRACE)
-  find_library(EXECINFO_LIB execinfo)
-  if(EXECINFO_LIB)
-    target_link_libraries(test_metal_common_libs INTERFACE ${EXECINFO_LIB})
-  endif()
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(test_metal_common_libs INTERFACE ${EXECINFO_LIB})
+    endif()
 endif()
 
 set(TT_METAL_TESTS_SRCS
@@ -124,19 +127,20 @@ target_sources(
     metalium_test_files
     PUBLIC
         FILE_SET jit_api
-            TYPE HEADERS
-            BASE_DIRS
-                ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-            FILES
-                ${kernels}
-                perf_microbenchmark/common/kernel_utils.hpp
-                perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
+        TYPE HEADERS
+        BASE_DIRS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
+        FILES
+            ${kernels}
+            perf_microbenchmark/common/kernel_utils.hpp
+            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(
     TARGETS
         metalium_test_files
-    FILE_SET jit_api
+    FILE_SET
+    jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation

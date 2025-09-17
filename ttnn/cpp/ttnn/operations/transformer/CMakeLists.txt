@@ -16,9 +16,9 @@ target_sources(
     ttnn_op_transformer
     PUBLIC
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
@@ -50,7 +50,8 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_transformer
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/transformer
         COMPONENT ttnn-runtime
 )

@@ -19,9 +19,7 @@ from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
     "model_name",
     (("hrnet_w18_small"),),
 )
-def test_gs_demo(
-    device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
-):
+def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds):
     tt_model = hrnet_w18_small(device, multi_scale_output=True)
 
     tt_input = torch_to_tt_tensor_rm(imagenet_sample_input, device, put_on_device=False)

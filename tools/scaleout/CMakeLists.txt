@@ -23,14 +23,14 @@ target_sources(
     scaleout_tools
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                board/board.hpp
-                cabling_generator/cabling_generator.hpp
-                connector/connector.hpp
-                factory_system_descriptor/utils.hpp
-                node/node_types.hpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            board/board.hpp
+            cabling_generator/cabling_generator.hpp
+            connector/connector.hpp
+            factory_system_descriptor/utils.hpp
+            node/node_types.hpp
     PRIVATE
         node/node.cpp
         node/node_types.cpp
@@ -54,13 +54,16 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
-check_function_exists(backtrace HAVE_BACKTRACE)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
 
 if(NOT HAVE_BACKTRACE)
-  find_library(EXECINFO_LIB execinfo)
-  if(EXECINFO_LIB)
-    target_link_libraries(scaleout_tools PRIVATE ${EXECINFO_LIB})
-  endif()
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(scaleout_tools PRIVATE ${EXECINFO_LIB})
+    endif()
 endif()
 
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)

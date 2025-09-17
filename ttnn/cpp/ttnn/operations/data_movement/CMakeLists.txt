@@ -31,47 +31,47 @@ target_sources(
     ttnn_op_data_movement
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${FixmeOpAPIDir}
-            FILES
-                bcast/bcast.hpp
-                bcast/bcast_types.hpp
-                concat/concat.hpp
-                copy/device/copy_device_operation.hpp
-                permute/permute.hpp
-                repeat/repeat.hpp
-                reshape_view/reshape.hpp
-                reshape_view/reshape_common.hpp
-                sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-                sharded/reshard/device/reshard_op.hpp
-                sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
-                slice/slice.hpp
-                tilize_with_val_padding/tilize_with_val_padding.hpp
-                tilize_with_val_padding/tilize_with_val_padding_common.hpp
-                tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
-                transpose/transpose.hpp
-                untilize/untilize.hpp
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            bcast/bcast.hpp
+            bcast/bcast_types.hpp
+            concat/concat.hpp
+            copy/device/copy_device_operation.hpp
+            permute/permute.hpp
+            repeat/repeat.hpp
+            reshape_view/reshape.hpp
+            reshape_view/reshape_common.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/reshard/device/reshard_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            slice/slice.hpp
+            tilize_with_val_padding/tilize_with_val_padding.hpp
+            tilize_with_val_padding/tilize_with_val_padding_common.hpp
+            tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
+            transpose/transpose.hpp
+            untilize/untilize.hpp
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                ${kernels}
-                reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
-                reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
-                reshape_view/device/device/rm_reshape_interleaved.cpp
-                reshape_view/device/hostdevcommon/common.hpp
-                tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
-                untilize/device/kernels/dataflow/reader_unary_start_id.cpp
-                untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
-                untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
-                tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
-                tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
-                untilize/device/kernels/compute/common.cpp
-                untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
-                tilize/device/kernels/compute/tilize_wh.cpp
-                untilize/device/kernels/compute/pack_untilize.cpp
-                untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
-                untilize/device/kernels/compute/pack_untilize_wh.cpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+            reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/device/hostdevcommon/common.hpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
+            untilize/device/kernels/compute/pack_untilize.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -198,9 +198,11 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_data_movement
-    FILE_SET api
+    FILE_SET
+    api
         COMPONENT ttnn-dev
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement
         COMPONENT ttnn-runtime
 )

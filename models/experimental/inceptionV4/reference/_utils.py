@@ -30,9 +30,7 @@ class SelectAdaptivePool2d(nn.Module):
     ):
         super(SelectAdaptivePool2d, self).__init__()
         assert input_fmt in ("NCHW", "NHWC")
-        self.pool_type = (
-            pool_type or ""
-        )  # convert other falsy values to empty string for consistent TS typing
+        self.pool_type = pool_type or ""  # convert other falsy values to empty string for consistent TS typing
 
         self.pool = nn.AdaptiveAvgPool2d(output_size)
         self.flatten = nn.Flatten(1)
@@ -49,15 +47,7 @@ class SelectAdaptivePool2d(nn.Module):
         return adaptive_pool_feat_mult(self.pool_type)
 
     def __repr__(self):
-        return (
-            self.__class__.__name__
-            + " ("
-            + "pool_type="
-            + self.pool_type
-            + ", flatten="
-            + str(self.flatten)
-            + ")"
-        )
+        return self.__class__.__name__ + " (" + "pool_type=" + self.pool_type + ", flatten=" + str(self.flatten) + ")"
 
 
 def _create_pool(
@@ -72,9 +62,7 @@ def _create_pool(
         assert (
             num_classes == 0 or use_conv
         ), "Pooling can only be disabled if classifier is also removed or conv classifier is used"
-        flatten_in_pool = (
-            False  # disable flattening if pooling is pass-through (no pooling)
-        )
+        flatten_in_pool = False  # disable flattening if pooling is pass-through (no pooling)
     global_pool = SelectAdaptivePool2d(
         pool_type=pool_type,
         flatten=flatten_in_pool,
@@ -127,9 +115,7 @@ def assign_weight_batchnorm(norm: nn.BatchNorm2d, state_dict, key_w: str):
     norm.bias = nn.Parameter(state_dict[f"{key_w}.bias"])
     norm.running_mean = nn.Parameter(state_dict[f"{key_w}.running_mean"])
     norm.running_var = nn.Parameter(state_dict[f"{key_w}.running_var"])
-    norm.num_batches_tracked = nn.Parameter(
-        state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False
-    )
+    norm.num_batches_tracked = nn.Parameter(state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False)
     norm.eval()
 
 

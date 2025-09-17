@@ -66,12 +66,8 @@ class MBConvBlock(nn.Module):
         # Expansion phase
         oup = inp * expand_ratio  # number of output channels
         if expand_ratio != 1:
-            self._expand_conv = nn.Conv2d(
-                in_channels=inp, out_channels=oup, kernel_size=1, bias=False
-            )
-            self._bn0 = nn.BatchNorm2d(
-                num_features=oup, momentum=self._momentum, eps=self._epsilon
-            )
+            self._expand_conv = nn.Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
+            self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=self._momentum, eps=self._epsilon)
 
         # Depthwise convolution phase
         self._depthwise_conv = nn.Conv2d(
@@ -83,27 +79,17 @@ class MBConvBlock(nn.Module):
             stride=s,
             bias=False,
         )
-        self._bn1 = nn.BatchNorm2d(
-            num_features=oup, momentum=self._momentum, eps=self._epsilon
-        )
+        self._bn1 = nn.BatchNorm2d(num_features=oup, momentum=self._momentum, eps=self._epsilon)
 
         # Squeeze and Excitation layer, if desired
         if self.has_se:
             num_squeezed_channels = max(1, int(inp * se_ratio))
-            self._se_reduce = nn.Conv2d(
-                in_channels=oup, out_channels=num_squeezed_channels, kernel_size=1
-            )
-            self._se_expand = nn.Conv2d(
-                in_channels=num_squeezed_channels, out_channels=oup, kernel_size=1
-            )
+            self._se_reduce = nn.Conv2d(in_channels=oup, out_channels=num_squeezed_channels, kernel_size=1)
+            self._se_expand = nn.Conv2d(in_channels=num_squeezed_channels, out_channels=oup, kernel_size=1)
 
         # Output phase
-        self._project_conv = nn.Conv2d(
-            in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False
-        )
-        self._bn2 = nn.BatchNorm2d(
-            num_features=final_oup, momentum=self._momentum, eps=self._epsilon
-        )
+        self._project_conv = nn.Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
+        self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._momentum, eps=self._epsilon)
         self._relu = nn.ReLU6(inplace=True)
 
     def forward(self, x, drop_connect_rate=None):
@@ -128,11 +114,7 @@ class MBConvBlock(nn.Module):
         x = self._bn2(self._project_conv(x))
 
         # Skip connection and drop connect
-        if (
-            self.id_skip
-            and self.stride == 1
-            and self.input_filters == self.output_filters
-        ):
+        if self.id_skip and self.stride == 1 and self.input_filters == self.output_filters:
             if drop_connect_rate:
                 x = drop_connect(x, drop_connect_rate, training=self.training)
             x += identity  # skip connection
@@ -188,16 +170,10 @@ class EfficientNetLite(nn.Module):
                 se_ratio,
             ) = stage_setting
             # Update block input and output filters based on width multiplier.
-            input_filters = (
-                input_filters
-                if i == 0
-                else round_filters(input_filters, widthi_multiplier)
-            )
+            input_filters = input_filters if i == 0 else round_filters(input_filters, widthi_multiplier)
             output_filters = round_filters(output_filters, widthi_multiplier)
             num_repeat = (
-                num_repeat
-                if i == 0 or i == len(mb_block_settings) - 1
-                else round_repeats(num_repeat, depth_multiplier)
+                num_repeat if i == 0 or i == len(mb_block_settings) - 1 else round_repeats(num_repeat, depth_multiplier)
             )
 
             # The first block needs to take care of stride and filter size increase.
@@ -296,12 +272,8 @@ class EfficientNetLite(nn.Module):
 
 
 def build_efficientnet_lite(name, num_classes):
-    width_coefficient, depth_coefficient, _, dropout_rate = efficientnet_lite_params[
-        name
-    ]
-    model = EfficientNetLite(
-        width_coefficient, depth_coefficient, num_classes, 0.2, dropout_rate
-    )
+    width_coefficient, depth_coefficient, _, dropout_rate = efficientnet_lite_params[name]
+    model = EfficientNetLite(width_coefficient, depth_coefficient, num_classes, 0.2, dropout_rate)
     return model
 
 
@@ -316,7 +288,4 @@ if __name__ == "__main__":
     input_shape = (3, wh, wh)
     flops, params = get_model_complexity_info(model, input_shape)
     split_line = "=" * 30
-    print(
-        f"{split_line}\nInput shape: {input_shape}\n"
-        f"Flops: {flops}\nParams: {params}\n{split_line}"
-    )
+    print(f"{split_line}\nInput shape: {input_shape}\n" f"Flops: {flops}\nParams: {params}\n{split_line}")

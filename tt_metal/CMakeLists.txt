@@ -36,9 +36,9 @@ target_sources(
     tt_metal
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
-            FILES ${api}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
+        FILES ${api}
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
@@ -76,56 +76,56 @@ target_sources(
     jitapi
     INTERFACE
         FILE_SET jit_api
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                api/tt-metalium/buffer_types.hpp
-                api/tt-metalium/circular_buffer_constants.h
-                api/tt-metalium/constants.hpp
-                api/tt-metalium/fabric_edm_types.hpp
-                api/tt-metalium/edm_fabric_counters.hpp
-                core_descriptors/blackhole_140_arch.yaml
-                core_descriptors/wormhole_b0_80_arch.yaml
-                core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
-                fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-                fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
-                fabric/fabric_edm_packet_header.hpp
-                ${FABRIC_HW_INC}
-                ${LITE_FABRIC_INC}
-                impl/dispatch/kernels/cq_commands.hpp
-                impl/dispatch/kernels/cq_common.hpp
-                impl/dispatch/kernels/cq_relay.hpp
-                impl/dispatch/kernels/cq_helpers.hpp
-                ${COMPUTE_KERNEL_API}
-                soc_descriptors/blackhole_140_arch.yaml
-                soc_descriptors/wormhole_b0_80_arch.yaml
-                tools/profiler/kernel_profiler.hpp
-                tools/profiler/fabric_event_profiler.hpp
-                # Kernel sources
-                impl/dispatch/kernels/cq_dispatch.cpp
-                impl/dispatch/kernels/cq_dispatch_subordinate.cpp
-                impl/dispatch/kernels/cq_prefetch.cpp
-                fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
-                fabric/impl/kernels/tt_fabric_mux.cpp
-                kernels/compute/blank.cpp
-                kernels/compute/eltwise_binary.cpp
-                kernels/compute/eltwise_sfpu.cpp
-                kernels/dataflow/blank.cpp
-                kernels/dataflow/reader_binary_diff_lengths.cpp
-                kernels/dataflow/reader_unary.cpp
-                kernels/dataflow/writer_unary.cpp
-                kernels/dataflow/writer_unary_1.cpp
-                jit_build/genfiles.cpp
-                jit_build/genfiles.hpp
-                ${TT_LLK_HEADERS}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            api/tt-metalium/buffer_types.hpp
+            api/tt-metalium/circular_buffer_constants.h
+            api/tt-metalium/constants.hpp
+            api/tt-metalium/fabric_edm_types.hpp
+            api/tt-metalium/edm_fabric_counters.hpp
+            core_descriptors/blackhole_140_arch.yaml
+            core_descriptors/wormhole_b0_80_arch.yaml
+            core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
+            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/fabric_edm_packet_header.hpp
+            ${FABRIC_HW_INC}
+            ${LITE_FABRIC_INC}
+            impl/dispatch/kernels/cq_commands.hpp
+            impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_relay.hpp
+            impl/dispatch/kernels/cq_helpers.hpp
+            ${COMPUTE_KERNEL_API}
+            soc_descriptors/blackhole_140_arch.yaml
+            soc_descriptors/wormhole_b0_80_arch.yaml
+            tools/profiler/kernel_profiler.hpp
+            tools/profiler/fabric_event_profiler.hpp
+            # Kernel sources
+            impl/dispatch/kernels/cq_dispatch.cpp
+            impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+            impl/dispatch/kernels/cq_prefetch.cpp
+            fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+            fabric/impl/kernels/tt_fabric_mux.cpp
+            kernels/compute/blank.cpp
+            kernels/compute/eltwise_binary.cpp
+            kernels/compute/eltwise_sfpu.cpp
+            kernels/dataflow/blank.cpp
+            kernels/dataflow/reader_binary_diff_lengths.cpp
+            kernels/dataflow/reader_unary.cpp
+            kernels/dataflow/writer_unary.cpp
+            kernels/dataflow/writer_unary_1.cpp
+            jit_build/genfiles.cpp
+            jit_build/genfiles.hpp
+            ${TT_LLK_HEADERS}
 )
 
 target_link_libraries(
@@ -211,16 +211,18 @@ if(TT_INSTALL)
         EXPORT Metalium
         LIBRARY
             COMPONENT metalium-runtime
-        FILE_SET api
+        FILE_SET
+        api
             DESTINATION COMPONENT
-        metalium-dev
+            metalium-dev
     )
     install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
 
     install(
         TARGETS
             jitapi
-        FILE_SET jit_api
+        FILE_SET
+        jit_api
             DESTINATION
                 ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
             COMPONENT metalium-runtime
@@ -236,7 +238,8 @@ if(TT_INSTALL)
             TracyClient
             tt-logger
         EXPORT Metalium
-        FILE_SET api
+        FILE_SET
+        api
             COMPONENT metalium-dev
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
     )

@@ -10,9 +10,9 @@ target_sources(
     ttnn_op_debug
     PUBLIC
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES ${kernels}
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         apply_device_delay.cpp
         device/apply_device_delay_device_operation.cpp
@@ -29,7 +29,8 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_debug
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/debug
         COMPONENT ttnn-runtime
 )

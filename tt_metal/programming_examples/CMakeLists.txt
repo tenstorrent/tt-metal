@@ -1,12 +1,15 @@
 # All programming example targets should link tt_stl
 link_libraries(TT::STL)
-check_function_exists(backtrace HAVE_BACKTRACE)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
 
 if(NOT HAVE_BACKTRACE)
-  find_library(EXECINFO_LIB execinfo)
-  if(EXECINFO_LIB)
-  	link_libraries(execinfo)
-  endif()
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        link_libraries(execinfo)
+    endif()
 endif()
 
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
@@ -60,7 +63,8 @@ install(
     # magic doc handling is missing. For now keep it out of 'doc'.
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
     COMPONENT metalium-examples
-    REGEX "/kernels/"
+    REGEX
+    "/kernels/"
         EXCLUDE
 )
 
@@ -81,5 +85,6 @@ install(
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
-    REGEX "/kernels/"
+    REGEX
+    "/kernels/"
 )

@@ -1,5 +1,5 @@
 operator,
-clip, 
+clip,
 elu,
 hardshrink
 hardswish

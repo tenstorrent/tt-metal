@@ -28,12 +28,15 @@ set_target_properties(
 )
 target_link_libraries(fault_tolerance_tests PRIVATE TT::Metalium::Test::Distributed::FaultTolerance)
 
-check_function_exists(backtrace HAVE_BACKTRACE)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
 
 if(NOT HAVE_BACKTRACE)
-  find_library(EXECINFO_LIB execinfo)
-  if(EXECINFO_LIB)
-    target_link_libraries(fault_tolerance PRIVATE ${EXECINFO_LIB})
-    target_link_libraries(fault_tolerance_tests PRIVATE ${EXECINFO_LIB})
-  endif()
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(fault_tolerance PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(fault_tolerance_tests PRIVATE ${EXECINFO_LIB})
+    endif()
 endif()

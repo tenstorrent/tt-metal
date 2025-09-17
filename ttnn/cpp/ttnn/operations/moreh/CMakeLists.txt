@@ -23,17 +23,17 @@ target_sources(
     ttnn_op_moreh
     PUBLIC
         FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${FixmeOpAPIDir}
-            FILES moreh_group_norm/moreh_group_norm.hpp moreh_matmul/moreh_matmul.hpp
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES moreh_group_norm/moreh_group_norm.hpp moreh_matmul/moreh_matmul.hpp
         FILE_SET kernels
-            TYPE HEADERS
-            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-            FILES
-                ${kernels}
-                moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
-                moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
-                moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
     PRIVATE
         moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
         moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp
@@ -174,9 +174,11 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_moreh
-    FILE_SET api
+    FILE_SET
+    api
         COMPONENT ttnn-dev
-    FILE_SET kernels
+    FILE_SET
+    kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/moreh
         COMPONENT ttnn-runtime
 )

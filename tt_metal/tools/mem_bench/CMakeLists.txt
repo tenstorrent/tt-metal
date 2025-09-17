@@ -23,13 +23,16 @@ target_link_libraries(
         benchmark::benchmark
 )
 
-check_function_exists(backtrace HAVE_BACKTRACE)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
 
 if(NOT HAVE_BACKTRACE)
-  find_library(EXECINFO_LIB execinfo)
-  if(EXECINFO_LIB)
-    target_link_libraries(mem_bench PRIVATE ${EXECINFO_LIB})
-  endif()
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(mem_bench PRIVATE ${EXECINFO_LIB})
+    endif()
 endif()
 
 target_include_directories(
