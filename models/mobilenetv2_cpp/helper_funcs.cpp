@@ -374,7 +374,7 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
                     model_parameters["classifier_1_bias"] = bias.to_device(device.get());
                 }
                 else {
-                    TT_THROW("Unsurport Module {}", MODULE_NAME(seq_child));
+                    TT_THROW("Unsupported Module {}", MODULE_NAME(seq_child));
                 }
             }
         }
