@@ -326,6 +326,179 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
+HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor) {
+    auto get_host_buffer =
+        []<typename T>(
+            std::size_t py_data_ptr, std::size_t num_elements, const py::object& contiguous_py_tensor) -> HostBuffer {
+        tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(contiguous_py_tensor));
+        return HostBuffer(
+            tt::stl::Span<T>(static_cast<T*>(py_data_ptr), static_cast<T*>(py_data_ptr) + num_elements), pydata_pin);
+    };
+
+    if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        {
+            const auto py_dtype = py_tensor.attr("dtype");
+            if (py_dtype.equal(torch.attr("float16"))) {
+                py_tensor = py_tensor.attr("to")(torch.attr("bfloat16"));
+            } else if (py_dtype.equal(torch.attr("int64"))) {
+                py_tensor = py_tensor.attr("to")(torch.attr("int32"));
+            } else if (py_dtype.equal(torch.attr("float64"))) {
+                py_tensor = py_tensor.attr("to")(torch.attr("float32"));
+            }
+        }
+
+        py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
+
+        const auto py_dtype = contiguous_py_tensor.attr("dtype");
+        auto num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
+        auto py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")());
+        if (py_dtype.equal(torch.attr("float32"))) {
+            return get_host_buffer.operator<float>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+            return get_host_buffer.operator<bfloat16(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(torch.attr("int32"))) {
+            return get_host_buffer.operator<int32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(torch.attr("int16"))) {
+            return get_host_buffer.operator<int16_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(torch.attr("uint8"))) {
+            return get_host_buffer.operator<uint8_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else {
+            TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
+        }
+    } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
+        {
+            const auto py_dtype = py_tensor.attr("dtype");
+            if (py_dtype.equal(torch.attr("int64"))) {
+                py_tensor = py_tensor.attr("astype")(np.attr("int32"));
+            }
+        }
+
+        py::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
+        const auto py_dtype = contiguous_py_tensor.attr("dtype");
+        auto num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("size"));
+        auto py_data_ptr = py::cast<std::size_t>(py::cast<py::tuple>(
+            py::cast<py::dict>(contiguous_py_tensor.attr("__array_interface__"))[py::str("data")])[0]);
+
+        if (py_dtype.equal(np.attr("float32"))) {
+            return get_host_buffer.operator<float>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(np.attr("int32"))) {
+            return get_host_buffer.operator<int32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(np.attr("int16"))) {
+            return get_host_buffer.operator<int16_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else if (py_dtype.equal(np.attr("ubyte"))) {
+            return get_host_buffer.operator<uint8>(py_data_ptr, num_elements, contiguous_py_tensor);
+        } else {
+            TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
+        }
+    } else {
+        TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
+    }
+}
+
+std::optional<DataType> map_torch_data_type_to_ttnn(const py::object& py_dtype, const py::object& torch) {
+    if (py_dtype.equal(torch.attr("float32"))) {
+        return DataType::FLOAT32;
+    } else if (py_dtype.equal(torch.attr("float16"))) {
+        return DataType::BFLOAT16;
+    } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+        return DataType::BFLOAT16;
+    } else if (py_dtype.equal(torch.attr("int64"))) {
+        return DataType::UINT32;
+    } else if (py_dtype.equal(torch.attr("int32"))) {
+        return DataType::INT32;
+    } else if (py_dtype.equal(torch.attr("int16"))) {
+        return DataType::UINT16;
+    } else if (py_dtype.equal(torch.attr("uint8"))) {
+        return DataType::UINT8;
+    } else {
+        return std::nullopt;
+    }
+}
+
+std::optional<DataType> map_numpy_data_type_to_ttnn(const py::object& py_dtype, const py::object& numpy) {
+    if (py_dtype.equal(numpy.attr("float32"))) {
+        return DataType::FLOAT32;
+    } else if (py_dtype.equal(numpy.attr("float16"))) {
+        return DataType::BFLOAT16;
+    } else if (py_dtype.equal(numpy.attr("int64"))) {
+        return DataType::UINT32;
+    } else if (py_dtype.equal(numpy.attr("int32"))) {
+        return DataType::INT32;
+    } else if (py_dtype.equal(numpy.attr("int16"))) {
+        return DataType::UINT16;
+    } else if (py_dtype.equal(numpy.attr("uint8"))) {
+        return DataType::UINT8;
+    } else {
+        return std::nullopt;
+    }
+}
+
+DataType get_target_type(std::optional<DataType> optional_data_type, const py::handle& py_tensor) {
+    if (optional_data_type.has_value()) {
+        return optional_data_type.value();
+    } else if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        auto result = map_torch_data_type_to_ttnn(py_tensor.attr("dtype"));
+        TT_FATAL(result.has_value(), "Could not map torch type to TTNN: {}", py::cast<std::string>(py_tensor("dtype")));
+        return result.value();
+    } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
+        auto result = map_numpy_data_type_to_ttnn(py_tensor.attr("dtype"));
+        TT_FATAL(result.has_value(), "Could not map numpy type to TTNN: {}", py::cast<std::string>(py_tensor("dtype")));
+        return result.value();
+    } else {
+        TT_THROW(
+            "Could not get target type: the dtype was not explicitly specified and the input tensor object is not a "
+            "torch or numpy tensor: {}",
+            py : cast<std::string>(py::type(py_tensor)));
+    }
+}
+
+Tensor convert_python_tensor_to_tt_tensor(
+    const py::handle& py_tensor,
+    std::optional<DataType> optional_data_type,
+    std::optional<Layout> optional_layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
+    ttnn::distributed::MeshDevice* device,
+    ttnn::QueueId cq_id,
+    float pad_value,
+    const ttnn::distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
+
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
+        py_tensor,
+        optional_data_type,
+        optional_layout,
+        optional_tile,
+        memory_config,
+        device,
+        cq_id,
+        pad_value,
+        mesh_mapper);
+
+    py::object torch = py::module_::import("torch");
+    py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);
+
+    HostBuffer buffer = convert_py_tensor_to_host_buffer(py_tensor);
+    const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
+
+    Tensor output = create_device_tensor_from_host_data(
+        TensorSpec(
+            shape,
+            TensorLayout(
+                get_target_type(optional_data_type, py_tensor),
+                PageConfig(optional_layout.value_or(), optional_tile),
+                memory_config, )),
+        device,
+        cq_id,
+        pad_value,
+        mesh_mapper,
+        buffer);
+
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
