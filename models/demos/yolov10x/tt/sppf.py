@@ -25,6 +25,8 @@ class TtnnSPPF:
             parameters.cv1,
             self.conv_pt.cv1,
             use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv2 = Conv(
@@ -32,6 +34,8 @@ class TtnnSPPF:
             parameters.cv2,
             self.conv_pt.cv2,
             use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
     def __call__(self, x):

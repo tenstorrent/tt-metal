@@ -23,6 +23,8 @@ class TtnnSCDown:
             device,
             parameters.cv1,
             self.conv_pt.cv1,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv2 = Conv(
@@ -32,6 +34,8 @@ class TtnnSCDown:
             enable_identity=True,
             use_1d_systolic_array=False,
             deallocate_activation=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
     def __call__(self, input_tensor):
