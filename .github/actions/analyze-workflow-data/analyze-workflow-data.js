@@ -170,6 +170,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
         try {
           const text = fs.readFileSync(p, 'utf8');
           const lines = text.split(/\r?\n/);
+          core.info(`Scanning ${lines.length} lines in ${p}`);
           let foundInFile = 0;
 
           // A) info: ... until backtrace:
@@ -822,7 +823,7 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run (best-effort)
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -850,11 +851,7 @@ async function run() {
     }
 
     // Enrich stayed failing with first failing run within the window
-    sdfdsfd = 0
     for (const item of stayedFailingDetails) {
-      sdfdsfd++;
-      core.info(`sdfdsfd=${sdfdsfd}`);
-      if (sdfdsfd > 3) break;
       try {
         const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
         const res = findFirstFailInWindow(windowRuns);
@@ -877,7 +874,7 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run in window
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
