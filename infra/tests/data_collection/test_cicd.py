@@ -6,7 +6,7 @@ from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
-
+from loguru import logger
 
 INFRA_TESTS_DIR = pathlib.Path(__file__).parent.parent
 
@@ -383,9 +383,9 @@ def test_pipeline_job_contains_valid_steps():
     assert all(step.status in valid_statuses for step in target_job.steps)
     assert all(step.conclusion in valid_conclusions for step in target_job.steps)
 
-    print(f"\n✅ Job `{target_job_name}` has {len(target_job.steps)} steps:")
+    logger.debug(f"\n✅ Job `{target_job_name}` has {len(target_job.steps)} steps:")
     for step in target_job.steps:
-        print(
-            f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
-            f"started_at={step.started_at}, completed_at={step.completed_at}"
-        )
+        logger.debug(
+        f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
+        f"started_at={step.started_at}, completed_at={step.completed_at}"
+    )
