@@ -6,12 +6,12 @@
 
 #include <CLI/CLI.hpp>
 
-#include "autograd/module_base.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
+#include "modules/module_base.hpp"
 #include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     auto model = std::visit(
-        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::modules::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);

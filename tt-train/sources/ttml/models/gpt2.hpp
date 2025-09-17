@@ -6,9 +6,10 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include "autograd/module_base.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
+#include "modules/module_base.hpp"
+
 namespace ttml::models::gpt2 {
 
 using RunnerType = common::transformer::RunnerType;
@@ -39,11 +40,11 @@ struct TransformerConfig {
 class Transformer : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
-    std::shared_ptr<ttml::autograd::ModuleBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::autograd::ModuleBase>> blocks;
-    std::shared_ptr<ttml::autograd::ModuleBase> ln_fc;
-    std::shared_ptr<ttml::autograd::ModuleBase> fc;
+    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::modules::ModuleBase> pos_emb;
+    std::vector<std::shared_ptr<ttml::modules::ModuleBase>> blocks;
+    std::shared_ptr<ttml::modules::ModuleBase> ln_fc;
+    std::shared_ptr<ttml::modules::ModuleBase> fc;
 
 public:
     explicit Transformer(const TransformerConfig& config);

@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::modules {
 
-class Embedding : public autograd::ModuleBase {
+class Embedding : public ModuleBase {
     autograd::TensorPtr m_weight;
 
     void initialize_tensors(uint32_t num_embeddings, uint32_t embedding_dim);

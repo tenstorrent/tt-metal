@@ -8,8 +8,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
@@ -92,6 +90,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
