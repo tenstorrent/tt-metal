@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -314,8 +315,10 @@ class DropInVisionTransformer(torch.nn.Module):
             reverse_indices = torch.argsort(window_index)
             final_output = tt_output_torch[reverse_indices, :]
             if self.debug:
+                logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
                 reference_output = self.reference_model.forward(pixel_values, grid_thw)
                 _, pcc = comp_pcc(reference_output, final_output)
+                logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
             final_outputs.append(final_output)
         return torch.cat(final_outputs, dim=0)
 

@@ -210,12 +210,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             inputs.attention_mask,
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
-
         # Get user-specific rotary position embeddings
         cos, sin = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
+
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
