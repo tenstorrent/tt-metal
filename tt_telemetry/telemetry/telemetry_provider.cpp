@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * The telemetry provider creates a thread that collects and disseminates telemetry. Note that
+ * subscribers here are internal components. They maintain their own complete state, therefore
+ * the initial snapshot need only be sent once (the subscribers can never "disconnect") and any
+ * metrics received from remote instances can be propagated via delta updates.
+ */
+
 #include <future>
 #include <queue>
 #include <unistd.h>
@@ -31,9 +38,6 @@ static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
 
-// Only when aggregating: accumulated state of all remote tt_telemetry instances
-static TelemetrySnapshot remote_telemetry_state;
-
 // Unbounded queue for storing received telemetry snapshots from aggregate endpoints
 static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
 
@@ -47,17 +51,17 @@ static void on_snapshot_received(const std::string& endpoint, const TelemetrySna
     log_debug(tt::LogAlways, "TelemetryProvider: Snapshot from {} added to queue", endpoint);
 }
 
-static void aggregate_remote_telemetry() {
+static void aggregate_remote_telemetry(TelemetrySnapshot& delta_snapshot) {
     // Process all received snapshots from remote telemetry endpoints
-    received_snapshots_.process_all([](auto&& endpoint_snapshot_pair) {
+    received_snapshots_.process_all([&delta_snapshot](auto&& endpoint_snapshot_pair) {
         auto [endpoint, snapshot] = std::move(endpoint_snapshot_pair);
 
         log_debug(tt::LogAlways, "TelemetryProvider: Processing snapshot from endpoint {}", endpoint);
 
-        // Merge the received snapshot into remote telemetry state
-        remote_telemetry_state.merge_from(snapshot);
+        // Merge the received snapshot into the delta snapshot for this update cycle
+        delta_snapshot.merge_from(snapshot);
 
-        log_debug(tt::LogAlways, "TelemetryProvider: Updated remote telemetry store with data from {}", endpoint);
+        log_debug(tt::LogAlways, "TelemetryProvider: Added remote telemetry data from {} to delta", endpoint);
     });
 }
 
@@ -178,9 +182,8 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     }
 }
 
-static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) {
-    std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
-
+static void send_delta(
+    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers, std::shared_ptr<TelemetrySnapshot> snapshot) {
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         if (!bool_metrics_[i]->changed_since_transmission()) {
             continue;
@@ -197,6 +200,7 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>>& 
         }
         std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
         snapshot->uint_metrics[path] = uint_metrics_[i]->value();
+        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
         snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
         uint_metrics_[i]->mark_transmitted();
     }
@@ -207,8 +211,17 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>>& 
         }
         std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
         snapshot->double_metrics[path] = double_metrics_[i]->value();
+        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
         snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
         double_metrics_[i]->mark_transmitted();
+    }
+
+    // Add unit label maps to the snapshot (if not already present from remote aggregation)
+    if (snapshot->metric_unit_display_label_by_code.empty()) {
+        snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
+    }
+    if (snapshot->metric_unit_full_label_by_code.empty()) {
+        snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
     }
 
     for (auto &subscriber: subscribers) {
@@ -242,8 +255,9 @@ static void telemetry_thread(
             try {
                 std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
                 update(cluster);
-                aggregate_remote_telemetry();
-                send_delta(subscribers);
+                std::shared_ptr<TelemetrySnapshot> delta_snapshot = get_writeable_buffer();
+                aggregate_remote_telemetry(*delta_snapshot);
+                send_delta(subscribers, delta_snapshot);
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
             } catch (...) {
