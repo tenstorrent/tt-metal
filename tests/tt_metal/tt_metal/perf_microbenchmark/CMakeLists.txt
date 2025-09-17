@@ -62,6 +62,12 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     endif()
 
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
+        target_sources(
+            ${TEST_TARGET}
+            PRIVATE
+                routing/tt_fabric_test_config.cpp
+                routing/tt_fabric_test_context.cpp
+        )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
     target_include_directories(
