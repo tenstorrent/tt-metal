@@ -1,3 +1,4 @@
+include(CheckFunctionExists)
 add_executable(metal_example_matmul_multicore_reuse)
 target_sources(metal_example_matmul_multicore_reuse PRIVATE matmul_multicore_reuse.cpp)
 
