@@ -920,17 +920,18 @@ void MetalContext::initialize_firmware(
         tt_cxy_pair(device_id, virtual_core),
         jit_build_config.fw_launch_addr);
 
-    // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
-    // launch_message during program execution need to at least have the correct dispatch mode.
-    // When using Fast Dispatch on Tensix:
-    // dispatch cores (Tensix) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // Idle Eth cores configured with DISPATCH_MODE_HOST but not used
-    // When using Fast Dispatch on Idle Eth:
-    // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
-    // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
-    // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+    // Initialize the launch_msg ring buffer. Entry 0 gets the proper firmware startup message.
+    // Entries 1-7 are set with DISPATCH_MODE_NONE to indicate they are not valid for processing
+    // during firmware initialization, as specified in the PR requirements.
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, {});
+
+    // Entry 0: Use the proper firmware startup message
+    init_launch_msg_data[0] = *launch_msg;
+
+    // Entries 1-7: Set dispatch mode to DISPATCH_MODE_NONE as they are not needed during init
+    for (int i = 1; i < launch_msg_buffer_num_entries; i++) {
+        init_launch_msg_data[i].kernel_config.mode = DISPATCH_MODE_NONE;
+    }
     auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),

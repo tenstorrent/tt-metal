@@ -533,6 +533,10 @@ int main() {
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // DISPATCH_MODE_NONE entries should not be processed or advance the ring buffer.
+                // These are placeholder entries during firmware initialization that should be skipped.
+                // The dispatcher should not send GO signals for these entries.
             }
         }
     }

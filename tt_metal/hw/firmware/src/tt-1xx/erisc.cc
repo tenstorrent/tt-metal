@@ -143,6 +143,10 @@ void __attribute__((noinline)) Application(void) {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer
+            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // DISPATCH_MODE_NONE entries should not be processed or advance the ring buffer.
+                // These are placeholder entries during firmware initialization that should be skipped.
+                // The dispatcher should not send GO signals for these entries.
             }
 
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
