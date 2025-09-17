@@ -34,7 +34,7 @@ public:
         offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        inline Segment(std::span<word_t const> contents, address_t addr, address_t lma, offset_t membytes) :
+        Segment(std::span<const word_t> contents, address_t addr, address_t lma, offset_t membytes) :
             contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 

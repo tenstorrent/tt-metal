@@ -325,7 +325,7 @@ inline void print_datum(std::ostream& ss, uint8_t datum) {
     print_datum<uint32_t>(ss, datum);
 }
 
-inline constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
+constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
 
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
