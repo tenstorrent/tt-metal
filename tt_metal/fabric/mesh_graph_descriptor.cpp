@@ -62,7 +62,7 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
     return report.str();
 }
 
-inline LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
+LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
     // Check that mesh_coord is within mesh_shape
     TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
     return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
@@ -229,6 +229,8 @@ void MeshGraphDescriptor::populate() {
     populate_descriptors();
 
     populate_top_level_instance();
+
+    pre_populate_connections_lookups();
 
     populate_connections();
 }
@@ -585,16 +587,17 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Check that there is only a CLUSTER level graphs
-    if (proto.graph_descriptors_size() != 1) {
+    // Check that there is only a FABRIC level graph
+    if (proto.graph_descriptors_size() > 1) {
         error_messages.push_back(fmt::format(
-            "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})",
-            proto.graph_descriptors(0).name()));
+            "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph or less"
+        ));
     }
+
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.type() != "FABRIC") {
             error_messages.push_back(fmt::format(
-                "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})",
+                "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph (Graph: {})",
                 graph.name()));
         }
     }
