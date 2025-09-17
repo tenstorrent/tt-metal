@@ -70,6 +70,9 @@ private:
     size_t size_;
 };
 
+template <typename Struct>
+class StructBuffer;
+
 template <bool Const, typename Struct>
 class BaseStructView {
 private:
@@ -77,6 +80,7 @@ private:
     using same_const_t = std::conditional_t<Const, const T, T>;
     template <Struct::Field F>
     using FieldTraits = typename Struct::template FieldTraits<Const, F>;
+    friend class StructBuffer<Struct>;
 
 public:
     using byte_type = same_const_t<std::byte>;
@@ -134,6 +138,11 @@ public:
     StructBuffer(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {}
     StructBuffer(const StructBuffer& other) : StructBuffer(other.info_) {
         std::copy(other.data(), other.data() + size(), data());
+    }
+    // Construct from view
+    template <bool Const>
+    StructBuffer(const BaseStructView<Const, Struct>& view) : StructBuffer(view.info_) {
+        std::copy(view.data(), view.data() + size(), data());
     }
     StructBuffer& operator=(const StructBuffer& other) {
         *this = StructBuffer(other);
