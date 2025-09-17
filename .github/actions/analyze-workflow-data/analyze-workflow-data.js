@@ -129,6 +129,7 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
   const owner = context.repo.owner;
   const repo = context.repo.repo;
   try {
+    await core.startGroup(`Extracting error snippets for run ${runId}`);
     const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`));
     const zipPath = path.join(tmpDir, 'run_logs.zip');
@@ -136,10 +137,14 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     const extractDir = path.join(tmpDir, 'extract');
     fs.mkdirSync(extractDir, { recursive: true });
     execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-    return findErrorSnippetsInDir(extractDir, maxSnippets);
+    const snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
+    core.info(`Total snippets collected: ${snippets.length}`);
+    return snippets;
   } catch (e) {
     core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
     return [];
+  } finally {
+    core.endGroup();
   }
 }
 
@@ -149,7 +154,8 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
 function findErrorSnippetsInDir(rootDir, maxCount) {
   const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
   const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
-  const errorLineRegex = /error:/i;
+  const errorLineRegex = /(error:|runtimeerror:)/i; // allow RuntimeError too
+  const failedHeaderRegex = /^\s*FAILED\b/i; // pytest header lines
 
   const collected = [];
   const stack = [rootDir];
@@ -163,7 +169,9 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
         stack.push(p);
       } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
         try {
-          const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/);
+          const text = fs.readFileSync(p, 'utf8');
+          const lines = text.split(/\r?\n/);
+          let foundInFile = 0;
 
           // A) info: ... until backtrace:
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
@@ -178,6 +186,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               if (label) {
                 const text = block.join('\n');
                 collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
+                foundInFile++;
               }
               i = j;
             }
@@ -190,8 +199,27 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               if (!label) continue;
               const text = lines[k].trim();
               collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
+              foundInFile++;
             }
           }
+
+          // C) pytest FAILED header lines as stand-alone snippets
+          for (let m = 0; m < lines.length && collected.length < maxCount; m++) {
+            if (failedHeaderRegex.test(lines[m])) {
+              const label = lines[m].trim();
+              // use the header itself as label; snippet can be header + next non-blank line if present
+              let snippet = label;
+              let n = m + 1;
+              while (n < lines.length && lines[n].trim() === '') n++;
+              if (n < lines.length && !infoRegex.test(lines[n]) && !backtraceRegex.test(lines[n])) {
+                snippet += `\n${lines[n].trim()}`;
+              }
+              collected.push({ snippet: snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet, label });
+              foundInFile++;
+            }
+          }
+
+          core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`);
         } catch (_) { /* ignore */ }
       }
       if (collected.length >= maxCount) break;
@@ -861,7 +889,11 @@ async function run() {
     }
 
     // Enrich stayed failing with first failing run within the window
+    sdfdsfd = 0
     for (const item of stayedFailingDetails) {
+      sdfdsfd++;
+      core.info(`sdfdsfd=${sdfdsfd}`);
+      if (sdfdsfd > 3) break;
       try {
         const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
         const res = findFirstFailInWindow(windowRuns);
