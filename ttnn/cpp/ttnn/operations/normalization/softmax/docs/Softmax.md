@@ -44,7 +44,7 @@ ttnn.softmax(
     *,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     compute_kernel_config: Optional[DeviceComputeKernelConfig] = None,
-    numeric_stable: bool = False,
+    numeric_stable: bool = True,
     queue_id: int = 0
 ) -> ttnn.Tensor
 ```
@@ -74,7 +74,7 @@ ttnn.scale_mask_softmax(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     is_causal_mask: bool = False,
     compute_kernel_config: Optional[DeviceComputeKernelConfig] = None,
-    numeric_stable: bool = False,
+    numeric_stable: bool = True,
     queue_id: int = 0
 ) -> ttnn.Tensor
 ```
