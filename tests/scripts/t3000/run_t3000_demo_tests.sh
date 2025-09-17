@@ -153,6 +153,29 @@ run_t3000_qwen3_tests() {
   fi
 }
 
+run_t3000_qwq3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
+  echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
+  pip install -r models/tt_transformers/requirements.txt
+
+  echo "LOG_METAL: Running run_t3000_qwq3_tests"
+  qwq32b=/mnt/MLPerf/tt_dnn-models/qwen/QwQ-32B
+
+  HF_MODEL=$qwq32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwq3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3_vision_tests() {
   # Record the start time
   fail=0
@@ -387,6 +410,9 @@ run_t3000_tests() {
 
   # Run qwen3 tests
   run_t3000_qwen3_tests
+
+  # Run qwq tests
+  run_t3000_qwq3_tests
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
