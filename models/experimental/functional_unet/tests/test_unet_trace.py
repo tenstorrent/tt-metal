@@ -27,7 +27,7 @@ from models.experimental.functional_unet.tests.common import (
     UNetPerformanceStatistics,
 )
 
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 
 def determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):

@@ -22,7 +22,7 @@ namespace tt::tt_fabric {
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    if (dst_mesh_id == routing_table->mesh_id) {
+    if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
@@ -260,11 +260,21 @@ bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatency
 }
 
 // Overload: For 1D LowLatencyPacketHeader
-template <bool compressed = true>
-bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
-    tt_l1_ptr routing_path_t<1, compressed>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-    return routing_info->decode_route_to_buffer(dst_dev_id, (uint8_t*)&packet_header->routing_fields.value);
+// 1D need to choose between target_as_dev true/false and compressed true/false
+template <bool compressed = true, bool target_as_dev = true>
+bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
+    if constexpr (compressed) {
+        if constexpr (target_as_dev) {
+            return decode_route_to_buffer_by_dev(target_num, (uint8_t*)&packet_header->routing_fields.value);
+        } else {
+            return decode_route_to_buffer_by_hops(target_num, (uint8_t*)&packet_header->routing_fields.value);
+        }
+    } else {
+        static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
+        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        return routing_info->decode_route_to_buffer(target_num, (uint8_t*)&packet_header->routing_fields.value);
+    }
 }
 
 }  // namespace tt::tt_fabric

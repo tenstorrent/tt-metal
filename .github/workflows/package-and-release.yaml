@@ -1,5 +1,12 @@
 name: Package and release
 on:
+  workflow_call:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       dry-run:
@@ -7,10 +14,10 @@ on:
         required: false
         default: false
         type: boolean
-  # schedule:
-  #   # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
-  #   # dev testing and builds for beginning of work week
-  #   - cron: "0 0 * * *"
+  schedule:
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -74,7 +81,7 @@ jobs:
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      dry-run: ${{ inputs.dry-run }}
+      dry-run: ${{ inputs.dry-run || false }}
 
 
   build-test-publish:
@@ -86,7 +93,7 @@ jobs:
         version: [22.04, 24.04]
     with:
       version: ${{ matrix.version }}
-      dry-run: ${{ inputs.dry-run }}
+      dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
 

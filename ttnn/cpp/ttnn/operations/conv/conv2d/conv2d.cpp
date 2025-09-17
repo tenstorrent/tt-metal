@@ -652,6 +652,7 @@ Result conv2d_L1(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
+        mm_conv && auto_shard,
         bias_tensor.has_value(),
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
@@ -759,15 +760,6 @@ Result conv2d_L1(
             }
         }
 
-        bool enable_split_reader = conv_config.enable_split_reader;
-        if (enable_split_reader && opt_conv_op_block_config.act_block_h_ntiles == 1) {
-            // If the activation block height is 1, we can't enable split reader.
-            enable_split_reader = false;
-            log_warning(
-                tt::LogOp,
-                "Conv2D: Split reader was requested by the user, but it can't be support with just one tile per core "
-                "in activation matrix height.");
-        }
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
@@ -787,7 +779,6 @@ Result conv2d_L1(
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
             conv_config.full_inner_dim,
-            enable_split_reader,
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram);
 
