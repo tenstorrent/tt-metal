@@ -847,20 +847,6 @@ void ReadMeshDeviceProfilerResults(
 
 // clang-format off
 /**
- * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
- * Return value: void
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
- * | event          | An event that will be populated by this function, and inserted in CQ              | std::shared_ptr<Event>        |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
- */
-// clang-format on
-void EnqueueRecordEvent(
-    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// clang-format off
-/**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
