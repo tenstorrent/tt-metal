@@ -112,7 +112,11 @@ class EthCore(ABC):
         output.retrain_count = int(
             read_word_from_device(self.location, self.eth_core_definitions.retrain_count, context=self.context)
         )
-        log_check_with_loc(self.location, not output.retrain_count, f"{self.location.to_user_str()} retrain count is {output.retrain_count}")
+        log_check_with_loc(
+            self.location,
+            not output.retrain_count,
+            f"{self.location.to_user_str()} retrain count is {output.retrain_count}",
+        )
 
         # RX LINK UP
         output.rx_link_up = (
@@ -120,7 +124,11 @@ class EthCore(ABC):
             if read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
             else "Down"
         )
-        log_check_with_loc(self.location, output.rx_link_up != "Down", f"{self.location.to_user_str()} RX link is Down")
+        log_check_with_loc(
+                    self.location,
+                    not any_pending_message,
+                    f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
+        )
 
         # MAILBOX
         if self.eth_core_definitions.mailbox is not None:
