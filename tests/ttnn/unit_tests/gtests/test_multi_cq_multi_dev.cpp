@@ -37,15 +37,6 @@
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace ttnn {
-namespace operations {
-namespace unary {
-enum class UnaryOpType;
-struct UnaryWithParam;
-}  // namespace unary
-}  // namespace operations
-}  // namespace ttnn
-
 using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
