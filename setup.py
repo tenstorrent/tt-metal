@@ -331,6 +331,7 @@ class CMakeBuild(build_ext):
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
+            "fabric/mesh_graph_descriptors/*.textproto",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
             "lite_fabric/hw/**/*",
