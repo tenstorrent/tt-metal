@@ -17,7 +17,6 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include "assert.hpp"
