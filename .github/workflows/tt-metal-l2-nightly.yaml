@@ -155,4 +155,39 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      gtest_filter: "*NIGHTLY_*"
+  # Fast Dispatch Unit Tests
+  fast-dispatch-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # TTNN Tutorials
+  test-ttnn-tutorials:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+        ]
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
