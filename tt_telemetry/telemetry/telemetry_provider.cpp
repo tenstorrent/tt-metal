@@ -232,29 +232,42 @@ static void send_delta(const std::vector<std::shared_ptr<TelemetrySubscriber>>& 
 static void telemetry_thread(
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints) {
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-    log_info(tt::LogAlways, "Created cluster and HAL");
+    try {
+        std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+        std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
+        log_info(tt::LogAlways, "Created cluster and HAL");
 
-    // Create vectors of all metrics we will monitor by value type
-    create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-    create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-    log_info(tt::LogAlways, "Initialized telemetry thread");
+        create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+        create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+        log_info(tt::LogAlways, "Initialized metrics");
 
-    // Create WebSocket clients to connect to aggregate endpoints
-    // Always create WebSocketClients - it will handle empty endpoints internally
-    WebSocketClients websocket_clients(aggregate_endpoints, on_snapshot_received);
-    log_info(tt::LogAlways, "WebSocket clients created successfully");
+        // Create WebSocket clients to connect to aggregate endpoints (if any specified)
+        WebSocketClients websocket_clients(aggregate_endpoints, on_snapshot_received);
+        log_info(tt::LogAlways, "WebSocket clients created successfully");
 
-    // Continuously monitor on a loop
-    update(cluster);
-    send_initial_snapshot(subscribers);
-    log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
-    while (!stopped_.load()) {
-        std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
+        // Get initial telemetry reading
         update(cluster);
-        aggregate_remote_telemetry();
-        send_delta(subscribers);
+        send_initial_snapshot(subscribers);
+        log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
+
+        // Main telemetry monitoring loop
+        while (!stopped_.load()) {
+            try {
+                std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
+                update(cluster);
+                aggregate_remote_telemetry();
+                send_delta(subscribers);
+            } catch (const std::exception& e) {
+                log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
+            } catch (...) {
+                log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
+            }
+        }
+
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
+    } catch (...) {
+        log_fatal(tt::LogAlways, "Unknown fatal exception during telemetry thread initialization");
     }
 
     log_info(tt::LogAlways, "Telemetry thread stopped");
