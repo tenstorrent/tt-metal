@@ -95,8 +95,8 @@ class TtYOLOv9cConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=enable_weights_double_buffer,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -221,6 +221,8 @@ class TtnnRepconv:
         conv1_out = self.conv1(x)
         conv2_out = self.conv2(x)
         x = ttnn.silu(conv1_out + conv2_out)
+        ttnn.deallocate(conv1_out)
+        ttnn.deallocate(conv2_out)
         if use_signpost:
             signpost(header="TtnnRepconv End")
 
@@ -453,6 +455,7 @@ class TtnnSPPELAN:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
         self.cv5 = TtYOLOv9cConv2D(
             device=device,
@@ -460,6 +463,7 @@ class TtnnSPPELAN:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv5",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -542,12 +546,14 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.0.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_0_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[0][2],
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv2.0.2",
             device=device,
+            deallocate_activation=True,
             is_detect=True,
         )
 
@@ -566,6 +572,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.1.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_1_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[1][2],
@@ -573,6 +580,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.1.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv2_2_0 = TtYOLOv9cConv2D(
@@ -590,6 +598,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.2.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_2_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[2][2],
@@ -597,6 +606,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.2.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_0_0 = TtYOLOv9cConv2D(
@@ -606,6 +616,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_0_1 = TtYOLOv9cConv2D(
             device=device,
@@ -614,6 +625,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_0_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[0][2],
@@ -621,6 +633,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_1_0 = TtYOLOv9cConv2D(
@@ -630,6 +643,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_1_1 = TtYOLOv9cConv2D(
             device=device,
@@ -638,6 +652,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_1_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[1][2],
@@ -645,6 +660,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_2_0 = TtYOLOv9cConv2D(
@@ -654,6 +670,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.2.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_2_1 = TtYOLOv9cConv2D(
             device=device,
@@ -662,6 +679,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.2.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_2_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[2][2],
@@ -669,6 +687,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.2.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
         self.dfl = TtYOLOv9cConv2D(
             conv=conv_parameter.dfl.conv,
@@ -792,6 +811,7 @@ class TtnnProto:
             config_override={"act_block_h": 32},
             conv_transpose=True,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv2 = TtYOLOv9cConv2D(
@@ -803,6 +823,7 @@ class TtnnProto:
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             is_dfl=True,
+            deallocate_activation=True,
         )
         self.cv3 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3.conv,
@@ -810,6 +831,7 @@ class TtnnProto:
             conv_pth=f"{conv_pt}.cv3",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -901,6 +923,7 @@ class YoloV9:
             parameters=parameters,
             conv_pth="model.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )  # 1
         self.repncspelan4_1 = TtnnRepncspelan4(device, parameters.conv_args[2], parameters, "model.2")  # 2
         self.adown_1 = TtnnADown(
