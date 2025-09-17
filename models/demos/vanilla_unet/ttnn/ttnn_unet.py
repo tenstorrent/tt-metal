@@ -24,9 +24,12 @@ class TtUnet:
         device,
         parameters,
         model,
+        conv_args,
     ):
         self.model = model
+        self.conv_args = conv_args
         self.bn_parameters = parameters["decoder1"]["bn"]
+
         self.enc1_1 = Conv(
             [1, 1, 1, 1],
             parameters["encoder1"][0],
@@ -34,6 +37,7 @@ class TtUnet:
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
+            conv_args=conv_args["encoder1"][0],
         )
         self.enc1_2 = Conv(
             [1, 1, 1, 1],
@@ -41,16 +45,15 @@ class TtUnet:
             act_block_h=32,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
+            conv_args=conv_args["encoder1"][3],
         )
 
-        self.enc2_1 = Conv(
-            [1, 1, 1, 1],
-            parameters["encoder2"][0],
-            reshard=True,
+        self.enc2_1 = Conv([1, 1, 1, 1], parameters["encoder2"][0], reshard=True, conv_args=conv_args["encoder2"][0])
+        self.enc2_2 = Conv(
+            [1, 1, 1, 1], parameters["encoder2"][1], act_block_h=64, auto_shard=True, conv_args=conv_args["encoder2"][3]
         )
-        self.enc2_2 = Conv([1, 1, 1, 1], parameters["encoder2"][1], act_block_h=64, auto_shard=True)
 
-        self.enc3_1 = Conv([1, 1, 1, 1], parameters["encoder3"][0], auto_shard=True)
+        self.enc3_1 = Conv([1, 1, 1, 1], parameters["encoder3"][0], auto_shard=True, conv_args=conv_args["encoder3"][0])
         self.enc3_2 = Conv(
             [1, 1, 1, 1],
             parameters["encoder3"][1],
@@ -58,6 +61,7 @@ class TtUnet:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             auto_shard=True,
+            conv_args=conv_args["encoder3"][3],
         )
 
         self.enc4_1 = Conv(
@@ -66,8 +70,9 @@ class TtUnet:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             reshard=True,
+            conv_args=conv_args["encoder4"][0],
         )
-        self.enc4_2 = Conv([1, 1, 1, 1], parameters["encoder4"][1])
+        self.enc4_2 = Conv([1, 1, 1, 1], parameters["encoder4"][1], conv_args=conv_args["encoder4"][3])
 
         self.bottleneck_1 = Conv(
             [1, 1, 1, 1],
@@ -76,6 +81,7 @@ class TtUnet:
             enable_weights_double_buffer=True,
             height_sharding=False,
             reshard=True,
+            conv_args=conv_args["bottleneck"][0],
         )
         self.bottleneck_2 = Conv(
             [1, 1, 1, 1],
@@ -84,16 +90,18 @@ class TtUnet:
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
+            conv_args=conv_args["bottleneck"][3],
         )
 
-        self.upconv4 = ConvTranspose([2, 2, 0, 0], parameters["upconv4"], reshard=True)
-        self.dec4_1 = Conv([1, 1, 1, 1], parameters["decoder4"][0], auto_shard=True)
-        self.dec4_2 = Conv([1, 1, 1, 1], parameters["decoder4"][1], auto_shard=True)
+        self.upconv4 = ConvTranspose([2, 2, 0, 0], parameters["upconv4"], reshard=True, conv_args=conv_args["upconv4"])
+        self.dec4_1 = Conv([1, 1, 1, 1], parameters["decoder4"][0], auto_shard=True, conv_args=conv_args["decoder4"][0])
+        self.dec4_2 = Conv([1, 1, 1, 1], parameters["decoder4"][1], auto_shard=True, conv_args=conv_args["decoder4"][3])
 
         self.upconv3 = ConvTranspose(
             [2, 2, 0, 0],
             parameters["upconv3"],
             reshard=True,
+            conv_args=conv_args["upconv3"],
         )
         self.dec3_1 = Conv(
             [1, 1, 1, 1],
@@ -102,11 +110,10 @@ class TtUnet:
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
+            conv_args=conv_args["decoder3"][0],
         )
         self.dec3_2 = Conv(
-            [1, 1, 1, 1],
-            parameters["decoder3"][1],
-            height_sharding=False,
+            [1, 1, 1, 1], parameters["decoder3"][1], height_sharding=False, conv_args=conv_args["decoder3"][3]
         )
 
         self.upconv2 = ConvTranspose(
@@ -114,12 +121,17 @@ class TtUnet:
             parameters["upconv2"],
             act_block_h=32,
             reshard=True,
+            conv_args=conv_args["upconv2"],
         )
-        self.dec2_1 = Conv([1, 1, 1, 1], parameters["decoder2"][0], act_block_h=32)
-        self.dec2_2 = Conv([1, 1, 1, 1], parameters["decoder2"][1], act_block_h=64)
+        self.dec2_1 = Conv([1, 1, 1, 1], parameters["decoder2"][0], act_block_h=32, conv_args=conv_args["decoder2"][0])
+        self.dec2_2 = Conv([1, 1, 1, 1], parameters["decoder2"][1], act_block_h=64, conv_args=conv_args["decoder2"][3])
 
         self.upconv1 = ConvTranspose(
-            [2, 2, 0, 0], parameters["upconv1"], act_block_h=32, output_layout=ttnn.TILE_LAYOUT
+            [2, 2, 0, 0],
+            parameters["upconv1"],
+            act_block_h=32,
+            output_layout=ttnn.TILE_LAYOUT,
+            conv_args=conv_args["upconv1"],
         )
         self.dec1_1 = Conv(
             [1, 1, 1, 1],
@@ -129,6 +141,7 @@ class TtUnet:
             output_layout=ttnn.TILE_LAYOUT,
             # activation=None,
             reallocate_halo_output=True,
+            conv_args=conv_args["decoder1"][0],
         )
         self.dec1_2 = Conv(
             [1, 1, 1, 1],
@@ -138,6 +151,7 @@ class TtUnet:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             reallocate_halo_output=True,
+            conv_args=conv_args["decoder1"][3],
         )
 
         self.conv = Conv(
@@ -149,6 +163,7 @@ class TtUnet:
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat8_b,
             output_layout=ttnn.TILE_LAYOUT,
+            conv_args=conv_args["conv"],
         )
 
     def __call__(self, device, input_tensor):
@@ -166,20 +181,20 @@ class TtUnet:
 
         enc1 = self.enc1_1(device, nhwc)
         enc1 = self.enc1_2(device, enc1)
-        pool_in = ttnn.reshape(enc1, (1, 1, enc1.shape[0] * enc1.shape[1] * enc1.shape[2], enc1.shape[3]))
+        # pool_in = ttnn.reshape(enc1, (1, 1, enc1.shape[0] * enc1.shape[1] * enc1.shape[2], enc1.shape[3]))
         pool_1 = ttnn.max_pool2d(
-            input_tensor=pool_in,
+            input_tensor=enc1,
             batch_size=1,
-            input_h=enc1.shape[1],
-            input_w=enc1.shape[2],
+            input_h=self.conv_args.pool1.input_height,
+            input_w=self.conv_args.pool1.input_width,
             channels=enc1.shape[3],
             kernel_size=[2, 2],
             stride=[2, 2],
             padding=[0, 0],
             dilation=[1, 1],
         )
-        pool_1_out_h, pool_1_out_w = int(enc1.shape[1] / 2), int(enc1.shape[2] / 2)
-        pool_1 = ttnn.reshape(pool_1, (enc1.shape[0], pool_1_out_h, pool_1_out_w, enc1.shape[3]))
+        # pool_1_out_h, pool_1_out_w = int(enc1.shape[1] / 2), int(enc1.shape[2] / 2)
+        # pool_1 = ttnn.reshape(pool_1, (enc1.shape[0], pool_1_out_h, pool_1_out_w, enc1.shape[3]))
 
         enc1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -195,56 +210,57 @@ class TtUnet:
         ttnn.deallocate(pool_1)
         enc2 = self.enc2_2(device, enc2)
 
-        pool_in = ttnn.reshape(enc2, (1, 1, enc2.shape[0] * enc2.shape[1] * enc2.shape[2], enc2.shape[3]))
-        if pool_in.is_sharded:
-            pool_in = ttnn.sharded_to_interleaved(pool_in, ttnn.L1_MEMORY_CONFIG)
+        # pool_in = ttnn.reshape(enc2, (1, 1, enc2.shape[0] * enc2.shape[1] * enc2.shape[2], enc2.shape[3]))
+        if enc2.is_sharded:
+            pool_in = ttnn.clone(ttnn.sharded_to_interleaved(enc2, ttnn.L1_MEMORY_CONFIG))
+
         pool_2 = ttnn.max_pool2d(
             input_tensor=pool_in,
             batch_size=1,
-            input_h=enc2.shape[1],
-            input_w=enc2.shape[2],
-            channels=enc2.shape[3],
+            input_h=self.conv_args.pool2.input_height,
+            input_w=self.conv_args.pool2.input_width,
+            channels=pool_in.shape[3],
             kernel_size=[2, 2],
             stride=[2, 2],
             padding=[0, 0],
             dilation=[1, 1],
         )
-        pool_2_out_h, pool_2_out_w = int(enc2.shape[1] / 2), int(enc2.shape[2] / 2)
-        pool_2 = ttnn.reshape(pool_2, (1, pool_2_out_h, pool_2_out_w, enc2.shape[3]))
+        # pool_2_out_h, pool_2_out_w = int(enc2.shape[1] / 2), int(enc2.shape[2] / 2)
+        # pool_2 = ttnn.reshape(pool_2, (1, pool_2_out_h, pool_2_out_w, enc2.shape[3]))
         enc2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
 
         enc3 = self.enc3_1(device, pool_2)
         ttnn.deallocate(pool_2)
         enc3 = self.enc3_2(device, enc3)
 
-        pool_in = ttnn.reshape(enc3, (1, 1, enc3.shape[0] * enc3.shape[1] * enc3.shape[2], enc3.shape[3]))
+        # pool_in = ttnn.reshape(enc3, (1, 1, enc3.shape[0] * enc3.shape[1] * enc3.shape[2], enc3.shape[3]))
 
         pool_3 = ttnn.max_pool2d(
-            input_tensor=pool_in,
+            input_tensor=enc3,
             batch_size=1,
-            input_h=enc3.shape[1],
-            input_w=enc3.shape[2],
+            input_h=self.conv_args.pool3.input_height,
+            input_w=self.conv_args.pool3.input_width,
             channels=enc3.shape[3],
             kernel_size=[2, 2],
             stride=[2, 2],
             padding=[0, 0],
             dilation=[1, 1],
         )
-        pool_3_out_h, pool_3_out_w = int(enc3.shape[1] / 2), int(enc3.shape[2] / 2)
-        pool_3 = ttnn.reshape(pool_3, (1, pool_3_out_h, pool_3_out_w, enc3.shape[3]))
+        # pool_3_out_h, pool_3_out_w = int(enc3.shape[1] / 2), int(enc3.shape[2] / 2)
+        # pool_3 = ttnn.reshape(pool_3, (1, pool_3_out_h, pool_3_out_w, enc3.shape[3]))
         enc3 = ttnn.to_memory_config(enc3, ttnn.L1_MEMORY_CONFIG)
 
         enc4 = self.enc4_1(device, pool_3)
         ttnn.deallocate(pool_3)
         enc4 = self.enc4_2(device, enc4)
 
-        pool_in = ttnn.reshape(enc4, (1, 1, enc4.shape[0] * enc4.shape[1] * enc4.shape[2], enc4.shape[3]))
+        # pool_in = ttnn.reshape(enc4, (1, 1, enc4.shape[0] * enc4.shape[1] * enc4.shape[2], enc4.shape[3]))
 
         pool_4 = ttnn.max_pool2d(
-            input_tensor=pool_in,
+            input_tensor=enc4,
             batch_size=1,
-            input_h=enc4.shape[1],
-            input_w=enc4.shape[2],
+            input_h=self.conv_args.pool4.input_height,
+            input_w=self.conv_args.pool4.input_width,
             channels=enc4.shape[3],
             kernel_size=[2, 2],
             stride=[2, 2],
@@ -252,8 +268,8 @@ class TtUnet:
             dilation=[1, 1],
         )
         ttnn.deallocate(pool_in)
-        pool_4_out_h, pool_4_out_w = int(enc4.shape[1] / 2), int(enc4.shape[2] / 2)
-        pool_4 = ttnn.reshape(pool_4, (1, pool_4_out_h, pool_4_out_w, enc4.shape[3]))
+        # pool_4_out_h, pool_4_out_w = int(enc4.shape[1] / 2), int(enc4.shape[2] / 2)
+        # pool_4 = ttnn.reshape(pool_4, (1, pool_4_out_h, pool_4_out_w, enc4.shape[3]))
         enc4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
 
         bottleneck = self.bottleneck_1(device, pool_4)
