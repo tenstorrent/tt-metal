@@ -17,10 +17,6 @@ class RMSNorm:
         self.use_bias = bias
         self.weight = None
         self.bias = None
-        if norm_elementwise_affine:
-            self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
-            if bias:
-                self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
     def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
@@ -76,7 +72,7 @@ class LayerNorm:
         self.weight = None
         self.bias = None
         # When using the row-major workaround, ensure that dummy weight/bias are created
-        if norm_elementwise_affine or use_row_major_workaround:
+        if use_row_major_workaround:
             if use_row_major_workaround:
                 self.weight = bf16_tensor(
                     torch.ones(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
