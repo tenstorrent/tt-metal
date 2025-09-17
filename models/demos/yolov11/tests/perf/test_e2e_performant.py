@@ -66,7 +66,6 @@ def run_yolov11_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
@@ -103,6 +102,7 @@ def test_e2e_performant(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
