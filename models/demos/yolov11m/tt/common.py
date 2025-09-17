@@ -64,7 +64,7 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if "bias" in conv_pth:
+        if "bias" in conv_pth and conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
         else:
