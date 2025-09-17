@@ -230,15 +230,9 @@ void MAIN {
                         PACK(pack_reconfig_data_format(pre_tilize_cb_id, out_cb_id));
 
                         // Skip fast_tilize path for bfp4_b output until #28380 is closed
-                        if constexpr (is_output_bfp4_b) {
-                            tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                            tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                            tilize_uninit(pre_tilize_cb_id, out_cb_id);
-                        } else {
-                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                            fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
-                        }
+                        tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        tilize_uninit(pre_tilize_cb_id, out_cb_id);
                         cb_push_back(out_cb_id, in_ntiles_c);
 
                         // if constexpr (is_output_block_format) {
