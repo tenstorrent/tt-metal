@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <utility>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -20,8 +19,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-struct go_msg_t;
-struct launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
