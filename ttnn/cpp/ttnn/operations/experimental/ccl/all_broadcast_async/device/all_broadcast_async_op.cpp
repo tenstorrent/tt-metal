@@ -68,6 +68,36 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mes
         });
 }
 
+std::optional<MeshCoordinate> get_tensor_topology_neighbor(
+    const tt::tt_metal::distributed::MeshShape& shape,
+    const MeshCoordinate& coord,
+    int offset,
+    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode mode,
+    const std::optional<uint32_t>& cluster_axis) {
+    if (cluster_axis.has_value()) {
+        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
+        return coord.get_neighbor(shape, offset, cluster_axis.value(), mode);
+    } else if (shape[1] > 1) {
+        return coord.get_neighbor(shape, offset, 1, mode);
+    } else if (shape[0] > 1) {
+        return coord.get_neighbor(shape, offset, 0, mode);
+    } else {
+        TT_THROW("All gather without cluster axis is only supported when shape[1-cluster_axis] == 1");
+        return std::nullopt;
+    }
+}
+
+uint32_t get_tensor_topology_linearized_index(
+    const tt::tt_metal::distributed::MeshShape& shape,
+    const MeshCoordinate& coord,
+    const std::optional<uint32_t>& cluster_axis) {
+    if (cluster_axis.has_value()) {
+        return coord[cluster_axis.value()];
+    } else {
+        return coord[0] * shape[1] + coord[1];
+    }
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_at(
     const MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
@@ -75,7 +105,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     const GlobalSemaphore& init_barrier_semaphore,
     const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
     auto target_device_coord = coord;
     std::vector<IDevice*> devices_to_use = {};
     if (this->cluster_axis.has_value()) {
@@ -92,11 +121,12 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     auto boundary_mode = this->topology == ttnn::ccl::Topology::Ring
                              ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                              : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-    std::optional<MeshCoordinate> backward_coord =
-        ttnn::ccl::get_neighbor(*mesh_device, coord, -1, boundary_mode, this->cluster_axis);
-    std::optional<MeshCoordinate> forward_coord =
-        ttnn::ccl::get_neighbor(*mesh_device, coord, 1, boundary_mode, this->cluster_axis);
-    uint32_t device_index = ttnn::ccl::get_linearized_index(*mesh_device, coord, this->cluster_axis);
+    std::optional<MeshCoordinate> backward_coord = get_tensor_topology_neighbor(
+        input_tensors[0].tensor_topology().distribution_shape(), coord, -1, boundary_mode, this->cluster_axis);
+    std::optional<MeshCoordinate> forward_coord = get_tensor_topology_neighbor(
+        input_tensors[0].tensor_topology().distribution_shape(), coord, 1, boundary_mode, this->cluster_axis);
+    uint32_t device_index = get_tensor_topology_linearized_index(
+        input_tensors[0].tensor_topology().distribution_shape(), coord, this->cluster_axis);
 
     return all_broadcast_async_multicore(
         input_tensors[0],
