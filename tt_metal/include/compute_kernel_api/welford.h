@@ -38,18 +38,18 @@ namespace ckernel {
  * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
  *                           be computed using float division instead.
  *
- * @param current_row     The current row index (starting from 0). Should follow 0 <= current_row <= TILE_HEIGHT(32) and
- * current_row
+ * @param current_row     The current row index (starting from 0). Should follow 0 <= current_row <= TILE_HEIGHT (32)
+ * and current_row
  *                        <= final_row. When current_row is 0, the previous mean and m2 are ignored.
  * @param final_row       The final row index. This index is not included in the update. Should follow current_row <=
  * final_row.A2D This dictates the total number of rows to update, starting from current_row.
  * @param num_skip_rows   Number of initial rows to skip in the update.
  *                        Setting this to a value greater than 0 skips the first num_skip_rows rows of the update.
- *                        Should follow 0 <= num_skip_rows <= TILE_HEIGHT(32).
- * @param reciprocal_lut  The optional reference to the reciprocal lookup table. If nullptr, the reciprocal will
- *                        be computed using float division.
+ *                        Should follow 0 <= num_skip_rows <= TILE_HEIGHT (32).
+ * @param reciprocal_lut  The reference to the reciprocal lookup table. If an empty array is passed (reciprocal_size is
+ * 0), the reciprocal will be computed using float division.
  *
- * @note All TILE_WIDTH(32) columns of the input tile are processed by this function.
+ * @note All TILE_WIDTH (32) columns of the input tile are processed by this function.
  *
  * @return None. Mean and m2 tiles are updated in place.
  */
@@ -96,12 +96,12 @@ ALWI void welford_tile(
  *
  * @param scale_factor       The reciprocal of this value (1/scale_factor) is multiplied with the M2 value in the DST
  * register at tile offset 2 to compute the variance.
- * @param reciprocal_lut     The optional reference to the reciprocal lookup table. If nullptr, the reciprocal will
- *                           be computed using float division.
+ * @param reciprocal_lut     The reference to the reciprocal lookup table. If an empty array is passed (reciprocal_size
+ * is 0), the reciprocal will be computed using float division.
  *
- * @return                   None. The mean and variance tiles are updated in place. TILE_WIDTH(32) number of values
+ * @return                   None. The mean and variance tiles are updated in place. TILE_WIDTH (32) number of values
  *                           are written to the DST register.
- *                           All TILE_WIDTH(32) number of values are written to the first face of the DST register.
+ *                           All TILE_WIDTH (32) number of values are written to the first face of the DST register.
  *                           Each valid value is followed by an invalid value.
  */
 template <uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reciprocal_size>
