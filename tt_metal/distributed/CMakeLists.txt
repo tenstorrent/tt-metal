@@ -32,6 +32,8 @@ endif()
 
 set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 
+list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mock_distributed_context.cpp)
+
 # Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
 if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
     message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
@@ -74,7 +76,6 @@ else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")
     set(USE_MPI FALSE)
     list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mock_distributed_context.cpp)
 endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})

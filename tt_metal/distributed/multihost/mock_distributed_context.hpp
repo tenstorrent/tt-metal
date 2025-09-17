@@ -15,7 +15,7 @@ namespace tt::tt_metal::distributed::multihost {
 class MockDistributedContext : public DistributedContext {
 public:
     /* ----------------- mock constructor ---------------- */
-    explicit MockDistributedContext(const tt::umd::tt_ClusterDescriptor* cluster_desc);
+    explicit MockDistributedContext(const tt_ClusterDescriptor* cluster_desc);
 
     // destructor – no-op
     ~MockDistributedContext() override = default;
@@ -71,7 +71,7 @@ public:
     std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
 
 private:
-    const tt::umd::tt_ClusterDescriptor* cluster_desc_;
+    const tt_ClusterDescriptor* cluster_desc_;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

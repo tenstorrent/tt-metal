@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/tt-metalium/distributed_context.hpp"
-#include "mock_distributed_context.hpp"
 #include <umd/device/cluster_descriptor.hpp>
+
+#include "mock_distributed_context.hpp"
 
 #if defined(OPEN_MPI)
 #include "mpi_distributed_context.hpp"
+
 #else
 #include "single_host_context.hpp"
 #endif

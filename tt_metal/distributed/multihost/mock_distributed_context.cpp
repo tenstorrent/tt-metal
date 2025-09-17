@@ -9,7 +9,7 @@ namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------
 //                           Context implementation
 // ---------------------------------------------------------------------
-MockDistributedContext::MockDistributedContext(const tt::umd::tt_ClusterDescriptor* cluster_desc) {}
+MockDistributedContext::MockDistributedContext(const tt_ClusterDescriptor* cluster_desc) {}
 
 // basic info
 Rank MockDistributedContext::rank() const { TT_THROW("Not supported"); }
