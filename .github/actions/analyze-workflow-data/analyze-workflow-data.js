@@ -170,6 +170,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
         try {
           const text = fs.readFileSync(p, 'utf8');
           const lines = text.split(/\r?\n/);
+          core.info(`Scanning ${lines.length} lines in ${p}`);
           let foundInFile = 0;
 
           // A) info: ... until backtrace:
@@ -771,7 +772,7 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run (best-effort)
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -799,11 +800,7 @@ async function run() {
     }
 
     // Enrich stayed failing with first failing run within the window
-    sdfdsfd = 0
     for (const item of stayedFailingDetails) {
-      sdfdsfd++;
-      core.info(`sdfdsfd=${sdfdsfd}`);
-      if (sdfdsfd > 3) break;
       try {
         const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
         const res = findFirstFailInWindow(windowRuns);
@@ -826,7 +823,7 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run in window
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
+          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
@@ -863,7 +860,7 @@ async function run() {
     let regressionsSection = '';
     let stayedFailingSection = '';
     try {
-      const parsed = JSON.parse(fs.readFileSync(statusChangesPath, 'utf8')) || [];
+      const parsed = Array.isArray(changes) ? changes : [];
       const regressionsItems = parsed.filter(item => item.change === 'success_to_fail');
       const stayedFailingItems = parsed.filter(item => item.change === 'stayed_failing');
       if (regressionsItems.length > 0) {
@@ -922,7 +919,9 @@ async function run() {
         stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
       }
     } catch (_) {
-      // If parsing fails, omit the section silently
+      // Fallback: always show headers even if nothing parsed
+      regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
+      stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
     }
 
     const finalReport = [mainReport, regressionsSection, stayedFailingSection].join('\n');
