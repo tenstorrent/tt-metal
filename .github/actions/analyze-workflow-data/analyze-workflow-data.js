@@ -204,6 +204,15 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
   await core.startGroup(`Collecting error annotations for run ${runId}`);
   try {
     core.info(`[run ${runId}] Starting annotation collection (max ${maxSnippets}).`);
+    // Preload run to get attempt/check suite info for later fallbacks
+    let runMeta = undefined;
+    try {
+      const r = await octokit.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+      runMeta = r?.data;
+      core.info(`[run ${runId}] Loaded run meta: attempt=${runMeta?.run_attempt}, check_suite_id=${runMeta?.check_suite_id}`);
+    } catch (e) {
+      core.info(`[run ${runId}] Failed to load run meta: ${e.message}`);
+    }
     // 1) Try the workflow-run annotations endpoint (aggregated across jobs)
     try {
       core.info(`[run ${runId}] Attempt 1: workflow-run annotations endpoint`);
@@ -235,12 +244,32 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     // 2) Fall back to jobs → check run annotations
     try {
       core.info(`[run ${runId}] Attempt 2: list jobs for workflow run`);
-      const jobs = await octokit.paginate(
+      let jobs = await octokit.paginate(
         octokit.rest.actions.listJobsForWorkflowRun,
         { owner, repo, run_id: runId, per_page: 100 },
         (res) => (res.data?.jobs) || []
       );
       core.info(`[run ${runId}] Attempt 2: fetched ${jobs.length} jobs`);
+      // If zero, try per-attempt API as a fallback (iterate all attempts if known)
+      if (jobs.length === 0 && runMeta?.run_attempt) {
+        core.info(`[run ${runId}] Attempt 2: trying listJobsForWorkflowRunAttempt across attempts 1..${runMeta.run_attempt}`);
+        const all = [];
+        for (let attempt = 1; attempt <= runMeta.run_attempt; attempt++) {
+          try {
+            const jobsForAttempt = await octokit.paginate(
+              octokit.rest.actions.listJobsForWorkflowRunAttempt,
+              { owner, repo, run_id: runId, attempt_number: attempt, per_page: 100 },
+              (res) => (res.data?.jobs) || []
+            );
+            core.info(`[run ${runId}] Attempt 2: attempt #${attempt} returned ${jobsForAttempt.length} jobs`);
+            all.push(...jobsForAttempt);
+          } catch (e) {
+            core.info(`[run ${runId}] Attempt 2: failed to fetch jobs for attempt #${attempt}: ${e.message}`);
+          }
+        }
+        jobs = all;
+        core.info(`[run ${runId}] Attempt 2: total jobs after attempt sweep = ${jobs.length}`);
+      }
       const snippets = [];
       for (const job of jobs) {
         if (snippets.length >= maxSnippets) break;
@@ -289,21 +318,39 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     // 3) Final fallback: list check runs for the commit and filter by details_url containing the runId
     try {
       core.info(`[run ${runId}] Attempt 3: derive check runs from commit sha`);
-      const run = await octokit.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
-      const ref = run?.data?.head_sha;
+      const run = runMeta || (await octokit.rest.actions.getWorkflowRun({ owner, repo, run_id: runId })).data;
+      const ref = run?.head_sha;
       if (ref) {
         core.info(`[run ${runId}] Retrieved head_sha ${ref}`);
-        const checkRuns = await octokit.paginate(
-          octokit.rest.checks.listForRef,
-          { owner, repo, ref, per_page: 100 },
-          (res) => (res.data?.check_runs) || []
-        );
-        core.info(`[run ${runId}] Found ${checkRuns.length} check runs for ref`);
+        let checkRuns = [];
+        try {
+          // Prefer listing by check_suite_id if available, it's tightly scoped to the workflow run
+          if (run?.check_suite_id) {
+            core.info(`[run ${runId}] Attempt 3: listing check runs by check_suite_id ${run.check_suite_id}`);
+            checkRuns = await octokit.paginate(
+              octokit.rest.checks.listForSuite,
+              { owner, repo, check_suite_id: run.check_suite_id, per_page: 100 },
+              (res) => (res.data?.check_runs) || []
+            );
+          } else {
+            core.info(`[run ${runId}] Attempt 3: check_suite_id unavailable, listing check runs by ref`);
+            checkRuns = await octokit.paginate(
+              octokit.rest.checks.listForRef,
+              { owner, repo, ref, per_page: 100 },
+              (res) => (res.data?.check_runs) || []
+            );
+          }
+        } catch (e) {
+          core.info(`[run ${runId}] Attempt 3: failed to list check runs: ${e.message}`);
+          checkRuns = [];
+        }
+        core.info(`[run ${runId}] Found ${checkRuns.length} check runs`);
         const snippets = [];
         for (const cr of checkRuns) {
           if (snippets.length >= maxSnippets) break;
+          // If details_url is present and does not point at this run, skip
           const url = cr.details_url || '';
-          if (!String(url).includes(`/runs/${runId}`)) continue;
+          if (url && !String(url).includes(`/runs/${runId}`)) continue;
           core.info(`[run ${runId}] Fetching annotations for check run ${cr.id} (${cr.name}) linked to run`);
           try {
             const annotations = await octokit.paginate(
