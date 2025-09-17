@@ -6,6 +6,8 @@
 ARG UBUNTU_VERSION=22.04
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ENV UBUNTU_VERSION=${UBUNTU_VERSION}
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -142,6 +144,7 @@ RUN mkdir -p /tmp/iwyu \
 
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
+RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
 RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
 RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
