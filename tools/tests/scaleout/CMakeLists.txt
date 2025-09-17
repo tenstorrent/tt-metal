@@ -8,13 +8,7 @@ set_target_properties(
 )
 
 # Add the protobuf generated headers directory for tests
-target_include_directories(
-    test_factory_system_descriptor
-    SYSTEM
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../scaleout
-        ${CMAKE_CURRENT_BINARY_DIR}/../../scaleout
-)
+target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_factory_system_descriptor

@@ -47,6 +47,8 @@ struct AsicChannel {
     auto operator<=>(const AsicChannel& other) const = default;
 };
 
+std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel);
+
 struct Port {
     PortType port_type = PortType::TRACE;
     PortId port_id{0};

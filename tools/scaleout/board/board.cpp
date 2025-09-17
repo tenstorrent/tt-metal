@@ -464,6 +464,12 @@ tt::umd::BoardType get_board_type_from_string(const std::string& board_name) {
     return *board_type;
 }
 
+std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel) {
+    os << "AsicChannel{asic_location=" << asic_channel.asic_location << ", channel_id=" << *asic_channel.channel_id
+       << "}";
+    return os;
+}
+
 }  // namespace tt::scaleout_tools
 
 // Hash function implementation for AsicChannel
