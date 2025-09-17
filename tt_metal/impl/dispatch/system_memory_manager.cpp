@@ -336,14 +336,30 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
 
+    CoreType core_type = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    tt_cxy_pair completion_queue_writer_core =
+            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
+                device_id, channel, cq_id);
+    auto completion_queue_writer_virtual =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            completion_queue_writer_core.chip,
+            CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
+            core_type);
+
     // this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
 
-    this->prefetch_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &read_ptr_and_toggle, sizeof(uint32_t), tt_cxy_pair(device_id, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y), this->completion_byte_addrs[cq_id]
+    );
+    // this->prefetch_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    // tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+    //             &read_ptr_and_toggle, sizeof(uint32_t), this->prefetcher_cores[cq_id], this->completion_byte_addrs[cq_id]);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
-    uint16_t channel =
+    channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
