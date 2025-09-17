@@ -1458,8 +1458,13 @@ private:
         }
 
         bool has_ns = false, has_ew = false;
-        bool opp_ns = (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0);
-        bool opp_ew = (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0);
+        bool opp_ns =
+            (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0 &&
+             hops.at(RoutingDirection::N) > 0 && hops.at(RoutingDirection::S) > 0);
+        bool opp_ew =
+            (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0 &&
+             hops.at(RoutingDirection::E) > 0 && hops.at(RoutingDirection::W) > 0);
+
         if (opp_ns || opp_ew) {
             TT_THROW("Unicast cannot have opposing directions in the same dimension");
         }
