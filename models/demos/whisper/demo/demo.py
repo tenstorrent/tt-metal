@@ -30,6 +30,8 @@ from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 
+available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
+
 
 def load_input_paths(folder_path):
     files = [os.path.join(folder_path, f) for f in listdir(folder_path) if isfile(join(folder_path, f))]
@@ -115,7 +117,6 @@ def run_generate(
     stream_generation=False,
     feature_dtype_to_use=torch.bfloat16,
     return_perf_metrics=False,
-    num_devices=2,
 ):
     all_input_features = []
     start_encode = time.time()
@@ -129,7 +130,9 @@ def run_generate(
     input_features = torch.cat(all_input_features, dim=0)  # [B, x, y]
     del all_input_features
     unpadded_batch_size = input_features.shape[0]
-    assert unpadded_batch_size == 1 * num_devices, "Only batch size (per device) 1 is supported for inference"
+    assert (
+        unpadded_batch_size == 1 * mesh_device.get_num_devices()
+    ), "Only batch size (per device) 1 is supported for inference"
     # Compute embeddings
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config,
@@ -263,9 +266,7 @@ def run_generate(
             return output
 
 
-def create_functional_whisper_for_conditional_generation_inference_pipeline(
-    ttnn_model, mesh_device, model_repo, input_mesh_mapper, output_mesh_composer, weights_mesh_mapper, num_devices=2
-):
+def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, mesh_device, model_repo):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
@@ -277,6 +278,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(model_repo)
     parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, ttnn_model, mesh_device, weights_mesh_mapper=weights_mesh_mapper
@@ -284,9 +286,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
 
     def _model_pipeline(
         current_batch,
-        input_mesh_mapper,
-        output_mesh_composer,
-        weights_mesh_mapper,
         stream=False,
         return_perf_metrics=False,
     ):
@@ -311,7 +310,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             input_mesh_mapper=input_mesh_mapper,
             output_mesh_composer=output_mesh_composer,
             weights_mesh_mapper=weights_mesh_mapper,
-            num_devices=num_devices,
         )
 
     return _model_pipeline
@@ -322,7 +320,6 @@ def run_demo_whisper_for_audio_classification_inference(
     ttnn_model,
     mesh_device,
     num_inputs,
-    num_devices=2,
     batch_size_per_device=1,
     label=False,
     dataset=None,
@@ -344,7 +341,7 @@ def run_demo_whisper_for_audio_classification_inference(
         custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
     )
-    batch_size = batch_size_per_device * num_devices
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
     total_inputs = num_inputs * batch_size
 
     if not label and len(input_data) < total_inputs:
@@ -417,25 +414,18 @@ def run_demo_whisper_for_audio_classification_inference(
 
 
 def run_demo_whisper_for_conditional_generation_inference(
-    input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device=1, num_devices=2
+    input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device=1
 ):
     torch.manual_seed(0)
     # instantiate model inference pipeline
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
-        ttnn_model,
-        mesh_device,
-        model_repo,
-        weights_mesh_mapper=weights_mesh_mapper,
-        input_mesh_mapper=input_mesh_mapper,
-        output_mesh_composer=output_mesh_composer,
-        num_devices=num_devices,
+        ttnn_model, mesh_device, model_repo
     )
 
     # load data
     input_data = load_input_paths(input_path)
 
-    batch_size = batch_size_per_device * num_devices
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
     total_inputs = num_inputs * batch_size
 
     if len(input_data) < total_inputs:
@@ -453,14 +443,7 @@ def run_demo_whisper_for_conditional_generation_inference(
             samplerate, data = wavfile.read(input_file_path)
             current_batch.append((samplerate, data))
         # perform model inference
-        ttnn_output, ttft, avg_decode_throughput = model_pipeline(
-            current_batch,
-            stream=False,
-            return_perf_metrics=True,
-            input_mesh_mapper=input_mesh_mapper,
-            output_mesh_composer=output_mesh_composer,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )
+        ttnn_output, ttft, avg_decode_throughput = model_pipeline(current_batch, stream=False, return_perf_metrics=True)
         if i >= num_warmup_runs:  # Exclude first compile run
             total_ttft += ttft
             total_decode_throughput += avg_decode_throughput
@@ -472,25 +455,16 @@ def run_demo_whisper_for_conditional_generation_inference(
     return avg_ttft, avg_decode_throughput
 
 
-def run_demo_whisper_for_conditional_generation_dataset(
-    ttnn_model, mesh_device, model_repo, batch_size_per_device=1, num_devices=2
-):
+def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, mesh_device, model_repo, batch_size_per_device=1):
     torch.manual_seed(0)
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
-        ttnn_model,
-        mesh_device,
-        model_repo,
-        weights_mesh_mapper=weights_mesh_mapper,
-        input_mesh_mapper=input_mesh_mapper,
-        output_mesh_composer=output_mesh_composer,
-        num_devices=num_devices,
+        ttnn_model, mesh_device, model_repo
     )
 
     # load data
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    batch_size = batch_size_per_device * num_devices
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
     # perform model inference
     total_wer = 0
     total_cer = 0
@@ -513,9 +487,6 @@ def run_demo_whisper_for_conditional_generation_dataset(
             current_batch,
             stream=False,
             return_perf_metrics=False,
-            weights_mesh_mapper=weights_mesh_mapper,
-            input_mesh_mapper=input_mesh_mapper,
-            output_mesh_composer=output_mesh_composer,
         )
         batch_start = i + 1
         batch_end = i + current_batch_size
@@ -538,31 +509,19 @@ def run_demo_whisper_for_conditional_generation_dataset(
     "num_inputs,batch_size_per_device",
     [(1, 1)],
 )
-@pytest.mark.parametrize(
-    "run_on_single_card",
-    [
-        False,
-        # True   # Uncomment to run on single_card only
-    ],
-    ids=lambda val: "run_single_card_only" if val else "run_on_multi_device",
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
 def test_demo_for_audio_classification_inference(
-    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env, run_on_single_card
+    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing for audio classification inference")
 
-    if run_on_single_card:
-        num_devices = 1
-    else:
-        num_devices = mesh_device.get_num_devices()
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
         ttnn_model,
         mesh_device,
         num_inputs,
-        num_devices,
         batch_size_per_device,
     )
 
@@ -576,31 +535,18 @@ def test_demo_for_audio_classification_inference(
     [(1, 1)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize(
-    "run_on_single_card",
-    [
-        False,
-        # True   # Uncomment to run on single_card only
-    ],
-    ids=lambda val: "run_single_card_only" if val else "run_on_multi_device",
-)
+@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
 def test_demo_for_audio_classification_dataset(
-    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env, run_on_single_card
+    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
-
-    if run_on_single_card:
-        num_devices = 1
-    else:
-        num_devices = mesh_device.get_num_devices()
     ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
         ttnn_model,
         mesh_device,
         num_inputs,
-        num_devices,
         batch_size_per_device,
         label=True,
         dataset=ds,
@@ -619,33 +565,23 @@ def test_demo_for_audio_classification_dataset(
     "model_repo",
     ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
 )
+@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
+# To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
+# By default, it uses all available devices.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize(
-    "run_on_single_card",
-    [
-        False,
-        # True   # Uncomment to run on single_card only
-    ],
-    ids=lambda val: "run_single_card_only" if val else "run_on_multi_device",
-)
 def test_demo_for_conditional_generation(
-    input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device, run_on_single_card
+    input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device
 ):
-    if run_on_single_card:
-        num_devices = 1
-    else:
-        num_devices = mesh_device.get_num_devices()
-
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
-        input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device, num_devices=num_devices
+        input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
-    total_batch = num_devices * batch_size_per_device
+    total_batch = mesh_device.get_num_devices() * batch_size_per_device
     if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 8.31, "decode_t/s/u": 90.06}
+                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
             else:
-                expected_perf_metrics = {"prefill_t/s": 8.77, "decode_t/s/u": 96.51}
+                expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 7.40, "decode_t/s/u": 41.1}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
@@ -670,24 +606,13 @@ def test_demo_for_conditional_generation(
     "batch_size_per_device",
     [(1)],
 )
-@pytest.mark.parametrize(
-    "run_on_single_card",
-    [
-        False,
-        # True   # Uncomment to run on single_card only
-    ],
-    ids=lambda val: "run_single_card_only" if val else "run_on_multi_device",
-)
-def test_demo_for_conditional_generation_dataset(
-    ttnn_model, mesh_device, model_repo, is_ci_env, run_on_single_card, batch_size_per_device
-):
+@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
+# To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
+# By default, it uses all available devices.
+def test_demo_for_conditional_generation_dataset(ttnn_model, mesh_device, model_repo, is_ci_env, batch_size_per_device):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
-    if run_on_single_card:
-        num_devices = 1
-    else:
-        num_devices = mesh_device.get_num_devices()
     return run_demo_whisper_for_conditional_generation_dataset(
-        ttnn_model, mesh_device, model_repo, batch_size_per_device, num_devices
+        ttnn_model, mesh_device, model_repo, batch_size_per_device
     )
