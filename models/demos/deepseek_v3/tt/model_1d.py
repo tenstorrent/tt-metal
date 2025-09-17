@@ -310,7 +310,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ):
                 if is_padding_layer:
                     continue
-                x_next = DecoderBlock.forward_prefill(
+                x = DecoderBlock.forward_prefill(
                     x,
                     user_id,
                     row_idx,
@@ -318,8 +318,6 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     rope_tensors,
                     page_tables[layer_idx],
                 )
-                ttnn.deallocate(x)
-                x = ttnn.clone(x_next)
 
             # Transfer rows
             cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
