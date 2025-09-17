@@ -142,6 +142,7 @@ inline void _llk_pack_untilize_init_(
 {
     static_assert(!diagonal, "Diagonal not supported");
     static_assert(block_ct_dim <= 8, "block_ct_dim must be less than or equal to 8");
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
 
     if constexpr (narrow_row)
     {
@@ -188,6 +189,8 @@ inline void _llk_pack_untilize_(
     const std::uint32_t num_faces          = 4,
     const std::uint32_t tile_dst_rt_offset = 0)
 {
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+
     /*
     full_ct_dim represents the number of input tiles.
     For input widths greater than 8 tiles, input is split into blocks of equal sizes,
