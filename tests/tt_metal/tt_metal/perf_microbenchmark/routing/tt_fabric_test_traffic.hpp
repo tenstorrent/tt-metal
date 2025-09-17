@@ -246,6 +246,7 @@ struct TrafficParameters {
     bool is_2D_routing_enabled;
     bool is_dynamic_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
+    tt::tt_fabric::Topology topology;
 };
 
 struct TestTrafficConfig {
