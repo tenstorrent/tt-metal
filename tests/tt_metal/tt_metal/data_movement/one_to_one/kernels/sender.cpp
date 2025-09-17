@@ -26,9 +26,16 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // Cycle through virtual channels 0 to (num_virtual_channels - 1)
             uint32_t current_virtual_channel = i % num_virtual_channels;
-            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
+            // nonposted
+            // noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
+            // posted
+            noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(
+                l1_local_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
         }
-        noc_async_write_barrier();
+        // nonposted
+        // noc_async_write_barrier();
+        // posted
+        noc_async_posted_writes_flushed();
     }
 
     DeviceTimestampedData("Test id", test_id);

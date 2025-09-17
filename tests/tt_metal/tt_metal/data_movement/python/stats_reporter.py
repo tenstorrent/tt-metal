@@ -21,6 +21,9 @@ class StatsReporter:
 
     def print_stats(self):
         # Print stats per runtime host id
+        import pudb
+
+        pudb.set_trace()
         for riscv1_run, riscv0_run in itertools.zip_longest(
             self.dm_stats["riscv_1"]["analysis"]["series"],
             self.dm_stats["riscv_0"]["analysis"]["series"],

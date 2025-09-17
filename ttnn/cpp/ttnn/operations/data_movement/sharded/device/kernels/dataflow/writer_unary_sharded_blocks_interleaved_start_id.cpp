@@ -29,16 +29,27 @@ void kernel_main() {
     uint32_t row_start_tile_id = start_id;
     cb_wait_front(cb_id_out, block_num_tiles);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-    for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
-        uint32_t tile_id = row_start_tile_id;
-        for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
-            noc_async_write_tile(tile_id, s, l1_read_addr);
-            tile_id++;
-            l1_read_addr += tile_bytes;
+    {
+        DeviceZoneScopedN("RISCV0");
+        for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
+            uint32_t tile_id = row_start_tile_id;
+            for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
+                noc_async_write_tile(tile_id, s, l1_read_addr);
+                tile_id++;
+                l1_read_addr += tile_bytes;
+            }
+            l1_read_addr += padded_width_diff;
+            row_start_tile_id += output_width_tiles;
         }
-        l1_read_addr += padded_width_diff;
-        row_start_tile_id += output_width_tiles;
+        noc_async_write_barrier();
     }
-    noc_async_write_barrier();
     cb_pop_front(cb_id_out, block_num_tiles);
+
+    constexpr uint32_t test_id = 500;
+    DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", unpadded_block_height_tiles * unpadded_block_width_tiles);
+    DeviceTimestampedData("Transaction size in bytes", s.page_size);
+
+    // DeviceTimestampedData("NoC Index", noc_index);
+    // DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }
