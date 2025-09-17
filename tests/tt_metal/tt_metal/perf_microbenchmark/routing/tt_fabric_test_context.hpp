@@ -28,8 +28,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-#include "llrt/tt_cluster.hpp"
-
 // Constants
 const std::string output_dir = "generated/fabric";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
