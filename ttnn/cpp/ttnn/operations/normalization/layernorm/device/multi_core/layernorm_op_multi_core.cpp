@@ -93,6 +93,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     Tensor& output,
     LayerNormType norm_type,
     float eps,
+    bool legacy_reduction,
+    bool legacy_rsqrt,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const uint32_t no_weights_max_size = 120;
@@ -310,7 +312,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     if (rms_norm) {
         compute_defines["RMSNORM"] = "1";
     }
-
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
@@ -333,7 +334,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
+    std::vector<uint32_t> compute_args = {
+        Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en, float32_reduction, legacy_rsqrt};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -525,6 +528,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
+    bool legacy_reduction,
+    bool legacy_rsqrt,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
@@ -1181,6 +1186,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         compute_defines["RMSNORM"] = "1";
     }
     // compute kernel compile time args
+    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
         gamma.has_value(),
@@ -1193,6 +1199,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,
         block_ht * block_wt,
         fp32_dest_acc_en,
+        float32_reduction,
+        legacy_rsqrt,
         num_blocks_second_stage};
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
@@ -1206,6 +1214,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,
         block_ht * block_wt,
         fp32_dest_acc_en,
+        float32_reduction,
+        legacy_rsqrt,
         num_blocks_second_stage};
     // compute kernel
     std::string compute_kernel_file;
