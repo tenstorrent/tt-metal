@@ -13,7 +13,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_TRACE_REGION_SIZE,
 )
 import os
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig

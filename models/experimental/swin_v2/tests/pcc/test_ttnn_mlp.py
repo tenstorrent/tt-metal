@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import (
     preprocess_layernorm_parameter,
     preprocess_linear_bias,
 )
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP

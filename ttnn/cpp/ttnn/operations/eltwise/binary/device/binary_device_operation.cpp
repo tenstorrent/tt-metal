@@ -392,8 +392,8 @@ BinaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    std::optional<unary::EltwiseFusedActivations> activations,
+    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),
@@ -473,8 +473,8 @@ BinaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    std::optional<unary::EltwiseFusedActivations> activations,
+    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),

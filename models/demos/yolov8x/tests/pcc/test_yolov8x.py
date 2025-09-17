@@ -7,11 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8x.reference import yolov8x
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtC2f, TtConv, TtDFL, TtSppf, TtYolov8xModel
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor, ttnn_decode_bboxes
-from models.utility_functions import disable_persistent_kernel_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

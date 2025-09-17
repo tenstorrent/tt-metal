@@ -58,7 +58,7 @@ using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
 std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     uint32_t size,
     CoreRangeSet& logical_crs,
     std::vector<uint32_t>& fill_data) {

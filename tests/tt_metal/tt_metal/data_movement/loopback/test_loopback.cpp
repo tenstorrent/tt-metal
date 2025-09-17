@@ -41,7 +41,7 @@ struct LoopbackConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
@@ -103,7 +103,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        transaction_size_bytes / bfloat16::SIZEOF,
+        transaction_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
