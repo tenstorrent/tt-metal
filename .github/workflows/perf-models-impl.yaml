@@ -41,8 +41,8 @@ jobs:
       DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       DOCKER_OPTS: |
         -v /mnt/MLPerf:/mnt/MLPerf:ro
-        -v ${{ github.workspace }}:/ \
-        -w / \
+        -v ${{ github.workspace }}:${{ github.workspace }} \
+        -w ${{ github.workspace }} \
         --user 0 \
         -v "$RUNNER_TEMP/pip-cache:/pip-cache"
 
@@ -53,7 +53,7 @@ jobs:
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
 
-        --e PIP_CACHE_DIR=/pip-cache
+        -e PIP_CACHE_DIR=/pip-cache
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
