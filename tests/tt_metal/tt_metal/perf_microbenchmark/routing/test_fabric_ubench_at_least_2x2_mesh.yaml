@@ -16,10 +16,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
+        iterations: 10
 
   - name: "UnidirLinearMulticast"
     benchmark_mode: true
@@ -34,10 +35,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: unidirectional_linear
+        iterations: 10
 
   - name: "SingleSenderLinearUnicastAllDevices"
     benchmark_mode: true
@@ -52,10 +54,11 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: one_to_all
+        iterations: 10
 
   - name: "FullRingMulticast"
     benchmark_mode: true
@@ -70,10 +73,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: full_ring
+        iterations: 10
 
   - name: "FullRingUnicast"
     benchmark_mode: true
@@ -88,10 +92,11 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: full_ring
+        iterations: 10
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
@@ -106,10 +111,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: half_ring
+        iterations: 10
 
   - name: "MeshMulticast"
     benchmark_mode: true
@@ -124,10 +130,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
+        iterations: 10
 
   - name: "MeshMulticastDynamic"
     benchmark_mode: true
@@ -144,10 +151,11 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
+        iterations: 10
 
   - name: "SingleSenderMeshUnicastAllDevices"
     benchmark_mode: true
@@ -162,7 +170,8 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: one_to_all
+        iterations: 10
