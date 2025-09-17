@@ -87,6 +87,12 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const std::string& padding_mode,
     bool use_precomputed_grid,
     bool batch_output_channels) {
+    std::cout << "Shard shape: " << (grid_tensor.shard_spec().value().shape[0]) << ", "
+              << grid_tensor.shard_spec().value().shape[1] << std::endl;
+    std::cout << "Input shape: " << input_tensor.padded_shape() << std::endl;
+    std::cout << "Grid shape: " << grid_tensor.padded_shape() << std::endl;
+    std::cout << "Output shape: " << output_tensor.padded_shape() << std::endl;
+
     const bool is_sharded = grid_tensor.is_sharded();
     tt::tt_metal::Program program{};
 
@@ -105,6 +111,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
     const bool enable_split_reader = should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid);
+
+    std::cout << "Split reader: " << (enable_split_reader ? "enabled" : "disabled") << std::endl;
 
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
@@ -138,7 +146,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // Create CBs
     const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+        // is_sharded ? grid_shape[-1] * grid_tensor.element_size() :
+        get_aligned_stick_size(grid_shape, grid_tensor);
+
+    std::cout << "Grid stick size: " << grid_stick_size << std::endl;
+
     const auto [grid_cb_index, grid_cb_handle] = tt::tt_metal::create_cb(
         cb_idx++,
         program,
@@ -188,7 +200,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Prepare stick size arguments with proper names
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
     const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+        // is_sharded ? grid_shape[-1] * grid_tensor.element_size() :
+        get_aligned_stick_size(grid_shape, grid_tensor);
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {

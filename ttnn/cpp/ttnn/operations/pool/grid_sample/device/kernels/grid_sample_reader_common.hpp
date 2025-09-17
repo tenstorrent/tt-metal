@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug/dprint.h"
+
 #define ALWI inline __attribute__((always_inline))
 
 // Constants shared between interleaved and sharded kernels
@@ -147,6 +149,7 @@ ALWI void read_four_corner_inputs(
     int32_t w1,
     uint32_t input_height,
     uint32_t l1_write_input_addr) {
+    DPRINT << "Reading corners: h0=" << h0 << ", h1=" << h1 << ", w0=" << w0 << ", w1=" << w1 << '\n';
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -270,6 +273,8 @@ ALWI void process_grid_point(
     // Store bilinear interpolation weights for this grid point
     cb_reserve_back(scalar_cb_index, 1);
     const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
+    DPRINT << "Weights: nw=" << bfloat16_to_float(weight_nw_bf) << ", ne=" << bfloat16_to_float(weight_ne_bf)
+           << ", sw=" << bfloat16_to_float(weight_sw_bf) << ", se=" << bfloat16_to_float(weight_se_bf) << '\n';
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     cb_push_back(scalar_cb_index, 1);
 
