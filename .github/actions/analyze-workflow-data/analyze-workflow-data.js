@@ -186,9 +186,11 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
                 if (lines[j].trim() !== '') block.push(lines[j].trim());
                 j++;
               }
-              const label = extractTestLabelBackward(lines, i);
+              const testLabel = extractTestLabelBackward(lines, i);
               if (label) {
                 const text = block.join('\n');
+                const fileBase = path.basename(p);
+                const label = `${fileBase}: ${testLabel}`;
                 collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
                 foundInFile++;
               } else {
@@ -805,7 +807,9 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets for the first failing run (best-effort)
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
+          // Use the most recent failing run instead of the first in-window failure
+          const latestFail = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
+          item.error_snippets = latestFail?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 20) : [];
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -855,8 +859,9 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
-          // Error snippets for the first failing run in window
-          item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 20);
+          // Use the most recent failing run instead of the first in-window failure
+          const latestFail2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
+          item.error_snippets = latestFail2?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail2.id, 20) : [];
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
