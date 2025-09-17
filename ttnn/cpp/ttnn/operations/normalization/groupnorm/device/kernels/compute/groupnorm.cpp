@@ -13,13 +13,27 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+//#include "debug/dprint_pages.h"
+
 
 namespace NAMESPACE {
+    inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+        DPRINT << "======" << ENDL();
+        for (uint8_t r = 0; r < 32; ++ r) {
+            SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r+1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+            SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r+1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " " << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+        }
+        DPRINT << "++++++" << ENDL();
+   }
+
 void MAIN {
     // clang-format off
     // Definitions
@@ -123,13 +137,17 @@ void MAIN {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t pad_correction_factor = get_compile_time_arg_val(25);
+    constexpr uint32_t pad_correction_factor_minus_one = get_compile_time_arg_val(26);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    const uint32_t one = 0x3F800000; // FP32 encoding of 1.0
 
     // dst regs
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
     // input cbs
@@ -141,10 +159,10 @@ void MAIN {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
+    constexpr uint32_t cb_pad_correction = tt::CBIndex::c_31;
 
     // interm cbs
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
@@ -341,6 +359,8 @@ void MAIN {
             }
             // End Local Redcue
             // Start Global Reduce
+            //DPRINT << "is_mcast_sender: .........................................................>>>" << is_mcast_sender << ENDL();
+            
             if constexpr (is_mcast_sender) {
                 reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
@@ -353,17 +373,50 @@ void MAIN {
                 for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
                     reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
                 }
-                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
+                //fix error from padding
+                tile_regs_wait();
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst0, pad_correction_factor);
                 tile_regs_commit();
                 tile_regs_wait();
+                //End fix
+
+                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
+                //cb_wait_front(cb_pad_correction, 1);
+                //UNPACK(DPRINT << "cb_pad_correction: " << ENDL());
+               // UNPACK(print_full_tile(cb_pad_correction, 0, false));
+                //tile_regs_commit();
+                //tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
                 reduce_uninit();
                 cb_push_back(cb_ex_global, 1);
+                //cb_wait_front(cb_ex_global, 1);
+
+                //fix error from padding
+                /*
+                tile_regs_acquire();
+                mul_tiles_init(cb_ex_global, cb_pad_correction);
+                mul_tiles(cb_ex_global, cb_pad_correction, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                cb_pop_front(cb_ex_global, 1);
+                cb_reserve_back(cb_ex_global, 1);
+                pack_tile(dst0, cb_ex_global);
+                tile_regs_release();
+                */
+                //End fix error from padding
+                
+
+               // cb_push_back(cb_ex_global, 1);
+                //cb_push_back(cb_pad_correction, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex, 1);
                 }
             }
+
+            UNPACK(DPRINT << "mean/cb_ex_global: " << ENDL());
+            UNPACK(print_full_tile(cb_ex_global, 0, true));
             // End Global Reduce
             // End Average Calc
 
@@ -461,6 +514,8 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
+               // UNPACK(DPRINT << "cb_xmm: " << ENDL());
+                //UNPACK(print_full_tile(cb_xmm, 0, true));
                 cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_xmm, out_block_hw_normal);
 
@@ -471,6 +526,8 @@ void MAIN {
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
+                //UNPACK(DPRINT << "cb_scaler: " << ENDL());
+                //UNPACK(print_full_tile(cb_scaler, 0, true));
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
@@ -501,6 +558,12 @@ void MAIN {
                     reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
                 }
                 cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
+               // tile_regs_commit();
+               //Adjust normalization for padding
+                tile_regs_wait();
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst0, pad_correction_factor);
+                //End adjust normalization for padding
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_global);
@@ -517,10 +580,25 @@ void MAIN {
             //  global reduce results
             cb_wait_front(cb_eps, 1);
             cb_wait_front(cb_ex2_global, 1);
+            UNPACK(DPRINT << "cb_ex2_global: " << ENDL());
+            UNPACK(print_full_tile(cb_ex2_global, 0, true));
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex2_global, cb_eps);
+            //prefill dst0 with variance error from padding (1-pad_correction_factor)* cb_ex_global*cb_ex_global
+            mul_tiles_init(cb_ex_global, cb_ex_global);
+            //cb_wait_front(cb_ex_global, 1);
+            mul_tiles(cb_ex_global, cb_ex_global, 0, 0, dst0);
+            tile_regs_wait();
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst0, pad_correction_factor_minus_one);
+            tile_regs_wait();
+            
+            
+            //UNPACK(DPRINT << "eps: " << ENDL());
+            //UNPACK(print_full_tile(cb_eps, 0, false));
+            binary_op_init_common(cb_in0, cb_in1, cb_out0);
+            add_tiles_init(cb_ex2_global, cb_eps,true); //Accumulate to dst0. Already filled with the error from padding
             add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
             // sqrt(Var + eps)
@@ -536,6 +614,8 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
             cb_pop_front(cb_ex2_global, 1);
+            UNPACK(DPRINT << "cb_ex2pe: " << ENDL());
+            UNPACK(print_full_tile(cb_ex2pe, 0, true));
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;

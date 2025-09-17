@@ -1904,6 +1904,18 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
     // compute kernel compile time args
+    union {
+        float f;
+        uint32_t u;
+    } pad_correction_factor{};
+    pad_correction_factor.f = shape[1]*shape[2]*(1.0/(a.logical_shape()[1]*a.logical_shape()[2]));
+
+    union {
+        float f;
+        uint32_t u;
+    } pad_correction_factor_minus_one{};
+    pad_correction_factor_minus_one.f = 1.0 - pad_correction_factor.f;
+
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -1934,6 +1946,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)pad_correction_factor.u,
+        (std::uint32_t)pad_correction_factor_minus_one.u,
     };
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
@@ -1965,6 +1979,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)pad_correction_factor.u,
+        (std::uint32_t)pad_correction_factor_minus_one.u,
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
@@ -1997,6 +2013,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)pad_correction_factor.u,
+        (std::uint32_t)pad_correction_factor_minus_one.u,
     };
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
@@ -2028,6 +2046,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)pad_correction_factor.u,
+        (std::uint32_t)pad_correction_factor_minus_one.u,
     };
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -2128,6 +2148,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, cb_data_format}})
             .set_page_size(in3_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+
+    //  in3 pad_correction
+    uint32_t in3_pad_correction_cb_index = tt::CBIndex::c_31;
+    tt::tt_metal::CircularBufferConfig in3_pad_correction_cb_config =
+        tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_pad_correction_cb_index, cb_data_format}})
+            .set_page_size(in3_pad_correction_cb_index, single_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_pad_correction_cb_config);
+
     //  in4 scaler-c
     uint32_t in4_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig in4_cb_config =
@@ -2274,7 +2302,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         packed_winv_value_group_2 =
             pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
     }
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
+    float cinv = (1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group));// * std::sqrt(shape[1]*shape[2]*(1.0/(a.logical_shape()[1]*a.logical_shape()[2])));  // bcast-cores scaler
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
@@ -2489,6 +2517,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
+        writer_mcast_sender_args.push_back(pad_correction_factor.u);
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
             tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_1, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_kernels_id_group_1);

@@ -128,6 +128,10 @@ void kernel_main() {
                     generate_reduce_scaler(cb_in_4, scalar_c);
                 }
 
+                constexpr uint32_t cb_in_pad_correction = tt::CBIndex::c_31;
+                const uint32_t pad_correction_factor = get_arg_val<uint32_t>(12);
+                generate_bcast_col_scalar(cb_in_pad_correction, pad_correction_factor);
+
                 constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
                 const uint32_t eps = get_arg_val<uint32_t>(2);
                 generate_bcast_col_scalar(eps_cb_id, eps);
