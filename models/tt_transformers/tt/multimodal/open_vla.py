@@ -41,6 +41,7 @@ from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import (
     create_tt_model,
     get_block_size,
+    get_padded_prefill_len,
     num_blocks_in_seq,
     preprocess_inputs_prefill,
     sample_host,
@@ -283,6 +284,7 @@ class OpenVLALanguageModel(GenerationMixin):
             ),
         )
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
+        self.num_actions = 1
 
     def predict_text(self, input_prompts, max_generated_tokens=200):
         (
@@ -451,11 +453,10 @@ class OpenVLALanguageModel(GenerationMixin):
         assert not output_hidden_states, f"{self.__class__.__name__} does not accept output_hidden_states"
         assert return_dict, f"{self.__class__.__name__} does not accept return_dict=False"
         seq_len = inputs_embeds.shape[2]
-        # Make width multiple of 128
-        if inputs_embeds.shape[2] % 128 != 0:
-            padding = int(np.ceil(inputs_embeds.shape[2] / 128) * 128) - inputs_embeds.shape[2]
-            if padding != 0:
-                inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
+        CHECKPOINTS.checkpoint("start_PREFILL")
+        padding = get_padded_prefill_len(seq_len) - inputs_embeds.shape[2]
+        if padding != 0:
+            inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
 
         tt_rot_mats_prefill_global = [
             self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
@@ -483,8 +484,27 @@ class OpenVLALanguageModel(GenerationMixin):
 
         # Since we give unpadded_seq_len, only the tile containing the last token is returned
         output_logits = self.model[0].process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
-
-        return output_logits.unsqueeze(0).unsqueeze(0)
+        prefilled_token = torch.argmax(output_logits.cpu(), dim=-1).unsqueeze(0)
+        # Initial positions
+        current_pos = torch.tensor([seq_len])
+        out_tok = prefilled_token
+        output_toks = []
+        CHECKPOINTS.checkpoint("end_PREFILL")
+        for i in range(self.num_actions):
+            # Run decode forward
+            CHECKPOINTS.checkpoint("start_LLM_DECODE")
+            logits = self.generator.decode_forward_text(
+                out_tok,
+                current_pos,
+                page_table=self.page_table,
+                kv_cache=self.tt_kv_cache,
+                sampling_params=None,
+                enable_trace=False,
+            )
+            CHECKPOINTS.checkpoint("end_LLM_DECODE")
+            current_pos += 1
+            output_toks.append(logits)
+        return output_toks
 
 
 class PrismaticConfig(PretrainedConfig):
@@ -928,6 +948,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         self.ttnn_device = ttnn_device
         # HF Boilerplate =>> initializes weights via `_init_weights()` and sets gradient checkpointing
         self.post_init()
+        self.cached_output = (None, None)
 
     # === `PreTrainedModel` Boilerplate ===
     def get_input_embeddings(self) -> nn.Module:
@@ -978,6 +999,26 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, PrismaticCausalLMOutputWithPast]:
         """Run a forward pass through the VLM, returning a PrismaticCausalLMOutputWithPast instance."""
+        if self.cached_output[0] is not None:
+            token = self.cached_output[0][0]
+            language_model_output = self.cached_output[0][1:]
+            if len(language_model_output) == 0:
+                self.cached_output = (None, None)
+            else:
+                self.cached_output = (language_model_output, self.cached_output[1])
+            if not return_dict:
+                if output_projector_features and (projected_patch_embeddings is not None):
+                    return token, projected_patch_embeddings
+                return token
+            return PrismaticCausalLMOutputWithPast(
+                loss=None,
+                logits=token,
+                past_key_values=None,
+                hidden_states=None,
+                attentions=None,
+                projector_features=self.cached_output[1],
+            )
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1115,14 +1156,26 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
         # Unpack `language_model_output` and return PrismaticCausalLMOutputWithPast (or tuple if not `return_dict`)
         if not return_dict:
+            token = language_model_output[0]
+            language_model_output = language_model_output[1:]
+            if len(language_model_output) == 0:
+                self.cached_output = (None, None)
+            else:
+                self.cached_output = (language_model_output, projected_patch_embeddings)
             if output_projector_features and (projected_patch_embeddings is not None):
                 return *language_model_output, projected_patch_embeddings
 
             return language_model_output
         if self.ttnn_device is not None:
+            token = language_model_output[0]
+            language_model_output = language_model_output[1:]
+            if len(language_model_output) == 0:
+                self.cached_output = (None, None)
+            else:
+                self.cached_output = (language_model_output, projected_patch_embeddings)
             return PrismaticCausalLMOutputWithPast(
                 loss=None,
-                logits=language_model_output,
+                logits=token,
                 past_key_values=None,
                 hidden_states=None,
                 attentions=None,
@@ -1224,6 +1277,8 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
             )
 
         # Run VLA inference
+        if self.ttnn_device is not None:
+            self.language_model.num_actions = self.get_action_dim(unnorm_key)
         generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
 
         # get final actions
