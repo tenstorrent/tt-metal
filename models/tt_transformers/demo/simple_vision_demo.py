@@ -178,6 +178,13 @@ def test_multimodal_demo_text(
     """
     Simple multimodal demo with limited dependence on reference code.
     """
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+
+    if num_devices == 2 and max_batch_size not in (1, 4, 16):
+        pytest.skip(f"Batch size={max_batch_size} is not tested for N300 mesh")
+    if num_devices == 8 and max_batch_size not in (1, 4, 32):
+        pytest.skip(f"Batch size={max_batch_size} is not tested for T3K mesh")
+
     logger.info("Start profiler")
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -185,7 +192,6 @@ def test_multimodal_demo_text(
     ckpt_dir = os.environ["LLAMA_DIR"]
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
     model_args, model = prepare_generator_args(
@@ -452,6 +458,10 @@ def test_multimodal_demo_text(
 
         perf_targets = {}
         if run_config in targets_prefill_tok_s:
+            assert (
+                run_config in targets_decode_tok_s_u
+            ), f"Prefill targets exist, but decode targets are missing for {run_config}"
+
             perf_targets = {
                 "prefill_t/s": targets_prefill_tok_s[run_config],
                 "decode_t/s": targets_decode_tok_s_u[run_config] * max_batch_size,
