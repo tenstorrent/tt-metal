@@ -723,6 +723,43 @@ class MLA1D(AbstractModule):
         )
 
     @classmethod
+    def create_rand_page_table(
+        cls,
+        batch_size: int,
+        dp_factor: int,
+        config: PagedAttentionConfig,
+        mesh_device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        """Helper funtion to create the page table for MLA1D.
+
+        When doing DP, this function replicates the page table across DP shards.
+        Assumptions:
+            - If user X on DP shard 1 is on position N, with page id P,
+                and if user X on DP shard 2 is also on position N, it will also be on page id P.
+                As such, the max_num_blocks is only cut by the batch size of the DP shard, not the total batch size.
+
+        Args:
+            batch_size: Batch size for the model
+            dp_factor: Data parallelism factor, indicating how many DP shards are present
+            config: PagedAttentionConfig containing page table configuration
+            mesh_device: TTNN mesh device
+
+        Returns:
+            A tensor representing the page table
+        """
+        assert cls.is_device_supported(
+            mesh_device
+        ), f"Mesh device shape {mesh_device.shape} must be supported by MLA1D."
+
+        max_num_blocks = config.max_num_blocks
+        batch_per_shard = even_int_div(batch_size, dp_factor)
+
+        page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigourous
+        page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+
+        return page_table
+
+    @classmethod
     def create_page_table(
         cls,
         page_table: torch.Tensor,
@@ -748,6 +785,7 @@ class MLA1D(AbstractModule):
         assert cls.is_device_supported(
             mesh_device
         ), f"Mesh device shape {mesh_device.shape} must be supported by MLA1D."
+
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
