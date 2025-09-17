@@ -652,6 +652,7 @@ Result conv2d_L1(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
+        mm_conv && auto_shard,
         bias_tensor.has_value(),
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
