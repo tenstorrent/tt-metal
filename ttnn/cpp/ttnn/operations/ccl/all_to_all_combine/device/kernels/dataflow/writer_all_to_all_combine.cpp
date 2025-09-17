@@ -44,6 +44,7 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
 }  // namespace detail
 
 void kernel_main() {
+    invalidate_l1_cache();
     constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);

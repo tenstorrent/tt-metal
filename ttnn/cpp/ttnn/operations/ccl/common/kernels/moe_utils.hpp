@@ -573,6 +573,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
 
 template <typename T, uint32_t Size, bool ReturnIdx>
 inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
+    invalidate_l1_cache();
     for (uint32_t i = 0; i < Size; ++i) {
         if (ptr[i] == val) {
             if constexpr (ReturnIdx) {
