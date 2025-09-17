@@ -227,6 +227,7 @@ Result conv_transpose2d(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
+            mm_conv && auto_shard,
             bias_tensor.has_value());
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);

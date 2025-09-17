@@ -196,6 +196,20 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
     return set;
 }
 
+uint32_t Hal::make_go_msg_u32(
+    uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const {
+    uint32_t go_msg_u32_val = 0;
+    // We know go_msg_t is the same for all core types, so we can use TENSIX's factory.
+    auto go_msg = get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
+                      .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
+    TT_ASSERT(go_msg.size() == sizeof(uint32_t));
+    go_msg.signal() = signal;
+    go_msg.master_x() = master_x;
+    go_msg.master_y() = master_y;
+    go_msg.dispatch_message_offset() = dispatch_message_offset;
+    return go_msg_u32_val;
+}
+
 }  // namespace tt_metal
 }  // namespace tt
 
