@@ -2175,8 +2175,7 @@ void py_module(py::module& module) {
         ttnn::rpow,
         "exponent",
         "exponent value. Non-positive values are not supported.",
-        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc",
-        R"doc(Supported for input range upto 28)doc");
+        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
     bind_unary_operation_with_float_parameter_default(
         module,
         ttnn::celu,
