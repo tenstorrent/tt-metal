@@ -38,8 +38,8 @@ ttnn::Tensor composite_all_gather(
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t num_links,
+    int32_t dim,
+    uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);
