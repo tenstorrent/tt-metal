@@ -147,10 +147,13 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  // Match any occurrence of 'error:' regardless of position/casing
-  const errorLineRegex = /error:/i;
+  // Prioritized patterns for more meaningful failures
+  const highPriorityRegex = /(\bFAILED\b|\bERROR\b\s|RuntimeError:|AssertionError|Traceback \(most recent call last\):)/i;
+  // General catch-all when nothing else found
+  const errorLineRegex = /(error:|failed:)/i;
   const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
   const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
+  const excludeNoiseRegex = /\bwarning\b/i;
 
   const collected = [];
   const stack = [rootDir];
@@ -168,14 +171,32 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
           const lines = content.split(/\r?\n/);
           const used = new Set();
 
-          // Pass 1: capture info..backtrace blocks (include nearest previous non-blank error line if present)
+          // Pass 1: capture high-priority failure lines (pytest/gtest/traceback/runtime/assertion)
+          for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
+            const line = lines[i];
+            if (line.trim() !== '' && highPriorityRegex.test(line)) {
+              // Build a small block: this line plus immediate next non-blank line
+              const block = [line.trim()];
+              let j = i + 1;
+              while (j < lines.length && lines[j].trim() === '') j++;
+              if (j < lines.length && !infoRegex.test(lines[j]) && !backtraceRegex.test(lines[j])) {
+                block.push(lines[j].trim());
+              }
+              const snippetText = block.join('\n');
+              const label = extractTestLabelBackward(lines, i);
+              const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
+              if (label) collected.push({ snippet, label });
+            }
+          }
+
+          // Pass 2: capture info..backtrace blocks (include nearest previous non-blank error line if present)
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
             if (infoRegex.test(lines[i])) {
               const block = [];
               // Find nearest previous non-blank line
               let prev = i - 1;
               while (prev >= 0 && lines[prev].trim() === '') prev--;
-              if (prev >= 0 && errorLineRegex.test(lines[prev])) {
+              if (prev >= 0 && errorLineRegex.test(lines[prev]) && !excludeNoiseRegex.test(lines[prev])) {
                 block.push(lines[prev].trim());
                 used.add(prev);
               }
@@ -193,17 +214,17 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               }
               const snippetText = block.join('\n').trim();
               if (snippetText.length > 0) {
-                const label = extractTestLabel(lines, Math.max(0, i - 15), Math.min(lines.length - 1, j + 15), p);
+                const label = extractTestLabelBackward(lines, i);
                 const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
-                collected.push({ snippet, label });
+                if (label) collected.push({ snippet, label });
               }
               i = j; // advance past this block (backtrace line is not included)
             }
           }
 
-          // Pass 2: capture standalone error lines not already included (skip blanks), include 1 following context line if present
+          // Pass 3: capture standalone error lines not already included (skip blanks), include 1 following context line if present
           for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
-            if (!used.has(k) && lines[k].trim() !== '' && errorLineRegex.test(lines[k])) {
+            if (!used.has(k) && lines[k].trim() !== '' && errorLineRegex.test(lines[k]) && !excludeNoiseRegex.test(lines[k])) {
               const block = [lines[k].trim()];
               // include immediate next non-blank line (if not info/backtrace)
               let nxt = k + 1;
@@ -212,9 +233,9 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
                 block.push(lines[nxt].trim());
               }
               const snippetText = block.join('\n');
-              const label = extractTestLabel(lines, Math.max(0, k - 15), Math.min(lines.length - 1, (nxt || k) + 15), p);
+              const label = extractTestLabelBackward(lines, k);
               const snippet = snippetText.length > 600 ? snippetText.slice(0, 600) + '…' : snippetText;
-              collected.push({ snippet, label });
+              if (label) collected.push({ snippet, label });
             }
           }
         } catch (_) { /* ignore file errors */ }
@@ -229,29 +250,27 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
 /**
  * Try to extract a test identifier from the nearby log lines or path.
  */
-function extractTestLabel(lines, startIdx, endIdx, filePath) {
-  const window = lines.slice(startIdx, endIdx + 1).join('\n');
-  // gtest block: [ RUN      ] Suite.TestName
-  const gtr = window.match(/\[\s*RUN\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
-  if (gtr) return gtr[1];
-  // PyTest-like: FAILED tests/path::test_name[...] - ...
-  const m1 = window.match(/FAILED\s+([^\s]+::[^\s]+(?:\[[^\]]+\])?)/);
-  if (m1) return m1[1];
-  // Lines like: Error: test_sdxl_unet_perf_device
-  const m2 = window.match(/Error:\s*([A-Za-z0-9_:.+\-\[\]\/\\]+)/i);
-  if (m2) return m2[1];
-  // Generic python test path starting with tests/... and ending with .py (with arbitrary suffix after .py)
-  const m5 = window.match(/\b(tests\/[\w\-\/\.]+\.py[^\s]*)/);
-  if (m5) return m5[1];
-  // GTest: [  FAILED  ] Suite.Test
-  const m3 = window.match(/\[\s*FAILED\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
-  if (m3) return m3[1];
-  // Benchmark: Benchmark NAME ... error/failed
-  const m4 = window.match(/Benchmark\s+([^\s]+)\b.*?(error|failed)/i);
-  if (m4) return m4[1];
-  // As fallback, infer job/step from path
-  const base = path.basename(filePath);
-  return base && base.length <= 80 ? base : undefined;
+function extractTestLabelBackward(lines, errIdx) {
+  for (let i = errIdx; i >= 0; i--) {
+    const line = lines[i];
+    if (!line) continue;
+    // gtest [ RUN ] Suite.Test
+    let m = line.match(/\[\s*RUN\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
+    if (m) return m[1];
+    // pytest FAILED tests/path::test_name
+    m = line.match(/FAILED\s+([^\s]+::[^\s]+(?:\[[^\]]+\])?)/);
+    if (m) return m[1];
+    // direct python test path starting with tests/... .py...
+    m = line.match(/\b(tests\/[\w\-\/\.]+\.py[^\s]*)/);
+    if (m) return m[1];
+    // gtest [  FAILED  ] Suite.Test
+    m = line.match(/\[\s*FAILED\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
+    if (m) return m[1];
+    // Named error that might be the only identifier
+    m = line.match(/AssertionError(?:[:\s].*)?/);
+    if (m) return 'AssertionError';
+  }
+  return undefined;
 }
 
 /**
