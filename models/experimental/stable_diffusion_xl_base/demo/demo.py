@@ -116,7 +116,6 @@ def run_demo_inference(
             negative_pooled_prompt_embeds_torch,
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
 
-        torch.manual_seed(0)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
             prompt_embeds_torch,
             negative_prompt_embeds_torch,

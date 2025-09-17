@@ -277,6 +277,8 @@ class TtSDXLPipeline(LightweightModule):
         negative_prompt_embeds_torch,
         pooled_prompt_embeds_torch,
         negative_pooled_prompt_embeds_torch,
+        start_latent_seed=0,
+        fixed_seed_bool=True,
     ):
         # Generate user input tensors for the TT model.
 
@@ -288,16 +290,24 @@ class TtSDXLPipeline(LightweightModule):
         height = width = 1024
         assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
 
-        latents = self.torch_pipeline.prepare_latents(
-            1,
-            num_channels_latents,
-            height,
-            width,
-            prompt_embeds_torch[0].dtype,
-            self.cpu_device,
-            None,
-            None,
-        )
+        latents_list = []
+        for index in range(self.batch_size):
+            torch.manual_seed(start_latent_seed if fixed_seed_bool else start_latent_seed + index)
+            latents = self.torch_pipeline.prepare_latents(
+                1,
+                num_channels_latents,
+                height,
+                width,
+                prompt_embeds_torch[0].dtype,
+                self.cpu_device,
+                None,
+                None,
+            )
+            B, C, H, W = latents.shape  # 1, 4, 128, 128
+            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
+            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            latents_list.append(latents)
+        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
 
@@ -318,11 +328,6 @@ class TtSDXLPipeline(LightweightModule):
         )
         negative_add_time_ids = add_time_ids
 
-        B, C, H, W = latents.shape
-
-        # All device code will work with channel last tensors
-        tt_latents = torch.permute(latents, (0, 2, 3, 1))
-        tt_latents = tt_latents.reshape(1, 1, B * H * W, C)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = self.__create_user_tensors(
             latents=tt_latents,
             negative_prompt_embeds=negative_prompt_embeds_torch,
@@ -539,7 +544,7 @@ class TtSDXLPipeline(LightweightModule):
             latents,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.ttnn_device, dim=0) if is_mesh_device else None,
         )
 
         tt_prompt_embeds = [
