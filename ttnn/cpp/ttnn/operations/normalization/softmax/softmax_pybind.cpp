@@ -113,7 +113,7 @@ void bind_normalization_softmax_operation(py::module& module) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. If not provided, inherits from input tensor.
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: Output tensor with softmax applied along the specified dimension.
@@ -183,7 +183,7 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. If not provided, inherits from input tensor.
                 is_causal_mask (bool, optional): Whether the mask is a causal mask. Defaults to False.
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: Output tensor with the fused scale-mask-softmax operation applied.
@@ -285,7 +285,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
             Keyword Args:
                 program_config (SoftmaxProgramConfig, optional): Program configuration for the operation. Defaults to SoftmaxDefaultProgramConfig().
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: The same tensor as input with softmax applied in-place.
