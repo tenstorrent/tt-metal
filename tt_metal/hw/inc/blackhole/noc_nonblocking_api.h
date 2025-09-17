@@ -694,7 +694,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     // niche user code cases. For example, when a user wants to send some data via an inline write
     // (say if they need to send data where src/dest are not aligned), and they need to signal to
     // a consumer when the write has completed (when the data and consumer are on different cores -
-    // a completion ack is needed to avoid race). Forcing posted removes this as asupported use
+    // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
     // case; it was not chosen as an approach.
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
