@@ -9,6 +9,7 @@ import json
 import datetime as dt
 import hashlib
 import os
+import math
 from elasticsearch import Elasticsearch
 from framework.database import (
     postgres_connection,
@@ -24,6 +25,12 @@ from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
 from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
 from framework.upload_sftp import upload_run_sftp
+
+# Optional numpy import for numeric handling in hot paths
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 class ResultDestination(ABC):
@@ -353,6 +360,34 @@ class FileResultDestination(ResultDestination):
                 metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
             return metrics if metrics else None
 
+        def _coerce_to_optional_string(value: Any) -> Optional[str]:
+            """Convert any value to an optional string, handling common numeric types gracefully."""
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+
+            # Handle numpy numeric types first (before checking for regular float/int)
+            if np is not None and isinstance(value, np.number):
+                if np.isnan(value):
+                    return None
+                if np.isinf(value):
+                    return "inf" if value > 0 else "-inf"
+                return str(value)
+
+            # Handle regular Python numeric types
+            if isinstance(value, (int, float)):
+                # Handle special float cases
+                if isinstance(value, float):
+                    if math.isnan(value):
+                        return None
+                    if math.isinf(value):
+                        return "inf" if value > 0 else "-inf"
+                return str(value)
+
+            # For any other type, convert to string
+            return str(value)
+
         for i in range(len(results)):
             header = header_info[i]
             raw = results[i]
@@ -428,8 +463,8 @@ class FileResultDestination(ResultDestination):
                 backend="n/a",
                 data_source="ttnn op test",
                 input_hash=header.get("input_hash"),
-                message=raw.get("message", None),
-                exception=raw.get("exception", None),
+                message=_coerce_to_optional_string(raw.get("message", None)),
+                exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=raw.get("device_perf", None),
                 op_params_set=op_param_list,
             )
