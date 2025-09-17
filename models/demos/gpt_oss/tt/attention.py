@@ -156,7 +156,7 @@ class Attention:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "k_cache"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_cache = ttnn.as_tensor(
@@ -165,7 +165,7 @@ class Attention:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "v_cache"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.kv_cache = [k_cache, v_cache]
@@ -213,7 +213,8 @@ class Attention:
         apply_rope, tt_cos, tt_sin = rope_stuff
         tt_q = apply_rope(tt_q, tt_cos, tt_sin)
         tt_k = apply_rope(tt_k, tt_cos, tt_sin)
-
+        # print("batch_size", batch_size)
+        # print("seq_len", seq_len)
         if batch_size * seq_len == 1:
             # Update cache
             k_cache, v_cache = self.kv_cache
@@ -299,6 +300,8 @@ class Attention:
         if self.mesh_device.shape[1] > 1:
             # AllReduce
             tt_out = ttnn.unsqueeze(tt_out, 0)
+            if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
+                tt_out = ttnn.pad(tt_out, [(0, 0), (0, 0), (0, 0), (0, 192)], 0)
             tt_out_scattered = ttnn.experimental.reduce_scatter_minimal_async(
                 tt_out,
                 dim=3,
@@ -320,6 +323,8 @@ class Attention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
+                tt_out = tt_out[:, :, :, : self.hidden_size]
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         return tt_out

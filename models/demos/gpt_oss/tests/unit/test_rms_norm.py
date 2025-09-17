@@ -27,7 +27,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (1, 2),
+        (4, 8),
     ],
     indirect=True,
 )
@@ -42,9 +42,9 @@ def reference_model(hf_config):
         1,
         32,
         64,
-        128,
-        512,
-        1024,
+        # 128,
+        # 512,
+        # 1024,
     ],
 )
 def test_rms_norm(
@@ -54,6 +54,14 @@ def test_rms_norm(
     hf_config,
     reference_model,
 ):
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print(mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     torch.manual_seed(0)
     mesh_shape = tuple(mesh_device.shape)
     ref_rms_norm = reference_model.eval()

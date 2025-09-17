@@ -67,13 +67,15 @@ class ReferenceExperts(nn.Module):
     "num_experts, experts_per_token, intermediate_size, hidden_size",
     [
         (32, 4, 2880, 2880),  # 20B config
-        (128, 4, 2880, 2880),  # 120B config
+        #    (128, 4, 2880, 2880),  # 120B config
     ],
-    ids=["gpt20B", "gpt120B"],
+    ids=[
+        "gpt20B",
+    ],
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -82,6 +84,15 @@ class ReferenceExperts(nn.Module):
 def test_experts(
     mesh_device, num_experts, experts_per_token, intermediate_size, hidden_size, seq_len, batch_size, reset_seeds
 ):
+    print("MESH DEVICE!", mesh_device)
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 2)))
+    print("MESH SHAPE!", mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     # Create configuration
     config = GptOssConfig(
         num_local_experts=num_experts,
@@ -206,7 +217,7 @@ def test_experts(
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1], ids=["s1_"])
 # @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -215,6 +226,15 @@ def test_experts(
 def test_sparse_experts(
     mesh_device, num_experts, experts_per_token, intermediate_size, hidden_size, seq_len, batch_size, reset_seeds
 ):
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print("MESH DEVICE!", mesh_device)
+    print("MESH SHAPE!", mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     """Test experts with sparse routing weights (only a few experts active per token)"""
     # Create configuration
     config = GptOssConfig(

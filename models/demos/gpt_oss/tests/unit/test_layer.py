@@ -279,20 +279,20 @@ class ReferenceDecoderLayer(nn.Module):
 @pytest.mark.parametrize(
     "num_experts, experts_per_token, intermediate_size, hidden_size",
     [
-        (32, 4, 2880, 2880),  # 20B config
-        # (128, 4, 2880, 2880),  # 120B config
+        # (32, 4, 2880, 2880),  # 20B config
+        (128, 4, 2880, 2880),  # 120B config
     ],
     ids=[
-        "gpt20B",
-        # "gpt120B",
+        # "gpt20B",
+        "gpt120B",
     ],
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
 @pytest.mark.parametrize("layer_idx", [0])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_decoder_layer(
     mesh_device,
     num_experts,
@@ -305,6 +305,15 @@ def test_decoder_layer(
     use_real_weights,
     reset_seeds,
 ):
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print("MESH DEVICE!", mesh_device)
+    print("MESH SHAPE!", mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     # Create configuration
     config = GptOssConfig(
         num_local_experts=num_experts,

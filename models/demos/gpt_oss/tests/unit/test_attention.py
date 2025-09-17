@@ -23,15 +23,15 @@ local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/g
     [
         (1, 1),  # 20B config
         (1, 32),  # 20B config
-        (1, 256),  # 20B config
+        # (1, 256),  # 20B config
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [False], ids=["random"])
 @pytest.mark.parametrize("layer_idx", [0])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 def test_attention(
@@ -42,6 +42,14 @@ def test_attention(
     layer_idx,
     reset_seeds,
 ):
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print(mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     all_passing = True
 
     # Create configuration

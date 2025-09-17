@@ -259,37 +259,33 @@ class Generator:
         Returns tt_logits on device
         """
         tt_logits = []
-
-        tt_tokens = []
-        tt_current_pos = []
-        tt_rot_mat_idxs_global = []
-        tt_rot_mat_idxs_local = []
-        tt_page_table = []
+        tt_inputs = []
+        # tt_tokens = []
+        # tt_current_pos = []
+        # tt_rot_mat_idxs_global = []
+        # tt_rot_mat_idxs_local = []
+        # tt_page_table = []
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
-            (
-                tt_tokens_i,
-                tt_current_pos_i,
-                tt_rot_mat_idxs_global_i,
-                tt_rot_mat_idxs_local_i,
-                tt_page_table_i,
-            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
-            tt_tokens.append(tt_tokens_i)
-            tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
-            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
-            tt_page_table.append(tt_page_table_i)
+            tt_inputs_i = model_i.prepare_inputs_decode([tokens[i], current_pos[i], user_page_table])
+            # tt_tokens.append(tt_tokens_i)
+            # tt_current_pos.append(tt_current_pos_i)
+            # tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
+            # tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
+            # tt_page_table.append(tt_page_table_i)
+            tt_inputs.append(tt_inputs_i)
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
-                tt_tokens[i],
-                tt_current_pos[i],
-                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
-                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
-                page_table=tt_page_table[i],
+                # tt_tokens[i],
+                # tt_current_pos[i],
+                # rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
+                # rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
+                # page_table=tt_page_table[i],
+                inputs=tt_inputs[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
             )
@@ -321,12 +317,11 @@ class Generator:
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            host_inputs = self.model[i].prepare_decode_inputs_host(
-                tokens[i], current_pos[i], page_table=user_page_table
-            )
-
+            host_inputs = self.model[i].prepare_decode_inputs_host([tokens[i], current_pos[i], user_page_table])
+            print(f"DEBUG CAPTURE_TRACE_TEXT: host_inputs: {host_inputs}")
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
+            print(f"DEBUG CAPTURE_TRACE_TEXT: device_inputs: {device_inputs}")
 
         for i in range(self.data_parallel):
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
@@ -334,7 +329,7 @@ class Generator:
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
@@ -370,7 +365,7 @@ class Generator:
         if reset_inputs:
             for i in range(self.data_parallel):
                 user_page_table = page_table[i] if page_table is not None else None
-                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                host_inputs_i = self.model[i].prepare_decode_inputs_host([tokens[i], current_pos[i], user_page_table])
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,

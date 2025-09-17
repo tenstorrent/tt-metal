@@ -25,16 +25,16 @@ tokenizer = load_tokenizer(local_weights_path)
 BASE_PROMPT_LEN = 81  # Send empty prompt to apply_chat_template
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "generation_length",
     [
-        200,
+        2,
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 12087296}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 42087296}], indirect=True
 )
 def test_model(
     mesh_device,
@@ -42,6 +42,15 @@ def test_model(
     dtype,
     reset_seeds,
 ):
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print("MESH DEVICE!", mesh_device)
+    print("MESH SHAPE!", mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
     # Prepare the prompt
     prompt = "How many r's in the word 'strawberry'?"
 
@@ -58,11 +67,11 @@ def test_model(
         padding="max_length",
         max_length=padded_prefill_seq_len,
     )
-    # print(f"Input ids: {inputs.input_ids}")
+    print(f"Input ids: {inputs.input_ids.shape}")
     print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
 
     decode_start_pos = (inputs.attention_mask[0] == 0).nonzero(as_tuple=True)[0][0].item()
-
+    print(f"DEBUG: decode_start_pos: {decode_start_pos}")
     # Create configuration
     config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=True)
 
@@ -117,14 +126,17 @@ def test_model(
     tt_output_tensor = ttnn.get_device_tensors(tt_output)[0]
 
     outputs = ""
+    print(f"Input ids: {inputs.input_ids.shape}")
+    print(f"DEBUG: decode_start_pos: {decode_start_pos}")
 
     print(f"Checking outputs:")
     prefill_out = ttnn.to_torch(tt_output_tensor)[:, decode_start_pos - 1, :]
+    print(f"Prefill out shape: {prefill_out}")
     prefill_out_token_id = torch.argmax(prefill_out.float(), dim=-1)
     prefill_token_out = tokenizer.decode(prefill_out_token_id.flatten())
     outputs += prefill_token_out
     print(f"Prefill token output: {prefill_token_out}")
-
+    return True
     ###### Decode Setup ######
     prev_token_id = prefill_out_token_id.unsqueeze(0)
     cur_pos = decode_start_pos

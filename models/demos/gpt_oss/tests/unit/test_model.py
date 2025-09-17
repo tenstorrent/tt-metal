@@ -40,7 +40,7 @@ tokenizer = load_tokenizer(local_weights_path)
 )
 @pytest.mark.parametrize("vocab_size", [201088])
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
 def test_model(
@@ -58,6 +58,14 @@ def test_model(
     reset_seeds,
 ):
     assert use_real_weights, "Random weights giving bad PCC (0s), need to investigate."
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    print("MESH DEVICE!", mesh_device)
+    print("MESH SHAPE!", mesh_device.shape)
+    tensor_cache_dir = (
+        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
+    )
+    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
     weights_type = "/real" if use_real_weights else "/random"
 

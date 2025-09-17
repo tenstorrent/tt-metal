@@ -112,6 +112,8 @@ class Experts:
 
         if self.mesh_device.shape[1] > 1:
             # AllReduce
+            if next_states.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
+                next_states = ttnn.pad(next_states, [(0, 0), (0, 0), (0, 0), (0, 192)], 0)
             next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
                 next_states,
                 dim=3,
@@ -133,6 +135,8 @@ class Experts:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            if next_states.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
+                next_states = next_states[:, :, :, : self.hidden_size]
             next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
 
         return next_states
