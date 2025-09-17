@@ -83,12 +83,14 @@ def run_rms_trace(
             32,
             128,
         ),
-        core_grid=input_shard_grid,
+        core_grid=ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]
+        ),  # pass 0, 0 core grid for now
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 256]
+    ag_shape = [1, 1, 32, 128 * num_devices]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
