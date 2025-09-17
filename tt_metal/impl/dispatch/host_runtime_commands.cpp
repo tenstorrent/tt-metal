@@ -273,16 +273,6 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     program.impl().release_buffers();
 }
 
-void EnqueueRecordEvent(
-    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Ignore record event in slow dispatch.
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    cq.enqueue_record_event(event, sub_device_ids);
-}
-
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch conservatively flushes all work since there's no cq.
