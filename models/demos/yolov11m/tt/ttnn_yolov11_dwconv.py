@@ -31,8 +31,10 @@ class TtnnDWConv:
         
         # For depthwise convolution, groups should equal in_channels
         # This is handled in the parameter setup, but we validate here
-        assert parameter.groups == parameter.in_channels, \
-            f"DWConv requires groups=in_channels, got groups={parameter.groups}, in_channels={parameter.in_channels}"
+        # The parameter is a DWConv module, so we access the inner conv layer
+        conv_layer = parameter.conv if hasattr(parameter, 'conv') else parameter
+        assert conv_layer.groups == conv_layer.in_channels, \
+            f"DWConv requires groups=in_channels, got groups={conv_layer.groups}, in_channels={conv_layer.in_channels}"
         
         # Create the depthwise convolution using Yolov11Conv2D
         # The activation will be handled separately if enable_act is True
