@@ -10,9 +10,8 @@ import torch
 import ttnn
 
 from ..utils.padding import PaddingConfig, pad_weight_tensor
-from ..utils.tensor import bf16_tensor
 from .linear import ColParallelLinear
-from .module import Module
+from .module import Module, Parameter
 from .normalization import RMSNorm
 
 if TYPE_CHECKING:
@@ -53,7 +52,6 @@ class Attention(Module):
         self.parallel_config = parallel_config
         self.padding_config = padding_config
         self.use_spatial_weights_for_prompt = use_spatial_weights_for_prompt
-        self.added_head_scaling = added_head_scaling
 
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
@@ -98,7 +96,11 @@ class Attention(Module):
             self.to_add_out = None
 
         self.added_head_factors = (
-            bf16_tensor(torch.ones([self.n_local_heads, 1]), device=mesh_device)
+            Parameter(
+                shape=[self.n_local_heads, 1],
+                device=mesh_device,
+                init=init and torch.ones([self.n_local_heads, 1]),
+            )
             if added_head_scaling and self.add_qkv_proj is not None
             else None
         )
@@ -138,11 +140,6 @@ class Attention(Module):
                 pad = (0, 0, 0, self.padding_config.self.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
             state["added_head_factors"] = factors
-
-    def _load_local_torch_state(self, state: MutableMapping[str, Any]) -> None:
-        if self.added_head_scaling:
-            factors = state.pop("added_head_factors")
-            self.added_head_factors = bf16_tensor(factors, device=self.mesh_device)
 
     def _reshape_and_merge_qkv(
         self,
@@ -199,9 +196,9 @@ class Attention(Module):
         if prompt is not None:
             assert len(prompt.shape) == 3
         for t in spatial_rope or ():
-            assert len(t) == 2
+            assert len(t.shape) == 2
         for t in prompt_rope or ():
-            assert len(t) == 2
+            assert len(t.shape) == 2
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -230,7 +227,7 @@ class Attention(Module):
             add_k = self.norm_added_k(add_k)
 
             if self.added_head_factors is not None:
-                add_q = add_q * self.added_head_factors
+                add_q = add_q * self.added_head_factors.data
 
             if prompt_rope is not None:
                 add_q = _apply_rope(add_q, prompt_rope)
