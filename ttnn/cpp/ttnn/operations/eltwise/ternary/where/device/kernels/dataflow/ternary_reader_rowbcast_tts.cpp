@@ -8,7 +8,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    // Standard first 5 arguments (same as ternary_reader_nobcast_tts.cpp)
+    // Standard first 5 arguments
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
     const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true tensor address
     const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // unused for TTS (but expected by kernel interface)
