@@ -137,8 +137,7 @@ void generate(
     auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
-    auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
-    // auto padded_top_k = round_up_to_tile(static_cast<uint32_t>(top_k), (enable_tp ? num_devices : 1U) * 32U);
+    auto padded_vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -154,7 +153,7 @@ void generate(
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
-    std::vector<float> padded_logits_vector(vocab_size, 0.0);
+    std::vector<float> padded_logits_vector(padded_vocab_size, 0.0F);
 
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
@@ -163,11 +162,11 @@ void generate(
     // Sampling setup
 
     auto repeats = ttnn::Shape({1U, 1U, SamplingBatchSize, 1U});
-    uint32_t prompt_tokens_padded_size = 0;
-    uint32_t next_token_id = 0;
+    uint32_t prompt_tokens_padded_size = 0U;
+    uint32_t next_token_id = 0U;
 
     auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        std::vector<float>(original_vocab_size, 0),
+        std::vector<float>(original_vocab_size, 0.0F),
         ttnn::Shape({1, 1, 1, original_vocab_size}),
         device,
         ttnn::Layout::ROW_MAJOR);
@@ -177,19 +176,14 @@ void generate(
     std::vector<uint32_t> next_token_vector;
     std::vector<float> logits_vector(original_vocab_size, 0.0F);
 
-    ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> end_index = {1, 1, 1, vocab_size};
-    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-
     // Create a large negative mask for out-of-vocab logits
-
-    auto vocab_mask = std::vector<float>(vocab_size - original_vocab_size, 1e4F);
+    auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
 
     auto argmax_zeros =
-        ttml::core::zeros(ttnn::Shape({1, 1, 1, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+        ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
 
     auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
-        vocab_mask, ttnn::Shape({1, 1, 1, vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+        vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
 
     auto mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
@@ -211,10 +205,13 @@ void generate(
         }
         prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded,
+            ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
+            device,
+            ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
-        // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
+        // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
         auto output_tensor = output->get_value();
         auto rand = ttnn::rand(
