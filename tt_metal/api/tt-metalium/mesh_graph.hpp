@@ -117,7 +117,7 @@ public:
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
-        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir);
+        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, bool version_2 = true);
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;
@@ -141,9 +141,6 @@ private:
     // For distributed context, bookkeeping of host ranks and their shapes
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
-
-    static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-        cluster_type_to_mesh_graph_descriptor;
 };
 
 }  // namespace tt::tt_fabric
