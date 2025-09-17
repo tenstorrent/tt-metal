@@ -187,15 +187,11 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
                 j++;
               }
               const testLabel = extractTestLabelBackward(lines, i);
-              if (label) {
-                const text = block.join('\n');
-                const fileBase = path.basename(p);
-                const label = `${fileBase}: ${testLabel}`;
-                collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
-                foundInFile++;
-              } else {
-                core.info(`Skipped info-block at line ${i} in ${p} (no label found above)`);
-              }
+              const textBlock = block.join('\n');
+              const fileBase = path.basename(p);
+              const finalLabel = testLabel ? `${fileBase}: ${testLabel}` : `${fileBase}: no label found`;
+              collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel });
+              foundInFile++;
               i = j;
             }
           }
