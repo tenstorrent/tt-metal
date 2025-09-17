@@ -143,14 +143,19 @@ RUN mkdir -p /tmp/iwyu \
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
 RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
-RUN ([ "$UBUNTU_VERSION" != "24.04" ] \
-    && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
-    && rm -rf /tmp/gdb-build) || true
+RUN echo "Checking if UBUNTU_VERSION ($UBUNTU_VERSION) != 24.04" && apt-get remove -y gdb || true
+RUN if [ "$UBUNTU_VERSION" != "24.04" ]; then \
+    echo "Building custom GDB for Ubuntu $UBUNTU_VERSION" && \
+    mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ && \
+    wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz && \
+    tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 && \
+    /tmp/gdb-build/configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/gdb-build; \
+    else \
+    echo "Using system GDB for Ubuntu 24.04"; \
+    fi
 
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
