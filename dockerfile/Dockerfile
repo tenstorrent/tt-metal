@@ -6,8 +6,6 @@
 ARG UBUNTU_VERSION=22.04
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
-ENV UBUNTU_VERSION=${UBUNTU_VERSION}
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -145,15 +143,14 @@ RUN mkdir -p /tmp/iwyu \
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
 RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
-RUN echo "Checking if UBUNTU_VERSION ($UBUNTU_VERSION) != 24.04" && [ "$UBUNTU_VERSION" != "24.04" ] || true
-RUN echo "Checking if UBUNTU_VERSION ($UBUNTU_VERSION) != 24.04" && [ "$UBUNTU_VERSION" != "24.04" ] \
+RUN ([ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
     && wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz \
     && tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 \
     && /tmp/gdb-build/configure --prefix=/usr/local \
     && make -j$(nproc) \
     && make install \
-    && rm -rf /tmp/gdb-build
+    && rm -rf /tmp/gdb-build) || true
 
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -199,7 +196,7 @@ RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
 WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
-run /bin/bash -c "./build_metal.sh \
+RUN /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh \
     && source $PYTHON_ENV_DIR/bin/activate \
     && pip install -r models/tt_transformers/requirements.txt \
