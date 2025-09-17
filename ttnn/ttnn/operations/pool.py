@@ -22,22 +22,27 @@ def golden_maxpool2d(
 ):
     import torch
 
-    # Handle padding format conversion
-    # ttnn uses [pad_t, pad_b, pad_l, pad_r] while torch expects (pad_h, pad_w) or specific 4D format
-    if isinstance(padding, (list, tuple)) and len(padding) == 4:
-        # Convert from ttnn format [pad_t, pad_b, pad_l, pad_r] to torch 2D format (pad_h, pad_w)
-        pad_t, pad_b, pad_l, pad_r = padding
-        # For symmetric padding, use the average or maximum
-        pad_h = max(pad_t, pad_b) if pad_t != pad_b else pad_t
-        pad_w = max(pad_l, pad_r) if pad_l != pad_r else pad_l
-        torch_padding = (pad_h, pad_w)
-    else:
-        # Assume it's already in the correct 2D format
-        torch_padding = padding
-
     input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
+
+    # Handle padding format conversion
+    # ttnn uses [pad_t, pad_b, pad_l, pad_r] while torch expects (pad_h, pad_w) or specific 4D format
+    if isinstance(padding, (list, tuple)) and len(padding) == 4:
+        # Apply padding using torch.nn.functional.pad with 4D format
+        # ttnn format: [pad_t, pad_b, pad_l, pad_r]
+        # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
+        pad_t, pad_b, pad_l, pad_r = padding
+        input_tensor = torch.nn.functional.pad(
+            input_tensor, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
+        )
+        torch_padding = 0  # No padding in max_pool2d since we already padded
+    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
+        # Standard 2D padding format (pad_h, pad_w)
+        torch_padding = padding
+    else:
+        # Assume it's already in the correct format
+        torch_padding = padding
 
     output_tensor = torch.nn.functional.max_pool2d(
         input_tensor,

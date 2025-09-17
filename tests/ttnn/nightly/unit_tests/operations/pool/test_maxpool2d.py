@@ -662,7 +662,6 @@ def test_golden_maxpool2d_with_vovnet_params(device):
     to ensure the golden implementation is correct.
     """
     from ttnn.operations.pool import golden_maxpool2d
-    import torch
 
     # VoVNet test parameters from the original issue
     batch_size, in_h, in_w, in_c = 1, 56, 56, 256
@@ -692,7 +691,7 @@ def test_golden_maxpool2d_with_vovnet_params(device):
         channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
-        padding=padding_4d,  # 4D format that was causing the issue
+        padding=padding_4d,
         dilation=dilation,
         ceil_mode=ceil_mode,
     )
@@ -707,7 +706,7 @@ def test_golden_maxpool2d_with_vovnet_params(device):
         channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
-        padding=padding_2d,  # 2D format
+        padding=padding_2d,
         dilation=dilation,
         ceil_mode=ceil_mode,
     )
@@ -736,14 +735,15 @@ def test_golden_maxpool2d_with_vovnet_params(device):
     golden_2d_torch = golden_2d_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
 
     # Verify both padding formats produce correct results
-    assert torch.allclose(
-        golden_4d_torch, torch_output, rtol=1e-3, atol=1e-3
+    # For bfloat16 maxpool tests we use torch.equal since we don't expect any loss
+    assert torch.equal(
+        golden_4d_torch, torch_output
     ), f"Golden function with 4D padding produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_4d_torch.shape}"
 
-    assert torch.allclose(
-        golden_2d_torch, torch_output, rtol=1e-3, atol=1e-3
+    assert torch.equal(
+        golden_2d_torch, torch_output
     ), f"Golden function with 2D padding produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_2d_torch.shape}"
 
-    assert torch.allclose(
-        golden_4d_torch, golden_2d_torch, rtol=1e-5, atol=1e-5
+    assert torch.equal(
+        golden_4d_torch, golden_2d_torch
     ), "4D and 2D padding formats should produce identical results for symmetric padding"
