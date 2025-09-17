@@ -84,7 +84,7 @@ jobs:
             testname="$1"
             command="$2"
             pids=()
-            for tray in tray-1 tray-2 tray-3 tray-4; do
+            for tray in tray-0 tray-1 tray-2 tray-3; do
               echo ">>> Running $testname in $tray"
               (
                 docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
@@ -109,7 +109,7 @@ jobs:
           export -f run_test
           run_test "tt-smi test" "tt-smi -ls"
           #run_test "test_system_health" "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
-          #run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+          # run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
 
       - name: Tear down containers
         if: always()
