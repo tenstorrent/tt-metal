@@ -267,7 +267,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Shape& padded_input_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
-    const bool recreate_mapping_tensor) {
+    const TileReshapeMapMode reshape_map_mode) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -351,7 +351,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             mem_config,
             queue_id,
             pad_value.value_or(default_pad_value),
-            recreate_mapping_tensor);
+            reshape_map_mode == TileReshapeMapMode::RECREATE);
     }
 }
 
@@ -361,8 +361,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
-    const bool recreate_mapping_tensor) {
-    return invoke(queue_id, tensor, shape, shape, memory_config, pad_value, recreate_mapping_tensor);
+    const TileReshapeMapMode reshape_map_mode) {
+    return invoke(queue_id, tensor, shape, shape, memory_config, pad_value, reshape_map_mode);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
@@ -371,14 +371,14 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
-    const bool recreate_mapping_tensor) {
+    const TileReshapeMapMode reshape_map_mode) {
     return invoke(
         queue_id,
         tensor,
         tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
-        recreate_mapping_tensor);
+        reshape_map_mode);
 }
 
 }  // namespace ttnn::operations::data_movement
