@@ -111,7 +111,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, false>(start_N, W, 0, 0);
+                welford_tile<dst0, dst1, dst2, true, 0>(start_N, W, 0, {});
                 start_N += tile_width;
             }
         }

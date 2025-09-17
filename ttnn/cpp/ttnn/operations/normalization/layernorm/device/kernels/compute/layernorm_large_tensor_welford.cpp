@@ -143,7 +143,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 cb_wait_front(cb_result_or_input, j + 1);
                 transpose_wh_tile(cb_result_or_input, j, dst0);
-                welford_tile<dst0, dst1, dst2, true, false>((wt + j) * tile_width, W, 0, 0);
+                welford_tile<dst0, dst1, dst2, true, 0>((wt + j) * tile_width, W, 0, {});
             }
             tile_regs_commit();
 
