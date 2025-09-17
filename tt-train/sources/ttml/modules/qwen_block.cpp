@@ -1,48 +1,60 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
+#include "gpt_block.hpp"
 
-#include "autograd/tensor.hpp"
-#include "modules/dropout_module.hpp"
-#include "modules/grouped_query_attention.hpp"
-#include "modules/linear_module.hpp"
-#include "modules/rms_norm_module.hpp"
-#include "ops/rope_op.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
 
-class QwenMLP : public autograd::ModuleBase {
-private:
-    std::shared_ptr<LinearLayer> m_gate_proj;
-    std::shared_ptr<LinearLayer> m_up_proj;
-    std::shared_ptr<LinearLayer> m_down_proj;
-    std::shared_ptr<DropoutLayer> m_dropout;
+GPTMLP::GPTMLP(uint32_t embedding_size, float dropout_prob) {
+    fc1 = std::make_shared<LinearLayer>(embedding_size, embedding_size * 4);
+    fc2 = std::make_shared<LinearLayer>(embedding_size * 4, embedding_size);
+    dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
-public:
-    QwenMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
+    create_name("gpt_mlp");
+    register_module(fc1, "fc1");
+    register_module(fc2, "fc2");
+    register_module(dropout, "dropout");
+}
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input);
-};
+autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
+    auto x = (*fc1)(input);
+    x = ops::gelu(x);
+    x = (*fc2)(x);
+    x = (*dropout)(x);
+    return x;
+}
 
-class QwenBlock : public autograd::ModuleBase {
-private:
-    std::shared_ptr<QwenMLP> m_mlp;
-    std::shared_ptr<RMSNormLayer> m_input_layernorm;
-    std::shared_ptr<RMSNormLayer> m_post_attention_layernorm;
-    std::shared_ptr<GroupedQueryAttention> m_self_attn;
+GPTBlock::GPTBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm) {
+    mlp = std::make_shared<GPTMLP>(embedding_size, dropout_prob);
+    ln1 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
+    ln2 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
+    attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
 
-public:
-    explicit QwenBlock(
-        uint32_t embedding_size,
-        uint32_t num_heads,
-        uint32_t num_groups,
-        const ops::RotaryEmbeddingParams& rope_params,
-        float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt);
+    create_name("gpt_block");
+    register_module(mlp, "mlp");
+    register_module(ln1, "ln1");
+    register_module(ln2, "ln2");
+    register_module(attention, "attention");
+}
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
-};
+autograd::TensorPtr GPTBlock::operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    auto residual = input;
+    auto x = (*ln1)(input);
+    x = (*attention)(x, mask);
+    x = ops::add(x, residual);
+
+    residual = x;
+    x = (*ln2)(x);
+    x = (*mlp)(x);
+    x = ops::add(x, residual);
+    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "gpt_block");
+
+    return x;
+}
 
 }  // namespace ttml::modules
