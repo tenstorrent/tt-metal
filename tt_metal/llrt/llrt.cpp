@@ -3,20 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
-#include <cassert>
 #include <chrono>
 #include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -28,7 +24,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "metal_soc_descriptor.h"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -115,35 +110,38 @@ tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoo
 
 void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
-    uint64_t go_signal_adrr =
-        tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    uint64_t go_signal_adrr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
-    go_msg_t reset_msg{};
-    reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip);
-    uint32_t go_message_index_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
+    cluster.write_core_immediate(reset_msg.data(), reset_msg.size(), {chip, virtual_core}, go_signal_adrr);
+    cluster.l1_barrier(chip);
+    uint32_t go_message_index_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
+    cluster.write_core_immediate(&zero, sizeof(uint32_t), {chip, virtual_core}, go_message_index_addr);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
+void write_launch_msg_to_core(
+    chip_id_t chip,
+    CoreCoord core,
+    tt_metal::dev_msgs::launch_msg_t::View msg,
+    tt_metal::dev_msgs::go_msg_t::ConstView go_msg,
+    bool send_go) {
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, core);
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
 
-    msg->kernel_config.mode = DISPATCH_MODE_HOST;
+    msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
-    uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
-    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
-    uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
+    uint64_t launch_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
+    uint64_t go_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-        (void*)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
+    cluster.write_core_immediate(msg.data(), msg.size(), {chip, core}, launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(
-            go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
+        cluster.write_core_immediate(go_msg.data(), go_msg.size(), {chip, core}, go_addr);
     }
 }
 
@@ -219,29 +217,30 @@ bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
-    uint64_t go_msg_addr =
-        tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
-        constexpr int RUN_MAILBOX_BOGUS = 3;
-        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            chip_id, core, go_msg_addr & ~0x3, sizeof(go_msg_t));
-        go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
-        uint8_t run = core_status->signal;
-        if (run != run_state && run != RUN_MSG_DONE) {
+        auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            core_status.data(), core_status.size(), {chip_id, core}, go_msg_addr & ~0x3);
+        uint8_t run = core_status.view().signal();
+        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
                 run,
                 run_state,
-                RUN_MSG_DONE);
+                tt_metal::dev_msgs::RUN_MSG_DONE);
             TT_FATAL(
-                run == run_state || run == RUN_MSG_DONE, "Read unexpected run_mailbox value from core {}", core.str());
+                run == run_state || run == tt_metal::dev_msgs::RUN_MSG_DONE,
+                "Read unexpected run_mailbox value from core {}",
+                core.str());
         }
 
-        return run == RUN_MSG_DONE;
+        return run == tt_metal::dev_msgs::RUN_MSG_DONE;
     };
     return get_mailbox_is_done(go_msg_addr);
 }
