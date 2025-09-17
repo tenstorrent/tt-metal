@@ -8,6 +8,7 @@
 #include <distributed.hpp>
 #include "device_pool.hpp"
 #include "llrt/hal.hpp"
+#include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -1726,7 +1727,8 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 
 void runAnalysesForDeviceMarkers(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
-    const std::filesystem::path& report_path) {
+    const std::filesystem::path& report_path,
+    ThreadPool& thread_pool) {
 #if defined(TRACY_ENABLE)
     log_info(tt::LogMetal, "Running analyses for device markers");
     std::vector<AnalysisConfig> analysis_configs = {
@@ -1950,10 +1952,16 @@ void runAnalysesForDeviceMarkers(
                     .marker_name_keywords = {tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL}},
         }};
 
-    std::vector<std::unique_ptr<const AnalysisResults>> analysis_results;
+    uint32_t i = 0;
+    std::vector<std::unique_ptr<const AnalysisResults>> analysis_results(analysis_configs.size());
     for (const auto& analysis_config : analysis_configs) {
-        analysis_results.push_back(generateAnalysisForDeviceMarkers(analysis_config, device_markers));
+        thread_pool.enqueue([&analysis_config, &device_markers, &analysis_results, i]() {
+            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
+        });
+        i++;
     }
+
+    thread_pool.wait();
 
     writeAnalysisResultsToCSV(analysis_results, report_path);
 #endif
@@ -1997,7 +2005,9 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
     runAnalysesForDeviceMarkers(
-        device_markers_vec, this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME);
+        device_markers_vec,
+        this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME,
+        *this->thread_pool);
 
     // for (auto& [runtime_id, durations] :
     // dynamic_cast<DurationAnalysisResults&>(*analysis_results).results_per_runtime_id) {
@@ -2178,12 +2188,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         return;
     }
 
-    const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
-    if (!profiler_state_manager) {
-        // Profiler not enabled, skip file writing
-        return;
-    }
-    std::scoped_lock lock(profiler_state_manager->file_write_mutex);
+    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);

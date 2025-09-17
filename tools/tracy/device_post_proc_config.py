@@ -37,34 +37,34 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
             "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
         },
-        # "trace2trace - FW": {
-        #     "across": "device",
-        #     "type": "adjacent",
-        #     "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-FW"},
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-FW"},
-        # },
-        # "trace2trace - kernel": {
-        #     "across": "device",
-        #     "type": "adjacent",
-        #     "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-KERNEL"},
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-KERNEL"},
-        # },
-        # "op2op": {
-        #     "across": "core",
-        #     "type": "adjacent",
-        #     "start": {
-        #         "core": "ANY",
-        #         "risc": "ANY",
-        #         "zone_phase": "ZONE_END",
-        #         "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
-        #     },
-        #     "end": {
-        #         "core": "ANY",
-        #         "risc": "ANY",
-        #         "zone_phase": "ZONE_START",
-        #         "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC"]],
-        #     },
-        # },
+        "trace2trace - FW": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-FW"},
+        },
+        "trace2trace - kernel": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-KERNEL"},
+        },
+        "op2op": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_END",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+            "end": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC"]],
+            },
+        },
         "device_kernel_first_to_last_start": {
             "across": "ops",
             "type": "op_first_last",
@@ -81,12 +81,12 @@ class default_setup(metaclass=MergeMetaclass):
                 "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
             },
         },
-        # "device_kernel_duration_per_core": {
-        #     "across": "ops",
-        #     "type": "op_core_first_last",
-        #     "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
-        #     "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
-        # },
+        "device_kernel_duration_per_core": {
+            "across": "ops",
+            "type": "op_core_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
         "device_fw_duration": {
             "across": "ops",
             "type": "op_first_last",
@@ -145,28 +145,28 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
             "end": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
         },
-        # "device_compute_cb_wait_front": {
-        #     "across": "ops",
-        #     "type": "sum",
-        #     "marker": {"risc": "TRISC_0", "zone_name": "CB-COMPUTE-WAIT-FRONT"},
-        # },
-        # "device_compute_cb_reserve_back": {
-        #     "across": "ops",
-        #     "type": "sum",
-        #     "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
-        # },
-        # "dispatch_total_cq_cmd_op_time": {
-        #     "across": "dispatch_ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
-        #     "end": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
-        # },
-        # "dispatch_go_send_wait_time": {
-        #     "across": "dispatch_ops",
-        #     "type": "op_first_last",
-        #     "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
-        #     "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
-        # },
+        "device_compute_cb_wait_front": {
+            "across": "ops",
+            "type": "sum",
+            "marker": {"risc": "TRISC_0", "zone_name": "CB-COMPUTE-WAIT-FRONT"},
+        },
+        "device_compute_cb_reserve_back": {
+            "across": "ops",
+            "type": "sum",
+            "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
+        },
+        "dispatch_total_cq_cmd_op_time": {
+            "across": "dispatch_ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
+        },
+        "dispatch_go_send_wait_time": {
+            "across": "dispatch_ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
+        },
     }
 
     displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
