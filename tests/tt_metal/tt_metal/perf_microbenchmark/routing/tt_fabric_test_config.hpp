@@ -510,9 +510,14 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                if (p.iterations.has_value()) {
+                if (p.iterations.has_value()) { 
                     max_iterations = std::max(max_iterations, p.iterations.value());
-                } else if (p.type == "all_to_one") {
+                    // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of iterations set by all_to_one
+                    if (p.type == "all_to_one") {
+                        log_warning(tt::LogTest, "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead of auto-generating iterations based on number of devices");
+                    }
+                }
+                else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
                     uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
                     max_iterations = std::max(max_iterations, num_devices);
