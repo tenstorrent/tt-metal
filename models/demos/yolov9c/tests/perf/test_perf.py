@@ -29,9 +29,13 @@ def test_perf_device_yolov9c(model_task, batch_size):
     num_iterations = 1
     margin = 0.03
     enable_segment = model_task == "segment"
-    expected_perf = 33.95 if enable_segment else 33.93
+    expected_perf = 55.1 if enable_segment else 90
 
-    command = f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c"
+    command = (
+        f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c[device_params0-segment-True]"
+        if model_task == "segment"
+        else f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c[device_params0-detect-True]"
+    )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
