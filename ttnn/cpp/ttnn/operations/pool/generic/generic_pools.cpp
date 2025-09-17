@@ -6,6 +6,7 @@
 
 #include "tt-metalium/constants.hpp"
 #include <cmath>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -97,8 +98,10 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     Tensor input_tensor_sharded = input_tensor;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {
+        log_info(tt::LogOp, "Input tensor is not sharded, applying sharding.");
         // Input is not sharded. Perform sharding.
         if (applied_shard_scheme.has_value()) {
+            log_info(tt::LogOp, "Using user provided sharding scheme: {}", applied_shard_scheme.value());
             TT_FATAL(
                 (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
                     (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
@@ -113,7 +116,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
                 output_shape[2],
                 channels,
                 tt::constants::TILE_WIDTH,
-                input_tensor.device()->compute_with_storage_grid_size(),
+                CoreCoord(1, 1),
                 ShardOrientation::ROW_MAJOR,
                 false,
                 is_out_tiled,
@@ -121,6 +124,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
                                               // shard width to be a tile multiple, it cannot be 16
                 0);
         } else {  // auto-sharding
+            log_info(tt::LogOp, "Using auto-sharding to determine sharding scheme.");
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(
                     input_tensor,
@@ -140,6 +144,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        log_info(tt::LogOp, "num_cores_nhw: {}, num_cores_c: {}", num_cores_nhw, num_cores_c);
 
         // This is the code path of the non sharded input tensor, this means that input channels
         // can be whatever number here so we need to have the shard_width aligned to the l1 memory alignment
