@@ -241,6 +241,8 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     std::optional<RoutingDirection> outgoing_direction;
     std::vector<uint32_t> outgoing_link_indices;
     // either we will have hops specified or the dest node id
+    // With 2d unicast, we have bugs where we try to follow the input hop count but the routing tables
+    // cause the packets to fail to reach the destination properly in some cases, due to torus links
     bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
@@ -248,7 +250,6 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =
             this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
-
     } else {
         const auto dst_node_id = config.dst_node_ids[0];
         const auto src_node_id = this->test_device_ptr_->get_node_id();
