@@ -152,7 +152,15 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     // needs to respect 4B alignment.
     ASSERT((dst_noc_addr & 0x3) == 0);
     uint32_t offset = dst_noc_addr & 0xF;
+
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t src_addr = MEM_IERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#elif defined(COMPILE_FOR_ERISC)
+    uint32_t src_addr = MEM_AERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#else
     uint32_t src_addr = MEM_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#endif
+
 #ifdef COMPILE_FOR_TRISC
     ASSERT(0);  // we do not have L1 space for inline values for TRISCs.
 #endif
