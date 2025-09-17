@@ -122,7 +122,6 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
     const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
 
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     const auto impl = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
         TT_FATAL(
@@ -136,7 +135,7 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
         return ttnn::tilize_with_zero_padding(
                    ttnn::DefaultQueueId,
                    tt::tt_metal::Tensor::from_span(
-                       tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
+                       ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
             .to_device(device, tensor_memory_config);
     };
 
