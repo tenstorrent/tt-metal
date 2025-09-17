@@ -16,7 +16,7 @@ except ModuleNotFoundError:
 
 
 class TtnnAttention:
-    def __init__(self, dim, num_heads=8, attn_ratio=0.5, device=None, parameters=None, conv_pt=None):
+    def __init__(self, dim, num_heads=8, attn_ratio=0.5, device=None, parameters=None, conv_pt=None, path=""):
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.key_dim = int(self.head_dim * attn_ratio)
@@ -30,7 +30,7 @@ class TtnnAttention:
         self.qkv = Conv(
             device,
             parameters.qkv,
-            self.conv_pt.qkv,
+            self.conv_pt[f"{path}.qkv"],
             enable_identity=True,
             activation_dtype=ttnn.bfloat16,
             use_1d_systolic_array=False,
@@ -40,7 +40,7 @@ class TtnnAttention:
         self.proj = Conv(
             device,
             parameters.proj,
-            self.conv_pt.proj,
+            self.conv_pt[f"{path}.proj"],
             enable_identity=True,
             activation_dtype=ttnn.bfloat16,
             use_1d_systolic_array=False,
@@ -51,7 +51,7 @@ class TtnnAttention:
         self.pe = Conv(
             device,
             parameters.pe,
-            self.conv_pt.pe,
+            self.conv_pt[f"{path}.pe"],
             enable_identity=True,
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,

@@ -14,14 +14,14 @@ except ModuleNotFoundError:
 
 
 class TtnnCIB:
-    def __init__(self, shortcut=True, device=None, parameters=None, conv_pt=None):
+    def __init__(self, shortcut=True, device=None, parameters=None, conv_pt=None, path=""):
         self.device = device
         self.parameters = parameters
         self.conv_pt = conv_pt
         self.conv0 = Conv(
             device,
             parameters.cv1[0],
-            self.conv_pt.cv1[0],
+            self.conv_pt[f"{path}.cv1.0"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -30,7 +30,7 @@ class TtnnCIB:
         self.conv1 = Conv(
             device,
             parameters.cv1[1],
-            self.conv_pt.cv1[1],
+            self.conv_pt[f"{path}.cv1.1"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -39,14 +39,14 @@ class TtnnCIB:
         self.conv2 = Conv(
             device,
             parameters.cv1[2],
-            self.conv_pt.cv1[2],
+            self.conv_pt[f"{path}.cv1.2"],
             use_1d_systolic_array=False,
         )
 
         self.conv3 = Conv(
             device,
             parameters.cv1[3],
-            self.conv_pt.cv1[3],
+            self.conv_pt[f"{path}.cv1.3"],
             deallocate_activation=True,
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
@@ -56,7 +56,7 @@ class TtnnCIB:
         self.conv4 = Conv(
             device,
             parameters.cv1[4],
-            self.conv_pt.cv1[4],
+            self.conv_pt[f"{path}.cv1.4"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,

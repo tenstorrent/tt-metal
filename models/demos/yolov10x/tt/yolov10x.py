@@ -16,31 +16,39 @@ from models.experimental.yolo_common.yolo_utils import concat
 class TtnnYolov10:
     def __init__(self, device, parameters, conv_pt):
         self.device = device
-        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt.model[0], deallocate_activation=True)
-        self.conv2 = Conv(device, parameters.conv_args[1], conv_pt.model[1], deallocate_activation=True)
+
+        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt["model.0"], deallocate_activation=True)
+        self.conv2 = Conv(device, parameters.conv_args[1], conv_pt["model.1"], deallocate_activation=True)
         self.c2f_1 = TtnnC2f(
-            shortcut=True, n=3, device=self.device, parameters=parameters.conv_args[2], conv_pt=conv_pt.model[2]
+            shortcut=True, n=3, device=self.device, parameters=parameters.conv_args[2], conv_pt=conv_pt, path="model.2"
         )
-        self.conv3 = Conv(device, parameters.conv_args[3], conv_pt.model[3], deallocate_activation=True)
+        self.conv3 = Conv(device, parameters.conv_args[3], conv_pt["model.3"], deallocate_activation=True)
         self.c2f_2 = TtnnC2f(
-            shortcut=True, n=6, device=self.device, parameters=parameters.conv_args[4], conv_pt=conv_pt.model[4]
+            shortcut=True, n=6, device=self.device, parameters=parameters.conv_args[4], conv_pt=conv_pt, path="model.4"
         )
-        self.scdown_1 = TtnnSCDown(device=device, parameters=parameters.conv_args[5], conv_pt=conv_pt.model[5])
-        self.c2fcib_1 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[6], n=6, conv_pt=conv_pt.model[6])
-        self.scdown_2 = TtnnSCDown(device=device, parameters=parameters.conv_args[7], conv_pt=conv_pt.model[7])
-        self.c2fcib_2 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[8], conv_pt=conv_pt.model[8])
-        self.sppf = TtnnSPPF(device=device, parameters=parameters.conv_args[9], conv_pt=conv_pt.model[9])
-        self.psa_1 = TtnnPSA(device=device, parameters=parameters.conv_args[10], conv_pt=conv_pt.model[10])
-        self.c2fcib_3 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[13], conv_pt=conv_pt.model[13])
+        self.scdown_1 = TtnnSCDown(device=device, parameters=parameters.conv_args[5], conv_pt=conv_pt, path="model.5")
+        self.c2fcib_1 = TtnnC2fCIB(
+            device=device, parameters=parameters.conv_args[6], n=6, conv_pt=conv_pt, path="model.6"
+        )
+        self.scdown_2 = TtnnSCDown(device=device, parameters=parameters.conv_args[7], conv_pt=conv_pt, path="model.7")
+        self.c2fcib_2 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[8], conv_pt=conv_pt, path="model.8")
+        self.sppf = TtnnSPPF(device=device, parameters=parameters.conv_args[9], conv_pt=conv_pt, path="model.9")
+        self.psa_1 = TtnnPSA(device=device, parameters=parameters.conv_args[10], conv_pt=conv_pt, path="model.10")
+        self.c2fcib_3 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[13], conv_pt=conv_pt, path="model.13")
         self.c2f_3 = TtnnC2f(
-            shortcut=False, n=3, device=self.device, parameters=parameters.conv_args[16], conv_pt=conv_pt.model[16]
+            shortcut=False,
+            n=3,
+            device=self.device,
+            parameters=parameters.conv_args[16],
+            conv_pt=conv_pt,
+            path="model.16",
         )
-        self.conv4 = Conv(device, parameters.conv_args[17], conv_pt.model[17])
-        self.c2fcib_4 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[19], conv_pt=conv_pt.model[19])
-        self.scdown_3 = TtnnSCDown(device=device, parameters=parameters.conv_args[20], conv_pt=conv_pt.model[20])
-        self.c2fcib_5 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[22], conv_pt=conv_pt.model[22])
+        self.conv4 = Conv(device, parameters.conv_args[17], conv_pt["model.17"])
+        self.c2fcib_4 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[19], conv_pt=conv_pt, path="model.19")
+        self.scdown_3 = TtnnSCDown(device=device, parameters=parameters.conv_args[20], conv_pt=conv_pt, path="model.20")
+        self.c2fcib_5 = TtnnC2fCIB(device=device, parameters=parameters.conv_args[22], conv_pt=conv_pt, path="model.22")
         self.detect = TtnnV10Detect(
-            device=device, parameters=parameters.model_args.model[23], conv_pt=conv_pt.model[23]
+            device=device, parameters=parameters.model_args.model[23], conv_pt=conv_pt, path="model.23"
         )
 
     def __call__(self, input_tensor):

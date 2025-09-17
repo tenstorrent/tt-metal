@@ -15,7 +15,7 @@ except ModuleNotFoundError:
 
 
 class TtnnSPPF:
-    def __init__(self, device=None, parameters=None, conv_pt=None):
+    def __init__(self, device=None, parameters=None, conv_pt=None, path=""):
         self.device = device
         self.parameters = parameters
         self.conv_pt = conv_pt
@@ -23,7 +23,7 @@ class TtnnSPPF:
         self.cv1 = Conv(
             device,
             parameters.cv1,
-            self.conv_pt.cv1,
+            self.conv_pt[f"{path}.cv1"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -32,7 +32,7 @@ class TtnnSPPF:
         self.cv2 = Conv(
             device,
             parameters.cv2,
-            self.conv_pt.cv2,
+            self.conv_pt[f"{path}.cv2"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
