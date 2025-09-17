@@ -173,36 +173,31 @@ std::vector<Tensor> all_broadcast_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     auto tensor_topology_shape = input_tensor.tensor_topology().distribution_shape();
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_broadcast_async op is only supported for Fast Dispatch");
 
     if (!cluster_axis.has_value()) {
-        bool all_other_dims_are_one = true;
-        for (int i = 0; i < tensor_topology_shape.dims(); i++) {
-            if (tensor_topology_shape[i] > 1 && !all_other_dims_are_one) {
-                TT_THROW(
-                    "all_broadcast_async op is only supported for cluster_axis=None when all but one mesh dimensions "
-                    "are 1");
-            }
-            if (tensor_topology_shape[i] > 1) {
-                all_other_dims_are_one = false;
-            }
-        }
+        TT_FATAL(
+            tensor_topology_shape.is_line_topology(),
+            "all_broadcast_async op is only supported for a linear tensor topology shape");
     }
 
     uint32_t num_devices = get_tensor_topology_dimension(tensor_topology_shape, cluster_axis);
 
-    TT_FATAL(num_devices > 1, "all_broadcast_async op will only work for num_devices > 1, but has {}", num_devices);
+    TT_FATAL(
+        num_devices > 1,
+        "all_broadcast_async op will only work for num_devices > 1, but has {}, shape: {}",
+        num_devices,
+        tensor_topology_shape);
 
     ttnn::ccl::Topology ccl_topology = topology;
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     return tt::tt_metal::operation::run(
@@ -223,14 +218,7 @@ std::vector<Tensor> all_broadcast_async(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    return all_broadcast_async_impl(
-        input_tensor,
-        num_links,
-        memory_config,
-        topology,
-        cluster_axis,
-        sub_device_id,
-        ttnn::ccl::get_active_physical_devices(input_tensor));
+    return all_broadcast_async_impl(input_tensor, num_links, memory_config, topology, cluster_axis, sub_device_id);
 }
 
 }  // namespace operations::experimental::ccl

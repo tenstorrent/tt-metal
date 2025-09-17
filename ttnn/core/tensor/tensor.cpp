@@ -713,7 +713,11 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+    return Tensor(std::move(device_storage), tensor_spec, TensorTopology{device->shape(), placements, coords});
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
