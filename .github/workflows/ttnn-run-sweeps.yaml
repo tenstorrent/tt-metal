@@ -553,7 +553,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: "0 14 * * 0" # This cron schedule runs the workflow at 2:00 PM UTC / 9 AM EST weekly on Sundays
+    - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
 
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}
