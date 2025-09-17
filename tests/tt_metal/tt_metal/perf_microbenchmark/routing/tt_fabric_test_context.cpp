@@ -43,8 +43,11 @@ void TestContext::read_telemetry() {
 
                 const auto& core_data = data.at(eth_core);
 
-                LowResolutionBandwidthTelemetryResult tel{};
-                memcpy(&tel, core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
+                std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
+                memcpy(staging_buf.data(), core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
+                LowResolutionBandwidthTelemetryResult tel =
+                    std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
+
                 uint64_t cycles = tel.duration.full;
                 double bytes_per_cycle = calc_bw_bytes_per_cycle(tel.num_words_sent, cycles);
                 double bw_GB_s = bytes_per_cycle * double(freq_ghz);
