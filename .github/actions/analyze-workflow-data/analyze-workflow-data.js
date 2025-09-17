@@ -20,72 +20,6 @@ const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
-// Owners mapping cache
-let __ownersMapping = undefined;
-function loadOwnersMapping() {
-  if (__ownersMapping !== undefined) return __ownersMapping;
-  try {
-    const ownersPath = path.join(__dirname, 'owners.json');
-    if (fs.existsSync(ownersPath)) {
-      const raw = fs.readFileSync(ownersPath, 'utf8');
-      __ownersMapping = JSON.parse(raw);
-    } else {
-      __ownersMapping = null;
-    }
-  } catch (_) {
-    __ownersMapping = null;
-  }
-  return __ownersMapping;
-}
-
-function normalizeOwners(value) {
-  if (!value) return undefined;
-  // Single string -> id-only
-  if (typeof value === 'string') return [{ id: value }];
-  // Object with id/name
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    const id = value.id || undefined;
-    const name = value.name || undefined;
-    if (!id && !name) return undefined;
-    return [{ id, name }];
-  }
-  // Array -> map each entry
-  if (Array.isArray(value)) {
-    const arr = [];
-    for (const entry of value) {
-      if (typeof entry === 'string') arr.push({ id: entry });
-      else if (entry && typeof entry === 'object') arr.push({ id: entry.id, name: entry.name });
-    }
-    return arr.length ? arr : undefined;
-  }
-  return undefined;
-}
-
-function findOwnerForLabel(label) {
-  try {
-    const mapping = loadOwnersMapping();
-    if (!mapping) return undefined;
-    const lbl = typeof label === 'string' ? label : '';
-    // Prefer exact keys (label may contain the key as a substring)
-    if (mapping.exact && typeof mapping.exact === 'object') {
-      for (const key of Object.keys(mapping.exact)) {
-        if (lbl.includes(key)) return normalizeOwners(mapping.exact[key]);
-      }
-    }
-    // Fallback to contains list
-    if (Array.isArray(mapping.contains)) {
-      for (const entry of mapping.contains) {
-        if (entry && typeof entry.needle === 'string' && lbl.includes(entry.needle)) {
-          return normalizeOwners(entry.owner);
-        }
-      }
-    }
-  } catch (_) {
-    // ignore
-  }
-  return undefined;
-}
-
 // Simple HTML escaping for rendering snippets safely in summary HTML
 function escapeHtml(text) {
   if (typeof text !== 'string') return text;
@@ -102,16 +36,9 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const label = escapeHtml(obj.label || '');
     const snippet = escapeHtml(obj.snippet || '');
-    // Render owner display name(s) if present; fallback to id(s); else 'no owner found'
-    let ownerDisplay = 'no owner found';
-    if (obj.owner && Array.isArray(obj.owner) && obj.owner.length) {
-      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
-      if (names.length) ownerDisplay = names.join(', ');
-    }
-    const owner = escapeHtml(ownerDisplay);
-    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
+    return `<tr><td style="vertical-align:top;">${label}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
   }).join('\n');
-  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderRepeatedErrorsTable(repeatedErrors) {
@@ -304,12 +231,18 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
  */
 function extractTestLabel(lines, startIdx, endIdx, filePath) {
   const window = lines.slice(startIdx, endIdx + 1).join('\n');
+  // gtest block: [ RUN      ] Suite.TestName
+  const gtr = window.match(/\[\s*RUN\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
+  if (gtr) return gtr[1];
   // PyTest-like: FAILED tests/path::test_name[...] - ...
   const m1 = window.match(/FAILED\s+([^\s]+::[^\s]+(?:\[[^\]]+\])?)/);
   if (m1) return m1[1];
   // Lines like: Error: test_sdxl_unet_perf_device
   const m2 = window.match(/Error:\s*([A-Za-z0-9_:.+\-\[\]\/\\]+)/i);
   if (m2) return m2[1];
+  // Generic python test path starting with tests/... and ending with .py (with arbitrary suffix after .py)
+  const m5 = window.match(/\b(tests\/[\w\-\/\.]+\.py[^\s]*)/);
+  if (m5) return m5[1];
   // GTest: [  FAILED  ] Suite.Test
   const m3 = window.match(/\[\s*FAILED\s*\]\s+([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/);
   if (m3) return m3[1];
@@ -1052,30 +985,18 @@ async function run() {
               : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             // Error snippets first
             let errorsList = '';
-            if (Array.isArray(it.error_snippets) && it.error_snippets.length > 0) {
-              const errLines = it.error_snippets.map(obj => {
-                const prefix = obj.label ? `[${obj.label}] ` : '';
-                return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
-              });
-              errorsList = ['', '  - Errors:', ...errLines].join('\n');
-            }
+            const errorsHtml = renderErrorsTable(it.error_snippets || []);
+            errorsList = ['','  - Errors (table below):','', errorsHtml].join('\n');
             let repeatedList = '';
-            if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
-              const repLines = it.repeated_errors.map(e => `    - (${e.count}×) "${e.snippet.replace(/`/g, '\\`')}"`);
-              repeatedList = ['', '  - Repeated errors across failed runs:', ...repLines].join('\n');
-            }
+            const repeatedHtml = renderRepeatedErrorsTable(it.repeated_errors || []);
+            repeatedList = ['','  - Repeated errors across failed runs (table below):','', repeatedHtml].join('\n');
             if (it.no_success_in_window) {
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
-            if (Array.isArray(it.commits_between) && it.commits_between.length > 0) {
-              const commitLines = it.commits_between.map(c => {
-                const who = c.author_login ? `[@${c.author_login}](${c.author_url})` : (c.author_name || 'unknown');
-                return `    - [\`${c.short}\`](${c.url}) ${who}`;
-              });
-              commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
-            }
+            const commitsHtml = renderCommitsTable(it.commits_between || []);
+            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml].join('\n');
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
@@ -1093,30 +1014,18 @@ async function run() {
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
             // Error snippets first
             let errorsList = '';
-            if (Array.isArray(it.error_snippets) && it.error_snippets.length > 0) {
-              const errLines = it.error_snippets.map(obj => {
-                const prefix = obj.label ? `[${obj.label}] ` : '';
-                return `    - ${prefix}"${obj.snippet.replace(/`/g, '\\`')}"`;
-              });
-              errorsList = ['', '  - Errors:', ...errLines].join('\n');
-            }
+            const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
+            errorsList = ['','  - Errors (table below):','', errorsHtml2].join('\n');
             let repeatedList = '';
-            if (Array.isArray(it.repeated_errors) && it.repeated_errors.length > 0) {
-              const repLines = it.repeated_errors.map(e => `    - (${e.count}×) "${e.snippet.replace(/`/g, '\\`')}"`);
-              repeatedList = ['', '  - Repeated errors across failed runs:', ...repLines].join('\n');
-            }
+            const repeatedHtml2 = renderRepeatedErrorsTable(it.repeated_errors || []);
+            repeatedList = ['','  - Repeated errors across failed runs (table below):','', repeatedHtml2].join('\n');
             if (it.no_success_in_window) {
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
-            if (Array.isArray(it.commits_between) && it.commits_between.length > 0) {
-              const commitLines = it.commits_between.map(c => {
-                const who = c.author_login ? `[@${c.author_login}](${c.author_url})` : (c.author_name || 'unknown');
-                return `    - [\`${c.short}\`](${c.url}) ${who}`;
-              });
-              commitsList = ['','  - Commits between last success and first failure:', ...commitLines].join('\n');
-            }
+            const commitsHtml2 = renderCommitsTable(it.commits_between || []);
+            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2].join('\n');
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
