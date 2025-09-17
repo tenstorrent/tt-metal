@@ -114,6 +114,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
     Program program = CreateProgram();
 
+    uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+
     if (this->in_place_) {
         // after untilize bfloat8 is converted to bfloat16
         const tt::tt_metal::DataType dtype = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B
@@ -143,6 +145,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             remote_read_,
             is_in_tiled,
             device,
+            num_cores_x,
             max_out_nsticks_per_core_,
             in_nsticks_per_core_,
             this->in_place_,
@@ -178,6 +181,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             padding_exists,
             config_.num_cores_nhw,
             config_.num_cores_c,
+            num_cores_x,
             max_out_nsticks_per_core_,
             max_ref_size,
             in_out_shard_size_delta,
@@ -197,6 +201,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             transpose_mcast_,
             remote_read_,
             device,
+            num_cores_x,
             is_in_tiled,
             UNTILIZE_BLOCK_SIZE);
 
