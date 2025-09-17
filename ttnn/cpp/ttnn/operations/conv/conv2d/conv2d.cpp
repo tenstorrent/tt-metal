@@ -337,11 +337,15 @@ Result conv2d_DRAM(
     }
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
-    TT_FATAL(
-        dram_slice_config.num_slices < output_sliced_dim,
-        " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
-        dram_slice_config.num_slices,
-        output_sliced_dim);
+    if (output_sliced_dim == 1) {
+        dram_slice_config.num_slices = 1;
+    } else {
+        TT_FATAL(
+            dram_slice_config.num_slices < output_sliced_dim,
+            " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
+            dram_slice_config.num_slices,
+            output_sliced_dim);
+    }
 
     ttnn::Tensor input_tensor_on_device;
     if (!is_device_tensor(input_tensor)) {
