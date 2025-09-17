@@ -1756,9 +1756,7 @@ class ModelArgs:
 )"""
 
     def is_llama_vision(self):
-        hf_llama_vision = ("vision" in self.CKPT_DIR.lower()) and ("llama" in self.model_name.lower())
-        llama_dir_llama_vision = self.vision_chunk_size > 0
-        return hf_llama_vision or llama_dir_llama_vision
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
