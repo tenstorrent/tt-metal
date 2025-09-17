@@ -49,7 +49,7 @@ constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;  // isn't used right now, for debugging only
-constexpr uint32_t cb_qk_result = tt::CBIndex::c_7;      // used for accumulating results
+constexpr uint32_t cb_qk_result = tt::CBIndex::c_7;      // used for Q by K^t result
 
 constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;       // used to store previous max value
 constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;        // used to store current max value
@@ -104,21 +104,24 @@ void MAIN {
                     /* transpose */ 1);  // accumulate in dest_reg 0
             }
 
+#ifdef USE_ATTN_MASK
             /*
              * apply attention mask on dest_reg.
              * function assumes that dest_reg is in acquired state via *acquire_dst* call
              * function transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
              */
             apply_mask_on_reg<matmul_accum_reg>(cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+#endif
             tile_regs_commit();
-
             tile_regs_wait();
             cb_reserve_back(cb_qk_result, onetile);
             pack_reconfig_data_format(cb_qk_result);
             pack_tile(matmul_accum_reg, cb_qk_result);
             tile_regs_release();
             cb_push_back(cb_qk_result, onetile);
+#ifdef USE_ATTN_MASK
             cb_pop_front(cb_attn_mask, onetile);
+#endif
 
             // pop key data to make space for next key chunk
             cb_pop_front(cb_key, qWt);
@@ -174,9 +177,11 @@ void MAIN {
             alias_cb_prev_sum_exp);
         cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
+#ifdef RETURN_INTERMEDIATES
         // pack recip exp sum into intermediates buffer
         // [Improve]:i need to pack exp sum pack max value per head to intermediates also
         pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
+#endif
 
         cb_reserve_back(cb_output, qWt);
         pack_reconfig_data_format(cb_output);

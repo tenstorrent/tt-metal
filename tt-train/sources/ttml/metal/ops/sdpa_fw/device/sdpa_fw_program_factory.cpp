@@ -36,8 +36,8 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_2;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
-constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulating results
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
+constexpr auto kQKResultCbIndex = tt::CBIndex::c_7;      // used for accumulating results
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
 constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
@@ -59,6 +59,7 @@ constexpr uint32_t kIntermediateTiles = 1U;  // [Debug] should be 2U
 constexpr uint32_t kSingleTileBuffer = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
+const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 
 }  // namespace
 
@@ -115,7 +116,7 @@ void assign_per_core_runtime_args(
             {query_buffer->address(),
              key_buffer->address(),
              value_buffer->address(),
-             mask_buffer != nullptr ? mask_buffer->address() : 0U,
+             mask_buffer != nullptr ? mask_buffer->address() : 0,
              num_rows_per_core,
              num_rows_written});
 
@@ -124,7 +125,10 @@ void assign_per_core_runtime_args(
             program,
             kernels.writer,
             core,
-            {output_buffer->address(), intermediates_buffer->address(), num_rows_per_core, num_rows_written});
+            {output_buffer->address(),
+             intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+             num_rows_per_core,
+             num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -208,6 +212,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     uint32_t block_size = get_block_size(qWt, 4U);
 
+    const bool use_attn_mask = attn_mask.has_value();
+
     //[DEBUG]:
     fmt::print(
         "SDPA FW: NC={}, St={}, qWt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
@@ -248,11 +254,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
-    auto cb_attn_mask = create_circular_buffer(
-        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
-
-    auto cb_intermediate = create_circular_buffer(
-        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+    // create mask buffer only if it's going to be used
+    if (use_attn_mask) {
+        auto cb_attn_mask = create_circular_buffer(
+            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
+    }
+    // create intermediate buffer only if we need to return intermediates
+    if (args.return_intermediates) {
+        auto cb_intermediate = create_circular_buffer(
+            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+    }
 
     auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
@@ -260,8 +271,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_temp_accum = create_circular_buffer(
-        program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
+    auto cb_qk_result = create_circular_buffer(
+        program, all_cores, kQKResultCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
 
     auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -327,11 +338,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         "Output buffer must be in DRAM. Output buffer of type {}",
         enchantum::to_string(output_buffer->buffer_type()));
 
-    auto* intermediates_buffer = output.back().buffer();
-    TT_FATAL(
-        intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Intermediates buffer must be in DRAM. Intermediates buffer of type {}",
-        enchantum::to_string(intermediates_buffer->buffer_type()));
+    auto* intermediates_buffer = args.return_intermediates ? output.back().buffer() : nullptr;
+    if (intermediates_buffer != nullptr) {
+        TT_FATAL(
+            intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
+            "Intermediates buffer must be in DRAM. Intermediates buffer of type {}",
+            enchantum::to_string(intermediates_buffer->buffer_type()));
+    }
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -343,6 +356,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     if (args.return_intermediates) {
         defines[kReturnIntermediates] = "1";
+    }
+
+    if (use_attn_mask) {
+        defines[kUseAttnMaskDefKey] = "1";
     }
 
     SDPAForwardKernels kernels;
@@ -473,7 +490,8 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer() : nullptr;
     auto* output_buffer = tensor_return_value.front().buffer();
-    auto* intermediates_buffer = tensor_return_value.back().buffer();
+    auto* intermediates_buffer =
+        operation_attributes.return_intermediates ? tensor_return_value.back().buffer() : nullptr;
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     // No runtime args to update for compute kernels.
@@ -496,7 +514,8 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
-            runtime_args[kIntermediateBufferIdx] = intermediates_buffer->address();
+            runtime_args[kIntermediateBufferIdx] =
+                intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
         }
     }
 }

@@ -116,6 +116,7 @@ void kernel_main() {
             uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row
             read_head(kv_start_idx, qWt, cb_key, key_address_generator, tile_bytes);
 
+#ifdef USE_ATTN_MASK
             // read one tile of attn_mask for current row of K and V
             // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
             cb_reserve_back(cb_attn_mask, onetile);
@@ -123,7 +124,7 @@ void kernel_main() {
             noc_async_read_tile(mask_offset + h, mask_address_generator, attn_mask_l1_writer_addr);
             noc_async_read_barrier();
             cb_push_back(cb_attn_mask, onetile);
-
+#endif
             read_head(kv_start_idx, qWt, cb_value, value_address_generator, tile_bytes);
         }
     }

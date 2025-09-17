@@ -73,15 +73,16 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
 
     // TODO[improve]: add check for mask tensor
 
-    auto query_shape = query.padded_shape();
-    auto key_shape = key.padded_shape();
-    auto value_shape = value.padded_shape();
+    auto query_shape = query.logical_shape();
+    auto key_shape = key.logical_shape();
+    auto value_shape = value.logical_shape();
 
     auto [qBt, qHt, qSt, qEt] = query_shape.to_array_4D();
     auto [kBt, kHt, kSt, kEt] = key_shape.to_array_4D();
     auto [vBt, vHt, vSt, vEt] = value_shape.to_array_4D();
 
-    TT_FATAL(qHt > 0 && kHt > 0, "Number of heads must be greater than zero. Got heads={}, groups={}", qHt, kHt);
+    TT_FATAL(
+        qHt > 0 && kHt > 0 && vHt > 0, "Number of heads must be greater than zero. Got heads={}, groups={}", qHt, kHt);
     TT_FATAL(
         qHt % kHt == 0,
         "Number of query heads ({}) must be divisible by number of key/value heads ({}) for grouped attention. "
