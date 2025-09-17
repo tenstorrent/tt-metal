@@ -6,6 +6,7 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
@@ -108,10 +109,11 @@ def test_rmsnorm(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("input_shape"),
+    ("input_shape", "use_row_major_workaround"),
     [
-        (1, 1, 4096, 2432),  # spatial norm
-        (1, 1, 333, 2432),  # prompt norm
+        ((1, 1, 4096, 2432), False),  # spatial norm
+        ((1, 1, 333, 2432), False),  # prompt norm
+        ((1, 1, 22528, 3072), True),  # Mochi large layernorm
     ],
 )
 @pytest.mark.parametrize(
@@ -125,7 +127,9 @@ def test_layernorm(
     input_shape: tuple[int, int, int, int],
     norm_eltwise_affine: bool,
     bias: bool,
+    use_row_major_workaround: bool,
 ) -> None:
+    MIN_PCC = 0.982_000 if input_shape[-2] < 20000 else 0.961_000
     torch_dtype = torch.bfloat16
     torch_model = TorchLayerNorm(
         embedding_dim=input_shape[-1], norm_elementwise_affine=norm_eltwise_affine, bias=bias
@@ -133,7 +137,11 @@ def test_layernorm(
     torch_model.eval()
 
     tt_model = LayerNorm(
-        embedding_dim=input_shape[-1], norm_elementwise_affine=norm_eltwise_affine, bias=bias, mesh_device=mesh_device
+        embedding_dim=input_shape[-1],
+        norm_elementwise_affine=norm_eltwise_affine,
+        bias=bias,
+        mesh_device=mesh_device,
+        use_row_major_workaround=use_row_major_workaround,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -141,14 +149,16 @@ def test_layernorm(
 
     tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device)
 
+    logger.info(f"Running torch model with input shape {torch_input_tensor.shape}")
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
+    logger.info(f"Running TT model with input shape {tt_input_tensor.shape}")
     tt_output = tt_model(tt_input_tensor)
 
     for t in ttnn.get_device_tensors(tt_output):
         t = ttnn.to_torch(t)
-        assert_quality(torch_output, t, pcc=0.982_000)
+        assert_quality(torch_output, t, pcc=MIN_PCC)
 
 
 @pytest.mark.parametrize(

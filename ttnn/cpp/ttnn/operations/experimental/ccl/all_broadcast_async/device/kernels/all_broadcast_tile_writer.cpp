@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -15,7 +14,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -23,18 +21,17 @@ using tt::tt_metal::BufferType;
 
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(1);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<8>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<7>();
 constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<8 + ccl_routing_utils::num_line_multicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<7 + ccl_routing_utils::num_line_multicast_args>();
 
-inline constexpr uint32_t sharded_args_start_idx = 8 + 2 * ccl_routing_utils::num_line_multicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 7 + 2 * ccl_routing_utils::num_line_multicast_args;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -68,7 +65,8 @@ void kernel_main() {
         get_compile_time_arg_val(sharded_args_start_idx + 2),
         get_compile_time_arg_val(sharded_args_start_idx + 3),
         get_compile_time_arg_val(sharded_args_start_idx + 4),
-        get_compile_time_arg_val(sharded_args_start_idx + 5)>
+        get_compile_time_arg_val(sharded_args_start_idx + 5),
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>
         tensor_shard_info;
     // Sharded addrgen
     const auto [mapping_table, rt_increment] =
@@ -78,10 +76,8 @@ void kernel_main() {
     size_t fab_idx = arg_for_fab + rt_increment;
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
 #else
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
 #endif
@@ -141,21 +137,41 @@ void kernel_main() {
     while (tile_id < tile_id_end) {
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
+
+        uint32_t num_pages_read = 0;
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
+        while (num_pages_read < num_pages_to_read) {
+            // scatter-write currently only supports up to 2 distinct addresses
+            uint32_t num_pages_for_current_packet = std::min<uint32_t>(num_pages_to_read - num_pages_read, 2);
+            if (num_pages_for_current_packet == 1) {
+                write_and_advance_local_read_address_for_fabric_write(
+                    tile_id,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
 
-        for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                tile_id++;
+                num_pages_read++;
+            } else if (num_pages_for_current_packet == 2) {
+                scatter_write_and_advance_local_read_address_for_fabric_write(
+                    tile_id,
+                    tile_id + 1,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
 
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                tensor0_page_size);
-            tile_id++;
+                tile_id += 2;
+                num_pages_read += 2;
+            } else {
+                ASSERT(false);
+            }
         }
-
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
 

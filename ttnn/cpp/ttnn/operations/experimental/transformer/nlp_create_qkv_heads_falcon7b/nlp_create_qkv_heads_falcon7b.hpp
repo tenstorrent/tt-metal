@@ -17,11 +17,6 @@ struct NLPCreateHeadsFalcon7bOperation {
         const Tensor& input_tensor_q,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors = std::nullopt);
-
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        const Tensor& input_tensor_q,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors = std::nullopt);
 };
 }  // namespace operations::experimental::transformer
 

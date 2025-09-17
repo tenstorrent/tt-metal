@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
@@ -15,7 +14,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -23,11 +21,11 @@ using tt::tt_metal::BufferType;
 
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(1);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
-constexpr uint32_t page_size = get_compile_time_arg_val(4);
-constexpr uint32_t row_size = get_compile_time_arg_val(5);
-constexpr uint32_t max_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
+constexpr uint32_t page_size = get_compile_time_arg_val(3);
+constexpr uint32_t row_size = get_compile_time_arg_val(4);
+constexpr uint32_t max_packet_size = get_compile_time_arg_val(5);
+constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
@@ -70,7 +68,8 @@ void kernel_main() {
         get_compile_time_arg_val(sharded_args_start_idx + 2),
         get_compile_time_arg_val(sharded_args_start_idx + 3),
         get_compile_time_arg_val(sharded_args_start_idx + 4),
-        get_compile_time_arg_val(sharded_args_start_idx + 5)>
+        get_compile_time_arg_val(sharded_args_start_idx + 5),
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -80,10 +79,9 @@ void kernel_main() {
     size_t fab_idx = arg_for_fab + rt_increment;
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
 #else
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
+    constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
 #endif
 
     // packet header cb
@@ -140,22 +138,55 @@ void kernel_main() {
     uint32_t row_id = row_id_start;
     while (row_id < row_id_end) {
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        cb_wait_front(cb0_id, 1);
+        cb_wait_front(cb0_id, num_rows_per_packet);
 
-        uint32_t offset = 0;
+        if constexpr (num_rows_per_packet == 1) {
+            uint32_t offset = 0;
+            for (uint32_t j = 0; j < num_packets_per_row; j++) {
+                uint32_t packet_size = std::min(max_packet_size, page_size);
+                packet_size = std::min(packet_size, page_size - max_packet_size * j);
 
-        for (uint32_t j = 0; j < num_packets_per_row; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(row_id, tensor0_addrgen, offset, 0);
+                write_and_advance_local_read_address_for_fabric_write(
+                    row_id,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    packet_size,
+                    offset);
+                offset += packet_size;  // advance the noc address for the next packet
+            }
+            row_id++;
+        } else {
+            uint32_t num_pages_for_current_packet = std::min<uint32_t>(row_id_end - row_id, num_rows_per_packet);
+            if (num_pages_for_current_packet == 1) {
+                write_and_advance_local_read_address_for_fabric_write(
+                    row_id,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    page_size);
+                row_id++;
+            } else if (num_pages_for_current_packet == 2) {
+                scatter_write_and_advance_local_read_address_for_fabric_write(
+                    row_id,
+                    row_id + 1,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    page_size);
 
-            uint32_t packet_size = std::min(max_packet_size, page_size);
-            packet_size = std::min(packet_size, page_size - max_packet_size * j);
-
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
-            offset += packet_size;  // advance the noc address for the next packet
+                row_id += 2;
+            } else {
+                ASSERT(false);
+            }
         }
-        row_id++;
-        cb_pop_front(cb0_id, 1);
+        cb_pop_front(cb0_id, num_rows_per_packet);
     }
 
     // 2. mcast output ready semaphore

@@ -62,8 +62,8 @@ Tensor handle_zero_volume_matmul(
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
 
     // Create a tensor filled with zeros
-    auto output_tensor = ttnn::full(
-        output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.mesh_device(), memory_config);
+    auto output_tensor =
+        ttnn::full(output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.device(), memory_config);
 
     // Apply bias if provided
     if (bias.has_value()) {
@@ -403,14 +403,15 @@ Tensor SparseMatmulOperation::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    uint32_t nnz,
+    const std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor,
+    const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord =
@@ -421,6 +422,7 @@ Tensor SparseMatmulOperation::invoke(
         sparsity,
         SparseMatmul{
             nnz,
+            is_input_a_sparse,
             program_config,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,

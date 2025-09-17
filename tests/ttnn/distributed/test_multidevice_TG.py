@@ -1474,9 +1474,6 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     # )
 
 
-# TODO #11406 - Add unit tests for visualize_tensor API
-
-
 def rms_norm(x, gamma, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
 

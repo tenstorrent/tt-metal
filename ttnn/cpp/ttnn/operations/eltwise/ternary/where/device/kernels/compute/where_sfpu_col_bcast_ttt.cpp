@@ -60,7 +60,7 @@ ALWI void process_tile(
 
         // Perform the where operation
         where_tile_init();
-        WHERE_LLK(0, 1, 2);  // where(predicate, true, false)
+        WHERE_LLK(0, 1, 2, 0);  // where(predicate, true, false)
 
         tile_regs_commit();
 

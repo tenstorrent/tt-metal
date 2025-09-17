@@ -6,8 +6,8 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -40,17 +40,6 @@ constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
-// Stream IDs
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 17;
-constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
-constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
-    fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
-
-// Persistent channel flags
-constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
-constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
-    fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
-
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -79,7 +68,7 @@ void setup_channel(
     StreamId my_channel_free_slots_stream_id,
     bool is_persistent_channel) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
-        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
+        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE));
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
@@ -121,21 +110,23 @@ void forward_data(
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_flush_blocking_from_address(
+
+        fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
 
+        // not handling/processing acks for now, re-evaluate if needed
+        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
+
+        noc_async_writes_flushed();
         if (is_persistent_channel) {
             constexpr bool enable_deadlock_avoidance = true;  // not used
             worker_interface.template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(1);
         } else if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
-
-        // not handling/processing acks for now, re-evaluate if needed
-        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
     if (!is_persistent_channel) {
@@ -173,6 +164,17 @@ void kernel_main() {
             header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
+    // Stream IDs
+    constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 17;
+    constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
+    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
+        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
+
+    // Persistent channel flags
+    constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
+        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
+
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
@@ -190,7 +192,7 @@ void kernel_main() {
             connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
+            is_persistent_channels[i]);
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {

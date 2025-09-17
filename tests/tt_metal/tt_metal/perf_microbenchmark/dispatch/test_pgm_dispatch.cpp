@@ -40,7 +40,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -282,7 +282,10 @@ uint32_t get_num_kernels(const TestInfo& info) {
 }
 
 bool initialize_program(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, tt_metal::Program& program, uint32_t run_cycles) {
+    const TestInfo& info,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    tt_metal::Program& program,
+    uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
@@ -407,7 +410,7 @@ struct ProgramExecutor {
     uint32_t total_program_iterations;
 
     ProgramExecutor(std::function<void()> exec, std::function<void()> warm, uint32_t total_iters) :
-        execute_programs(exec), warmup_programs(warm), total_program_iterations(total_iters) {}
+        execute_programs(std::move(exec)), warmup_programs(std::move(warm)), total_program_iterations(total_iters) {}
 };
 
 // Helper function to create program executor for standard test
@@ -478,7 +481,7 @@ ProgramExecutor create_load_prefetcher_executor(
 // Helper function to setup trace if enabled
 template <typename T>
 MeshTraceId setup_trace_if_enabled(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, ProgramExecutor& executor) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, ProgramExecutor& executor) {
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
@@ -498,7 +501,7 @@ void run_benchmark_timing_loop(
     MeshCommandQueue& mesh_cq,
     ProgramExecutor& executor,
     MeshTraceId tid,
-    std::shared_ptr<MeshDevice> mesh_device) {
+    const std::shared_ptr<MeshDevice>& mesh_device) {
     constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
     for ([[maybe_unused]] auto _ : state) {
@@ -578,7 +581,7 @@ CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
 
 // Helper function to create standard programs
 std::array<tt_metal::Program, 2> create_standard_programs(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
     std::array<tt_metal::Program, 2> programs;
     if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
         !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {
@@ -588,7 +591,7 @@ std::array<tt_metal::Program, 2> create_standard_programs(
 }
 // Helper function to create prefetcher cache load programs
 std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
     uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
                                          .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
                                          .ringbuffer_size();

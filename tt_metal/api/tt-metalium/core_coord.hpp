@@ -17,8 +17,7 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace stl {
@@ -146,7 +145,7 @@ public:
 
     CoreRangeSet() = default;
 
-    friend void swap(CoreRangeSet& first, CoreRangeSet& second);
+    friend void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept;
 
     CoreRangeSet(const CoreRangeSet& other);
 

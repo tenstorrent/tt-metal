@@ -9,12 +9,12 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
 from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors, partial_layernorm
-from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh
 
 
@@ -108,7 +108,6 @@ class TtFalconModelShared:
             memory_config=self.model_config["LN_F_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_weights_path,
-            enable_multihost_format=True,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
 
@@ -120,7 +119,6 @@ class TtFalconModelShared:
             memory_config=self.model_config["LN_F_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_bias_path,
-            enable_multihost_format=True,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
 

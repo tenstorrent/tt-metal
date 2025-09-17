@@ -14,6 +14,8 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+from setuptools_scm.version import guess_next_dev_version as _guess_next_dev
+
 
 readme = None
 
@@ -105,19 +107,16 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    is_release_version = version.distance is None or version.distance == 0
-    is_dirty = version.dirty
-    is_clean_prod_build = (not is_dirty) and is_release_version
+    # Safety net
+    if version is None:
+        return "0.0.0.dev0"
 
-    if is_clean_prod_build:
-        return version.format_with("{tag}")
-    elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}")
-    elif is_dirty and is_release_version:
-        return version.format_with("{tag}")
-    else:
-        assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}")
+    if getattr(version, "exact", False):
+        # Exact tag (release/rc/dev*) already normalized by packaging
+        return version.version.public
+
+    # Untagged commit → let setuptools_scm choose X.Y.Z.devN
+    return _guess_next_dev(version)
 
 
 def get_version(metal_build_config):
@@ -289,13 +288,14 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/constants.hpp",
             "api/tt-metalium/dev_msgs.h",
             "api/tt-metalium/fabric_edm_types.hpp",
-            "api/tt-metalium/fabric_edm_packet_header.hpp",
+            "fabric/fabric_edm_packet_header.hpp",
             "api/tt-metalium/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
-            "fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
+            "lite_fabric/hw/**/*",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",

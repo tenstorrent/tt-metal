@@ -40,6 +40,16 @@ on:
         required: false
         type: boolean
         default: false
+      run_bos_tests:
+        description: 'Run TTNN BOS tests'
+        required: false
+        type: boolean
+        default: false
+      run_APC_cpp_tests:
+        description: 'Run APC C++ tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
@@ -84,6 +94,7 @@ jobs:
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
       run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
       run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || inputs.run_sdpa_stress_tests }}
+      run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || inputs.run_bos_tests) }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
@@ -105,3 +116,43 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # FD C++ Unit Tests
+  cpp-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      gtest_filter: "*NIGHTLY_*"
+  # Slow Dispatch Unit Tests
+  sd-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      gtest_filter: "*NIGHTLY_*"

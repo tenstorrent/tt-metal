@@ -27,8 +27,6 @@ void kernel_main() {
     uint32_t outstanding_data_size = data_size;
     set_sender_socket_page_size(sender_socket, page_size);
 
-    uint64_t receiver_noc_coord_addr = get_noc_addr(sender_socket.downstream_noc_x, sender_socket.downstream_noc_y, 0);
-
     uint64_t src_noc_addr = get_noc_addr(src_core_x, src_core_y, src_buffer_addr);
 
     uint32_t local_write_addr = get_write_ptr(scratch_cb_index);

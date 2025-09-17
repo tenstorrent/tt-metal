@@ -84,7 +84,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_weights_path,
-            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -98,7 +97,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_bias_path,
-            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -117,7 +115,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_ATTN_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_weights_path,
-            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -131,7 +128,6 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_bias_path,
-            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 

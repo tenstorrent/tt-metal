@@ -17,12 +17,12 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 
 using namespace tt::tt_metal;
 
 // 32 buckets to match the number of bits in uint32_t lengths on device
-#define NOC_DATA_SIZE sizeof(uint32_t) * 8
+#define NOC_DATA_SIZE (sizeof(uint32_t) * 8)
 using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 
 namespace tt {

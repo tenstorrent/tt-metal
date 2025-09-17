@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <string>
+#include <unordered_map>
 
 #include "api/tt-metalium/kernel.hpp"
 #include "core_coord.hpp"
@@ -26,10 +27,12 @@ public:
     const std::string& get_full_kernel_name() const override;
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
+    void process_named_compile_time_args(
+        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const;
 
     virtual void set_build_options(JitBuildOptions& build_options) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual bool binaries_exist_on_disk(const IDevice* device) const = 0;
     virtual void read_binaries(IDevice* device) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
@@ -53,14 +56,22 @@ protected:
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
-        const std::map<std::string, std::string>& defines) :
-        Kernel(programmable_core_type, processor_class, kernel_src, core_range_set, compile_args, defines) {}
+        const std::map<std::string, std::string>& defines,
+        const std::unordered_map<std::string, uint32_t>& named_compile_args) :
+        Kernel(
+            programmable_core_type,
+            processor_class,
+            kernel_src,
+            core_range_set,
+            compile_args,
+            defines,
+            named_compile_args) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<const ll_api::memory*>> binaries_;
 
-    virtual std::vector<std::string> file_paths(IDevice& device) const = 0;
+    std::vector<std::string> file_paths(IDevice& device) const;
 };
 
 class DataMovementKernel : public KernelImpl {
@@ -72,7 +83,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
@@ -82,7 +94,6 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
@@ -102,8 +113,6 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-
-    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 class EthernetKernel : public KernelImpl {
@@ -115,7 +124,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
@@ -125,7 +135,6 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
@@ -145,7 +154,6 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 class ComputeKernel : public KernelImpl {
@@ -157,7 +165,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     }
@@ -167,7 +176,6 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(
@@ -187,7 +195,6 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
-    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 }  // namespace tt::tt_metal

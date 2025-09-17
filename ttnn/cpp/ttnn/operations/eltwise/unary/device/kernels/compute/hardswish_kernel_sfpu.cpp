@@ -37,7 +37,7 @@ void MAIN {
             hardsigmoid_tile(0);
 
             mul_binary_tile_init();
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
 
             tile_regs_commit();
 

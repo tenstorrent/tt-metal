@@ -5,10 +5,10 @@
 #include "rmsnorm_bw_program_factory.hpp"
 
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
-
-#include <enchantum/enchantum.hpp>
 
 namespace {
 
@@ -297,18 +297,17 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     }
 
     RMSNormBackwardKernels kernels;
-    kernels.reader =
-        create_reader_kernel(program, all_cores, {packed_scaler, block_size, mask_w, Wt}, defines, kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(rms_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program,
-        all_cores,
-        {
-            block_size,
-            Wt,
-        },
-        defines,
-        kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw

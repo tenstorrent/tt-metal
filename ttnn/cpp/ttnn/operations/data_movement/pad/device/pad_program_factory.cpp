@@ -418,7 +418,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
     switch (ntiles_w) {
         case 2: ncores_w = 2; break;
         case 4: ncores_w = 4; break;
-        case 8: ncores_w = 8; break;
+        case 8:
         case 64: ncores_w = 8; break;
     }
     ncores = ncores_h * ncores_w;
@@ -1396,7 +1396,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
+        uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);

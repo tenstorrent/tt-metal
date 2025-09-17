@@ -57,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.mesh_device();
+    IDevice* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }
@@ -88,10 +88,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
     // Section end for fusion signaler initialization
 
-    const bool enable_async_intermediate_tensor = false;
-
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -162,7 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     uint32_t inter_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_inter_config =
@@ -170,19 +168,18 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
             intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
             .set_page_size(inter_cb_index, intermediate_tensor_page_size)
             .set_globally_allocated_address(*intermediate_tensor.buffer());
-    tt::tt_metal::CBHandle cb_inter_workers = CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+    CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // KERNEL CREATION
     // Reader
@@ -193,7 +190,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         op_config.get_page_size(),  // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for (const auto& arg : reader_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -217,7 +214,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         dynamic_alternate                 // dynamic_alternate
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
-    for (const auto& arg : writer_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -378,7 +375,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         reader_rt_args.insert(
             reader_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
         log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
+        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
@@ -399,7 +396,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
         writer_rt_args.insert(
             writer_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
         log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
+        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
 

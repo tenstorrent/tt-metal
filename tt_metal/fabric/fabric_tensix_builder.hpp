@@ -15,7 +15,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/core_descriptor.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
 
 namespace tt::tt_fabric {
@@ -56,6 +56,14 @@ public:
         return translated_fabric_or_dispatch_mux_cores_;
     }
 
+    const std::unordered_set<CoreCoord>& get_translated_fabric_mux_cores() const {
+        return translated_fabric_mux_cores_;
+    }
+
+    const std::unordered_set<CoreCoord>& get_translated_dispatch_mux_cores() const {
+        return translated_dispatch_mux_cores_;
+    }
+
     // Wrapper APIs for mux config access - these takes device_id, eth_chan_id and channel_id (channels inside a mux)
     size_t get_local_flow_control_semaphore_address(
         chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
@@ -68,6 +76,8 @@ public:
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
+    std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
+    std::unordered_set<CoreCoord> translated_dispatch_mux_cores_;
     std::unordered_set<CoreCoord> translated_fabric_or_dispatch_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix

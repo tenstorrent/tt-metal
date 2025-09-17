@@ -15,7 +15,8 @@ namespace ttnn::operations::point_to_point {
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensors) {
+    PointToPointOp::tensor_return_value_t& output_tensors,
+    const tt::tt_metal::GlobalSemaphore& semaphore) {
     auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
     const auto& send_coord = operation_attributes.send_coord;
@@ -48,29 +49,28 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
-    auto cb_header_handle = CreateCircularBuffer(program, all_cores, cb_header_config);
+    CreateCircularBuffer(program, all_cores, cb_header_config);
 
     // Scratch CB for loading up pages that are collected into packets
     constexpr auto packet_cb_id = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, inter_dataformat}})
             .set_page_size(packet_cb_id, packet_size_bytes);
-    tt::tt_metal::CBHandle cb_cb_handle = CreateCircularBuffer(program, all_cores, cb_packet_config);
+    CreateCircularBuffer(program, all_cores, cb_packet_config);
 
     // CB for sender reader->writer kernels
     constexpr auto receiver_cb_id = tt::CBIndex::c_2;
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;
-    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_receiver_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * output_page_size_bytes, {{receiver_cb_id, inter_dataformat}})
             .set_page_size(receiver_cb_id, output_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_receiver_config);
+    CreateCircularBuffer(program, all_cores, cb_receiver_config);
 
     const auto& topology = operation_attributes.topology;
     auto this_device = mesh_device->get_device(receive_coord);
@@ -118,7 +118,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
-            operation_attributes.semaphore.address(),
+            semaphore.address(),
             num_hops,
             sender_is_forward};
 
@@ -151,6 +151,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         PointToPointOp::SendReceive::shared_variables_t{
             .receive_unary_reader_kernel_id = receive_unary_reader_kernel_id,
             .receive_unary_writer_kernel_id = receive_unary_writer_kernel_id,
-            .receiver_cores = receiver_cores}};
+            .receiver_cores = receiver_cores,
+            .semaphore = semaphore}};
 }
 }  // namespace ttnn::operations::point_to_point

@@ -11,9 +11,9 @@ from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfi
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
-from models.utility_functions import is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"

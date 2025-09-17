@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
@@ -109,7 +110,7 @@ Tensor full_impl(
     MeshDevice* device = nullptr,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
+    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->device() : device;
 
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
@@ -210,7 +211,7 @@ Tensor full_like_impl(
                 fill_value,
                 dtype_value,
                 layout_value,
-                device ? device : tensor.mesh_device(),
+                device ? device : tensor.device(),
                 memory_config.value_or(tensor.memory_config()),
                 optional_output_tensor);
         }
@@ -221,7 +222,7 @@ Tensor full_like_impl(
             fill_value,
             dtype_value,
             layout_value,
-            device ? device : tensor.mesh_device(),
+            device ? device : tensor.device(),
             memory_config,
             optional_output_tensor);
     }
@@ -240,7 +241,7 @@ struct FullLikeWith {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
-            queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            queue_id, tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
     }
 
     static Tensor invoke(
@@ -251,7 +252,14 @@ struct FullLikeWith {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
-            ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId,
+            tensor,
+            fill_value,
+            dtype,
+            layout,
+            device,
+            memory_config,
+            std::move(optional_output_tensor));
     }
 };
 
@@ -302,7 +310,7 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.mesh_device();
+        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
         return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device_ptr);
@@ -329,7 +337,7 @@ struct Full {
             layout,
             device.has_value() ? &device->get() : nullptr,
             memory_config,
-            optional_output_tensor);
+            std::move(optional_output_tensor));
     }
 
     template <typename FillValueType>
@@ -350,7 +358,7 @@ struct Full {
             layout,
             device.has_value() ? &device->get() : nullptr,
             memory_config,
-            optional_output_tensor);
+            std::move(optional_output_tensor));
     }
 };
 
@@ -367,7 +375,7 @@ struct FullLike {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
-            queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            queue_id, tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
     }
 
     template <typename FillValueType>
@@ -381,7 +389,14 @@ struct FullLike {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
-            ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            ttnn::DefaultQueueId,
+            tensor,
+            fill_value,
+            dtype,
+            layout,
+            device,
+            memory_config,
+            std::move(optional_output_tensor));
     }
 };
 

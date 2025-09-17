@@ -5,11 +5,10 @@
 #include "silu_bw_program_factory.hpp"
 
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
-
-#include <enchantum/enchantum.hpp>
-
 
 namespace {
 
@@ -169,9 +168,14 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         enchantum::to_string(dL_da_buffer->buffer_type()));
 
     SiLUBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, {block_size, Wt}, {}, kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(program, all_cores, {block_size, Wt}, {}, kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw

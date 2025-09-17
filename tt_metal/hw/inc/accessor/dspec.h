@@ -8,6 +8,7 @@
 #include <variant>
 #include "helpers.h"
 #include "array_wrapper.h"
+#include "compile_time_args.h"
 #include <cstring>
 
 // Forward declared from dataflow_api.h
@@ -157,46 +158,28 @@ struct DistributionSpec {
      * @param bank_coords_ptr       Pointer to the bank coordinates array. Used if BankCoordsWrapper_ is dynamic.
      */
     constexpr DistributionSpec(
-        uint32_t rank_rt = 0,
-        uint32_t num_banks_rt = 0,
+        uint32_t rank_rt_param = 0,
+        uint32_t num_banks_rt_param = 0,
         uint32_t* tensor_shape_ptr = nullptr,
         uint32_t* shard_shape_ptr = nullptr,
-        uint16_t* bank_coords_ptr = nullptr) {
-        uint32_t rank = has_static_rank ? RankCT : rank_rt;
+        uint16_t* bank_coords_ptr = nullptr) :
+        tensor_shape_rt(init_tensor_shape(tensor_shape_ptr, rank_rt_param)),
+        shard_shape_rt(init_shard_shape(shard_shape_ptr, rank_rt_param)),
+        bank_coords_rt(init_bank_coords(bank_coords_ptr, num_banks_rt_param)) {
+        uint32_t rank = has_static_rank ? RankCT : rank_rt_param;
 
-        auto span_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) { arr = detail::Span<T>(ptr, size); };
-
-        auto array_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) {
-            std::memcpy(arr.data(), ptr, sizeof(T) * size);
-            return arr;
-        };
-
-        if constexpr (has_static_rank) {
-            if constexpr (!tensor_shape_static) {
-                ASSERT(tensor_shape_ptr != nullptr);
-                array_from_pointer(tensor_shape_rt, tensor_shape_ptr, RankCT);
-            }
-            if constexpr (!shard_shape_static) {
-                ASSERT(shard_shape_ptr != nullptr);
-                array_from_pointer(shard_shape_rt, shard_shape_ptr, RankCT);
-            }
-        } else {
-            if constexpr (!tensor_shape_static) {
-                ASSERT(tensor_shape_ptr != nullptr);
-                span_from_pointer(tensor_shape_rt, tensor_shape_ptr, rank_rt);
-            }
-            if constexpr (!shard_shape_static) {
-                ASSERT(shard_shape_ptr != nullptr);
-                span_from_pointer(shard_shape_rt, shard_shape_ptr, rank_rt);
-            }
+        if constexpr (!tensor_shape_static) {
+            ASSERT(rank == 0 || tensor_shape_ptr != nullptr);
+        }
+        if constexpr (!shard_shape_static) {
+            ASSERT(rank == 0 || shard_shape_ptr != nullptr);
         }
 
         if constexpr (!bank_coords_static) {
-            ASSERT(bank_coords_ptr != nullptr);
             if constexpr (has_static_num_banks) {
-                array_from_pointer(bank_coords_rt, bank_coords_ptr, NumBanksCT);
+                ASSERT(NumBanksCT == 0 || bank_coords_ptr != nullptr);
             } else {
-                span_from_pointer(bank_coords_rt, bank_coords_ptr, num_banks_rt);
+                ASSERT(num_banks_rt == 0 || bank_coords_ptr != nullptr);
             }
         }
 
@@ -211,6 +194,30 @@ struct DistributionSpec {
         }
 
         init_runtime_values();
+    }
+    /**
+     * @brief Build a DistributionSpec from the provided arguments. This function allows for both static and dynamic
+     * rank, number of banks, tensor shape, shard shape, and bank coordinates.
+     *
+     * @param args                  Arguments to build the DistributionSpec from.
+     */
+    template <typename Args>
+    constexpr DistributionSpec(const Args& args) :
+        DistributionSpec(
+            args.get_rank(),
+            args.get_num_banks(),
+            Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
+            Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
+            Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr) {
+        static_assert(
+            !Args::rank_is_crta or Args::tensor_shape_is_crta,
+            "Tensor shape must be CRTA if rank is not known at compile time!");
+        static_assert(
+            !Args::rank_is_crta or Args::shard_shape_is_crta,
+            "Shard shape must be CRTA if rank is not known at compile time!");
+        static_assert(
+            !Args::num_banks_is_crta or Args::bank_coords_is_crta,
+            "Bank coords must be CRTA if num_banks is not known at compile time!");
     }
 
 // Helper macro to avoid code duplication in getters
@@ -258,6 +265,50 @@ struct DistributionSpec {
 #undef getter_helper
 
 private:
+    // Unified initialization helper for arrays
+    // This allows to initialize arrays in initializer list, which allows to keep fields const, which allows compiler to
+    // optimize the code better.
+    template <
+        typename ResultType,
+        typename ElementType,
+        typename WrapperType,
+        bool is_static,
+        bool has_static_size,
+        uint32_t static_size>
+    static constexpr ResultType init_array(ElementType* ptr, uint32_t size_rt_param) {
+        if constexpr (is_static) {
+            return WrapperType::elements;
+        } else if constexpr (has_static_size) {
+            ResultType result{};
+            if (ptr) {
+                std::memcpy(result.data(), ptr, sizeof(ElementType) * static_size);
+            }
+            return result;
+        } else {
+            return ptr ? ResultType(ptr, size_rt_param) : ResultType{};
+        }
+    }
+
+    static constexpr Shape init_tensor_shape(uint32_t* ptr, uint32_t rank_rt_param) {
+        return init_array<Shape, uint32_t, TensorShapeWrapper, tensor_shape_static, has_static_rank, RankCT>(
+            ptr, rank_rt_param);
+    }
+
+    static constexpr Shape init_shard_shape(uint32_t* ptr, uint32_t rank_rt_param) {
+        return init_array<Shape, uint32_t, ShardShapeWrapper, shard_shape_static, has_static_rank, RankCT>(
+            ptr, rank_rt_param);
+    }
+
+    static constexpr BankCoords init_bank_coords(uint16_t* ptr, uint32_t num_banks_rt_param) {
+        return init_array<
+            BankCoords,
+            uint16_t,
+            BankCoordsWrapper,
+            bank_coords_static,
+            has_static_num_banks,
+            NumBanksCT>(ptr, num_banks_rt_param);
+    }
+
     void swap(DistributionSpec& other) noexcept {
         std::swap(rank_rt, other.rank_rt);
         std::swap(num_banks_rt, other.num_banks_rt);
@@ -415,50 +466,21 @@ private:
     static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::elements);
 };
 
-/**
- * @brief Helper function to build a DistributionSpec from CTA and CRTA. Parses tensor shape, shard shape,
- * bank coordinates if needed, and passes to DSpec constructor.
- */
-template <typename Args>
-auto make_dspec_from_args(const Args& args) {
-    // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
-    using TensorShapeType =
-        typename ArrayWrapperTypeSelectorU32<!Args::tensor_shape_is_crta, Args::TensorShapeCTAOffset, Args::RankCT>::
-            type;
-    using ShardShapeType =
-        typename ArrayWrapperTypeSelectorU32<!Args::shard_shape_is_crta, Args::ShardShapeCTAOffset, Args::RankCT>::type;
-    using BankCoordsType = typename ArrayWrapperTypeSelectorPackedU16<
-        !Args::bank_coords_is_crta,
-        Args::BankCoordsCTAOffset,
-        Args::NumBanksCT>::type;
-
-    auto rank = args.get_rank();
-    auto num_banks = args.get_num_banks();
-
-    static_assert(
-        !Args::rank_is_crta or Args::tensor_shape_is_crta,
-        "Tensor shape must be CRTA if rank is not known at compile time!");
-    static_assert(
-        !Args::rank_is_crta or Args::shard_shape_is_crta,
-        "Shard shape must be CRTA if rank is not known at compile time!");
-    static_assert(
-        !Args::num_banks_is_crta or Args::bank_coords_is_crta,
-        "Bank coords must be CRTA if num_banks is not known at compile time!");
-
-    constexpr bool is_interleaved = !Args::is_sharded;
+template <bool IsDram>
+auto make_interleaved_dspec() {
     return DistributionSpec<
-        Args::RankCT,
-        Args::NumBanksCT,
-        TensorShapeType,
-        ShardShapeType,
-        BankCoordsType,
-        is_interleaved,
-        Args::is_dram>(
-        rank,
-        num_banks,
-        Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
-        Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
-        Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr);
+        /*RankCT=*/0,
+        /*NumBanksCT=*/0,
+        /*TensorShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*ShardShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*BankCoordsWrapper=*/ArrayStaticWrapper<uint16_t>,
+        /*IsInterleaved=*/true,
+        IsDram>(
+        /* rank_rt */ 0,
+        /* num_banks_rt */ 0,
+        /* tensor_shape_ptr */ nullptr,
+        /* shard_shape_ptr */ nullptr,
+        /* bank_coords_ptr */ nullptr);
 }
 
 }  // namespace tensor_accessor

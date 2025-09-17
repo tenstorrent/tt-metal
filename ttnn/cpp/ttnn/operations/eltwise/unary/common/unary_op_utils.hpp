@@ -13,6 +13,8 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
+std::string unary_with_param_to_string(const UnaryWithParam& unary_op);
+
 bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
@@ -85,7 +87,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::WHERE_TSS:
         case UnaryOpType::CELU:
         case UnaryOpType::HARDTANH:
-        case UnaryOpType::THRESHOLD: return true;
+        case UnaryOpType::THRESHOLD:
+        case UnaryOpType::CLAMP_TSS:
+        case UnaryOpType::SELU: return true;
         default: return false;
     }
     return false;

@@ -17,8 +17,6 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(
         page_size % input_tensors[0].buffer()->alignment() == 0,
@@ -50,7 +48,6 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor0 = input_tensors[0];
-    const auto& input_tensor1 = input_tensors[1];
 
     auto intermediate_shape = input_tensor0.padded_shape();
     intermediate_shape[-1] = intermediate_shape[-1] * this->all_gather_params.ring_size;
@@ -122,13 +119,13 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->all_gather_params.cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
-        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        const auto& mesh_view = input_tensors[0].device()->get_view();
         devices_to_use = (this->all_gather_params.cluster_axis.value() == 0)
                              ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                              : mesh_view.get_devices_on_row(mesh_coordinate[0]);
@@ -197,8 +194,6 @@ tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
     auto intermediate_dtype = input_tensors[1].dtype();
     auto intermediate_memory_config = input_tensors[1].memory_config();
 
-    uint32_t semaphore_address =
-        this->all_gather_params.semaphore.address();  // semaphore address is not used in the hash operation
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsync>(
         this->all_gather_params.dim,
         this->all_gather_params.num_links,

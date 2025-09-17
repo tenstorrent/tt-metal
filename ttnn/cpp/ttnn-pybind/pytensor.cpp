@@ -219,7 +219,7 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
-            case DataType::INT32: return torch.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return torch.attr("int32");
             case DataType::BFLOAT16: return torch.attr("bfloat16");
             case DataType::BFLOAT8_B:
@@ -256,7 +256,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
-            case DataType::INT32: return np.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return np.attr("int32");
             case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
             case DataType::BFLOAT8_B:
@@ -753,7 +753,7 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> py::object {
                 switch (self.dtype()) {
                     case DataType::FLOAT32: return py::cast(self.item<float>());
-                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT16: return py::cast(static_cast<float>(self.item<bfloat16>()));
                     case DataType::BFLOAT8_B:
                     case DataType::BFLOAT4_B: return py::cast(self.item<float>());
                     case DataType::INT32: return py::cast(self.item<int32_t>());

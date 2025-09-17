@@ -6,13 +6,12 @@
 
 #include <bit>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "softmax_device_operation_types.hpp"
-
-#include <enchantum/enchantum.hpp>
-
 
 namespace {
 
@@ -272,16 +271,13 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     SoftmaxKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt, mask_w},
-        defines,
-        kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{block_size, Wt, mask_w};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for softmax

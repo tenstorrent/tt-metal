@@ -32,6 +32,7 @@ jobs:
           { name: "t3k_llama3_tests_t3k", arch: wormhole_b0, cmd: run_t3000_llama3_perplexity_tests_t3000, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
           { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_perplexity_tests, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
           { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_perplexity_tests, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
+          { name: "t3k_gemma3_tests", arch: wormhole_b0, cmd: run_t3000_gemma3_accuracy_tests, timeout: 300, owner_id: U08TJ70UFRT}, # Harry Andrews
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:

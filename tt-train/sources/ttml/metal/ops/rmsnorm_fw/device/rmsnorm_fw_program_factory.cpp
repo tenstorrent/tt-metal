@@ -6,11 +6,11 @@
 
 #include <bit>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
-
-#include <enchantum/enchantum.hpp>
 
 namespace {
 
@@ -293,14 +293,19 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     RMSNormForwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */ {packed_scaler, packed_eps, mask_w, Wt, block_size},
-        defines,
-        kReaderKernelPath);
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {Wt, block_size}, defines, kWriterKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler, packed_eps, mask_w, Wt, block_size};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+
+    std::vector<uint32_t> writer_compile_time_args{Wt, block_size};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    if (args.return_intermediates) {
+        tt::tt_metal::TensorAccessorArgs(rms_output_buffer).append_to(writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+    }
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for rmsnorm_fw

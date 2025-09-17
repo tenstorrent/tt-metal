@@ -3,24 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
-    prepare_gn_beta_gamma,
-    prepare_gn_mask,
 )
 from loguru import logger
 
 
-class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1):
+class TtDecoder(LightweightModule):
+    def __init__(self, device, state_dict, model_config):
         super().__init__()
 
         self.device = device
-        self.batch_size = batch_size
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
@@ -58,14 +55,17 @@ class TtDecoder(nn.Module):
         core_x, core_y, self.norm_blocks = get_DRAM_GN_config(None, 1)
         self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=core_x)
 
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(
-            device, norm_out_weights, norm_out_bias, self.norm_core_grid.x
-        )
-        self.input_mask = prepare_gn_mask(
-            self.device, norm_out_weights.shape[0], self.norm_groups, self.norm_core_grid.x
+        [self.gamma_t, self.beta_t], self.input_mask = ttnn.dram_group_norm_params_from_torch(
+            [norm_out_weights, norm_out_bias],
+            norm_out_weights.shape[0],
+            self.norm_groups,
+            device,
+            core_grid=self.norm_core_grid,
+            return_mask=True,
         )
 
         self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
+        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
         (
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
@@ -73,12 +73,12 @@ class TtDecoder(nn.Module):
         ) = prepare_conv_params(
             conv_in_weights,
             conv_in_bias,
-            model_config.conv_w_dtype,
+            self.conv_in_config.weights_dtype,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
-        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
+        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         (
             self.tt_conv_out_weights,
             self.tt_conv_out_bias,
@@ -86,10 +86,9 @@ class TtDecoder(nn.Module):
         ) = prepare_conv_params(
             conv_out_weights,
             conv_out_bias,
-            model_config.conv_w_dtype,
+            self.conv_out_config.weights_dtype,
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
-        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):

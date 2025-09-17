@@ -26,12 +26,4 @@ ttnn::Tensor TypecastOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor TypecastOperation::invoke(
-    const Tensor& input_tensor,
-    const DataType& dtype,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, dtype, output_mem_config, optional_output_tensor);
-}
-
 }  // namespace ttnn::operations::experimental::copy

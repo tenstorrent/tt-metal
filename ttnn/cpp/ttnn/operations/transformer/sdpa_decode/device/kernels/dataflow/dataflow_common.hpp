@@ -139,13 +139,18 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
 /******************************************************************************
  *                   Attention Mask Functions                                 *
  ******************************************************************************/
-template <uint32_t cb_mask_in, uint32_t mask_tile_bytes, uint32_t barrier_threshold, uint32_t PNHt>
+template <
+    uint32_t cb_mask_in,
+    uint32_t mask_tile_bytes,
+    uint32_t barrier_threshold,
+    uint32_t PNHt,
+    typename MaskReaderType>
 uint32_t read_mask_chunk(
     uint32_t PSt,
     uint32_t Sk_chunk_t,
     uint32_t mask_chunk_tiles,
     uint32_t mask_start_tile_id,
-    const InterleavedAddrGenFast<true> mask_reader) {
+    const MaskReaderType& mask_reader) {
     // Read mask chunk
     cb_reserve_back(cb_mask_in, mask_chunk_tiles);
     uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
@@ -306,9 +311,8 @@ void worker_compute(
     cb_pop_front(cb_out_l, PNHt);
 }
 
-template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold>
-uint32_t write_tiles_to_memory(
-    uint32_t& out_tile_id, const InterleavedAddrGenFast<true>& out_writer, uint32_t& barrier_count) {
+template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType>
+uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
@@ -323,10 +327,10 @@ uint32_t write_tiles_to_memory(
     return barrier_count;
 }
 
-template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold>
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
 uint32_t write_partial_tiles_to_memory(
     uint32_t& out_tile_id,
-    const InterleavedAddrGenFast<true>& out_writer,
+    const WriterType& out_writer,
     uint32_t& barrier_count,
     uint32_t cur_head,
     uint32_t num_heads_to_write,
@@ -384,8 +388,10 @@ template <
     uint32_t cb_k_in,
     uint32_t cb_v_in,
     uint32_t cb_mask_in,
-    bool reuse_k  // If enabled, read V from K, instead of from DRAM
-    >
+    bool reuse_k,  // If enabled, read V from K, instead of from DRAM
+    typename KReaderType,
+    typename VReaderType,
+    typename MaskReaderType>
 void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
@@ -395,9 +401,9 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_tiles,
     uint32_t v_chunk_tiles,
     uint32_t mask_chunk_tiles,
-    const InterleavedAddrGenFast<true>& k_reader,
-    const InterleavedAddrGenFast<true>& v_reader,
-    const InterleavedAddrGenFast<true>& mask_reader,
+    const KReaderType& k_reader,
+    const VReaderType& v_reader,
+    const MaskReaderType& mask_reader,
     uint32_t k_tile_bytes,
     uint32_t v_tile_bytes,
     uint32_t PSt) {

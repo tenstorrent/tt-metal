@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"

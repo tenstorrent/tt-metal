@@ -103,7 +103,6 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const std::vector<Tensor>& output_tensors,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& in_a_shape = input_tensors.at(0).logical_shape();
-    const auto& in_b_shape = input_tensors.at(1).logical_shape();
     const auto& out_shape = output_tensors.at(0).logical_shape();
 
     const auto& t = output_tensors.at(0);
@@ -358,7 +357,6 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     auto n_size = b_padded_shape[-1];
     uint32_t batch_size_a = get_batch_size(a_padded_shape);
     uint32_t batch_size_b = get_batch_size(b_padded_shape);
-    bool input_b_is_batched = batch_size_b > 1;
     TT_FATAL(
         batch_size_b == 1,
         "Second input cannot be currently batched when running matmul using "
@@ -505,14 +503,11 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     const tt::tt_metal::DataType output_dtype) {
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
-    uint32_t batch_size_a = get_batch_size(ashape);
-    uint32_t num_output_tiles = batch_size_a * ashape[-2] * bshape[-1] / TILE_HW;  // Output M x N
 
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
 
     // Parameters for large matmul with reuse
-    uint32_t B = batch_size_a;
     uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
@@ -756,7 +751,6 @@ MatmulProgramConfig create_matmul_program_config(
 
     auto height = batch_size_a * m_size;
     auto width = n_size;
-    auto height_width_ratio = (height > width) ? height / width : width / height;
     bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
     if (is_narrow_shape(height, width) || any_size_within_tile) {
         if (!a_is_block_sharded) {
@@ -1043,8 +1037,6 @@ MatmulProgramConfig get_matmul_program_config(
             per_core_N_equals_subblock_w_constraint = true;
         }
 
-        uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-        uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
 
         auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
@@ -1479,7 +1471,8 @@ std::vector<Tensor> matmul_batched_weights(
         queue_id);
 }
 
-ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+ttnn::Shape compute_sparse_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
     const auto& input_shape_b = input_tensor_b.logical_shape();
 
@@ -1489,7 +1482,7 @@ ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, con
     // Decide the rank of the output shape based on batch dimensions in input tensors
     // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
     // Batched dimensions are all dimensions except the last two
-    uint32_t a_batched_dims = (a_rank > 2) ? (a_rank - 2) : 0;
+    uint32_t a_batched_dims = (is_input_a_sparse || (a_rank <= 2)) ? 0 : (a_rank - 2);
     uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
     uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
 
@@ -1539,6 +1532,7 @@ SparseMatmul create_sparse_matmul_struct(
         create_matmul_struct(input_tensor_a, input_tensor_b, matmul_parameters, {optional_output_tensors.at(0)});
     return SparseMatmul{
         parameters.nnz,
+        parameters.is_input_a_sparse,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
@@ -1902,10 +1896,8 @@ void Matmul::validate(
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
-                        uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                         uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
                         uint32_t per_core_M = program_config.per_core_M;
-                        uint32_t per_core_N = program_config.per_core_N;
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                         // No padding
@@ -1937,7 +1929,6 @@ void Matmul::validate(
                                           ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
-                        uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                         uint32_t per_core_M = program_config.per_core_M;
                         uint32_t per_core_N = program_config.per_core_N;
 
@@ -2008,12 +1999,7 @@ void Matmul::validate(
                         TT_FATAL(
                             this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                             "Error: Output memory layout must be HEIGHT_SHARDED.");
-                        uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
-                                          : input_tensor_a.padded_shape()[-2]) /
-                                     in0_tile_shape[0];
                         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-                        uint32_t per_core_M = program_config.per_core_M;
                         uint32_t per_core_N = program_config.per_core_N;
 
                         TT_FATAL(N == per_core_N, "Error: N must be equal to per_core_N.");
@@ -2054,10 +2040,8 @@ void Matmul::validate(
                     "Input A shard orientation must be ROW_MAJOR, got: {}",
                     input_tensor_a.shard_spec().value().orientation);
                 uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-                uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                 uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
                 uint32_t per_core_M = program_config.per_core_M;
-                uint32_t per_core_N = program_config.per_core_N;
                 auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
                 // No padding
@@ -2110,10 +2094,7 @@ void Matmul::validate(
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
-                    uint32_t M =
-                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
-                    uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
@@ -2220,10 +2201,6 @@ void Matmul::validate(
                         this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
                         "Output memory layout must be BLOCK_SHARDED, got: {}",
                         this->output_mem_config.memory_layout());
-                    uint32_t M =
-                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-                    uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
 
                     TT_FATAL(
@@ -2455,7 +2432,6 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     if (!program_config.gather_in0) {
                         uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                         uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                        uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                         uint32_t num_cores = num_blocks_x * num_blocks_y;
                         CoreRangeSet all_cores =
                             num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
@@ -2632,7 +2608,6 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
     TT_FATAL(this->output_dtype.has_value(), "Error: output_dtype field should have been populated");
     tt::tt_metal::DataType output_dtype = this->output_dtype.value();
 
-    bool fuse_batch = true;
     // TODO: If input_tensor_a.padded_shape()[0] * input_tensor_a.padded_shape()[1] * ... except last two
     // dimensions == 1, does matmuls work if we treat it as bmm
     // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single core matmul/bmm
@@ -2647,8 +2622,6 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
 
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
-
-    auto mesh_device = input_tensor_a.mesh_device();
 
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
@@ -2793,9 +2766,6 @@ void SparseMatmul::validate(
     auto in1_tile = input_tensor_b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
-    auto output_tile = this->output_tile.value();
-    auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
-    auto output_layout = Layout::TILE;
 
     TT_FATAL(
         ashape[-1] == bshape[-2],
@@ -2834,11 +2804,11 @@ void SparseMatmul::validate(
         in1_tile_shape[1],
         bshape,
         in1_tile_shape);
-    TT_FATAL(this->nnz > 0, "nnz must be greater than 0");
+    TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length = 1;
-    if (ashape.rank() > 2) {
+    if ((!this->is_input_a_sparse) && ashape.rank() > 2) {
         for (int i = 0; i < ashape.rank() - 2; ++i) {
             batch_length *= ashape[i];
         }
@@ -2848,17 +2818,18 @@ void SparseMatmul::validate(
             batch_length *= bshape[i];
         }
     }
-    TT_FATAL(
-        this->nnz <= batch_length,
-        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        this->nnz,
-        batch_length);
 
     // Check that sparsity has enough entries
     TT_FATAL(
         sparsity.logical_volume() == batch_length,
         "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
         sparsity.logical_volume(),
+        batch_length);
+
+    TT_FATAL(
+        this->nnz.value_or(1) <= batch_length,
+        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+        this->nnz,
         batch_length);
 }
 
@@ -2878,7 +2849,8 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto output_shape = compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b);
+    const auto output_shape =
+        compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b, this->is_input_a_sparse);
 
     const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
 
@@ -2934,6 +2906,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     input_tensor_b,
                     sparsity,
                     this->nnz,
+                    this->is_input_a_sparse,
                     output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),

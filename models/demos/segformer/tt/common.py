@@ -17,7 +17,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         groups=1,
         dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
@@ -48,7 +48,6 @@ class Conv:
             deallocate_activation=self.deallocate,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
-            enable_split_reader=False,
             output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -108,18 +107,6 @@ class Conv:
         )
 
         return output_tensor, _out_height, _out_width
-
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = None
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
 
 def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):

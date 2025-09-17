@@ -58,6 +58,9 @@ using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
+// Access to internal API: ProgramImpl::num_kernel
+#include "impl/program/program_impl.hpp"
+
 // Bandwidth measurement result structures
 struct BandwidthResult {
     uint32_t num_devices;
@@ -349,7 +352,7 @@ public:
 
             test_device.create_kernels();
             auto& program_handle = test_device.get_program_handle();
-            if (program_handle.num_kernels()) {
+            if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
             }
         }
@@ -659,8 +662,6 @@ private:
     }
 
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
         // Use proper topology detection from fixture
         if (fixture_->get_topology() == Topology::Ring) {
             // Ring topology - use ring traversal logic with boundary turning
@@ -791,7 +792,7 @@ private:
         log_debug(tt::LogTest, "Performance profiling results:");
         // Results are automatically sorted by device ID and core coordinates
         for (const auto& [device_id, core_cycles] : device_core_cycles_) {
-            for (const auto& [core, cycles] : core_cycles) {
+            for ([[maybe_unused]] const auto& [core, cycles] : core_cycles) {
                 log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
             }
         }
@@ -885,7 +886,8 @@ private:
                         bool found_connected_core = false;
                         for (const auto& [core, sender] : test_device.get_senders()) {
                             for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                                RoutingDirection config_direction =
+                                    fixture_->get_forwarding_direction(config.hops.value());
                                 uint32_t config_link_id = config.link_id.value_or(0);
                                 if (config_direction == direction && config_link_id == link_id) {
                                     uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
@@ -1042,6 +1044,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
             double tolerance = get_tolerance_percent(
                 config.name,
@@ -1069,6 +1072,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string cluster_name = enchantum::to_string(cluster_type).data();
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
@@ -1190,6 +1194,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
 
             // Find matching golden entry
@@ -1211,6 +1216,7 @@ private:
             comp_result.packet_size = summary_result.packet_size;
             comp_result.current_bandwidth_gb_s = summary_result.bandwidth_gb_s;
 
+            double test_tolerance = 1.0;  // Default tolerance for no golden case
             if (golden_it != golden_csv_entries_.end()) {
                 comp_result.golden_bandwidth_gb_s = golden_it->bandwidth_gb_s;
                 comp_result.difference_percent =
@@ -1219,24 +1225,32 @@ private:
                     100.0;
 
                 // Use per-test tolerance from golden CSV instead of global tolerance
-                double test_tolerance = golden_it->tolerance_percent;
+                test_tolerance = golden_it->tolerance_percent;
                 comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
 
                 if (comp_result.within_tolerance) {
                     comp_result.status = "PASS";
                 } else {
                     comp_result.status = "FAIL";
-                    failed_tests_.push_back(
-                        config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
-                        ") - diff: " + std::to_string(comp_result.difference_percent) +
-                        "%, tolerance: " + std::to_string(test_tolerance) + "%");
                 }
             } else {
                 comp_result.golden_bandwidth_gb_s = 0.0;
                 comp_result.difference_percent = 0.0;
                 comp_result.within_tolerance = false;
                 comp_result.status = "NO_GOLDEN";
-                failed_tests_.push_back(config.name + " (NO GOLDEN ENTRY)");
+            }
+
+            // Create common CSV format string for any failure case
+            if (!comp_result.within_tolerance) {
+                std::ostringstream tolerance_stream;
+                tolerance_stream << std::fixed << std::setprecision(1) << test_tolerance;
+                std::string csv_format_string =
+                    config.name + "," + ftype_str + "," + ntype_str + "," + topology_str + ",\"" + num_devices_str +
+                    "\"," + std::to_string(config.fabric_setup.num_links) + "," +
+                    std::to_string(summary_result.packet_size) + "," + std::to_string(summary_result.cycles) + "," +
+                    std::to_string(comp_result.current_bandwidth_gb_s) + "," +
+                    std::to_string(summary_result.packets_per_second) + "," + tolerance_stream.str();
+                failed_tests_.push_back(csv_format_string);
             }
 
             comparison_results_.push_back(comp_result);

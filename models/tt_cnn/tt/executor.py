@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Union
 
 import ttnn
 
@@ -14,7 +14,7 @@ class Executor(ABC):
         pass
 
     @abstractmethod
-    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+    def execute(self, host_inputs: list) -> Iterable[Union[ttnn.Tensor, list]]:
         pass
 
     @abstractmethod
@@ -24,6 +24,14 @@ class Executor(ABC):
     @abstractmethod
     def get_read_cq(self) -> int:
         pass
+
+    @abstractmethod
+    def get_output_schema(self):
+        """
+        Returns the schema of the model's output. The schema is a nested structure
+        of lists/tuples mirroring the model's output, with tensors replaced by a
+        (shape, dtype, layout) tuple.
+        """
 
 
 class ModelExecutor(Executor):
@@ -35,6 +43,28 @@ class ModelExecutor(Executor):
         self.device = device
         self.cq_id = cq_id
         self.l1_input_memory_config = l1_input_memory_config
+        self.output_schema = None
+
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout)
+        elif isinstance(output, (list, tuple)):
+            return [self._create_output_schema(t) for t in output]
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            for t in tensor_struct:
+                self._deallocate_structured_tensor(t, force=force)
 
     def get_read_cq(self):
         return self.cq_id
@@ -44,7 +74,9 @@ class ModelExecutor(Executor):
         Compiles the model by running it once.
         """
         self._validate_input(host_input)
-        self._execute_single(host_input)
+        output_tensor = self._execute_single(host_input)
+        self.output_schema = self._create_output_schema(output_tensor)
+        self._deallocate_structured_tensor(output_tensor, force=True)
         ttnn.synchronize_device(self.device)
 
     def _validate_input(self, host_input):
@@ -93,6 +125,27 @@ class TracedModelExecutor(Executor):
         self.trace_id = None
         self.input_trace_addr = None
 
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout)
+        elif isinstance(output, (list, tuple)):
+            return [self._create_output_schema(t) for t in output]
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            for t in tensor_struct:
+                self._deallocate_structured_tensor(t, force=force)
+
     def get_read_cq(self):
         return self.cq_id
 
@@ -103,6 +156,7 @@ class TracedModelExecutor(Executor):
         self._validate_input(host_input)
         self._allocate_persistent_tensors(host_input)
         self._run_model_for_compilation(host_input)
+        self.output_schema = self._create_output_schema(self._compilation_output_tensor)
         self._capture_execution_trace(host_input)
         ttnn.synchronize_device(self.device)
 
@@ -136,7 +190,7 @@ class TracedModelExecutor(Executor):
         self.input_trace_addr = l1_input_for_trace.buffer_address()
         spec = l1_input_for_trace.spec
 
-        self._compilation_output_tensor.deallocate(force=True)
+        self._deallocate_structured_tensor(self._compilation_output_tensor, force=True)
 
         return l1_input_for_trace, spec
 
@@ -230,9 +284,31 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         self.device = device
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
+        self.output_schema = None
 
         self.dram_input_tensor = None
         self.op_event = None
+
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout)
+        elif isinstance(output, (list, tuple)):
+            return [self._create_output_schema(t) for t in output]
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            for t in tensor_struct:
+                self._deallocate_structured_tensor(t, force=force)
 
     def get_read_cq(self):
         return self.CQ_OPS_AND_OUTPUT_READ
@@ -250,7 +326,9 @@ class MultiCQModelOverlappedInputExecutor(Executor):
 
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
-        self._compile_model(host_input)
+        compilation_output = self._compile_model(host_input)
+        self.output_schema = self._create_output_schema(compilation_output)
+        self._deallocate_structured_tensor(compilation_output, force=True)
         ttnn.synchronize_device(self.device)
 
     def _compile_model(self, host_input):
@@ -269,8 +347,7 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
-        if output_tensor.is_allocated():
-            ttnn.deallocate(output_tensor, force=True)
+        return output_tensor
 
     def _execute_single(self, input_tensor):
         """
@@ -328,6 +405,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         self.device = device
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
+        self.output_schema = None
 
         self.dram_input_tensor = None
         self.l1_input_tensor = None
@@ -336,6 +414,27 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
 
         self.trace_id = None
         self.op_event = None
+
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout)
+        elif isinstance(output, (list, tuple)):
+            return [self._create_output_schema(t) for t in output]
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            for t in tensor_struct:
+                self._deallocate_structured_tensor(t, force=force)
 
     def get_read_cq(self):
         return self.CQ_OPS_AND_OUTPUT_READ
@@ -355,6 +454,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
         self._compile_model(host_input)
+        self.output_schema = self._create_output_schema(self._compilation_output_tensor)
         self._capture_trace(host_input)
         ttnn.synchronize_device(self.device)
 
@@ -400,7 +500,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         # of the persistent L1 input tensor occurs at the expected device memory address. This is
         # necessary because trace capture relies on the L1 input tensor being allocated at the same
         # address as during the initial trace.
-        self._compilation_output_tensor.deallocate(force=True)
+        self._deallocate_structured_tensor(self._compilation_output_tensor, force=True)
 
         # Capture trace
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
@@ -476,6 +576,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.dram_input_memory_config = dram_input_memory_config
         self.l1_input_memory_config = l1_input_memory_config
         self.dram_output_memory_config = dram_output_memory_config
+        self.output_schema = None
 
         self.dram_input_tensor = None
         self.dram_output_tensor = None
@@ -488,6 +589,26 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.read_event = None
         self.write_event = None
         self.last_op_event = None
+
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout)
+        elif isinstance(output, (list, tuple)):
+            raise TypeError("MultiCQTracedModelPipelinedIOExecutor does not support multiple outputs.")
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            raise TypeError("MultiCQTracedModelPipelinedIOExecutor does not support multiple outputs.")
 
     def get_read_cq(self):
         return self.CQ_IO
@@ -508,7 +629,10 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
         self.read_event = ttnn.record_event(self.device, self.CQ_IO)
 
-        output_shape, output_dtype = self._compile_model(host_input)
+        self._compile_model(host_input)
+        self.output_schema = self._create_output_schema(self._compilation_output_tensor)
+
+        output_shape, output_dtype, _ = self.output_schema
 
         self.dram_output_tensor = ttnn.allocate_tensor_on_device(
             output_shape, output_dtype, ttnn.ROW_MAJOR_LAYOUT, self.device, self.dram_output_memory_config
@@ -532,11 +656,10 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
         self._compilation_output_tensor = self.model(l1_input_tensor)
-        output_shape = self._compilation_output_tensor.shape
-        output_dtype = self._compilation_output_tensor.dtype
 
         # Transfer output to DRAM
         ttnn.wait_for_event(self.CQ_OPS, self.read_event)
+
         ttnn.reshard(
             self._compilation_output_tensor, self.dram_output_memory_config, output_tensor=self.dram_output_tensor
         )
@@ -544,9 +667,6 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
 
         # Cleanup compilation tensors
         ttnn.deallocate(l1_input_tensor)
-        ttnn.deallocate(self._compilation_output_tensor)
-
-        return output_shape, output_dtype
 
     def _capture_trace(self, host_input):
         """
@@ -567,7 +687,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         # of the persistent L1 input tensor occurs at the expected device memory address. This is
         # necessary because trace capture relies on the L1 input tensor being allocated at the same
         # address as during the initial trace.
-        self._compilation_output_tensor.deallocate(force=True)
+        self._deallocate_structured_tensor(self._compilation_output_tensor, force=True)
 
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS)
         self.output_tensor = self.model(l1_input_tensor)
