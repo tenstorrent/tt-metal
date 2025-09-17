@@ -29,12 +29,16 @@ class Yolov11Conv2D:
         self.is_dfl = is_dfl
         self.conv = conv
         self.device = device
-        self.in_channels = conv.in_channels
-        self.out_channels = conv.out_channels
-        self.kernel_size = conv.kernel_size
-        self.padding = conv.padding
-        self.stride = conv.stride
-        self.groups = conv.groups
+        
+        # Extract the actual Conv2d layer from either direct Conv2d or wrapped modules like DWConv
+        actual_conv = conv.conv if hasattr(conv, 'conv') else conv
+        
+        self.in_channels = actual_conv.in_channels
+        self.out_channels = actual_conv.out_channels
+        self.kernel_size = actual_conv.kernel_size
+        self.padding = actual_conv.padding
+        self.stride = actual_conv.stride
+        self.groups = actual_conv.groups
         self.reshard = reshard
         self.deallocate_activation = deallocate_activation
         self.compute_config = ttnn.init_device_compute_kernel_config(
