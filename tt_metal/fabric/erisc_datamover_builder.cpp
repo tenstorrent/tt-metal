@@ -946,7 +946,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
         if (requires_forced_assignment_to_noc1()) {
             this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
-            this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
         }
     }
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
@@ -955,6 +957,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
         if (requires_forced_assignment_to_noc1()) {
             this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
+            this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
         }
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
