@@ -30,11 +30,16 @@ jobs:
         shell: bash
         working-directory: .github/actions/fetch-workflow-data
         run: npm install
+      - name: Log token source (fetch)
+        env:
+          TOKEN_SOURCE: ${{ secrets.ACTIONS_READ_TOKEN != '' && 'ACTIONS_READ_TOKEN' || 'GITHUB_TOKEN' }}
+        run: |
+          echo "Using token: ${TOKEN_SOURCE}"
       - name: Fetch workflow data
         id: fetch
         uses: ./.github/actions/fetch-workflow-data
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
@@ -108,12 +113,17 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}
+      - name: Log token source (analyze)
+        env:
+          TOKEN_SOURCE: ${{ secrets.ACTIONS_READ_TOKEN != '' && 'ACTIONS_READ_TOKEN' || 'GITHUB_TOKEN' }}
+        run: |
+          echo "Using token: ${TOKEN_SOURCE}"
       - name: Analyze workflow data
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
         with:
           days: ${{ github.event.inputs.days || 15 }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_READ_TOKEN != '' && secrets.ACTIONS_READ_TOKEN || secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           alert-all: 'true'
