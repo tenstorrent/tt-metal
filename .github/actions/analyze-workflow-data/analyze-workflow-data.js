@@ -169,7 +169,11 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
       } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
         try {
           const text = fs.readFileSync(p, 'utf8');
-          const lines = text.split(/\r?\n/);
+          const rawLines = text.split(/\r?\n/);
+          const lines = rawLines.map(l => l
+            .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
+            .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
+          );
           core.info(`Scanning ${lines.length} lines in ${p}`);
           let foundInFile = 0;
 
@@ -211,9 +215,14 @@ function extractTestLabelBackward(lines, errIdx) {
   const runExact = /^\s*\[\s*RUN\s*\]/;     // case-sensitive
   const failedTests = /^\s*FAILED\s+tests/; // case-sensitive
   const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
+  const testsPath = /\btests\//;             // any line containing tests/
 
   for (let i = errIdx; i >= 0; i--) {
-    const line = lines[i] || '';
+    // Normalize the line the same way as in the scanner (strip prefixes)
+    const raw = lines[i] || '';
+    const line = raw
+      .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
+      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
     if (runExact.test(line) || failedTests.test(line)) return line.trim();
     if (failedOnly.test(line)) {
       // return first non-empty line below
@@ -221,6 +230,7 @@ function extractTestLabelBackward(lines, errIdx) {
       while (j < lines.length && lines[j].trim() === '') j++;
       if (j < lines.length) return lines[j].trim();
     }
+    if (testsPath.test(line)) return line.trim();
   }
   return undefined;
 }
