@@ -179,7 +179,7 @@ jobs:
       - name: Install CLI tool and deps
         run: |
           pip install --upgrade cloudsmith-cli
-          sudo apt update && sudo apt install -y ubuntu-distro-info
+          sudo apt update && sudo apt install -y distro-info
       - name: Push packages
         shell: bash
         env:
