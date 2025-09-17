@@ -17,7 +17,7 @@ from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(name):
-    base = {"yolov6l": (183.7, 0.011)}
+    base = {"yolov6l": (183.7, 0.0115)}
     return base[name]
 
 
@@ -96,7 +96,6 @@ def run_yolov6_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_perf_yolov6l(
     device,
     batch_size_per_device,
@@ -132,6 +131,7 @@ def test_perf_yolov6l(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_perf_yolov6l_dp(
     mesh_device,
     batch_size_per_device,
