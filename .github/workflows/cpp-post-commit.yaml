@@ -106,8 +106,6 @@ jobs:
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 17744997555
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
