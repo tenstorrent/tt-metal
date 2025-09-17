@@ -353,6 +353,23 @@ class FileResultDestination(ResultDestination):
                 metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
             return metrics if metrics else None
 
+        def _coerce_to_optional_string(value: Any) -> Optional[str]:
+            """Convert any value to an optional string, handling common numeric types gracefully."""
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            if isinstance(value, (int, float)):
+                # Handle special float cases
+                if isinstance(value, float):
+                    if value.is_nan():
+                        return None
+                    if value.is_infinite():
+                        return "inf" if value > 0 else "-inf"
+                return str(value)
+            # For any other type, convert to string
+            return str(value)
+
         for i in range(len(results)):
             header = header_info[i]
             raw = results[i]
@@ -428,8 +445,8 @@ class FileResultDestination(ResultDestination):
                 backend="n/a",
                 data_source="ttnn op test",
                 input_hash=header.get("input_hash"),
-                message=raw.get("message", None),
-                exception=raw.get("exception", None),
+                message=_coerce_to_optional_string(raw.get("message", None)),
+                exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=raw.get("device_perf", None),
                 op_params_set=op_param_list,
             )
