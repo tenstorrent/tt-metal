@@ -9,6 +9,7 @@ import json
 import datetime as dt
 import hashlib
 import os
+import math
 from elasticsearch import Elasticsearch
 from framework.database import (
     postgres_connection,
@@ -24,6 +25,12 @@ from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
 from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
 from framework.upload_sftp import upload_run_sftp
+
+# Optional numpy import for numeric handling in hot paths
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 class ResultDestination(ABC):
@@ -361,24 +368,17 @@ class FileResultDestination(ResultDestination):
                 return value
 
             # Handle numpy numeric types first (before checking for regular float/int)
-            try:
-                import numpy as np
-
-                if isinstance(value, np.number):
-                    if np.isnan(value):
-                        return None
-                    if np.isinf(value):
-                        return "inf" if value > 0 else "-inf"
-                    return str(value)
-            except ImportError:
-                pass
+            if np is not None and isinstance(value, np.number):
+                if np.isnan(value):
+                    return None
+                if np.isinf(value):
+                    return "inf" if value > 0 else "-inf"
+                return str(value)
 
             # Handle regular Python numeric types
             if isinstance(value, (int, float)):
                 # Handle special float cases
                 if isinstance(value, float):
-                    import math
-
                     if math.isnan(value):
                         return None
                     if math.isinf(value):
