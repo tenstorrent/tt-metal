@@ -531,7 +531,7 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    std::string path,
+    const std::string& path,
     const std::map<std::string, std::string>& defines_in,
     std::vector<uint32_t> compile_args,
     CoreCoord my_core,
