@@ -177,30 +177,30 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push CI Build image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-build
-          push: true
-          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
-          cache-to: type=inline
-          pull: true
-      - name: Build and push CI Test image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-test
-          push: true
-          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
-          cache-to: type=inline
-          pull: true
+      # - name: Build and push CI Build image
+      #   if: needs.check-docker-images.outputs.dev-exists != 'true'
+      #   uses: docker/build-push-action@v6
+      #   with:
+      #     context: ${{ github.workspace }}
+      #     file: dockerfile/Dockerfile
+      #     target: ci-build
+      #     push: true
+      #     tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+      #     build-args: UBUNTU_VERSION=${{ inputs.version }}
+      #     cache-to: type=inline
+      #     pull: true
+      # - name: Build and push CI Test image
+      #   if: needs.check-docker-images.outputs.dev-exists != 'true'
+      #   uses: docker/build-push-action@v6
+      #   with:
+      #     context: ${{ github.workspace }}
+      #     file: dockerfile/Dockerfile
+      #     target: ci-test
+      #     push: true
+      #     tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+      #     build-args: UBUNTU_VERSION=${{ inputs.version }}
+      #     cache-to: type=inline
+      #     pull: true
       - name: Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
