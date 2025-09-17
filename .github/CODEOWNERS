@@ -186,7 +186,6 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tens
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-codeowners-large-changes
-ttnn/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/api/tools/profiler/ @mo-tenstorrent @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/multidevice_perf_tests/ @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT @tenstorrent/metalium-codeowners-large-changes
@@ -297,6 +296,9 @@ models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @
 models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+
+# tracy
+tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes

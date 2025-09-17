@@ -13,8 +13,8 @@ import socket
 
 from loguru import logger
 
-from tt_metal.tools.profiler.process_ops_logs import process_ops
-from tt_metal.tools.profiler.common import (
+from .process_ops_logs import process_ops
+from .common import (
     TT_METAL_HOME,
     PROFILER_BIN_DIR,
     PROFILER_ARTIFACTS_DIR,
