@@ -8,6 +8,7 @@ target_sources(
     PRIVATE
         allocator/test_free_list_opt_allocator.cpp
         allocator/test_l1_banking_allocator.cpp
+        allocator/test_overlapped_bank_manager.cpp
         circular_buffer/test_CircularBuffer_allocation.cpp
         circular_buffer/test_CircularBuffer_creation.cpp
         circular_buffer/test_CircularBuffer_non_blocking.cpp
