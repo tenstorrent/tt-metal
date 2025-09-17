@@ -223,8 +223,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-        rot_mat_list = [(rot_mats[0][i : i + 1], rot_mats[1][i : i + 1]) for i in range(inputs.input_ids.shape[0])]
-        super().update_cos_sin_rows(rot_mat_list)
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
