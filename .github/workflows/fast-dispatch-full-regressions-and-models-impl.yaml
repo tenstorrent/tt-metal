@@ -58,6 +58,7 @@ jobs:
             {"model":"vgg_unet"},
             {"model":"yolov10x"},
             {"model":"yolov11"},
+            {"model":"yolov11m"},
             {"model":"yolov8s"},
             {"model":"yolov8s_world"},
             {"model":"yolov8x"},
