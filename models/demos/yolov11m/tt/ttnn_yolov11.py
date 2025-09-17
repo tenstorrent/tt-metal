@@ -8,7 +8,7 @@ import ttnn
 from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
 from models.demos.yolov11m.tt.ttnn_yolov11_c2psa import TtnnC2PSA
 from models.demos.yolov11m.tt.ttnn_yolov11_c3k2 import TtnnC3k2
-from models.demos.yolov11m.tt.ttnn_yolov11_detect import TtnnDetect
+from models.demos.yolov11m.tt.ttnn_yolov11_obb import TtnnOBB
 from models.demos.yolov11m.tt.ttnn_yolov11_sppf import TtnnSPPF
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
@@ -42,7 +42,7 @@ class TtnnYoloV11:
         self.c3k2_8 = TtnnC3k2(
             device, parameters.conv_args[22], parameters.model[22], is_bk_enabled=False, reshard=True
         )
-        self.detect = TtnnDetect(device, parameters.model_args.model[23], parameters.model[23])
+        self.obb = TtnnOBB(device, parameters.model_args.model[23], parameters.model[23])
 
     def __call__(self, input, min_channels=8):
         n, c, h, w = input.shape
@@ -112,7 +112,7 @@ class TtnnYoloV11:
         ttnn.deallocate(x10)
         x = self.c3k2_8(self.device, x)
         x22 = x
-        x = self.detect(self.device, x16, x19, x22)
+        x = self.obb(self.device, x16, x19, x22)
         deallocate_tensors(x16, x19, x22)
 
         return x
