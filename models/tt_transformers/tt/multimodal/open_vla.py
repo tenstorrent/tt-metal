@@ -13,8 +13,10 @@ References [LLaVa, IDEFICS-2]:
     => https://huggingface.co/openvla/openvla-7b/blob/main/modeling_prismatic.py
 """
 
+import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
@@ -85,6 +87,62 @@ LLM_BACKBONE_TO_HF_METACLASS = {
 VALID_VISION_BACKBONES = set(VISION_BACKBONE_TO_RESOLUTION.keys())
 VALID_LLM_BACKBONES = set(LLM_BACKBONE_TO_HF_PATH)
 # fmt: on
+
+
+class PerfCheckpoints:
+    checkpoints: ClassVar[List[Dict[str, int]]] = None
+
+    def __init__(self):
+        self.times = {}
+        if self.checkpoints is None:
+            self.checkpoints = []
+        self.present_keys_counter = {}
+
+    def checkpoint(self, key):
+        if key not in self.present_keys_counter:
+            self.present_keys_counter[key] = 0
+            new_key = f"{key}_{self.present_keys_counter[key]}"
+            self.times[new_key] = time.time()
+        else:
+            self.present_keys_counter[key] += 1
+            new_key = f"{key}_{self.present_keys_counter[key]}"
+            self.times[new_key] = time.time()
+
+    def get_pairs(self):
+        pairs = []
+        keys = list(key for key in self.present_keys_counter if key.startswith("start"))
+        for key in keys:
+            end_key = key.replace("start", "end")
+            if end_key in self.present_keys_counter:
+                pairs.append((key, end_key))
+        return pairs
+
+    def analyze(self, pairs=None):
+        results = {}
+        if pairs is None:
+            pairs = self.get_pairs()
+        for pair in pairs:
+            assert len(pair) == 2, "Each pair must contain exactly two keys."
+            assert pair[0] in self.present_keys_counter, f"Key {pair[0]} not found in checkpoints."
+            assert pair[1] in self.present_keys_counter, f"Key {pair[1]} not found in checkpoints."
+            assert (
+                self.present_keys_counter[pair[0]] == self.present_keys_counter[pair[1]]
+            ), f"Key {pair[0]} and {pair[1]} must have the same number of occurrences."
+            for counter in range(self.present_keys_counter[pair[0]] + 1):
+                key1 = f"{pair[0]}_{counter}"
+                key2 = f"{pair[1]}_{counter}"
+                results[f"{key1}->{key2}"] = self.times[key2] - self.times[key1]
+        results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
+        return results
+
+    def reset(self):
+        if len(self.times) > 0:
+            self.checkpoints.append(self.times)
+            self.times = {}
+            self.present_keys_counter = {}
+
+
+CHECKPOINTS = PerfCheckpoints()
 
 
 def map_openvla_hf_to_meta_keys(loaded_weights):
@@ -411,16 +469,6 @@ class OpenVLALanguageModel(GenerationMixin):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(inputs_embeds.device()),
         )
-        device = inputs_embeds.device()
-        # TODO: Find a workaround for ttnn.aggregate_tensor bug
-        inputs_embeds = ttnn.aggregate_tensor(inputs_embeds, ttnn.ConcatMeshToTensor(device, dim=3))[
-            :, :, :, : inputs_embeds.shape[-1]
-        ]
-        inputs_embeds = ttnn.distribute_tensor(
-            inputs_embeds,
-            mapper=ttnn.ShardTensorToMesh(device, dim=3),
-            mesh_device=device,
-        )
         tt_logits = self.model[0].forward(
             inputs_embeds,
             None,
@@ -589,7 +637,9 @@ class PrismaticVisionBackbone(nn.Module):
             print("Loaded local state dict into PrismaticVisionBackbone.featurizer")
         self.embed_dim = self.featurizer.embed_dim
         if self.ttnn_device is not None:
+            CHECKPOINTS.checkpoint("start_DINOINIT")
             self.ttnn_featurizer = ttnn_optimized_vit_highres.dinov2_encoder(self.featurizer, self.ttnn_device)
+            CHECKPOINTS.checkpoint("end_DINOINIT")
 
         # If `use_fused_vision_backbone` =>> create "beta" featurizer
         if self.use_fused_vision_backbone:
@@ -616,6 +666,7 @@ class PrismaticVisionBackbone(nn.Module):
                 if isinstance(module, LayerScale):
                     ls_apply_patch(module)
             if self.ttnn_device is not None:
+                CHECKPOINTS.checkpoint("start_SIGLIPINIT")
                 self.featurize_parameters_2 = preprocess_model_parameters(
                     initialize_model=lambda: self.fused_featurizer.to(torch.bfloat16),
                     device=self.ttnn_device,
@@ -642,6 +693,7 @@ class PrismaticVisionBackbone(nn.Module):
                     ),
                     pixel=x2,
                 )
+                CHECKPOINTS.checkpoint("end_SIGLIPINIT")
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Run image (`pixel_values`) through featurizer; if channel-stacked, then dispatch and sequence stack."""
@@ -654,8 +706,12 @@ class PrismaticVisionBackbone(nn.Module):
             patches, patches_fused = self.featurizer(img), self.fused_featurizer(img_fused)
         else:
             img, img_fused = pixel_values
-            patches, patches_fused = self.ttnn_featurizer(img)[:, 5:, :], self.ttnn_fused_featurizer(img_fused)
-
+            CHECKPOINTS.checkpoint("start_DINOFORWARD")
+            patches = self.ttnn_featurizer(img)[:, 5:, :]
+            CHECKPOINTS.checkpoint("end_DINOFORWARD")
+            CHECKPOINTS.checkpoint("start_SIGLIPFORWARD")
+            patches_fused = self.ttnn_fused_featurizer(img_fused)
+            CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
         if self.ttnn_device is None:
             return torch.cat([patches, patches_fused], dim=2)
         return ttnn.concat([patches, ttnn.typecast(patches_fused, patches.dtype)], dim=2)
@@ -822,6 +878,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             )
 
         # Instantiate PrismaticVisionBackbone (w/ Potential Fused Backbone)
+        CHECKPOINTS.checkpoint("start_VISIONINIT")
         self.vision_backbone = PrismaticVisionBackbone(
             config.use_fused_vision_backbone,
             config.image_sizes,
@@ -830,6 +887,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             ttnn_device,
             local_state_dict=local_state_dict,
         )
+        CHECKPOINTS.checkpoint("end_VISIONINIT")
 
         # Create Multimodal Projector
         self.projector = PrismaticProjector(
@@ -843,6 +901,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 strict=True,
             )
         if ttnn_device is not None:
+            CHECKPOINTS.checkpoint("start_PROJECTORINIT")
             projector_params = preprocess_model_parameters(
                 initialize_model=lambda: self.projector.to(torch.bfloat16),
                 device=ttnn_device,
@@ -854,10 +913,12 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 ttnn_device=ttnn_device,
                 params=projector_params,
             )
-
+            CHECKPOINTS.checkpoint("end_PROJECTORINIT")
         # Instantiate LLM Backbone
         if ttnn_device is not None:
+            CHECKPOINTS.checkpoint("start_LLama2INIT")
             self.language_model = OpenVLALanguageModel(ttnn_device, local_state_dict=local_state_dict)
+            CHECKPOINTS.checkpoint("end_LLama2INIT")
         else:
             self.language_model = AutoModelForCausalLM.from_config(
                 config.text_config, attn_implementation=config._attn_implementation
@@ -939,6 +1000,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
             # Visual Feature Extraction
             if self.ttnn_device is not None:
+                CHECKPOINTS.checkpoint("start_PREPROCESS")
                 pixel_values = torch.permute(pixel_values, (0, 2, 3, 1))
                 img, img_fused = torch.split(pixel_values, [3, 3], dim=3)
                 pixel_values1 = torch.nn.functional.pad(img, (0, 1, 0, 0, 0, 0, 0, 0))
@@ -950,8 +1012,17 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     pixel_values2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ttnn_device
                 )
                 pixel_values = [pixel_values1, pixel_values2]
+                CHECKPOINTS.checkpoint("end_PREPROCESS")
+                CHECKPOINTS.checkpoint("start_VISIONFORWARD")
                 ttnn_patch_features = self.vision_backbone(pixel_values)
+                CHECKPOINTS.checkpoint("end_VISIONFORWARD")
+                CHECKPOINTS.checkpoint("start_PROJECTORFORWARD")
                 projected_patch_embeddings = self.ttnn_projector.forward(ttnn_patch_features)
+                projected_patch_embeddings = ttnn.mesh_partition(
+                    projected_patch_embeddings,
+                    -1,
+                )
+                CHECKPOINTS.checkpoint("end_PROJECTORFORWARD")
             else:
                 patch_features = self.vision_backbone(pixel_values)
                 # Projection Logic =>> Update Attention Mask
@@ -974,28 +1045,23 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
             # Get Input Embeddings (from Language Model Embeddings)
             if self.ttnn_device is not None:
+                CHECKPOINTS.checkpoint("start_LLMINPUTEMBEDDINGS")
                 ttnn_input_ids = ttnn.from_torch(
                     input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
                 )
                 input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
-                input_embeddings = ttnn.aggregate_tensor(
-                    input_embeddings, ttnn.ConcatMeshToTensor(self.ttnn_device, dim=2)
-                )
-                input_embeddings = ttnn.distribute_tensor(
-                    input_embeddings,
-                    mapper=ttnn.replicate_tensor_to_mesh_mapper(self.ttnn_device),
-                    mesh_device=self.ttnn_device,
-                )
-
+                CHECKPOINTS.checkpoint("end_LLMINPUTEMBEDDINGS")
             else:
                 input_embeddings = self.get_input_embeddings()(input_ids)
 
             if self.ttnn_device is not None:
+                CHECKPOINTS.checkpoint("start_VISIONLLMCONCAT")
                 multimodal_embeddings = ttnn.concat(
                     [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
                 )
                 multimodal_embeddings = ttnn.unsqueeze(multimodal_embeddings, dim=0)
                 multimodal_embeddings = ttnn.to_layout(multimodal_embeddings, layout=ttnn.TILE_LAYOUT)
+                CHECKPOINTS.checkpoint("end_VISIONLLMCONCAT")
             else:
                 # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
                 multimodal_embeddings = torch.cat(
@@ -1016,7 +1082,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     multimodal_attention_mask = torch.cat(
                         [attention_mask[:, :1], projected_patch_attention_mask, attention_mask[:, 1:]], dim=1
                     )
-
+            CHECKPOINTS.checkpoint("start_LLMFORWARD")
             language_model_output = self.language_model(
                 input_ids=None,
                 attention_mask=multimodal_attention_mask,
@@ -1029,6 +1095,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
+            CHECKPOINTS.checkpoint("end_LLMFORWARD")
 
         # === Otherwise =>> Assume Invalid! ===
         elif (input_ids.shape[0] != pixel_values.shape[0]) or (inputs_embeds.shape[0] != pixel_values.shape[0]):
@@ -1270,7 +1337,11 @@ def test_language_model(mesh_device, prompt):
     ],
     indirect=True,
 )
-def test_openvla_model(mesh_device):
+@pytest.mark.parametrize(
+    "iterations",
+    [1],
+)
+def test_openvla_model(mesh_device, iterations):
     ##  Download model checkpoints HuggingFace
     #   ```
     #   huggingface-cli download openvla/openvla-7b model.safetensors.index.json
@@ -1317,5 +1388,20 @@ def test_openvla_model(mesh_device):
     )
     # Predict Action (7-DoF; un-normalize for BridgeData V2)
     inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
-    action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
-    print(action)
+    results: List[Dict[str, float]] = []
+    for i in range(iterations):
+        CHECKPOINTS.reset()
+        CHECKPOINTS.checkpoint("start_ACTIONPREDICTION")
+        action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
+        CHECKPOINTS.checkpoint("end_ACTIONPREDICTION")
+        results.append(CHECKPOINTS.analyze())
+
+    # combine results
+    combined_results = {k: 0.0 for k in results[0].keys()}
+    for r in results[min(iterations - 1, 1) :]:
+        for k, v in r.items():
+            combined_results[k] += v
+    results = {k: round(v / len(results), 6) for k, v in combined_results.items()}
+    results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
+    print(f"Predicted Action: {action}")
+    print(f"Timings after running {iterations} iterations: {json.dumps(results, indent=4)}")
