@@ -201,7 +201,7 @@ def test_grid_sample_sharded_grid_batching(
 
     # torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
-    torch_grid = torch.zeros(grid_shape, dtype=torch.float32) - 0.5
+    torch_grid = torch.zeros(grid_shape, dtype=torch.float32) + 0.75
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
     )
@@ -227,6 +227,10 @@ def test_grid_sample_sharded_grid_batching(
         device, batch_size, grid_h, grid_w, use_precomputed_grid, grid_dtype, grid_batching_factor, core_grid
     )
     ttnn_grid_tiled_sharded = ttnn.to_memory_config(ttnn_grid_tiled_dram, sharded_memory_config)
+
+    print("Tiled grid sharded:")
+    ttnn_grid_sharded_torch = ttnn.to_torch(ttnn_grid_tiled_sharded)
+    print(ttnn_grid_sharded_torch[:, :, 0:32, 0:2])
 
     # Step 4: Untilize with to_layout()
     ttnn_grid_untilized = ttnn.untilize(ttnn_grid_tiled_sharded, use_pack_untilize=False)
