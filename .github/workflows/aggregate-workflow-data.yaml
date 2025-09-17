@@ -12,6 +12,12 @@ on:
         required: false
         default: '15'
 
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+
 jobs:
   fetch-data:
     runs-on: ubuntu-latest
