@@ -224,9 +224,10 @@ void MAIN {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
-                        tensix_sync();
-                        unary_op_init_common(pre_tilize_cb_id, out_cb_id);
-                        tensix_sync();
+                        // tensix_sync();
+                        // unary_op_init_common(pre_tilize_cb_id, out_cb_id);
+                        // tensix_sync();
+                        PACK(pack_reconfig_data_format(pre_tilize_cb_id, out_cb_id));
 
                         // Skip fast_tilize path for bfp4_b output until #28380 is closed
                         if constexpr (is_output_bfp4_b) {
@@ -240,11 +241,12 @@ void MAIN {
                         }
                         cb_push_back(out_cb_id, in_ntiles_c);
 
-                        if constexpr (is_output_block_format) {
-                            tensix_sync();
-                            unary_op_init_common(in_cb_id_0, pre_tilize_cb_id);
-                            tensix_sync();
-                        }
+                        // if constexpr (is_output_block_format) {
+                        //     tensix_sync();
+                        //     unary_op_init_common(in_cb_id_0, pre_tilize_cb_id);
+                        //     tensix_sync();
+                        // }
+                        PACK(pack_reconfig_data_format(out_cb_id, pre_tilize_cb_id));
 
                         // init math for reduction again since FPU gets reprogrammed by tilize
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
