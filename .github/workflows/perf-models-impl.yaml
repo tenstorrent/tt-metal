@@ -145,6 +145,12 @@ jobs:
         with:
           commands: pytest -n auto models/demos/yolov11/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov11m model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov11m/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
