@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Union
+from typing import Optional
 
-from matplotlib.pyplot import grid
 import ttnn
 
 import math
