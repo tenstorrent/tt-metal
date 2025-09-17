@@ -148,7 +148,7 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
   // Prioritized patterns for more meaningful failures
-  const highPriorityRegex = /(\bFAILED\b|\bERROR\b\s|RuntimeError:|AssertionError|Traceback \(most recent call last\):)/i;
+  const highPriorityRegex = /(^\s*FAILED\s+tests\/|\[\s*FAILED\s*\]\s+[A-Za-z0-9_]+\.[A-Za-z0-9_]+|\bERROR\b\s|RuntimeError:|AssertionError|Traceback \(most recent call last\):)/i;
   // General catch-all when nothing else found
   const errorLineRegex = /(error:|failed:)/i;
   const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
