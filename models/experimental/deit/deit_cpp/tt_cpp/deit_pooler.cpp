@@ -14,8 +14,8 @@ TtDeiTPooler::TtDeiTPooler(
     const std::string& base_address
 ) : config_(config), device_(device) {
     // Construct weight and bias keys
-    std::string weight_key = base_address + ".dense.weight";
-    std::string bias_key = base_address + ".dense.bias";
+    std::string weight_key = base_address + "dense.weight";
+    std::string bias_key = base_address + "dense.bias";
     
     // Check if weights exist in state_dict
     auto weight_it = state_dict.find(weight_key);

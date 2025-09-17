@@ -9,9 +9,10 @@
 TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     const DeiTConfig& config,
     std::unordered_map<std::string, torch::Tensor>& state_dict,
-    const std::string& base_address,
-    std::shared_ptr<ttnn::MeshDevice> device
-) : device_(device) {
+    const std::string& base_address
+) : projection_(torch::nn::Conv2dOptions(config.num_channels, config.hidden_size, config.patch_size)
+                .stride(config.patch_size)
+                .padding(0)) {
     // Extract configuration parameters
     auto image_size = config.image_size;
     auto patch_size = config.patch_size;
@@ -26,8 +27,8 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     num_patches_ = (image_size_.first / patch_size_.first) * (image_size_.second / patch_size_.second);
     
     // Load projection weights and bias from state_dict
-    std::string weight_key = base_address + ".projection.weight";
-    std::string bias_key = base_address + ".projection.bias";
+    std::string weight_key = base_address + "projection.weight";
+    std::string bias_key = base_address + "projection.bias";
     
     if (state_dict.find(weight_key) == state_dict.end()) {
         throw std::runtime_error("Missing projection weight in state_dict: " + weight_key);
@@ -36,13 +37,13 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
         throw std::runtime_error("Missing projection bias in state_dict: " + bias_key);
     }
     
-    // Convert torch tensors to ttnn tensors
+    // Load weights and bias into the Conv2d module
     auto weight_torch = state_dict[weight_key];
     auto bias_torch = state_dict[bias_key];
     
-    // Convert to TTNN tensors and move to device
-    projection_weight_ = helper_funcs::torch_to_tt_tensor_tile(weight_torch, device_);
-    projection_bias_ = helper_funcs::torch_to_tt_tensor_tile(bias_torch, device_);
+    // Set the weights and bias for the Conv2d module
+    projection_->weight.data() = weight_torch;
+    projection_->bias.data() = bias_torch;
     
     std::cout << "TtDeiTPatchEmbeddings initialized with:" << std::endl;
     std::cout << "  Image size: (" << image_size_.first << ", " << image_size_.second << ")" << std::endl;
@@ -52,72 +53,38 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
     std::cout << "  Hidden size: " << hidden_size_ << std::endl;
 }
 
-ttnn::Tensor TtDeiTPatchEmbeddings::forward(const ttnn::Tensor& pixel_values) {
+torch::Tensor TtDeiTPatchEmbeddings::forward(const torch::Tensor& pixel_values) {
     // Validate input dimensions
-    validate_input(pixel_values);
+    auto input_shape = pixel_values.sizes();
+    int batch_size = input_shape[0];
+    int num_channels = input_shape[1];
+    int height = input_shape[2];
+    int width = input_shape[3];
     
-    // Apply 2D convolution to extract patches
-    // For now, use a simplified approach with matrix operations
-    // TODO: Implement proper conv2d when available
-    
-    // Get input shape
-    auto shape = pixel_values.get_logical_shape();
-    auto batch_size = shape[0];
-    auto channels = shape[1];
-    auto height = shape[2];
-    auto width = shape[3];
-    
-    // For simplicity, reshape input to [batch_size, num_patches, patch_size*patch_size*channels]
-    // and use matrix multiplication with reshaped weights
-    int patch_area = patch_size_.first * patch_size_.second * num_channels_;
-    
-    // Reshape pixel_values for patch extraction
-    // This is a simplified version - in practice, you'd need proper patch extraction
-    ttnn::Shape input_shape({batch_size, static_cast<uint32_t>(num_patches_), static_cast<uint32_t>(patch_area)});
-    auto reshaped_input = ttnn::reshape(ttnn::DefaultQueueId, pixel_values, input_shape);
-    
-    // Reshape projection weight for matrix multiplication
-    auto weight_shape = projection_weight_.get_logical_shape();
-    ttnn::Shape weight_reshape({static_cast<uint32_t>(patch_area), static_cast<uint32_t>(hidden_size_)});
-    auto reshaped_weight = ttnn::reshape(ttnn::DefaultQueueId, projection_weight_, weight_reshape);
-    
-    // Perform matrix multiplication: [batch_size, num_patches, patch_area] x [patch_area, hidden_size]
-    auto conv_output = ttnn::matmul(reshaped_input, reshaped_weight);
-    
-    // Add bias if available
-    if (projection_bias_.get_logical_shape().volume() > 0) {
-        conv_output = ttnn::add(conv_output, projection_bias_);
-    }
-    
-    auto transposed = conv_output;
-    
-    return transposed;
-}
-
-void TtDeiTPatchEmbeddings::validate_input(const ttnn::Tensor& pixel_values) const {
-    auto shape = pixel_values.get_logical_shape();
-    
-    if (shape.rank() != 4) {
-        throw std::invalid_argument("Input tensor must be 4D: [batch_size, num_channels, height, width]");
-    }
-    
-    auto batch_size = shape[0];
-    auto num_channels = shape[1];
-    auto height = shape[2];
-    auto width = shape[3];
-    
-    if (static_cast<int>(num_channels) != num_channels_) {
+    // Check channel dimension
+    if (num_channels != num_channels_) {
         throw std::invalid_argument(
-            "Channel dimension mismatch. Expected: " + std::to_string(num_channels_) + 
-            ", Got: " + std::to_string(num_channels)
+            "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
         );
     }
     
-    if (static_cast<int>(height) != image_size_.first || static_cast<int>(width) != image_size_.second) {
+    // Check image size
+    if (height != image_size_.first || width != image_size_.second) {
         throw std::invalid_argument(
             "Input image size (" + std::to_string(height) + "*" + std::to_string(width) + 
             ") doesn't match model (" + std::to_string(image_size_.first) + "*" + 
-            std::to_string(image_size_.second) + ")"
+            std::to_string(image_size_.second) + ")."
         );
     }
+    
+    // Perform 2D convolution: x = self.projection(pixel_values)
+    auto x = projection_->forward(pixel_values);
+    
+    // Flatten and transpose: .flatten(2).transpose(1, 2)
+    // flatten(2) flattens from dimension 2 onwards
+    x = x.flatten(2);
+    // transpose(1, 2) swaps dimensions 1 and 2
+    x = x.transpose(1, 2);
+    
+    return x;
 }

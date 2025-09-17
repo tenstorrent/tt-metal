@@ -302,3 +302,45 @@ target_compile_options(test_deit_encoder PRIVATE
     -Wno-error=unused-parameter
     -Wno-error
 )
+
+# Add executable for test_deit_model
+add_executable(test_deit_model 
+    test_deit_model.cpp
+    ../tt_cpp/deit_model.cpp
+    ../tt_cpp/deit_for_image_classification.cpp
+    ../tt_cpp/deit_encoder.cpp
+    ../tt_cpp/deit_layer.cpp
+    ../tt_cpp/deit_attention.cpp
+    ../tt_cpp/deit_self_attention.cpp
+    ../tt_cpp/deit_self_output.cpp
+    ../tt_cpp/deit_intermediate.cpp
+    ../tt_cpp/deit_output.cpp
+    ../tt_cpp/deit_embeddings.cpp
+    ../tt_cpp/deit_patch_embeddings.cpp
+    ../tt_cpp/deit_pooler.cpp
+    ../helper_funcs.cpp
+)
+
+# Link libraries for test_deit_model
+target_link_libraries(test_deit_model
+    ${TORCH_LIBRARIES}
+    ttnncpp
+    tt_metal
+    pthread
+)
+
+# Set C++ standard for test_deit_model
+set_target_properties(test_deit_model PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+
+# Compiler options for debugging
+target_compile_options(test_deit_model PRIVATE
+    -Wall
+    -g
+    -O0
+    -Wno-unused-parameter
+    -Wno-error=unused-parameter
+    -Wno-error
+)
