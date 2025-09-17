@@ -45,11 +45,11 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
     } else if (torch_dtype == torch::kUInt8) {
         data_type = ttnn::DataType::UINT8;
     } else {
-        TT_THROW("from_torch Unsurport type : {}", c10::toString(torch_dtype));
+        TT_THROW("from_torch Unsupported type : {}", c10::toString(torch_dtype));
     }
 
     if (data_type == ttnn::DataType::BFLOAT8_B || data_type == ttnn::DataType::BFLOAT4_B) {
-        throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsurport!");
+        throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsupported!");
     }
     
     torch::Tensor contiguous_tensor = tensor.contiguous();
