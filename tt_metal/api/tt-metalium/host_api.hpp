@@ -177,6 +177,13 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
+// TODO: Docs and/or move to tt_metal::experimental
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& binary_path,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
 // clang-format off
 // ==================================================
 //                  HOST API: buffers
