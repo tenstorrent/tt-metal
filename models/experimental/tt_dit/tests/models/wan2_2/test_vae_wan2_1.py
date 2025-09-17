@@ -1246,11 +1246,6 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
         )
     torch_model.eval()
 
-    h_factor = tuple(mesh_device.shape)[h_axis]
-    w_factor = tuple(mesh_device.shape)[w_axis]
-    if H % h_factor != 0 or W % w_factor != 0:
-        pytest.skip(f"H % h_factor != 0 or W % w_factor != 0, got {H % h_factor} != 0 or {W % w_factor} != 0")
-
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1274,15 +1269,19 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
+    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+    if logical_h != tt_input_tensor.shape[2]:
+        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output = tt_model(
+    tt_output, new_logical_h = tt_model(
         tt_input_tensor,
-    )[0]
+        logical_h,
+    )
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1308,6 +1307,9 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
         if tt_output_torch.shape[1] != torch_output.shape[1]:
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
             tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
+        if new_logical_h != tt_output_torch.shape[3]:
+            tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
+            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
         assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
     else:
         logger.warning("Skipping check")
