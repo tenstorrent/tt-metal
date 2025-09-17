@@ -482,7 +482,7 @@ public:
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
-    inline TargetDevice get_target_device() const { return runtime_target_device_; }
+    TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
 
