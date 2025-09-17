@@ -878,13 +878,13 @@ async function run() {
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
             const commitsHtml = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
@@ -904,13 +904,13 @@ async function run() {
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsHtml2 = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
