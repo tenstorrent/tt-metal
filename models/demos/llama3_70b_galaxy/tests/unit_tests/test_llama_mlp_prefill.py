@@ -29,7 +29,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 4096),
+    # (128, 4096),
+    (2048,),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -65,6 +66,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensu
         hidden_dim=4 * model_args.dim,
         multiple_of=model_args.multiple_of,
         ffn_dim_multiplier=model_args.ffn_dim_multiplier,
+        llama3=True,
     )
     reference_model.load_state_dict(partial_state_dict)
 

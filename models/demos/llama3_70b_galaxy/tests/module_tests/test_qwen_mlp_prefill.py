@@ -30,7 +30,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedF
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 4096),
+    (128, 2048, 4096, 8192),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -38,7 +38,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedF
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):

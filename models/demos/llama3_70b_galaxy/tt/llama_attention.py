@@ -655,6 +655,7 @@ class TtLlamaAttention(LightweightModule):
         if self.qk_norm:
             k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
+        # k_heads_1KSD = k_heads_1KSD_pre_rot
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
             rot_mats[0],

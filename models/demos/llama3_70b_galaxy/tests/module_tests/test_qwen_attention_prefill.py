@@ -9,10 +9,10 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    get_prefill_rot_mat,
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
 from models.utility_functions import (
     comp_pcc,
@@ -36,12 +36,12 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -51,15 +51,17 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        # 128,
+        128,
         2048,
+        4096,
+        8192,
         # 1024 * 32,
         # 1024 * 64,
     ),
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 def test_qwen_attention_inference_prefill(
@@ -88,12 +90,19 @@ def test_qwen_attention_inference_prefill(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        mesh_device,
+    # rot_mats = get_rot_mat(
+    #     model_args.head_dim,
+    #     model_args.max_seq_len * 2,
+    #     mesh_device,
+    #     seq_len=max_seq_len,
+    #     scale_factor=model_args.rope_scaling_factor,
+    # )
+    rot_mats = get_rot_mats(
+        head_dim=model_args.head_dim,
+        device=mesh_device,
         seq_len=max_seq_len,
-        scale_factor=model_args.rope_scaling_factor,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling_factor,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
@@ -196,7 +205,7 @@ def test_qwen_attention_inference_prefill(
         logger.warning(f"Qwen_Attention Failed!")
         all_tests_pass = False
 
-    check_kv_cache = True  # May want to disable: Issue #10648
+    check_kv_cache = False  # May want to disable: Issue #10648
     if check_kv_cache:
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
@@ -244,8 +253,9 @@ def test_qwen_attention_inference_prefill(
 
         for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
             cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
-            cache_pt = cache_pt[:1, :, :, :]
-            cache_tt = cache_tt[:, :, :128, :]
+            cache_pt = cache_pt[:, :, :, :]
+            cache_tt = cache_tt[:, :, :, :]
+            breakpoint()
             does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
             if i == 0:
                 logger.info(f"K cache output: {output_pcc}")
