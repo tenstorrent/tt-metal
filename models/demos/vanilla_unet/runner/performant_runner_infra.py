@@ -5,7 +5,7 @@
 
 import torch
 from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
+from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
@@ -59,8 +59,14 @@ class VanillaUNetPerformanceRunnerInfra:
             custom_preprocessor=create_custom_preprocessor(device),
             device=None,
         )
+        self.parameters.conv_args = {}
+        self.parameters.conv_args = infer_ttnn_module_args(
+            model=self.torch_model, run_model=lambda model: model(self.torch_input_tensor), device=None
+        )
 
-        self.ttnn_model = TtUnet(device=device, parameters=self.parameters, model=self.torch_model)
+        self.ttnn_model = TtUnet(
+            device=device, parameters=self.parameters, model=self.torch_model, conv_args=self.parameters.conv_args
+        )
 
     def run(self):
         self.output_tensor = self.ttnn_model(self.device, self.input_tensor)

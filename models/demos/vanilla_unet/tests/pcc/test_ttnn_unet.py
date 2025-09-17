@@ -5,11 +5,11 @@
 import pytest
 import torch
 from loguru import logger
-from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import skip_for_grayskull
-from models.demos.vanilla_unet.common import load_torch_model
+from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
 from models.demos.vanilla_unet.reference.unet import UNet
 from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -172,7 +172,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 2000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
     reference_model = load_torch_model(model_location_generator)
@@ -183,8 +183,12 @@ def test_unet(device, reset_seeds, model_location_generator):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
     )
+    parameters.conv_args = {}
+    parameters.conv_args = infer_ttnn_module_args(
+        model=reference_model, run_model=lambda model: model(torch_input_tensor), device=None
+    )
 
-    ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
+    ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model, conv_args=parameters.conv_args)
 
     n, c, h, w = torch_input_tensor.shape
     if c == 3:
