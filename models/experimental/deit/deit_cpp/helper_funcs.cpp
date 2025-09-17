@@ -1,5 +1,6 @@
 #include "helper_funcs.h"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <torch/torch.h>
 #include <vector>
@@ -313,6 +314,14 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
     return torch_tensor.contiguous();
 }
 
-
+ttnn::Tensor apply_layernorm(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& weight,
+    const ttnn::Tensor& bias,
+    float eps
+) {
+    // Apply layer normalization using ttnn operations
+    return ttnn::layer_norm(input, eps, weight, bias);
+}
 
 } // namespace helper_funcs

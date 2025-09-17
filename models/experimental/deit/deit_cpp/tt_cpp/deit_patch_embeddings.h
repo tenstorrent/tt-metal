@@ -9,14 +9,7 @@
 #include <vector>
 #include <memory>
 #include <torch/torch.h>
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "deit_config.h"
-#include "helper_funcs.h"
 
 class TtDeiTPatchEmbeddings {
 public:
@@ -25,13 +18,11 @@ public:
      * @param config DeiT configuration
      * @param state_dict Model state dictionary containing weights and biases
      * @param base_address Base address for parameter lookup in state_dict
-     * @param device TTNN device for tensor operations
      */
     TtDeiTPatchEmbeddings(
         const DeiTConfig& config,
         std::unordered_map<std::string, torch::Tensor>& state_dict,
-        const std::string& base_address,
-        std::shared_ptr<ttnn::MeshDevice> device
+        const std::string& base_address
     );
 
     /**
@@ -40,7 +31,7 @@ public:
      * @param pixel_values Input tensor with shape [batch_size, num_channels, height, width]
      * @return Patch embeddings tensor with shape [batch_size, num_patches, hidden_size]
      */
-    ttnn::Tensor forward(const ttnn::Tensor& pixel_values);
+    torch::Tensor forward(const torch::Tensor& pixel_values);
 
     // Getters
     int get_num_patches() const { return num_patches_; }
@@ -56,13 +47,8 @@ private:
     int num_patches_;
     int hidden_size_;
     
-    // TTNN tensors for convolution weights and bias
-    ttnn::Tensor projection_weight_;
-    ttnn::Tensor projection_bias_;
+    // Model parameters - using libtorch Conv2d
+    torch::nn::Conv2d projection_;
     
-    // Device reference
-    std::shared_ptr<ttnn::MeshDevice> device_;
-    
-    // Helper function to validate input dimensions
-    void validate_input(const ttnn::Tensor& pixel_values) const;
+
 };

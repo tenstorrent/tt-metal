@@ -6,7 +6,7 @@
 #define DEIT_CPP_TT_CPP_DEIT_POOLER_H
 
 #include "deit_config.h"
-#include "helper_funcs.h"
+#include "../helper_funcs.h"
 #include <memory>
 #include <torch/torch.h>
 #include <unordered_map>
