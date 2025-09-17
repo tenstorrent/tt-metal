@@ -314,7 +314,10 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     logger.info("End RefResBlock forward")
 
     logger.info("assert quality")
-    assert_quality(ref_output, tt_output_torch, pcc=0.999)
+    for i in range(T):
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.999)
 
 
 # Base configuration that applies to all test cases
