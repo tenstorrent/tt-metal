@@ -139,6 +139,10 @@ public:
     // Method to access sender configurations for traffic analysis
     const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
 
+    const std::unordered_map<RoutingDirection, std::set<uint32_t>>& get_used_fabric_connections() const {
+        return used_fabric_connections_;
+    }
+
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
