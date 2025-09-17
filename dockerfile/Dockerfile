@@ -102,16 +102,18 @@ RUN umask 000 && python3 -m pip config set global.extra-index-url https://downlo
 COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-        echo "Installing debugger for Ubuntu 22.04..." && \
-        /opt/tt_metal_infra/scripts/install_debugger.sh && \
-        echo "Debugger installation completed" && \
-        python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
+    echo "Installing debugger for Ubuntu 22.04..." && \
+    /opt/tt_metal_infra/scripts/install_debugger.sh && \
+    echo "Debugger installation completed" && \
+    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
 
 #############################################################
 
 FROM ci-test AS dev
 
+
+ARG UBUNTU_VERSION=22.04
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -140,15 +142,20 @@ RUN mkdir -p /tmp/iwyu \
 
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
-RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
-RUN [ "$UBUNTU_VERSION" != "24.04" ] \
-    && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
-    && rm -rf /tmp/gdb-build
+RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
+RUN if [ "$UBUNTU_VERSION" != "24.04" ]; then \
+    echo "Removing system gdb and building custom GDB for Ubuntu $UBUNTU_VERSION" && \
+    apt-get remove -y gdb && \
+    mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ && \
+    wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz && \
+    tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 && \
+    /tmp/gdb-build/configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/gdb-build; \
+    else \
+    echo "Using system GDB (15.1) for Ubuntu 24.04 - no custom build needed"; \
+    fi
 
 COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -194,11 +201,11 @@ RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
 WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
-run /bin/bash -c "./build_metal.sh \
-				&& ./create_venv.sh \
-				&& source $PYTHON_ENV_DIR/bin/activate \
-				&& pip install -r models/tt_transformers/requirements.txt \
-				&& rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+RUN /bin/bash -c "./build_metal.sh \
+    && ./create_venv.sh \
+    && source $PYTHON_ENV_DIR/bin/activate \
+    && pip install -r models/tt_transformers/requirements.txt \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -209,8 +216,8 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \
-		# required
-		gosu \
-		libgl1 \
-		libsndfile1 \
-		&& rm -rf /var/lib/apt/lists/*
+    # required
+    gosu \
+    libgl1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
