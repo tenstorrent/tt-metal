@@ -4,7 +4,10 @@
 
 import os
 import shutil
+import sys
 from pathlib import Path
+
+from loguru import logger
 
 ENVS = dict(os.environ)
 TT_METAL_HOME = ""
@@ -18,7 +21,7 @@ PROFILER_DEVICE_SIDE_LOG = "profile_log_device.csv"
 PROFILER_HOST_SIDE_LOG = "profile_log_host.csv"
 PROFILER_HOST_DEVICE_SYNC_INFO = "sync_device_info.csv"
 
-PROFILER_SCRIPTS_ROOT = TT_METAL_HOME / "tt_metal/tools/profiler"
+PROFILER_SCRIPTS_ROOT = TT_METAL_HOME / "tools/tracy"
 PROFILER_ARTIFACTS_DIR = TT_METAL_HOME / "generated/profiler"
 if "TT_METAL_PROFILER_DIR" in ENVS.keys():
     PROFILER_ARTIFACTS_DIR = Path(ENVS["TT_METAL_PROFILER_DIR"])
