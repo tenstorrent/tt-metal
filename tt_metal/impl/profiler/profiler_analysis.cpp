@@ -7,7 +7,9 @@
 #include <fstream>
 
 #include "assert.hpp"
+#include "core_coord.hpp"
 #include "profiler_analysis.hpp"
+#include "profiler_state_manager.hpp"
 
 namespace tt {
 
@@ -47,15 +49,15 @@ DurationAnalysisResults parse_duration(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
-    log_info(tt::LogMetal, "config name: {}", analysis_config.results_config.analysis_name);
-    log_info(tt::LogMetal, "markers size: {}", markers.size());
+    // log_info(tt::LogMetal, "config name: {}", analysis_config.results_config.analysis_name);
+    // log_info(tt::LogMetal, "markers size: {}", markers.size());
 
     // if (markers.empty()) {
     //     return {};
     // }
 
-    DurationAnalysisResults duration_analysis_results;
     std::unordered_map<uint64_t, DurationAnalysisResults::SingleResult> results_per_runtime_id;
+    std::unordered_map<uint64_t, std::unordered_set<CoreCoord>> fw_cores_per_runtime_id;
 
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
@@ -66,18 +68,48 @@ DurationAnalysisResults parse_duration(
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
-            // TT_ASSERT(results_per_runtime_id.find(marker.runtime_host_id) != results_per_runtime_id.end());
             if (results_per_runtime_id.find(marker.runtime_host_id) != results_per_runtime_id.end()) {
                 results_per_runtime_id[marker.runtime_host_id].end_timestamp = marker.timestamp;
                 results_per_runtime_id[marker.runtime_host_id].end_marker = marker_ref.get();
             }
         }
+
+        if (marker
+                .marker_name_keyword_flags[static_cast<std::underlying_type_t<tracy::MarkerDetails::MarkerNameKeyword>>(
+                    tracy::MarkerDetails::MarkerNameKeyword::_FW)]) {
+            fw_cores_per_runtime_id[marker.runtime_host_id].emplace(marker.core_x, marker.core_y);
+        }
     }
 
+    DurationAnalysisResults duration_analysis_results;
     for (auto& [runtime_id, result] : results_per_runtime_id) {
-        TT_ASSERT(result.start_timestamp < result.end_timestamp);
+        TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+
         result.duration = result.end_timestamp - result.start_timestamp;
         duration_analysis_results.addResultsForRuntimeId(runtime_id, result);
+
+        TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
+        TT_ASSERT(result.start_marker.op_name == result.end_marker.op_name);
+        TT_ASSERT(fw_cores_per_runtime_id.find(runtime_id) != fw_cores_per_runtime_id.end());
+
+        const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+        const ARCH device_arch = cluster_desc->get_arch(result.start_marker.chip_id);
+
+        const uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
+        const DispatchCoreConfig& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+        const CoreCoord compute_grid_size =
+            tt::get_compute_grid_size(result.start_marker.chip_id, num_hw_cqs, dispatch_core_config);
+        const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
+
+        duration_analysis_results.addMetaDataForRuntimeId(
+            runtime_id,
+            {.device_id = result.start_marker.chip_id,
+             .device_arch = device_arch,
+             .op_name = result.start_marker.op_name,
+             .num_fw_cores = fw_cores_per_runtime_id[runtime_id].size(),
+             .num_available_worker_cores = num_available_worker_cores});
     }
 
     duration_analysis_results.results_config = analysis_config.results_config;
@@ -102,38 +134,61 @@ std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
 void writeAnalysisResultsToCSV(
     const std::vector<std::unique_ptr<const AnalysisResults>>& analysis_results,
     const std::filesystem::path& report_path) {
-    std::string header_string = "GLOBAL CALL COUNT,DEVICE ID,OP NAME";
+    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->perf_ops_report_write_mutex);
+
+    std::string header_string =
+        "GLOBAL CALL COUNT,DEVICE ID,DEVICE ARCH,OP NAME,CORE COUNT,AVAILABLE WORKER CORE COUNT";
 
     for (const auto& analysis_result : analysis_results) {
         header_string += "," + analysis_result->getStringifiedHeaders();
     }
 
     std::map<uint64_t, std::string> results_string_per_runtime_id;
+    // for (const auto& analysis_result : analysis_results) {
+    //     const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
+    //     for (const uint64_t runtime_id : analysis_result_runtime_ids) {
+    //         auto [it, inserted] = results_string_per_runtime_id.emplace(runtime_id, "");
+    //         if (inserted) {
+    //             const AnalysisResults::RuntimeIdMetaData meta_data =
+    //                 analysis_result->getMetaDataForRuntimeId(runtime_id);
+    //             it->second = std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," +
+    //                          arch_to_str(meta_data.device_arch) + "," + meta_data.op_name;
+    //         }
+    //     }
+    // }
+
     for (const auto& analysis_result : analysis_results) {
-        const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
-        for (const uint64_t runtime_id : analysis_result_runtime_ids) {
-            auto [it, inserted] = results_string_per_runtime_id.emplace(runtime_id, "");
-            if (inserted) {
-                const AnalysisResults::RuntimeIdMetaData& meta_data =
+        for (const uint64_t runtime_id : analysis_result->getRuntimeIds()) {
+            if (results_string_per_runtime_id.find(runtime_id) == results_string_per_runtime_id.end()) {
+                const AnalysisResults::RuntimeIdMetaData meta_data =
                     analysis_result->getMetaDataForRuntimeId(runtime_id);
-                it->second =
-                    std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," + meta_data.op_name;
+                results_string_per_runtime_id[runtime_id] =
+                    std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," +
+                    arch_to_str(meta_data.device_arch) + "," + meta_data.op_name + "," +
+                    std::to_string(meta_data.num_fw_cores) + "," + std::to_string(meta_data.num_available_worker_cores);
             }
         }
     }
 
+    // for (const auto& analysis_result : analysis_results) {
+    //     const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
+    //     for (const uint64_t runtime_id : analysis_result_runtime_ids) {
+    //         results_string_per_runtime_id[runtime_id] +=
+    //             "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
+    //     }
+
+    //     for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
+    //         if (analysis_result_runtime_ids.find(runtime_id) == analysis_result_runtime_ids.end()) {
+    //             results_string_per_runtime_id[runtime_id] +=
+    //                 "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
+    //         }
+    //     }
+    // }
+
     for (const auto& analysis_result : analysis_results) {
-        const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
-        for (const uint64_t runtime_id : analysis_result_runtime_ids) {
+        for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
             results_string_per_runtime_id[runtime_id] +=
                 "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
-        }
-
-        for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
-            if (analysis_result_runtime_ids.find(runtime_id) == analysis_result_runtime_ids.end()) {
-                results_string_per_runtime_id[runtime_id] +=
-                    "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
-            }
         }
     }
 
