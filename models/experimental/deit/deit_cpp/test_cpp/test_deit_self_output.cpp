@@ -115,7 +115,7 @@ void test_deit_self_output_inference() {
     // Create input tensors: [1, 198, 768] for hidden_states
     // DeiT uses 196 patches + 1 CLS token + 1 distillation token = 198 tokens
     torch::Tensor hidden_states = torch::randn({1, 198, 768}, torch::kFloat32);
-    torch::Tensor input_tensor_torch = torch::zeros({1, 198, 768}, torch::kFloat32); // Zero tensor to match Python None
+
     
     // Call self-output module forward
     // The PyTorch forward method only takes hidden_states (self is implicit)
@@ -152,8 +152,9 @@ void test_deit_self_output_inference() {
     } else {
         std::cout << "Test FAILED! PCC: " << pcc << " (threshold: " << pcc_threshold << ")" << std::endl;
     }
-    
+
     // Device cleanup is handled automatically by MeshDevice
+    device->close();
 }
 
 } // anonymous namespace

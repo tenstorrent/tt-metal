@@ -189,8 +189,9 @@ void test_deit_encoder_inference() {
     } else {
         std::cout << "FAILED: PCC (" << pcc << ") is below threshold (" << pcc_threshold << ")" << std::endl;
     }
-    
+
     // Device cleanup is handled automatically by MeshDevice
+    device->close();
 }
 
 } // anonymous namespace

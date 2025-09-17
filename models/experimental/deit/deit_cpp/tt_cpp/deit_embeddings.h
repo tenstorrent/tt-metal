@@ -8,20 +8,8 @@
 #include <string>
 #include <memory>
 #include <torch/torch.h>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "deit_config.h"
 #include "deit_patch_embeddings.h"
-#include "helper_funcs.h"
 
 class TtDeiTEmbeddings {
 public:
@@ -30,14 +18,12 @@ public:
      * @param config DeiT configuration
      * @param state_dict Model state dictionary containing weights and biases
      * @param base_address Base address for parameter lookup in state_dict
-     * @param device TTNN device for tensor operations
      * @param use_mask_token Whether to use mask token for masked image modeling
      */
     TtDeiTEmbeddings(
         const DeiTConfig& config,
         std::unordered_map<std::string, torch::Tensor>& state_dict,
         const std::string& base_address,
-        std::shared_ptr<ttnn::MeshDevice> device,
         bool use_mask_token = false
     );
 
@@ -49,9 +35,9 @@ public:
      * @return Embeddings tensor with shape [batch_size, seq_length, hidden_size]
      *         where seq_length = num_patches + 2 (cls + distillation tokens)
      */
-    ttnn::Tensor forward(
-        const ttnn::Tensor& pixel_values,
-        const ttnn::Tensor* bool_masked_pos = nullptr
+    torch::Tensor forward(
+        const torch::Tensor& pixel_values,
+        const torch::Tensor* bool_masked_pos = nullptr
     );
 
     // Getters
@@ -67,16 +53,13 @@ private:
     // Components
     std::unique_ptr<TtDeiTPatchEmbeddings> patch_embeddings_;
     
-    // TTNN tensors for tokens and embeddings
-    ttnn::Tensor cls_token_;
-    ttnn::Tensor distillation_token_;
-    ttnn::Tensor mask_token_;  // Only used if use_mask_token_ is true
-    ttnn::Tensor position_embeddings_;
-    
-    // Device reference
-    std::shared_ptr<ttnn::MeshDevice> device_;
+    // Torch tensors for tokens and embeddings
+    torch::Tensor cls_token_;
+    torch::Tensor distillation_token_;
+    torch::Tensor mask_token_;  // Only used if use_mask_token_ is true
+    torch::Tensor position_embeddings_;
     
     // Helper functions
-    ttnn::Tensor expand_token(const ttnn::Tensor& token, uint32_t batch_size, int seq_length = 1) const;
-    ttnn::Tensor apply_mask(const ttnn::Tensor& embeddings, const ttnn::Tensor& bool_masked_pos) const;
+    torch::Tensor expand_token(const torch::Tensor& token, int64_t batch_size, int64_t seq_length = 1) const;
+    torch::Tensor apply_mask(const torch::Tensor& embeddings, const torch::Tensor& bool_masked_pos) const;
 };

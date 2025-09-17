@@ -71,21 +71,6 @@ private:
     ttnn::Tensor layernorm_before_bias;
     ttnn::Tensor layernorm_after_weight;
     ttnn::Tensor layernorm_after_bias;
-    
-    /**
-     * Apply layer normalization
-     * @param input Input tensor
-     * @param weight Normalization weight
-     * @param bias Normalization bias
-     * @param eps Layer norm epsilon
-     * @return Normalized tensor
-     */
-    ttnn::Tensor apply_layernorm(
-        const ttnn::Tensor& input,
-        const ttnn::Tensor& weight,
-        const ttnn::Tensor& bias,
-        float eps
-    );
 };
 
 

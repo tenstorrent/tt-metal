@@ -1,4 +1,5 @@
 #include "deit_layer.h"
+#include "../helper_funcs.h"
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/normalization/layernorm/layernorm.hpp>
 #include <ttnn/operations/data_movement/tilize/tilize.hpp>
@@ -52,7 +53,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
     bool output_attentions
 ) {
     // Apply layer normalization before self-attention (pre-norm)
-    auto normalized_hidden_states = apply_layernorm(
+    auto normalized_hidden_states = helper_funcs::apply_layernorm(
         hidden_states,
         layernorm_before_weight,
         layernorm_before_bias,
@@ -74,7 +75,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
     auto residual_output = ttnn::add(attention_output, hidden_states);
     
     // Apply layer normalization after self-attention
-    auto layer_output = apply_layernorm(
+    auto layer_output = helper_funcs::apply_layernorm(
         residual_output,
         layernorm_after_weight,
         layernorm_after_bias,
@@ -89,14 +90,4 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTLayer::forward(
     layer_output = output->forward(layer_output, residual_output);
     
     return std::make_tuple(layer_output, attention_weights);
-}
-
-ttnn::Tensor TtDeiTLayer::apply_layernorm(
-    const ttnn::Tensor& input,
-    const ttnn::Tensor& weight,
-    const ttnn::Tensor& bias,
-    float eps
-) {
-    // Apply layer normalization using ttnn operations
-    return ttnn::layer_norm(input, eps, weight, bias);
 }
