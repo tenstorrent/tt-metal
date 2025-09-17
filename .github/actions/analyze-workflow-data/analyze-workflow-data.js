@@ -208,12 +208,18 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
  * Try to extract a test identifier from the nearby log lines or path.
  */
 function extractTestLabelBackward(lines, errIdx) {
-  const runRegex = /\[\s*RUN\s*\]/; // case-sensitive
-  const failedRegex = /\bFAILED\b/;   // case-sensitive
+  const runExact = /^\s*\[\s*RUN\s*\]/;     // case-sensitive
+  const failedTests = /^\s*FAILED\s+tests/; // case-sensitive
+  const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
+
   for (let i = errIdx; i >= 0; i--) {
     const line = lines[i] || '';
-    if (runRegex.test(line) || failedRegex.test(line)) {
-      return line.trim();
+    if (runExact.test(line) || failedTests.test(line)) return line.trim();
+    if (failedOnly.test(line)) {
+      // return first non-empty line below
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === '') j++;
+      if (j < lines.length) return lines[j].trim();
     }
   }
   return undefined;
@@ -363,42 +369,6 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
  * @param {string} workflowPath - Path to the workflow file (e.g., .github/workflows/ci.yaml)
  * @returns {Promise<object|null>} The workflow run object or null if none found
  */
-async function findFirstFailOnMainSinceLastSuccess(octokit, context, workflowPath) {
-  if (!workflowPath) return null;
-  const owner = context.repo.owner;
-  const repo = context.repo.repo;
-  const workflowId = path.basename(workflowPath); // API accepts file name as workflow_id
-
-  let firstFail = null;
-  let foundSuccessBoundary = false;
-
-  await octokit.paginate(
-    octokit.rest.actions.listWorkflowRuns,
-    { owner, repo, workflow_id: workflowId, branch: 'main', status: 'completed', per_page: 100 },
-    (res, done) => {
-      const runs = res.data.workflow_runs || [];
-      for (const run of runs) {
-        // Newest -> oldest
-        if (run.conclusion === 'success') {
-          // We hit the boundary; earliest failure of the current streak is in firstFail
-          if (firstFail) {
-            foundSuccessBoundary = true;
-            done();
-            return [];
-          }
-          // No failures seen yet; continue scanning older pages in case the failure streak started after this success
-        } else if (run.conclusion && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped') {
-          // Record as we go; due to newest->oldest ordering, the last assigned before a success will be the oldest failure in the streak
-          firstFail = run;
-        }
-      }
-      // continue pagination
-      return [];
-    }
-  );
-
-  return firstFail;
-}
 
 /**
  * Analyzes scheduled runs to find the last good and earliest bad commits.
