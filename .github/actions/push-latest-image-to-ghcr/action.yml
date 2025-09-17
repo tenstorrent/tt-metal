@@ -48,12 +48,6 @@ runs:
     - name: Pull, tag and push image
       shell: bash
       run: |
-        echo "Pulling image: ${{ inputs.docker-image-tag }}"
-        docker pull ${{ inputs.docker-image-tag }}
-
         LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:latest"
-        echo "Tagging as: ${LATEST_TAG}"
-        docker tag ${{ inputs.docker-image-tag }} ${LATEST_TAG}
-
-        echo "Pushing: ${LATEST_TAG}"
-        docker push ${LATEST_TAG}
+        echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
+        regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
