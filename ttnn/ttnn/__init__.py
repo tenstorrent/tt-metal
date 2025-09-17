@@ -409,3 +409,6 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
