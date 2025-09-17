@@ -22,7 +22,7 @@ namespace tt::tt_fabric {
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    if (dst_mesh_id == routing_table->mesh_id) {
+    if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
@@ -231,16 +231,29 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-template <uint8_t dim, bool compressed = true>
-bool get_routing_info(uint16_t dst_dev_id, volatile uint8_t* out_route_buffer) {
+// 2D is always target_as_dev == true && compressed == true
+// 1D need to choose between target_as_dev true/false and compressed true/false
+template <uint8_t dim, bool compressed = true, bool target_as_dev = true>
+bool get_routing_info(uint16_t target_num, volatile uint8_t* out_route_buffer) {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
     tt_l1_ptr routing_path_t<dim, compressed>* routing_info;
     if constexpr (dim == 1) {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        if constexpr (compressed) {
+            if constexpr (target_as_dev) {
+                return decode_route_to_buffer_by_dev(target_num, out_route_buffer);
+            } else {
+                return decode_route_to_buffer_by_hops(target_num, out_route_buffer);
+            }
+        } else {
+            static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
+            routing_info =
+                reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+            return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
+        }
     } else {
         routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+        return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
     }
-    return routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
 }
 
 }  // namespace tt::tt_fabric

@@ -15,7 +15,7 @@ import ttnn
 from models.experimental.grok.tt.grok_embedding import TtGrokEmbedding
 from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

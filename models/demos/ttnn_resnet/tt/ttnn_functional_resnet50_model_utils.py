@@ -5,7 +5,7 @@
 import math
 
 import ttnn
-from models.utility_functions import nearest_y
+from models.common.utility_functions import is_blackhole, nearest_y
 
 
 def get_core_grid_from_num_cores(num_cores: int, grid_rows: int, grid_cols: int):
@@ -88,3 +88,10 @@ def get_conv_input_memory_config(
         tile_size=32,
     )
     return memory_config
+
+
+def is_blackhole_p100(device):
+    is_p100 = (
+        is_blackhole() and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
+    )
+    return is_p100

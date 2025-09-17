@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
@@ -231,7 +232,8 @@ struct FullLikeWith {
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+        return full_like_impl(
+            tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
     }
 };
 
@@ -307,7 +309,7 @@ struct Full {
             layout,
             device.has_value() ? &device->get() : nullptr,
             memory_config,
-            optional_output_tensor);
+            std::move(optional_output_tensor));
     }
 };
 
@@ -322,7 +324,8 @@ struct FullLike {
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+        return full_like_impl(
+            tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
     }
 };
 

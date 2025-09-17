@@ -46,7 +46,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
@@ -115,7 +115,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
@@ -189,7 +189,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderWriterConfig& test_config) {
+bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -286,7 +286,7 @@ struct ReaderDatacopyWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_datacopy_writer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderDatacopyWriterConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

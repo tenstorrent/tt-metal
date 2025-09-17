@@ -874,12 +874,12 @@ void bind_unary_rdiv(
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
-    const std::string parameter_b_value,
+    const std::string& parameter_b_value,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
-            auto doc = fmt::format(
-                R"doc(
+    auto doc = fmt::format(
+        R"doc(
         {7}
 
         Args:
@@ -915,36 +915,36 @@ void bind_unary_rdiv(
             >>> {2} = 2
             >>> output = {1}(tensor, {2}, {4} = None)
         )doc",
-                operation.base_name(),
-                operation.python_fully_qualified_name(),
-                parameter_name_a,
-                parameter_a_doc,
-                parameter_name_b,
-                parameter_b_doc,
-                parameter_b_value,
-                description,
-                supported_dtype,
-                note);
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        description,
+        supported_dtype,
+        note);
 
-            bind_registered_operation(
-                module,
-                operation,
-                doc,
-                ttnn::pybind_overload_t{
-                    [](const unary_operation_t& self,
-                       const ttnn::Tensor& input_tensor,
-                       float parameter_a,
-                       const std::optional<std::string> parameter_b,
-                       const std::optional<MemoryConfig>& memory_config,
-                       const std::optional<ttnn::Tensor>& output_tensor) {
-                        return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-                    },
-                    py::arg("input_tensor"),
-                    py::arg(parameter_name_a.c_str()),
-                    py::kw_only(),
-                    py::arg(parameter_name_b.c_str()) = std::nullopt,
-                    py::arg("memory_config") = std::nullopt,
-                    py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               float parameter_a,
+               const std::optional<std::string>& parameter_b,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()),
+            py::kw_only(),
+            py::arg(parameter_name_b.c_str()) = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>

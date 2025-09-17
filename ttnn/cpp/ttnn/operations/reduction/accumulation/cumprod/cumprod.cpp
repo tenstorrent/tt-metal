@@ -10,6 +10,7 @@
 #include <ttnn/operations/data_movement/permute/permute.hpp>
 #include <ttnn/operations/data_movement/squeeze/squeeze.hpp>
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>
+#include <utility>
 
 #include "tt-metalium/assert.hpp"
 #include "cumprod.hpp"
@@ -24,7 +25,7 @@ Tensor CumprodOperation::invoke(
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
     return common::accumulation_invoke(
-        input_tensor, dim, dtype, optional_out, reverse_order, memory_config, AccumulationOp::CUMPROD);
+        input_tensor, dim, dtype, std::move(optional_out), reverse_order, memory_config, AccumulationOp::CUMPROD);
 }
 
 }  // namespace ttnn::operations::reduction::accumulation
