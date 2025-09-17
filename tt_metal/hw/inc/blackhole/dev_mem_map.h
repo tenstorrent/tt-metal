@@ -74,6 +74,11 @@
 // Used by ARC FW and LLKs to store power throttling state
 #define MEM_L1_ARC_FW_SCRATCH 16
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
+// Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
+#define MEM_MAILBOX_BASE 96
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
+#define MEM_MAILBOX_SIZE 12768
+#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
 // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
@@ -83,14 +88,9 @@
 // Base address for each noc to store the value to be written will be `MEM_{E,B,NC}RISC_L1_INLINE_BASE + (noc_index *
 // 16)`
 #define MEM_L1_INLINE_SIZE_PER_NOC 16
-#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
-
-// Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
-#define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12768
-#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
-#define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
+#define MEM_L1_INLINE_BASE MEM_MAILBOX_END
+#define MEM_L1_INLINE_END (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
+#define MEM_ZEROS_BASE ((MEM_L1_INLINE_END + 31) & ~31)
 
 #define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 
@@ -218,7 +218,9 @@
 #define MEM_IERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 #define MEM_IERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
-#define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_MAILBOX_END
+#define MEM_IERISC_L1_INLINE_BASE MEM_IERISC_MAILBOX_END
+#define MEM_IERISC_L1_INLINE_END (MEM_IERISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
+#define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_L1_INLINE_END
 #define MEM_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
 #define MEM_SUBORDINATE_IERISC_FIRMWARE_BASE (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 #define MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
@@ -243,7 +245,9 @@
 #define MEM_AERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 #define MEM_AERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_AERISC_MAILBOX_END (MEM_AERISC_MAILBOX_BASE + MEM_AERISC_MAILBOX_SIZE)
-#define MEM_AERISC_FIRMWARE_BASE MEM_AERISC_MAILBOX_END
+#define MEM_AERISC_L1_INLINE_BASE MEM_AERISC_MAILBOX_END
+#define MEM_AERISC_L1_INLINE_END (MEM_AERISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
+#define MEM_AERISC_FIRMWARE_BASE MEM_AERISC_L1_INLINE_END
 #define MEM_AERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
 #define MEM_SUBORDINATE_AERISC_FIRMWARE_BASE (MEM_AERISC_FIRMWARE_BASE + MEM_AERISC_FIRMWARE_SIZE)
 #define MEM_SUBORDINATE_AERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
