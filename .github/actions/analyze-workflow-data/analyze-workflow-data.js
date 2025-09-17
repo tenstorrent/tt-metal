@@ -152,9 +152,9 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  // After prefix stripping, require clean standalone markers
-  const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
-  const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
+  // Relaxed: match anywhere on the line (after prefix stripping)
+  const infoRegex = /info:/i;
+  const backtraceRegex = /backtrace:/i;
 
   const collected = [];
   const stack = [rootDir];
