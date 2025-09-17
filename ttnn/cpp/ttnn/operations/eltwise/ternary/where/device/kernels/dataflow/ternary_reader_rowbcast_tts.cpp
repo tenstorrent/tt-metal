@@ -35,7 +35,7 @@ void kernel_main() {
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;    // predicate
-    constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // true tensor (matches TTT pattern)
+    constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // true tensor
 
     // Compile-time args layout for TTS: 2 CB ids, then 2 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<2>();
@@ -84,7 +84,7 @@ void kernel_main() {
     uint32_t next_d_shift_b = true_d_stride - true_n_stride * N;
     uint32_t next_nd_shift_b = true_nD_stride - true_d_stride * D;
 
-    // Main loop for reading tiles - TTT ROW BROADCAST PATTERN
+    // Main loop for reading tiles
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
         for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
