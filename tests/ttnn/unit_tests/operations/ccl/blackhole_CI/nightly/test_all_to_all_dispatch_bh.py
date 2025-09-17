@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
@@ -518,9 +519,7 @@ def run_all_to_all_dispatch_test(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((1, 4), (1, 4), id="2x4_grid")], indirect=["mesh_device"]
-)
+@pytest.mark.parametrize("mesh_shape", [pytest.param((1, 4), id="2x4_grid")])
 @pytest.mark.parametrize("cluster_axis", [0, 1], ids=["cluster_row", "cluster_col"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [4])
@@ -538,7 +537,7 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 def test_all_to_all_dispatch_no_trace(
-    mesh_device,
+    bh_1d_mesh_device,
     trace_mode,
     mesh_shape,
     cluster_axis,
@@ -555,11 +554,12 @@ def test_all_to_all_dispatch_no_trace(
     output_memory_config,
     device_params,
 ):
+    topology = ttnn.Topology.Linear
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
         dispatch_devices = mesh_shape[cluster_axis]
-    validate_test(dispatch_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(dispatch_devices, topology, bh_1d_mesh_device.shape, 0)
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
 
@@ -567,7 +567,7 @@ def test_all_to_all_dispatch_no_trace(
         num_links = 1
 
     run_all_to_all_dispatch_test(
-        mesh_device,
+        bh_1d_mesh_device,
         mesh_shape,
         batch,
         experts,
@@ -579,6 +579,7 @@ def test_all_to_all_dispatch_no_trace(
         trace_mode,
         num_links=num_links,
         scheme="random",
+        topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
@@ -598,9 +599,7 @@ def test_all_to_all_dispatch_no_trace(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((1, 4), (1, 4), id="2x4_grid")], indirect=["mesh_device"]
-)
+@pytest.mark.parametrize("mesh_shape", [pytest.param((1, 4), id="2x4_grid")])
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
@@ -625,7 +624,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
-    mesh_device,
+    bh_1d_mesh_device,
     trace_mode,
     mesh_shape,
     cluster_axis,
@@ -654,7 +653,7 @@ def test_all_to_all_dispatch_trace(
         num_links = get_max_links(cluster_axis, device_params["fabric_config"])
 
     run_all_to_all_dispatch_test(
-        mesh_device,
+        bh_1d_mesh_device,
         mesh_shape,
         batch,
         experts,

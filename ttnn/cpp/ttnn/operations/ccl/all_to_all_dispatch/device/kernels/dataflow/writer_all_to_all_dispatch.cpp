@@ -47,6 +47,7 @@ void zero_buffer_barrier() { noc_async_read_barrier(); }
 using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
+    invalidate_l1_cache();
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
@@ -120,6 +121,7 @@ void kernel_main() {
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
         send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+    invalidate_l1_cache();
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -193,6 +195,7 @@ void kernel_main() {
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             // get the expert that is chosen for the current token
+            invalidate_l1_cache();
             uint16_t expert_chosen = token_indices[k];
             uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
             uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
@@ -200,6 +203,7 @@ void kernel_main() {
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
+                invalidate_l1_cache();
                 if (devices_for_expert[d] == 1 &&
                     send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
                     send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;

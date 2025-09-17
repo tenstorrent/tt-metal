@@ -9,6 +9,7 @@
 using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
+    invalidate_l1_cache();
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
