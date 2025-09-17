@@ -82,7 +82,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].op_type == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -131,15 +131,15 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
 
-    if (!ops_chain[0].params.empty()) {
-        switch (ops_chain[0].op_type) {
-            case UnaryOpType::HARDSHRINK: value1 = ops_chain[0].params[0]; break;
+    if (!ops_chain[0].empty()) {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
             case UnaryOpType::WHERE_TSS:
-                value1 = ops_chain[0].params[0];
-                value2 = ops_chain[0].params[1];
+                value1 = *ops_chain[0].get_param_if<float>(0);
+                value2 = *ops_chain[0].get_param_if<float>(1);
                 if (input.dtype() == DataType::INT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
@@ -150,7 +150,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded, input.dtype());
+    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
 
     const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
     const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());

@@ -81,9 +81,9 @@ Tensor ExecuteMinimum::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MINIMUM>::invoke(
         queue_id,
@@ -105,9 +105,9 @@ Tensor ExecuteMinimum::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
@@ -125,9 +125,9 @@ Tensor ExecuteMaximum::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MAXIMUM>::invoke(
         queue_id,
@@ -149,9 +149,9 @@ Tensor ExecuteMaximum::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
@@ -213,9 +213,9 @@ Tensor ExecuteDiv::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
     if (not(use_legacy ? *use_legacy
@@ -260,9 +260,9 @@ Tensor ExecuteDiv::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
     if (not(use_legacy
@@ -397,7 +397,7 @@ Tensor ExecutePrelu::invoke(
 
 Tensor run_remainder(
     const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
-    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
     Tensor result = ttnn::subtract(
         input_a,
@@ -614,9 +614,9 @@ Tensor ExecuteGCD::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::GCD>::invoke(
         queue_id,
@@ -638,9 +638,9 @@ Tensor ExecuteLCM::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::LCM>::invoke(
         queue_id,
@@ -714,9 +714,9 @@ Tensor ExecutePower::invoke(
     const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
         queue_id,
@@ -739,9 +739,9 @@ Tensor ExecutePower::invoke(
     const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     // As per binary infra, first input is always a tensor but this support needed for pytorch2 tracing
     // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
@@ -767,9 +767,9 @@ Tensor ExecuteRsub::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
         queue_id,
@@ -791,9 +791,9 @@ Tensor ExecuteRsub::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -827,9 +827,9 @@ Tensor ExecuteBitwiseAnd::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -871,9 +871,9 @@ Tensor ExecuteBitwiseAnd::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -908,9 +908,9 @@ Tensor ExecuteBitwiseOr::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -943,9 +943,9 @@ Tensor ExecuteBitwiseOr::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -980,9 +980,9 @@ Tensor ExecuteBitwiseXor::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -1015,9 +1015,9 @@ Tensor ExecuteBitwiseXor::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -1052,9 +1052,9 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -1087,9 +1087,9 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -1124,9 +1124,9 @@ Tensor ExecuteBitwiseRightShift::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
@@ -1159,9 +1159,9 @@ Tensor ExecuteBitwiseRightShift::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(

@@ -461,18 +461,20 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::UnaryWithParam> activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
-        [&](std::string&& process, const unary::UnaryWithParam& a) {
-            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
+        [&](std::string&& process, const unary::EltwiseUnaryWithParam& a) {
+            const auto& [op_init, op_func] = std::visit(
+                [&](auto params) { return unary::utils::get_op_init_and_func(a.type(), params, "i", dtype); },
+                a.get_params());
             process += op_init;
             process += op_func;
-            unary::utils::update_macro_defines(a.op_type, defines);
+            unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
 }

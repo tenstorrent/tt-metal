@@ -164,7 +164,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
         unary_defines["TANH_BF16"] = "1";
     }
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
-    if (ops_chain[0].op_type == UnaryOpType::TANHSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
         path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
     }
 
