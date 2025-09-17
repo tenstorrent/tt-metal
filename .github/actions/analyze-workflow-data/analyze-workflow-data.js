@@ -152,10 +152,11 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
-  const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
+  // Match occurrences anywhere on the line (timestamps and prefixes are common)
+  const infoRegex = /info:/i;
+  const backtraceRegex = /backtrace:/i;
   const errorLineRegex = /(error:|runtimeerror:)/i; // allow RuntimeError too
-  const failedHeaderRegex = /^\s*FAILED\b/i; // pytest header lines
+  const failedHeaderRegex = /\bFAILED\b/i; // pytest header lines
 
   const collected = [];
   const stack = [rootDir];
@@ -233,8 +234,8 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
  * Try to extract a test identifier from the nearby log lines or path.
  */
 function extractTestLabelBackward(lines, errIdx) {
-  const runRegex = /^\s*\[\s*RUN\s*\]\s*/i; // starts with [ RUN      ]
-  const failedRegex = /^\s*FAILED\b/i;        // starts with FAILED
+  const runRegex = /\[\s*RUN\s*\]/i; // allow prefixes
+  const failedRegex = /\bFAILED\b/i;   // allow prefixes
   for (let i = errIdx; i >= 0; i--) {
     const line = lines[i] || '';
     if (runRegex.test(line) || failedRegex.test(line)) {
