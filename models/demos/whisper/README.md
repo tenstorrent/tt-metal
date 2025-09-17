@@ -13,11 +13,6 @@ Read more about Whisper at [huggingface.co/distil-whisper/distil-large-v3](https
 
 ## How to Run
 
-- Use the following command to run the model:
-```sh
-pytest --disable-warnings models/demos/whisper/tests/test_whisper_modules.py::test_ttnn_whisper
-```
-
 ### Conditional Generation Demo
 
 - To run the conditional generation demo with custom inputs:
@@ -48,4 +43,4 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 
 ## Notes:
 - By default, demo tests (Conditional Generation, Audio Classification) run using all available devices.
-- Uncomment the `True` value in `run_on_single_card` (pytest parameter) to restrict the demo tests to a single device (`num_devices = 1`).
+- To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
