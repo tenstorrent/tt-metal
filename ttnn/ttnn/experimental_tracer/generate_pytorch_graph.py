@@ -95,11 +95,18 @@ class CompositePytorchGraph(PytorchGraph):
             "from utils import LazyParams",
         ] + main_op.generate_import_code()
         if not self.clustered_graph:
+
+            def get_min_max(v):
+                try:
+                    return [v.value.min().item(), v.value.max().item()]
+                except:
+                    return [-1, 1]
+
             const_meta = {
                 k: {
                     "shape": list(v.value.shape),
                     "dtype": str(v.value.dtype),
-                    "min_max": [v.value.min().item(), v.value.max().item()] if v.value.device == "cpu" else [-1, 1],
+                    "min_max": get_min_max(v),
                 }
                 for k, v in CompositeOperation.ALL_CONSTANTS.items()
             }
