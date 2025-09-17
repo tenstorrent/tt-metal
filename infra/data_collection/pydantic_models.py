@@ -45,13 +45,10 @@ class Step(BaseModel):
     status: Optional[str] = Field(description="Status of the step.")
     conclusion: Optional[str] = Field(description="Conclusion of the step.")
     number: int = Field(description="Step number.")
-    started_at: Optional[datetime] = Field(
-        description="Timestamp with timezone when the step execution started."
-    )
-    completed_at: Optional[datetime] = Field(
-        description="Timestamp with timezone when the step execution ended."
-    )
+    started_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution started.")
+    completed_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution ended.")
 
+    
 class JobStatus(str, Enum):
     success = "success"
     failure = "failure"

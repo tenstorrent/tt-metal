@@ -366,19 +366,14 @@ def test_pipeline_job_contains_valid_steps():
 
     # Confirm the step names include general-purpose CI keywords
     expected_keywords = {"set up", "run", "post", "test", "checkout", "build", "artifact"}
-    matching_steps = [
-        name for name in step_names if any(keyword in name.lower() for keyword in expected_keywords)
-    ]
-    assert matching_steps, (
-        f"Expected at least one step containing a keyword from {expected_keywords}, got: {step_names}"
-    )
+    matching_steps = [name for name in step_names if any(keyword in name.lower() for keyword in expected_keywords)]
+    assert (
+        matching_steps
+    ), f"Expected at least one step containing a keyword from {expected_keywords}, got: {step_names}"
 
     # Validate step schema fields
     valid_statuses = {None, "queued", "in_progress", "completed"}
-    valid_conclusions = {
-        None, "success", "skipped", "failure", "cancelled",
-        "timed_out", "neutral", "stale"
-    }
+    valid_conclusions = {None, "success", "skipped", "failure", "cancelled", "timed_out", "neutral", "stale"}
 
     assert all(step.status in valid_statuses for step in target_job.steps)
     assert all(step.conclusion in valid_conclusions for step in target_job.steps)
@@ -387,5 +382,4 @@ def test_pipeline_job_contains_valid_steps():
     for step in target_job.steps:
         logger.debug(
         f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
-        f"started_at={step.started_at}, completed_at={step.completed_at}"
-    )
+        f"started_at={step.started_at}, completed_at={step.completed_at}")
