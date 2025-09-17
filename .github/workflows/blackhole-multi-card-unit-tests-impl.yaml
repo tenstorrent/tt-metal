@@ -33,6 +33,9 @@ jobs:
           - name: fabric 2D fixture unit tests
             cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
+          - name: fabric sanity tests
+            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+            timeout: 10
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
             timeout: 15

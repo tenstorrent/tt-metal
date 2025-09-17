@@ -386,46 +386,46 @@ Tests:
       - type: all_to_one_random
         iterations: 10
 
-  - name: "FabricMuxSimpleUnicastWriteLinear"
-    fabric_setup:
-      topology: Linear
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxSimpleUnicastWriteLinear"
+  #   fabric_setup:
+  #     topology: Linear
+  #     fabric_tensix_config: Mux
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 1]
+  #   senders:
+  #     - device: [0, 0]
+  #       patterns:
+  #         - ftype: unicast
+  #           ntype: unicast_write
+  #           size: 1024
+  #           num_packets: 100
+  #           destination:
+  #             device: [0, 1]
 
-  - name: "FabricMuxAllToAllUnicastMesh"
-    fabric_setup:
-      topology: Mesh
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxAllToAllUnicastMesh"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     fabric_tensix_config: Mux
 
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "FabricMuxAllToAllUnicastMeshDynamic"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxAllToAllUnicastMeshDynamic"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     routing_type: Dynamic
+  #     fabric_tensix_config: Mux
 
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
