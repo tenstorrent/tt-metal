@@ -152,9 +152,9 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  * Recursively find up to maxCount error snippets in a directory of text logs.
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
-  // Match occurrences anywhere on the line (timestamps and prefixes are common)
-  const infoRegex = /info:/i;
-  const backtraceRegex = /backtrace:/i;
+  // After prefix stripping, require clean standalone markers
+  const infoRegex = /^\s*(?:E\s+)?info:\s*$/i;
+  const backtraceRegex = /^\s*(?:E\s+)?backtrace:\s*$/i;
 
   const collected = [];
   const stack = [rootDir];
@@ -191,6 +191,8 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
                 const text = block.join('\n');
                 collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
                 foundInFile++;
+              } else {
+                core.info(`Skipped info-block at line ${i} in ${p} (no label found above)`);
               }
               i = j;
             }
@@ -215,7 +217,7 @@ function extractTestLabelBackward(lines, errIdx) {
   const runExact = /^\s*\[\s*RUN\s*\]/;     // case-sensitive
   const failedTests = /^\s*FAILED\s+tests/; // case-sensitive
   const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
-  const testsPath = /\btests\//;             // any line containing tests/
+  const testsPathStart = /^\s*tests\//;       // must start with tests/
 
   for (let i = errIdx; i >= 0; i--) {
     // Normalize the line the same way as in the scanner (strip prefixes)
@@ -230,7 +232,7 @@ function extractTestLabelBackward(lines, errIdx) {
       while (j < lines.length && lines[j].trim() === '') j++;
       if (j < lines.length) return lines[j].trim();
     }
-    if (testsPath.test(line)) return line.trim();
+    if (testsPathStart.test(line)) return line.trim();
   }
   return undefined;
 }
