@@ -47,6 +47,7 @@ struct port_direction_t {
     chan_id_t directions[eth_chan_directions::COUNT];
 };
 
+static_assert(sizeof(fabric_router_l1_config_t) == 2064, "Fabric router config must be 4KB");
 struct fabric_router_l1_config_t {
     routing_table_t intra_mesh_table;
     routing_table_t inter_mesh_table;

@@ -88,6 +88,15 @@ struct address_map {
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;
 
+    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = 64;
+    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = 16;
+    static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = 512;
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE_1D = FABRIC_ROUTING_PATH_BASE;
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE_2D = FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE_1D;
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE =
+        FABRIC_ROUTING_PATH_SIZE_1D + FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
+
     static constexpr std::int32_t ERISC_BARRIER_BASE =
         (FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE + 31) & ~31;
     static_assert(ERISC_BARRIER_BASE < MAX_SIZE, "Erisc config region is greater than MAX_SIZE");
