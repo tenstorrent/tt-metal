@@ -102,16 +102,18 @@ RUN umask 000 && python3 -m pip config set global.extra-index-url https://downlo
 COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-        echo "Installing debugger for Ubuntu 22.04..." && \
-        /opt/tt_metal_infra/scripts/install_debugger.sh && \
-        echo "Debugger installation completed" && \
-        python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
+    echo "Installing debugger for Ubuntu 22.04..." && \
+    /opt/tt_metal_infra/scripts/install_debugger.sh && \
+    echo "Debugger installation completed" && \
+    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
 
 #############################################################
 
 FROM ci-test AS dev
 
+
+ARG UBUNTU_VERSION=22.04
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -195,10 +197,10 @@ WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
 run /bin/bash -c "./build_metal.sh \
-				&& ./create_venv.sh \
-				&& source $PYTHON_ENV_DIR/bin/activate \
-				&& pip install -r models/tt_transformers/requirements.txt \
-				&& rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+    && ./create_venv.sh \
+    && source $PYTHON_ENV_DIR/bin/activate \
+    && pip install -r models/tt_transformers/requirements.txt \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -209,8 +211,8 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \
-		# required
-		gosu \
-		libgl1 \
-		libsndfile1 \
-		&& rm -rf /var/lib/apt/lists/*
+    # required
+    gosu \
+    libgl1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
