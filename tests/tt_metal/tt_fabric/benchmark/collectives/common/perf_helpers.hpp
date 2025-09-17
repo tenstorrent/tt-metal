@@ -36,8 +36,10 @@ struct PerfParams {
 struct PerfStats {
     uint64_t bytes{};
     int iters{};
+    // latency (ms)
     double mean_ms{}, std_ms{}, p50_ms{}, p95_ms{}, min_ms{}, max_ms{};
-    double mean_gbps{};
+    // throughput (GB/s)
+    double mean_gbps{}, std_gbps{}, p50_gbps{}, p10_gbps{}, min_gbps{}, max_gbps{}, cv_gbps_pct{};
 };
 
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p);

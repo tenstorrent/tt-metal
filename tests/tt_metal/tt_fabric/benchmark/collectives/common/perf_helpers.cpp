@@ -67,7 +67,14 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     s.p95_ms = percentile(v_ms, 95.0);
     s.min_ms = *std::min_element(v_ms.begin(), v_ms.end());
     s.max_ms = *std::max_element(v_ms.begin(), v_ms.end());
+    // throughput stats
     s.mean_gbps = mean_of(v_gbps);
+    s.std_gbps = stddev_of(v_gbps, s.mean_gbps);
+    s.p50_gbps = percentile(v_gbps, 50.0);
+    s.p10_gbps = percentile(v_gbps, 10.0);
+    s.min_gbps = *std::min_element(v_gbps.begin(), v_gbps.end());
+    s.max_gbps = *std::max_element(v_gbps.begin(), v_gbps.end());
+    s.cv_gbps_pct = (s.mean_gbps > 0.0) ? (s.std_gbps / s.mean_gbps) * 100.0 : 0.0;
     return s;
 }
 

@@ -179,15 +179,17 @@ int main(int argc, char** argv) {
     if (format == "human") {
         std::cout << "[bench] src=" << src_dev_str << " dst=" << dst_dev_str << " size=" << p.tensor_bytes
                   << " page=" << p.page_size << " iters=" << iters << " warmup=" << warmup << " p50_ms=" << stats.p50_ms
-                  << " p95_ms=" << stats.p95_ms << " mean_gbps=" << stats.mean_gbps << "\n";
+                  << " p95_ms=" << stats.p95_ms << " mean_gbps=" << stats.mean_gbps << " p50_gbps=" << stats.p50_gbps
+                  << " p10_gbps=" << stats.p10_gbps << " cv_gbps_pct=" << stats.cv_gbps_pct << "\n";
     } else if (format == "csv") {
         // print a single CSV row to stdout
-        std::cout
-            << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,p50_ms,p95_ms,mean_gbps\n";
+        std::cout << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
+                  << "p50_ms,p95_ms,mean_gbps,p50_gbps,p10_gbps,cv_gbps_pct\n";
         std::cout << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << ","
                   << p.sender_core.y << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes
                   << "," << p.page_size << "," << iters << "," << warmup << "," << stats.p50_ms << "," << stats.p95_ms
-                  << "," << stats.mean_gbps << "\n";
+                  << "," << stats.mean_gbps << "," << stats.p50_gbps << "," << stats.p10_gbps << ","
+                  << stats.cv_gbps_pct << "\n";
     } else if (format == "json") {
         std::cout << "{"
                   << "\"mesh\":" << p.mesh_id << ",\"src_chip\":" << p.src_chip << ",\"dst_chip\":" << p.dst_chip
@@ -207,13 +209,13 @@ int main(int argc, char** argv) {
         }
         std::ofstream ofs(csv_path, std::ios::app);
         if (newfile) {
-            ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,p50_ms,p95_ms,mean_"
-                   "gbps\n";
+            ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
+                   "p50_ms,p95_ms,mean_gbps,p50_gbps,p10_gbps,cv_gbps_pct\n";
         }
         ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
             << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size
             << "," << iters << "," << warmup << "," << stats.p50_ms << "," << stats.p95_ms << "," << stats.mean_gbps
-            << "\n";
+            << "," << stats.p50_gbps << "," << stats.p10_gbps << "," << stats.cv_gbps_pct << "\n";
     }
 
     return 0;
