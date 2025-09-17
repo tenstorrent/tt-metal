@@ -41,7 +41,7 @@ def torch_equal_nan(a, b):
     ],
 )
 @pytest.mark.parametrize("scalar", [15.5])
-@pytest.mark.parametrize("variant", ["TTS"])
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
 @pytest.mark.parametrize("condition", [1])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)

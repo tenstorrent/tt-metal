@@ -645,10 +645,29 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // Determine which tensor is actually broadcast based on logical shapes (not padded)
         auto pred_shape = predicate_tensor.logical_shape();
-        auto true_shape = value_true_tensor.value().logical_shape();
 
-        if (variant == WhereVariant::TTT) {
-            // TTT case - check height dimension (second-to-last)
+        if (variant == WhereVariant::TTS) {
+            // TTS case
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto pred_h = pred_shape[pred_shape.rank() - 2];
+            auto true_h = true_shape[true_shape.rank() - 2];
+
+            pred_is_bcast = (pred_h == 1 && true_h > 1);
+            true_is_bcast = (true_h == 1 && pred_h > 1);
+            false_is_bcast = false;  // False is scalar for TTS
+        } else if (variant == WhereVariant::TST) {
+            // TST case
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto pred_h = pred_shape[pred_shape.rank() - 2];
+            auto false_h =
+                value_false_tensor.value().logical_shape()[value_false_tensor.value().logical_shape().rank() - 2];
+
+            pred_is_bcast = (pred_h == 1 && false_h > 1);
+            true_is_bcast = false;  // True is scalar for TST
+            false_is_bcast = (false_h == 1 && pred_h > 1);
+        } else {
+            // TTT case
+            auto true_shape = value_true_tensor.value().logical_shape();
             auto false_shape = value_false_tensor.value().logical_shape();
             auto pred_h = pred_shape[pred_shape.rank() - 2];
             auto true_h = true_shape[true_shape.rank() - 2];
@@ -657,14 +676,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
             true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
             false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
-        } else {
-            // TTS case - now supports row broadcast
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto true_h = true_shape[true_shape.rank() - 2];
-
-            pred_is_bcast = (pred_h == 1 && true_h > 1);
-            true_is_bcast = (true_h == 1 && pred_h > 1);
-            false_is_bcast = false;  // False is scalar for TTS
         }
     }
 
