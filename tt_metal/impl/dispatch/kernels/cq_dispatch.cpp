@@ -287,7 +287,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
                             upstream_dispatch_cb_sem_id,
                             dispatch_cb_pages_per_block,
                             dispatch_cb_blocks,
-                        LockUpstreamNocAtomicCallback>(block_noc_writes_to_clear, rd_block_idx);
+                            LockUpstreamNocAtomicCallback>(block_noc_writes_to_clear, rd_block_idx);
                     } else {
                         move_rd_to_next_block_and_release_pages_remote<
                             upstream_noc_index,
@@ -295,7 +295,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
                             upstream_dispatch_cb_sem_id,
                             dispatch_cb_pages_per_block,
                             dispatch_cb_blocks,
-                        LockUpstreamNocAtomicCallback>(relay_client, block_noc_writes_to_clear, rd_block_idx);
+                            LockUpstreamNocAtomicCallback>(relay_client, block_noc_writes_to_clear, rd_block_idx);
                     }
                 }
                 // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -442,7 +442,7 @@ void relay_to_next_cb(
                         upstream_dispatch_cb_sem_id,
                         dispatch_cb_pages_per_block,
                         dispatch_cb_blocks,
-                    LockUpstreamNocAtomicCallback>(block_noc_writes_to_clear, rd_block_idx);
+                        LockUpstreamNocAtomicCallback>(block_noc_writes_to_clear, rd_block_idx);
                 }
 
                 // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
