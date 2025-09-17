@@ -12,7 +12,7 @@
 
 #include <common/TracyTTDeviceData.hpp>
 #include "assert.hpp"
-#include "device.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 
@@ -43,7 +43,10 @@ struct AnalysisResultsConfig {
 struct AnalysisResults {
     struct RuntimeIdMetaData {
         chip_id_t device_id;
+        ARCH device_arch;
         std::string op_name;
+        uint32_t num_fw_cores;
+        uint32_t num_available_worker_cores;
     };
 
     AnalysisResultsConfig results_config;
@@ -57,6 +60,11 @@ struct AnalysisResults {
     RuntimeIdMetaData getMetaDataForRuntimeId(uint64_t runtime_id) const {
         TT_ASSERT(runtime_id_to_meta_data.find(runtime_id) != runtime_id_to_meta_data.end());
         return runtime_id_to_meta_data.at(runtime_id);
+    }
+
+    void addMetaDataForRuntimeId(uint64_t runtime_id, const RuntimeIdMetaData& meta_data) {
+        // log_info(tt::LogMetal, "runtime_id: {}, num_fw_cores: {}", runtime_id, meta_data.num_fw_cores);
+        runtime_id_to_meta_data.emplace(runtime_id, meta_data);
     }
 
     std::string getStringifiedHeaders() const {
@@ -73,6 +81,8 @@ struct AnalysisResults {
 
 protected:
     std::unordered_set<uint64_t> runtime_ids;
+
+private:
     std::unordered_map<uint64_t, RuntimeIdMetaData> runtime_id_to_meta_data;
 };
 
@@ -106,10 +116,15 @@ struct DurationAnalysisResults : public AnalysisResults {
         results_per_runtime_id.emplace(runtime_id, result);
         runtime_ids.insert(runtime_id);
 
-        TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
-        TT_ASSERT(result.start_marker.op_name == result.end_marker.op_name);
-        runtime_id_to_meta_data[runtime_id] = {
-            .device_id = result.start_marker.chip_id, .op_name = result.start_marker.op_name};
+        // TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
+        // TT_ASSERT(result.start_marker.op_name == result.end_marker.op_name);
+
+        // Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        // tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+        // runtime_id_to_meta_data[runtime_id] = {
+        //     .device_id = result.start_marker.chip_id,
+        //     .device_arch = cluster_desc->get_arch(result.start_marker.chip_id),
+        //     .op_name = result.start_marker.op_name};
     }
 
 private:
