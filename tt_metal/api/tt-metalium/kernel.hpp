@@ -50,18 +50,19 @@ constexpr uint32_t max_runtime_args = 341;
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
+    enum SourceType { FILE_PATH, SOURCE_CODE, BINARY_PATH };
 
     std::string source_;
     SourceType source_type_;
     // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
+    // if source_type_ is BINARY_PATH, path_ points to the precompiled binary file/directory
     std::filesystem::path path_;
 
     KernelSource(const std::string& source, const SourceType& source_type);
 
     std::string name() const {
         std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
+        if (this->source_type_ == SourceType::FILE_PATH || this->source_type_ == SourceType::BINARY_PATH) {
             const std::size_t start_pos_of_name = this->source_.rfind("/") + 1;
             const std::size_t pos_of_dot = this->source_.rfind(".");
             name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));

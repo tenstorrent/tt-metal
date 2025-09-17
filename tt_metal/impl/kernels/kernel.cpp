@@ -82,6 +82,9 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
             TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", source);
         }
         path_ = *itr;
+    } else if (source_type == BINARY_PATH) {
+        // REVIEW NOTE: We could do early path validation here. However, non-existing files will be reported later anyways (at loading).
+        path_ = source;
     }
 };
 
@@ -132,9 +135,13 @@ void Kernel::register_kernel_with_watcher() {
     if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         this->watcher_kernel_id_ =
             MetalContext::instance().watcher_server()->register_kernel(this->kernel_src_.source_);
+    } else if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        // REVIEW NOTE: I'm using this->name, because following FILE_PATH branch does not make sense to me:
+        // why does it use kernel source as a key to register it in the watcher?
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
-        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name()); // This line looks unreachable, remove it?
     }
 }
 
@@ -454,6 +461,12 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
 }
 
 void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    // REVIEW NOTE: I truly hope that we don't skip any important side effects. Wouldn't be a problem if the code was favoring pure functions.
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+    
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -467,6 +480,11 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
 }
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+    
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type =
@@ -480,6 +498,11 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
 }
 
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+    
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -502,6 +525,11 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
 }
 
 bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
+    // If kernel source is a binary path, binaries always exist
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return true;
+    }
+    
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -523,11 +551,15 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+                        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+    std::string binary_path = this->kernel_src_.source_type_ == KernelSource::BINARY_PATH
+                            ? this->kernel_src_.path_.string()
+                            : build_state.get_target_out_path(this->kernel_full_name_);
+
     auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
-    const ll_api::memory& binary_mem =
-        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
@@ -546,6 +578,11 @@ std::vector<std::string> DataMovementKernel::file_paths(IDevice& device) const {
 }
 
 bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
+    // If kernel source is a binary path, binaries always exist
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return true;
+    }
+    
     const uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -565,13 +602,17 @@ void EthernetKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     constexpr auto k_EthDmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
+    
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), erisc_core_type, erisc_id, k_EthDmClassIndex);
+                         device->build_id(), erisc_core_type, erisc_id, k_EthDmClassIndex);
+    std::string binary_path = this->kernel_src_.source_type_ == KernelSource::BINARY_PATH
+                            ? this->kernel_src_.path_.string()
+                            : build_state.get_target_out_path(this->kernel_full_name_);
     // TODO: fix when active eth supports relo
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, k_EthDmClassIndex).memory_load;
     const ll_api::memory& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
+        binary_path, load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
                 this->config_.eth_mode != Eth::IDLE) {
                 // text_addr and some of span's addr point to IRAM base address.
@@ -604,6 +645,11 @@ std::vector<std::string> EthernetKernel::file_paths(IDevice& device) const {
 }
 
 bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
+    // If kernel source is a binary path, binaries always exist
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return true;
+    }
+    
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
@@ -627,14 +673,21 @@ void ComputeKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
+        std::string binary_path;
+        if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+            // For compute kernels with binary path, expect a directory containing trisc{0-2}.elf files
+            binary_path = fmt::format("{}/trisc{}.elf", this->kernel_src_.path_, trisc_id);
+        } else {
+            const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
+            binary_path = build_state.get_target_out_path(this->kernel_full_name_);
+        }
+        
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem =
-            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(
