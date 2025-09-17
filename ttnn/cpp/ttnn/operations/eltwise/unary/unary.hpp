@@ -309,6 +309,15 @@ struct Clamp {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rsub {
+    template <typename T>
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        T param,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
