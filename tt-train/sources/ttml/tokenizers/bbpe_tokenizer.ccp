@@ -2,16 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tiktoken_tokenizer.hpp"
+#include "bbpe_tokenizer.hpp"
 
 #include <fmt/format.h>
 #include <tokenizers_cpp.h>
 
 #include <fstream>
-#include <stdexcept>
-#include <unordered_map>
-#include <regex>
-#include <algorithm>
+#include <string>
 
 namespace {
 
@@ -35,25 +32,31 @@ using HuggingFaceTokenizer = tokenizers::Tokenizer;
 
 namespace ttml::tokenizers {
 
-class TikTokenTokenizer::TikTokenTokenizerImpl {
+class BBPETokenizer::BBPETokenizerImpl {
 public:
-    explicit TikTokenTokenizerImpl(const std::string& json_file) {
+    explicit BBPETokenizerImpl(const std::string& json_file) {
         auto blob = load_bytes_from_file(json_file);
         m_tokenizer = HuggingFaceTokenizer::FromBlobJSON(blob);
+        
+        // BBPE tokenizers typically use byte-level pre-processing
+        // The tokenizer configuration should already include byte-level settings
+        // from the JSON file, but we can verify it's properly configured
     }
-    ~TikTokenTokenizerImpl() = default;
-    TikTokenTokenizerImpl(const TikTokenTokenizerImpl&) = delete;
-    TikTokenTokenizerImpl& operator=(const TikTokenTokenizerImpl&) = delete;
-    TikTokenTokenizerImpl(TikTokenTokenizerImpl&&) = default;
-    TikTokenTokenizerImpl& operator=(TikTokenTokenizerImpl&&) = default;
+    ~BBPETokenizerImpl() = default;
+    BBPETokenizerImpl(const BBPETokenizerImpl&) = delete;
+    BBPETokenizerImpl& operator=(const BBPETokenizerImpl&) = delete;
+    BBPETokenizerImpl(BBPETokenizerImpl&&) = default;
+    BBPETokenizerImpl& operator=(BBPETokenizerImpl&&) = default;
 
     [[nodiscard]] std::vector<uint32_t> encode(const std::string& text) const {
+        // BBPE encoding: convert text to bytes, then apply BPE
         std::vector<int32_t> results = m_tokenizer->Encode(text);
-        // we currently use uint32_t for tokens, might change in the future
+        // Convert to uint32_t for consistency with the interface
         return {results.begin(), results.end()};
     }
 
     [[nodiscard]] std::string decode(const std::vector<uint32_t>& tokens) const {
+        // BBPE decoding: convert tokens back to bytes, then to text
         const std::vector<int32_t> tokens_i32(tokens.begin(), tokens.end());
         return m_tokenizer->Decode(tokens_i32);
     }
@@ -66,23 +69,23 @@ private:
     std::unique_ptr<HuggingFaceTokenizer> m_tokenizer;
 };
 
-TikTokenTokenizer::TikTokenTokenizer(const std::string& json_file)
-    : m_pimpl(std::make_unique<TikTokenTokenizerImpl>(json_file)) {}
+BBPETokenizer::BBPETokenizer(const std::string& json_file) {
+    m_pimpl = std::make_unique<BBPETokenizerImpl>(json_file);
+}
 
-TikTokenTokenizer::~TikTokenTokenizer() = default;
+BBPETokenizer::~BBPETokenizer() = default;
+BBPETokenizer::BBPETokenizer(BBPETokenizer&&) noexcept = default;
+BBPETokenizer& BBPETokenizer::operator=(BBPETokenizer&&) noexcept = default;
 
-TikTokenTokenizer::TikTokenTokenizer(TikTokenTokenizer&&) noexcept = default;
-TikTokenTokenizer& TikTokenTokenizer::operator=(TikTokenTokenizer&&) noexcept = default;
-
-std::vector<uint32_t> TikTokenTokenizer::encode(const std::string& text) const {
+std::vector<uint32_t> BBPETokenizer::encode(const std::string& text) const {
     return m_pimpl->encode(text);
 }
 
-std::string TikTokenTokenizer::decode(const std::vector<uint32_t>& tokens) const {
+std::string BBPETokenizer::decode(const std::vector<uint32_t>& tokens) const {
     return m_pimpl->decode(tokens);
 }
 
-uint32_t TikTokenTokenizer::get_vocab_size() const {
+uint32_t BBPETokenizer::get_vocab_size() const {
     return m_pimpl->get_vocab_size();
 }
 

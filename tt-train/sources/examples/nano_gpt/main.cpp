@@ -31,7 +31,7 @@
 #include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "tokenizers/tiktoken_tokenizer.hpp"
+#include "tokenizers/bbpe_tokenizer.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -665,10 +665,10 @@ int main(int argc, char **argv) {
                             tokens, sequence_length, tokenizer_path);
                     },
                     text);
-            } else if (tokenizer_type == "tiktoken") {
+            } else if (tokenizer_type == "bbpe") {
                 return std::visit(
                     [&](const auto &tokens) {
-                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::TikTokenTokenizer>(
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BBPETokenizer>(
                             tokens, sequence_length, tokenizer_path);
                     },
                     text);

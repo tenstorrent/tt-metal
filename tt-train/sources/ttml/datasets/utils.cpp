@@ -7,7 +7,7 @@
 #include "datasets/in_memory_token_dataset.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer_trainer.hpp"
-#include "tokenizers/tiktoken_tokenizer.hpp"
+#include "tokenizers/bbpe_tokenizer.hpp"
 #include "tokenizers/tokenizer_base.hpp"
 
 namespace ttml::datasets {
@@ -45,9 +45,9 @@ create_in_memory_token_dataset<tokenizers::BPETokenizer>(
 
 template <>
 std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::TikTokenTokenizer>(
+create_in_memory_token_dataset<tokenizers::BBPETokenizer>(
     const std::string &text, uint32_t seq_length, const std::string &model_path) {
-    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::TikTokenTokenizer>(model_path);
+    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::BBPETokenizer>(model_path);
 
     const std::vector<uint32_t> tokenized_text = tokenizer->encode(text);
 
@@ -56,9 +56,9 @@ create_in_memory_token_dataset<tokenizers::TikTokenTokenizer>(
 
 template <>
 std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::TikTokenTokenizer>(
+create_in_memory_token_dataset<tokenizers::BBPETokenizer>(
     const std::vector<uint32_t> &tokens, uint32_t seq_length, const std::string &model_path) {
-    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::TikTokenTokenizer>(model_path);
+    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::BBPETokenizer>(model_path);
 
     return {InMemoryTokenDataset(tokens, seq_length), std::move(tokenizer)};
 }
