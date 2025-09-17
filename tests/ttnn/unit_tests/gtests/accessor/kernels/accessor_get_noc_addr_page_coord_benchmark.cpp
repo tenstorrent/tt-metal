@@ -5,6 +5,10 @@
 #include <cstdint>
 #include "accessor/tensor_accessor.h"
 
+#ifndef N_REPEAT
+#define N_REPEAT 100
+#endif
+
 void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 0;
@@ -17,14 +21,18 @@ void kernel_main() {
     auto tensor_h = tensor_shape[rank - 2];
     uint32_t page_coord[tensor_accessor::MAX_RANK] = {0};
 
-    size_t loop_count = 125;
+    constexpr size_t max_tracy_zones = 125;
+    size_t loop_count = max_tracy_zones;
+    constexpr size_t n_repeat = N_REPEAT;
     for (size_t h = 0; h < tensor_h; ++h) {
         page_coord[rank - 2] = h;
         for (size_t w = 0; w < tensor_w; ++w) {
             page_coord[rank - 1] = w;
             {
                 DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-                volatile auto _ = sharded_accessor.get_noc_addr(page_coord);
+                for (size_t j = 0; j < n_repeat; ++j) {
+                    volatile auto _ = sharded_accessor.get_noc_addr(page_coord);
+                }
             }
             if (--loop_count == 0) {
                 break;
