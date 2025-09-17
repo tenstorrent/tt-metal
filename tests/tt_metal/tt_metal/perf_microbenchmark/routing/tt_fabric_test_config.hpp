@@ -443,13 +443,13 @@ inline ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
-    ParsedTestConfig config;
+    ParsedTestConfig test_config;
 
-    config.name = parse_scalar<std::string>(test_yaml["name"]);
-    log_info(tt::LogTest, "name: {}", config.name);
+    test_config.name = parse_scalar<std::string>(test_yaml["name"]);
+    log_info(tt::LogTest, "name: {}", test_config.name);
 
-    TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", config.name);
-    config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
+    TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
+    test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
 
     if (test_yaml["top_level_iterations"]) {
         test_config.num_top_level_iterations = parse_scalar<uint32_t>(test_yaml["top_level_iterations"]);
@@ -459,15 +459,15 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
     }
 
     if (test_yaml["parametrization_params"]) {
-        config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
+        test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
     }
 
     if (test_yaml["on_missing_param_policy"]) {
-        config.on_missing_param_policy = parse_scalar<std::string>(test_yaml["on_missing_param_policy"]);
+        test_config.on_missing_param_policy = parse_scalar<std::string>(test_yaml["on_missing_param_policy"]);
     }
 
     if (test_yaml["defaults"]) {
-        config.defaults = parse_traffic_pattern_config(test_yaml["defaults"]);
+        test_config.defaults = parse_traffic_pattern_config(test_yaml["defaults"]);
     }
 
     if (test_yaml["patterns"]) {
@@ -478,36 +478,36 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
         for (const auto& pattern_node : patterns_yaml) {
             high_level_patterns.push_back(parse_high_level_pattern_config(pattern_node));
         }
-        config.patterns = high_level_patterns;
+        test_config.patterns = high_level_patterns;
     }
 
     if (test_yaml["senders"]) {
         const auto& senders_yaml = test_yaml["senders"];
         TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");
-        config.senders.reserve(senders_yaml.size());
+        test_config.senders.reserve(senders_yaml.size());
         for (const auto& sender_node : senders_yaml) {
-            config.senders.push_back(
-                parse_sender_config(sender_node, config.defaults.value_or(ParsedTrafficPatternConfig{})));
+            test_config.senders.push_back(
+                parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
         }
     }
 
     if (test_yaml["bw_calc_func"]) {
-        config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
+        test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
     if (test_yaml["benchmark_mode"]) {
-        config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
     }
 
     if (test_yaml["sync"]) {
-        config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+        test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }
 
     if (test_yaml["check_for_cycles"].IsDefined()) {
-        config.check_for_cycles = parse_scalar<bool>(test_yaml["check_for_cycles"]);
+        test_config.check_for_cycles = parse_scalar<bool>(test_yaml["check_for_cycles"]);
     }
 
-    return config;
+    return test_config;
 }
 
 inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::Node& policies_yaml) {
@@ -1216,40 +1216,6 @@ public:
                 }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
 
-                // Apply cycle detection if enabled
-                if (p_config.check_for_cycles) {
-                    for (auto& config : expanded_tests) {
-                        // Check if conditions are met for cycle detection
-                        bool is_2d_dynamic = (config.fabric_setup.topology == Topology::Mesh ||
-                                              config.fabric_setup.topology == Topology::Torus) &&
-                                             config.fabric_setup.routing_type == RoutingType::Dynamic;
-
-                        if (is_2d_dynamic) {
-                            // Extract src-dest pairs from senders
-                            std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
-                            for (const auto& sender : config.senders) {
-                                for (const auto& receiver : sender.receivers) {
-                                    pairs.emplace_back(sender.sender_device, receiver.receiver_device);
-                                }
-                            }
-
-                            // Perform cycle detection
-                            CycleDetector detector;
-                            bool has_cycles = detector.detect_and_handle_cycles(
-                                pairs,
-                                this->fixture_.rt_gen,
-                                this->fixture_.inter_conn,
-                                !this->fixture_.is_deadlock_prevention_enabled(),
-                                config.name);
-
-                            if (has_cycles) {
-                                log_warning(
-                                    LogTest, "Cycles detected in test '{}' - check generated YAML files", config.name);
-                            }
-                        }
-                    }
-                }
-
                 built_tests.insert(
                     built_tests.end(),
                     std::make_move_iterator(expanded_tests.begin()),
@@ -1311,6 +1277,10 @@ private:
         resolved_test.benchmark_mode = parsed_test.benchmark_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
+
+        // Copy cycle detection fields
+        resolved_test.check_for_cycles = parsed_test.check_for_cycles;
+        resolved_test.num_top_level_iterations = parsed_test.num_top_level_iterations;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {

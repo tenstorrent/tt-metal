@@ -21,6 +21,7 @@
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_traffic.hpp"
+#include "tt_fabric_cycle_detector.hpp"
 #include "tt_fabric_test_allocator.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
@@ -193,6 +194,11 @@ public:
     void process_traffic_config(TestConfig& config) {
         this->allocator_->allocate_resources(config);
         log_debug(tt::LogTest, "Resource allocation complete");
+
+        // Perform cycle detection if enabled
+        if (config.check_for_cycles) {
+            perform_cycle_detection(config);
+        }
 
         if (config.global_sync) {
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
@@ -579,6 +585,46 @@ public:
     void dump_raw_telemetry_csv(const TestConfig& config);
 
 private:
+    void perform_cycle_detection(const TestConfig& config) {
+        log_info(tt::LogTest, "Performing cycle detection for test '{}'", config.name);
+
+        // Extract src->dst pairs from the test configuration
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+        for (const auto& sender : config.senders) {
+            for (const auto& pattern : sender.patterns) {
+                if (pattern.destination && pattern.destination->device) {
+                    pairs.emplace_back(sender.device, *pattern.destination->device);
+                }
+            }
+        }
+
+        if (pairs.empty()) {
+            log_info(tt::LogTest, "No traffic pairs found for cycle detection in test '{}'", config.name);
+            return;
+        }
+
+        try {
+            // Use the cycle detection function from your header
+            bool has_cycles = tt::tt_fabric::fabric_tests::detect_and_handle_cycles(
+                pairs,
+                *fixture_,  // TestFixture implements IRouteManager
+                config.name,
+                false  // Set to true if you want deadlock prevention mode
+            );
+
+            if (has_cycles) {
+                log_warning(tt::LogTest, "Cycles detected in test '{}' - check generated YAML files", config.name);
+                // Optionally throw or handle the cycle detection result
+                // TT_THROW("Cycles detected in routing for test {}", config.name);
+            } else {
+                log_info(tt::LogTest, "No cycles detected in test '{}'", config.name);
+            }
+
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Cycle detection failed for test '{}': {}", config.name, e.what());
+        }
+    }
+
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
