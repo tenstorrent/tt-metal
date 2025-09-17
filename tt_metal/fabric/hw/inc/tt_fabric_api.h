@@ -232,10 +232,9 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 }
 
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-template <bool compressed = true>
 bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
-    tt_l1_ptr routing_path_t<2, compressed>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    tt_l1_ptr routing_path_t<2, true>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.hop_index = 0;
