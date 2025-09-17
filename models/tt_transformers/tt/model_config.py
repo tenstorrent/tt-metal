@@ -1476,6 +1476,7 @@ class ModelArgs:
         is_gemma3 = "gemma-3" in self.base_model_name.lower()
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
+
             self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
@@ -1502,6 +1503,7 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1847,7 +1849,7 @@ class ModelArgs:
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-        if self.is_mixture_of_experts:
+        if getattr(self, "is_mixture_of_experts", False):
             self.num_experts_per_tok = self.num_experts_per_tok
             self.initialize_mixture_of_experts_configs()
             self.moe = True
