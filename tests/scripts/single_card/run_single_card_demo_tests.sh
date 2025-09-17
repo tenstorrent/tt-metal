@@ -88,6 +88,13 @@ run_yolov11_func() {
 
 }
 
+run_yolov11m_func() {
+
+ #Yolov11m Demo
+ pytest --disable-warnings models/demos/yolov11m/demo/demo.py --timeout 600; fail+=$?
+
+}
+
 run_llama3_func() {
   fail=0
 
