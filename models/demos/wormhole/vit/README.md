@@ -27,7 +27,7 @@ pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_shar
 To run the demo for ViT model, follow these instructions:
 -  For overall runtime inference (end-2-end), use the following command to run the demo:
 ```sh
-pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+pytest --disable-warnings models/demos/wormhole/vit/demo/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 ```
 
 -  For inference device OPs analysis, use the following command to run the demo:
