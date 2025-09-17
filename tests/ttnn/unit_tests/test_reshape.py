@@ -651,17 +651,18 @@ def test_reshape_oob(device):
         return ttnn.from_torch(tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
     B, T, H, W, U = 1, 1, 90, 20, 768
+    SENTINEL_TENSOR_SIZE = 2**15
     for i in range(10):
         print(f"running test {i}")
         torch_input_tensor = torch.randn(B, T, H, W, U, dtype=torch.bfloat16)
         torch_output = torch_input_tensor.reshape(B, T, H, W, 2, U // 2)
         # Known data below input and output tensors
-        pre_tensor = bf16_tensor(torch.full((2**15, 2**15), 2.0, dtype=torch.bfloat16))
+        pre_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
         tt_input_tensor = bf16_tensor(torch_input_tensor)
         # Allocate space for output tensor
         dummy_tensor = bf16_tensor(torch.zeros(B, T, H, W, U))
         # Known data above output tensor
-        post_tensor = bf16_tensor(torch.full((2**15, 2**15), 2.0, dtype=torch.bfloat16))
+        post_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
         ttnn.deallocate(dummy_tensor)
         tt_output_tensor = ttnn.reshape(tt_input_tensor, (B, T, H, W, 2, U // 2))
         tt_output_tensor_host = ttnn.to_torch(tt_output_tensor)
