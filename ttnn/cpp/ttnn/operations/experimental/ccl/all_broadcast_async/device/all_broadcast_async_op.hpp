@@ -27,7 +27,6 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllBroadcastAsync {
-    std::vector<IDevice*> devices;
     const uint32_t num_links;
     const uint32_t ring_size;
     const MemoryConfig output_mem_config;
@@ -36,14 +35,12 @@ struct AllBroadcastAsync {
     std::optional<uint32_t> cluster_axis;
 
     AllBroadcastAsync(
-        std::vector<IDevice*> devices,
         uint32_t num_links,
         uint32_t ring_size,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis) :
-        devices(std::move(devices)),
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(std::move(output_mem_config)),

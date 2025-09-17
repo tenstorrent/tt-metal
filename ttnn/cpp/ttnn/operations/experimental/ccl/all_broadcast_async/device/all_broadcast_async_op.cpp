@@ -72,17 +72,20 @@ std::optional<MeshCoordinate> get_tensor_topology_neighbor(
     const tt::tt_metal::distributed::MeshShape& shape,
     const MeshCoordinate& coord,
     int offset,
-    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode mode,
+    ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis) {
+    auto boundary_mode = topology == ttnn::ccl::Topology::Ring
+                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
+                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     if (cluster_axis.has_value()) {
         TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
-        return coord.get_neighbor(shape, offset, cluster_axis.value(), mode);
-    } else if (shape[1] > 1) {
-        return coord.get_neighbor(shape, offset, 1, mode);
-    } else if (shape[0] > 1) {
-        return coord.get_neighbor(shape, offset, 0, mode);
+        return coord.get_neighbor(shape, offset, cluster_axis.value(), boundary_mode);
     } else {
-        TT_THROW("All gather without cluster axis is only supported when shape[1-cluster_axis] == 1");
+        for (int i = shape.dims() - 1; i >= 0; i--) {
+            if (shape[i] > 1) {
+                return coord.get_neighbor(shape, offset, i, boundary_mode);
+            }
+        }
         return std::nullopt;
     }
 }
@@ -94,7 +97,16 @@ uint32_t get_tensor_topology_linearized_index(
     if (cluster_axis.has_value()) {
         return coord[cluster_axis.value()];
     } else {
-        return coord[0] * shape[1] + coord[1];
+        return coord.to_linear_index(shape);
+    }
+}
+
+uint32_t get_tensor_topology_dimension(
+    const tt::tt_metal::distributed::MeshShape& shape, const std::optional<uint32_t>& cluster_axis) {
+    if (cluster_axis.has_value()) {
+        return shape[cluster_axis.value()];
+    } else {
+        return shape.mesh_size();
     }
 }
 
@@ -106,27 +118,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto target_device_coord = coord;
-    std::vector<IDevice*> devices_to_use = {};
-    if (this->cluster_axis.has_value()) {
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        const auto& mesh_view = input_tensors[0].device()->get_view();
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
 
-    auto boundary_mode = this->topology == ttnn::ccl::Topology::Ring
-                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
-                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-    std::optional<MeshCoordinate> backward_coord = get_tensor_topology_neighbor(
-        input_tensors[0].tensor_topology().distribution_shape(), coord, -1, boundary_mode, this->cluster_axis);
-    std::optional<MeshCoordinate> forward_coord = get_tensor_topology_neighbor(
-        input_tensors[0].tensor_topology().distribution_shape(), coord, 1, boundary_mode, this->cluster_axis);
-    uint32_t device_index = get_tensor_topology_linearized_index(
-        input_tensors[0].tensor_topology().distribution_shape(), coord, this->cluster_axis);
+    auto tensor_topology_shape = input_tensors[0].tensor_topology().distribution_shape();
+    uint32_t target_ring_size = get_tensor_topology_dimension(tensor_topology_shape, this->cluster_axis);
+    std::optional<MeshCoordinate> backward_coord =
+        get_tensor_topology_neighbor(tensor_topology_shape, coord, -1, this->topology, this->cluster_axis);
+    std::optional<MeshCoordinate> forward_coord =
+        get_tensor_topology_neighbor(tensor_topology_shape, coord, 1, this->topology, this->cluster_axis);
+    uint32_t device_index = get_tensor_topology_linearized_index(tensor_topology_shape, coord, this->cluster_axis);
 
     return all_broadcast_async_multicore(
         input_tensors[0],
@@ -176,20 +175,26 @@ std::vector<Tensor> all_broadcast_async_impl(
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::vector<IDevice*>& devices) {
+    auto tensor_topology_shape = input_tensor.tensor_topology().distribution_shape();
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_broadcast_async op is only supported for Fast Dispatch");
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
+    if (!cluster_axis.has_value()) {
+        bool all_other_dims_are_one = true;
+        for (int i = 0; i < tensor_topology_shape.dims(); i++) {
+            if (tensor_topology_shape[i] > 1 && !all_other_dims_are_one) {
+                TT_THROW(
+                    "all_broadcast_async op is only supported for cluster_axis=None when all but one mesh dimensions "
+                    "are 1");
+            }
+            if (tensor_topology_shape[i] > 1) {
+                all_other_dims_are_one = false;
+            }
+        }
     }
+
+    uint32_t num_devices = get_tensor_topology_dimension(tensor_topology_shape, cluster_axis);
 
     TT_FATAL(num_devices > 1, "all_broadcast_async op will only work for num_devices > 1, but has {}", num_devices);
 
@@ -202,7 +207,6 @@ std::vector<Tensor> all_broadcast_async_impl(
 
     return tt::tt_metal::operation::run(
         ttnn::AllBroadcastAsync(
-            devices,
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
