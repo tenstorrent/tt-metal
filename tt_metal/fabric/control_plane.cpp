@@ -1772,7 +1772,9 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
     }
 
     for (const auto& mesh_id : this->get_local_mesh_id_bindings()) {
-        this->write_all_to_all_routing_fields<1, true>(mesh_id);
+        // TODO: re-enable once multi-galaxy environment issue is resolved
+        // https://github.com/tenstorrent/tt-metal/issues/28749
+        // this->write_all_to_all_routing_fields<1, true>(mesh_id);
         this->write_all_to_all_routing_fields<2, true>(mesh_id);
     }
 }
