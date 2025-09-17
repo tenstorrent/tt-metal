@@ -512,12 +512,15 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, mesh_device,
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
-# By default, the test runs on a single device (1) and all available devices.
 def test_demo_for_audio_classification_inference(
-    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
+    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
 ):
     if is_ci_env:
-        pytest.skip("Skipping test in CI since it provides redundant testing for audio classification inference")
+        pytest.skip("Skipping test in CI since it provides redundant testing")
+
+    param_mesh = request.node.callspec.params.get("mesh_device")
+    if not is_ci_env and param_mesh == 1:
+        pytest.skip("Skipping single device test in non-CI environment")
 
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
@@ -537,14 +540,18 @@ def test_demo_for_audio_classification_inference(
     [(1, 1)],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
-# By default, the test runs on a single device (1) and all available devices.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
 def test_demo_for_audio_classification_dataset(
-    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
+    input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env, request
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
+
+    param_mesh = request.node.callspec.params.get("mesh_device")
+    if not is_ci_env and param_mesh == 1:
+        pytest.skip("Skipping single device test in non-CI environment")
+
     ds = load_dataset("google/fleurs", "all", split="validation", streaming=True)
     return run_demo_whisper_for_audio_classification_inference(
         input_path,
@@ -571,11 +578,19 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
-# By default, the test runs on a single device (1) and all available devices.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
-    input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device
+    input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device, request
 ):
+    param_mesh = request.node.callspec.params.get("mesh_device")
+    if not is_ci_env and param_mesh == 1:
+        pytest.skip("Skipping single device test in non-CI environment")
+
+    if is_ci_env and mesh_device.get_num_devices() == 1 and param_mesh == available_devices:
+        pytest.skip(
+            "Skipping test with 'available_devices' since it resolves to a single device (available_devices = 1), which is already covered by the explicit single-device test."
+        )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
@@ -612,10 +627,15 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
-# By default, the test runs on a single device (1) and all available devices.
-def test_demo_for_conditional_generation_dataset(ttnn_model, mesh_device, model_repo, is_ci_env, batch_size_per_device):
+def test_demo_for_conditional_generation_dataset(
+    ttnn_model, mesh_device, model_repo, is_ci_env, batch_size_per_device, request
+):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
+
+    param_mesh = request.node.callspec.params.get("mesh_device")
+    if not is_ci_env and param_mesh == 1:
+        pytest.skip("Skipping single device test in non-CI environment")
 
     return run_demo_whisper_for_conditional_generation_dataset(
         ttnn_model, mesh_device, model_repo, batch_size_per_device
