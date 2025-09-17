@@ -261,6 +261,8 @@ bool flatten_stress(
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_on_workload = workload.get_programs().at(device_range);
     // Inside the loop, run async runtime functions
     for (int i = 0; i < 1000; i++) {
         // Create Device Buffers Asynchronously
@@ -278,18 +280,18 @@ bool flatten_stress(
             uint32_t(src_dram_buffer->address()), uint32_t(0), num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
         auto writer_runtime_args = {uint32_t(dst_dram_buffer->address()), uint32_t(0), num_tiles * 32};
 
-        SetRuntimeArgs(program, flatten_kernel, core, compute_runtime_args);
-        SetRuntimeArgs(program, unary_writer_kernel, core, writer_runtime_args);
+        SetRuntimeArgs(program_on_workload, flatten_kernel, core, compute_runtime_args);
+        SetRuntimeArgs(program_on_workload, unary_writer_kernel, core, writer_runtime_args);
 
         // Async write input
         distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
-        AssignGlobalBufferToProgram(std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program);
+        AssignGlobalBufferToProgram(
+            std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();
         // Queue up program
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
