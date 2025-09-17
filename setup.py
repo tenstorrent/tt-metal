@@ -14,8 +14,9 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+from setuptools.command.editable_wheel import editable_wheel
 from setuptools_scm.version import guess_next_dev_version as _guess_next_dev
-
+from wheel.wheelfile import WheelFile
 
 readme = None
 
@@ -138,6 +139,43 @@ class MetaliumBuildConfig:
 
 
 metal_build_config = MetaliumBuildConfig()
+
+
+# WORKAROUND: make editable installation work
+#
+# The setuptools generates `MetaPathFinder` and hooks them to the python import machinery (via `sys.meta_path`),
+# to be able to resolve imports of packages in editable installation. These finders are used as a fallback
+# when python isn't able to find the package from the `sys.path`.
+#
+# However, their logic isn't able to resolve `import ttnn` properly. The problem is that the `ttnn` package
+# is contained in the `ttnn` directory, which is a subdirectory of the root of the repository. If we execute
+# `import ttnn` from the root of the repository, the `importlib` will find the top-level directory `ttnn` and
+# won't fallback to the `MetaPathFinder` logic.
+#
+# To workaround this, we create our `.pth` file and add it to the editable wheel. Python will automatically
+# load this file and populate the `sys.path` with the paths specified in the `.pth` file.
+#
+# NOTE: Needs `wheel` to be installed.
+class EditableWheel(editable_wheel):
+    def run(self):
+        # Build the editable wheel first.
+        super().run()
+
+        # Create a .pth file with paths to the repo root, ttnn and tools directories.
+        # This file gets loaded automatically by the python interpreter and its content gets populated into `sys.path`;
+        # i.e. as if these paths were added to the PYTHONPATH.
+        pth_filename = "ttnn-custom.pth"
+        pth_content = f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
+
+        print(f"EditableWheel.run: adding {pth_filename} to the wheel")
+
+        # Find .whl file in the dist_dir (e.g. `ttnn-0.59.0rc42.dev21+gg66363d962a-0.editable-cp310-cp310-linux_x86_64.whl`)
+        wheel = next((f for f in os.listdir(self.dist_dir) if f.endswith(".whl") and "editable" in f), None)
+
+        assert wheel, f"Expected to see editable wheel in dist dir: {self.dist_dir}, but didn't find one"
+
+        # Add the .pth file to the wheel archive.
+        WheelFile(os.path.join(self.dist_dir, wheel), mode="a").writestr(pth_filename, pth_content)
 
 
 class CMakeBuild(build_ext):
@@ -337,8 +375,7 @@ class CMakeBuild(build_ext):
 
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
-
-print(("packaging: ", packages))
+packages += find_packages("tools")
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -358,9 +395,10 @@ setup(
     packages=packages,
     package_dir={
         "": "ttnn",
+        "tracy": "tools/tracy",
     },
     ext_modules=ext_modules,
-    cmdclass=dict(build_ext=CMakeBuild),
+    cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
