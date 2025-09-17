@@ -156,6 +156,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      gtest_filter: "*-*NIGHTLY_*"
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: build-artifact
