@@ -42,6 +42,8 @@ public:
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
 
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const override;
+
     std::optional<DeviceAddr> allocate(
         DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0) override;
 
