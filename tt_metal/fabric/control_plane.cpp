@@ -1530,7 +1530,8 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     tensix_routing_l1_info_t tensix_routing_info = {};
-    tensix_routing_info.mesh_id = *mesh_id;
+    tensix_routing_info.my_mesh_id = *mesh_id;
+    tensix_routing_info.my_device_id = chip_id;
 
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
@@ -1708,7 +1709,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, true>(MeshId mesh_id) cons
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<1, true> routing_path;
+        routing_path_t<1, false> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         // Calculate routing fields within the same mesh only
