@@ -6,6 +6,8 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <numeric>
+#include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
@@ -33,7 +35,7 @@
 #include "utils.hpp"
 
 namespace {
-constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
+constexpr auto gpt2_tokenizer_file_name = "/tokenizer.json";
 }
 
 /* WANDB BLocks this signal.
@@ -97,138 +99,9 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-uint32_t sample(std::span<const float> log_softmax) {
-    auto probabilities_vector = std::vector<float>(log_softmax.size());
-    std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
-    });
-    auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
-    return distribution(ttml::autograd::ctx().get_generator());
-}
+constexpr uint32_t SamplingBatchSize = 32U;
 
-inline void apply_repetition_penalty(
-    std::vector<float> &logits, const std::vector<uint32_t> &history, float repetition_penalty) {
-    if (repetition_penalty <= 1.0F) {
-        return;  // no penalty
-    }
-    for (auto token_id : history) {
-        float &val = logits[token_id];
-        if (val > 0.0F) {
-            val /= repetition_penalty;
-        } else {
-            val *= repetition_penalty;
-        }
-    }
-}
-
-inline void top_k_filter(std::vector<float> &logits, int top_k) {
-    if (top_k <= 0 || static_cast<size_t>(top_k) >= logits.size()) {
-        return;
-    }
-    std::vector<float> copy = logits;
-    std::nth_element(copy.begin(), copy.end() - top_k, copy.end());
-    float cutoff = *(copy.end() - top_k);
-
-    for (auto &val : logits) {
-        if (val < cutoff) {
-            val = -std::numeric_limits<float>::infinity();
-        }
-    }
-}
-
-inline void top_p_filter(std::vector<float> &logits, float top_p) {
-    if (top_p <= 0.0F || top_p >= 1.0F) {
-        return;  // no filtering
-    }
-
-    std::vector<float> probs(logits.size());
-    for (size_t i = 0; i < logits.size(); i++) {
-        probs[i] = std::exp(logits[i]);
-    }
-    float sum = 0.0F;
-    for (auto x : probs) {
-        sum += x;
-    }
-    // argsort
-    std::vector<size_t> indices(logits.size());
-    for (size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
-    }
-    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
-        return probs[a] > probs[b];  // descending by prob
-    });
-    // smallest set of tokens whose sum >= top_p
-    float cum_prob = 0.0F;
-    size_t cutoff_idx = 0;
-    for (size_t rank = 0; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        cum_prob += probs[idx] / sum;
-        if (cum_prob > top_p) {
-            cutoff_idx = rank;
-            break;
-        }
-    }
-    for (size_t rank = cutoff_idx + 1; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        logits[idx] = -std::numeric_limits<float>::infinity();
-    }
-}
-
-inline uint32_t sample_with_strategy(
-    std::span<float> logits_span,
-    const std::vector<uint32_t> &history,
-    float temperature,
-    float repetition_penalty,
-    int top_k,
-    float top_p) {
-    std::vector<float> logits(logits_span.begin(), logits_span.end());
-    size_t vocab_size = logits.size();
-
-    apply_repetition_penalty(logits, history, repetition_penalty);
-
-    if (temperature > 0.0F && std::fabs(temperature - 1.0F) > 1e-6f) {
-        for (auto &val : logits) {
-            val /= temperature;
-        }
-    }
-    auto max_it = std::max_element(logits.begin(), logits.end());
-    float max_val = (max_it != logits.end()) ? *max_it : 0.0F;
-    for (auto &val : logits) {
-        val -= max_val;
-    }
-
-    // 4) top-k filter
-    top_k_filter(logits, top_k);
-
-    // 5) top-p (nucleus) filter
-    top_p_filter(logits, top_p);
-
-    // 6) Convert to probabilities + sample
-    //    Recompute stable exponent after filtering
-    float sum_exp = 0.0F;
-    for (auto val : logits) {
-        if (val > -std::numeric_limits<float>::infinity()) {
-            sum_exp += std::exp(val);
-        }
-    }
-
-    auto &rng = ttml::autograd::ctx().get_generator();
-    std::uniform_real_distribution<float> dist(0.0F, 1.0F);
-
-    float r = dist(rng);
-    float cum = 0.0F;
-    for (size_t i = 0; i < vocab_size; ++i) {
-        if (logits[i] == -std::numeric_limits<float>::infinity()) {
-            continue;
-        }
-        float p = std::exp(logits[i]) / sum_exp;
-        cum += p;
-        if (r <= cum) {
-            return static_cast<uint32_t>(i);
-        }
-    }
-    // Fallback
-    return static_cast<uint32_t>(vocab_size - 1);
+void sample() {
 }
 
 template <typename Tokenizer>
@@ -265,6 +138,7 @@ void generate(
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
+    // auto padded_top_k = round_up_to_tile(static_cast<uint32_t>(top_k), (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -280,10 +154,46 @@ void generate(
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
+    std::vector<float> padded_logits_vector(vocab_size, 0.0);
 
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
     fmt::print("{}", prompt);
+
+    // Sampling setup
+
+    auto repeats = ttnn::Shape({1U, 1U, SamplingBatchSize, 1U});
+    uint32_t prompt_tokens_padded_size = 0;
+    uint32_t next_token_id = 0;
+
+    auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(original_vocab_size, 0),
+        ttnn::Shape({1, 1, 1, original_vocab_size}),
+        device,
+        ttnn::Layout::ROW_MAJOR);
+
+    auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
+
+    std::vector<uint32_t> next_token_vector;
+    std::vector<float> logits_vector(original_vocab_size, 0.0F);
+
+    ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> end_index = {1, 1, 1, vocab_size};
+    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+
+    // Create a large negative mask for out-of-vocab logits
+
+    auto vocab_mask = std::vector<float>(vocab_size - original_vocab_size, 1e4F);
+
+    auto argmax_zeros =
+        ttml::core::zeros(ttnn::Shape({1, 1, 1, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+
+    auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+        vocab_mask, ttnn::Shape({1, 1, 1, vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+
+    auto mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+
+    auto argmax_mask = ttnn::concat(ttnn::DefaultQueueId, mask_vector, 3);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -292,7 +202,6 @@ void generate(
         if (prompt_tokens.size() > max_sequence_length) {
             start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
         }
-
         // Fill padded array
         for (uint32_t i = 0; i < max_sequence_length; ++i) {
             prompt_tokens_padded[i] = pad_token_id;
@@ -300,42 +209,58 @@ void generate(
         for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
-        auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
+        prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
+        auto output_tensor = output->get_value();
+        auto rand = ttnn::rand(
+            ttnn::DefaultQueueId,
+            output_tensor.logical_shape(),
+            *device,
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            ttnn::types::DRAM_MEMORY_CONFIG,
+            0.00001F,
+            0.99F,
+            ttml::autograd::ctx().get_generator()());
 
-        // Convert last position's logits to a std::vector
-        auto output_vector = ttml::core::to_vector(output->get_value());
+        rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        output_tensor = ttnn::mul_sfpu(output_tensor, 1.0F / (temperature > 0 ? temperature : 1.0F));
+        output_tensor = ttnn::add(output_tensor, rand);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
         uint32_t predicted_token_idx =
             (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
 
-        // Extract the logits for the last token
-        // (Assuming output is flattened so that token dimension is first,
-        //  then you'd do: offset = predicted_token_idx * vocab_size)
-        size_t offset = static_cast<size_t>(predicted_token_idx) * vocab_size;
-        auto logits_ptr = output_vector.data() + offset;
+        // ** TTNN Argmax **
 
-        // Now we do advanced sampling from these logits
-        uint32_t next_token_id = sample_with_strategy(
-            std::span<float>(logits_ptr, original_vocab_size),
-            prompt_tokens,  // entire history for repetition penalty
-            temperature,
-            repetition_penalty,
-            top_k,
-            top_p);
+        next_token_tensor = ttnn::argmax(
+            ttnn::DefaultQueueId,
+            ttnn::untilize(ttnn::subtract(output_tensor, argmax_mask)),
+            3,
+            true,
+            std::nullopt,
+            true);
+
+        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor);
+        next_token_id = next_token_vector[predicted_token_idx];
+
+        // Handle out-of-vocabulary token
+        if (next_token_id >= original_vocab_size) {
+            next_token_id = prompt_tokens.back();
+        }
 
         // Append the new token
         prompt_tokens.push_back(next_token_id);
 
         // Decode and print
         fmt::print("{}", tokenizer.decode({next_token_id}));
+        std::cout.flush();
 
         // Reset the autograd graph if needed
         ttml::autograd::ctx().reset_graph();
@@ -702,7 +627,7 @@ int main(int argc, char **argv) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
