@@ -125,9 +125,9 @@ class EthCore(ABC):
             else "Down"
         )
         log_check_with_loc(
-                    self.location,
-                    not any_pending_message,
-                    f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
+            self.location,
+            not any_pending_message,
+            f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
         )
 
         # MAILBOX
@@ -142,8 +142,10 @@ class EthCore(ABC):
                 output.mailbox.append(f"0x{mailbox_value:08X}")
                 if mailbox_value & 0xFFFF0000 == 0xCA110000:
                     any_pending_message = True
-                log_check_with_loc(self.location,
-                    not any_pending_message, f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)"
+                log_check_with_loc(
+                    self.location,
+                    not any_pending_message,
+                    f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
                 )
         else:
             output.mailbox = ["None"]
