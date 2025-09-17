@@ -155,8 +155,6 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   // Match occurrences anywhere on the line (timestamps and prefixes are common)
   const infoRegex = /info:/i;
   const backtraceRegex = /backtrace:/i;
-  const errorLineRegex = /(error:|runtimeerror:)/i; // allow RuntimeError too
-  const failedHeaderRegex = /\bFAILED\b/i; // pytest header lines
 
   const collected = [];
   const stack = [rootDir];
@@ -193,32 +191,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
             }
           }
 
-          // B) any line with "error:" (case-insensitive)
-          for (let k = 0; k < lines.length && collected.length < maxCount; k++) {
-            if (errorLineRegex.test(lines[k])) {
-              const label = extractTestLabelBackward(lines, k);
-              if (!label) continue;
-              const text = lines[k].trim();
-              collected.push({ snippet: text.length > 600 ? text.slice(0, 600) + '…' : text, label });
-              foundInFile++;
-            }
-          }
-
-          // C) pytest FAILED header lines as stand-alone snippets
-          for (let m = 0; m < lines.length && collected.length < maxCount; m++) {
-            if (failedHeaderRegex.test(lines[m])) {
-              const label = lines[m].trim();
-              // use the header itself as label; snippet can be header + next non-blank line if present
-              let snippet = label;
-              let n = m + 1;
-              while (n < lines.length && lines[n].trim() === '') n++;
-              if (n < lines.length && !infoRegex.test(lines[n]) && !backtraceRegex.test(lines[n])) {
-                snippet += `\n${lines[n].trim()}`;
-              }
-              collected.push({ snippet: snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet, label });
-              foundInFile++;
-            }
-          }
+          // No other passes by design (keep it simple): only info..backtrace blocks
 
           core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`);
         } catch (_) { /* ignore */ }
