@@ -32,6 +32,7 @@
 #include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -213,21 +214,7 @@ void generate(
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
-        auto output_tensor = output->get_value();
-        auto rand = ttnn::rand(
-            ttnn::DefaultQueueId,
-            output_tensor.logical_shape(),
-            *device,
-            ttnn::DataType::BFLOAT16,
-            ttnn::Layout::TILE,
-            ttnn::types::DRAM_MEMORY_CONFIG,
-            0.00001F,
-            0.99F,
-            ttml::autograd::ctx().get_generator()());
-
-        rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
-        output_tensor = ttnn::mul_sfpu(output_tensor, 1.0F / (temperature > 0 ? temperature : 1.0F));
-        output_tensor = ttnn::add(output_tensor, rand);
+        next_token_tensor = ttml::ttnn_fixed::sample(output->get_value(), argmax_mask, temperature);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
@@ -235,14 +222,6 @@ void generate(
             (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
 
         // ** TTNN Argmax **
-
-        next_token_tensor = ttnn::argmax(
-            ttnn::DefaultQueueId,
-            ttnn::untilize(ttnn::subtract(output_tensor, argmax_mask)),
-            3,
-            true,
-            std::nullopt,
-            true);
 
         auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor);
         next_token_id = next_token_vector[predicted_token_idx];
