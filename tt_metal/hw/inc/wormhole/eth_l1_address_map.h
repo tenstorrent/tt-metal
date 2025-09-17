@@ -86,7 +86,7 @@ struct address_map {
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 1296;
 
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = 64;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = 16;

@@ -18,9 +18,8 @@ static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
 // Constants for fabric mesh configuration
-static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
+static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
-static_assert(MAX_MESH_SIZE == MAX_NUM_MESHES, "MAX_MESH_SIZE must be equal to MAX_NUM_MESHES");
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
@@ -39,26 +38,27 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 4,
 };
 
+template <size_t ArraySize>
 struct routing_table_t {
-    chan_id_t dest_entry[MAX_MESH_SIZE];
+    chan_id_t dest_entry[ArraySize];
 };
 
 struct port_direction_t {
     chan_id_t directions[eth_chan_directions::COUNT];
 };
 
-static_assert(sizeof(fabric_router_l1_config_t) == 2064, "Fabric router config must be 4KB");
 struct fabric_router_l1_config_t {
-    routing_table_t intra_mesh_table;
-    routing_table_t inter_mesh_table;
+    routing_table_t<MAX_MESH_SIZE> intra_mesh_table;
+    routing_table_t<MAX_NUM_MESHES> inter_mesh_table;
     port_direction_t port_direction;
     std::uint16_t my_mesh_id;  // Do we need this if we tag routing tables with magic values for outbound eth channels
                                // and route to local NOC?
-    std::uint16_t my_device_id;
-    std::uint16_t east_dim;
-    std::uint16_t north_dim;
-    std::uint8_t padding[4];  // pad to 16-byte alignment.
+    std::uint8_t my_device_id;
+    std::uint8_t east_dim;
+    std::uint8_t north_dim;
+    std::uint8_t padding[7];  // pad to 16-byte alignment.
 } __attribute__((packed));
+static_assert(sizeof(fabric_router_l1_config_t) == 1296, "Fabric router config must be 1296 bytes");
 
 // 3 bit expression
 enum class compressed_routing_values : std::uint8_t {
@@ -82,7 +82,7 @@ struct __attribute__((packed)) compressed_routing_table_t {
 
     // 3 bits per entry, so 8 entries per 3 bytes (24 bits)
     // For 1024 entries: 1024 * 3 / 8 = 384 bytes
-    std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];  // 384 bytes
+    std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Host-side methods (declared here, implemented in compressed_routing_table.cpp):
@@ -195,7 +195,7 @@ struct tensix_routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 384 bytes
+    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 96 bytes
     compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
     uint8_t padding[12];                                                  // pad to 16-byte alignment
 } __attribute__((packed));
