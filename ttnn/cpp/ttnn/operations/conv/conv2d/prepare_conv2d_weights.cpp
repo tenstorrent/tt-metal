@@ -1126,7 +1126,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    if (dram_slice_config_.has_value()) {
+    if (dram_slice_config_.has_value() &&
+        dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) {
         Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&
