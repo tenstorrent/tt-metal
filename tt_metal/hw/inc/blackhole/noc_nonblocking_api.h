@@ -716,6 +716,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 #endif
 
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     ncrisc_noc_fast_write<noc_mode>(
         noc,
         write_cmd_buf,
