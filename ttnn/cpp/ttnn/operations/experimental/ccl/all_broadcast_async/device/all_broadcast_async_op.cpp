@@ -120,6 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     auto target_device_coord = coord;
 
     auto tensor_topology_shape = input_tensors[0].tensor_topology().distribution_shape();
+    log_info(tt::LogOp, "DEBUG: tensor_topology_shape: {}", tensor_topology_shape);
     uint32_t target_ring_size = get_tensor_topology_dimension(tensor_topology_shape, this->cluster_axis);
     std::optional<MeshCoordinate> backward_coord =
         get_tensor_topology_neighbor(tensor_topology_shape, coord, -1, this->topology, this->cluster_axis);
