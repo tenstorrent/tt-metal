@@ -95,18 +95,17 @@ std::string get_macro_definition(UnaryOpType op_type) {
     };
 }
 
+template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type,
-    const std::vector<float>& params,
-    const std::string& idst,
-    std::optional<DataType> input_dtype) {
+    UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
+    // TODO don't cast T to float when precision needs to be preserved
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
@@ -115,7 +114,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::ROUND:
-            op_init_and_name = {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
+            op_init_and_name = {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)params[0])};
             break;
         case UnaryOpType::RELU_MAX:
             TT_FATAL(
@@ -135,7 +134,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
-                    "relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)param0)};
+                    "relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)params[0])};
             } else {
                 op_init_and_name = {
                     "relu_min_tile_init();",
@@ -188,23 +187,23 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::BITWISE_XOR:
             op_init_and_name = {
-                "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, (uint)param0)};
+                "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, (uint)params[0])};
             break;
         case UnaryOpType::BITWISE_AND:
             op_init_and_name = {
-                "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, (uint)param0)};
+                "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, (uint)params[0])};
             break;
         case UnaryOpType::BITWISE_OR:
             op_init_and_name = {
-                "bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, (uint)param0)};
+                "bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, (uint)params[0])};
             break;
         case UnaryOpType::RIGHT_SHIFT:
             op_init_and_name = {
-                "right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, (uint)param0)};
+                "right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, (uint)params[0])};
             break;
         case UnaryOpType::LEFT_SHIFT:
             op_init_and_name = {
-                "left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, (uint)param0)};
+                "left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, (uint)params[0])};
             break;
         case UnaryOpType::REMAINDER:
             op_init_and_name = {
@@ -285,7 +284,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_ne_tile_init();", fmt::format("unary_ne_tile_int32({}, {}u);", idst, (uint)param0)};
+                    "unary_ne_tile_init();", fmt::format("unary_ne_tile_int32({}, {}u);", idst, (uint)params[0])};
             } else {
                 op_init_and_name = {
                     "unary_ne_tile_init();",
@@ -297,7 +296,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_eq_tile_init();", fmt::format("unary_eq_tile_int32({}, {}u);", idst, (uint)param0)};
+                    "unary_eq_tile_init();", fmt::format("unary_eq_tile_int32({}, {}u);", idst, (uint)params[0])};
             } else {
                 op_init_and_name = {
                     "unary_eq_tile_init();",
@@ -308,7 +307,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"unary_gt_tile_init();", fmt::format("unary_gt_tile_int32({}, {});", idst, param0)};
+                op_init_and_name = {
+                    "unary_gt_tile_init();", fmt::format("unary_gt_tile_int32({}, {});", idst, params[0])};
             } else {
                 op_init_and_name = {
                     "unary_gt_tile_init();",
@@ -319,7 +319,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"unary_lt_tile_init();", fmt::format("unary_lt_tile_int32({}, {});", idst, param0)};
+                op_init_and_name = {
+                    "unary_lt_tile_init();", fmt::format("unary_lt_tile_int32({}, {});", idst, params[0])};
             } else {
                 op_init_and_name = {
                     "unary_lt_tile_init();",
@@ -330,7 +331,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"unary_ge_tile_init();", fmt::format("unary_ge_tile_int32({}, {});", idst, param0)};
+                op_init_and_name = {
+                    "unary_ge_tile_init();", fmt::format("unary_ge_tile_int32({}, {});", idst, params[0])};
             } else {
                 op_init_and_name = {
                     "unary_ge_tile_init();",
@@ -341,7 +343,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"unary_le_tile_init();", fmt::format("unary_le_tile_int32({}, {});", idst, param0)};
+                op_init_and_name = {
+                    "unary_le_tile_init();", fmt::format("unary_le_tile_int32({}, {});", idst, params[0])};
             } else {
                 op_init_and_name = {
                     "unary_le_tile_init();",
@@ -381,7 +384,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
-                    "unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)param0)};
+                    "unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
             } else {
                 op_init_and_name = {
                     "unary_max_tile_init();",
@@ -393,7 +396,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
-                    "unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)param0)};
+                    "unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
             } else {
                 op_init_and_name = {
                     "unary_min_tile_init();",
@@ -434,7 +437,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
                     "clamp_tile_init();",
-                    fmt::format("clamp_tile_int32({}, {}, {});", idst, (uint)param0, (uint)param1)};
+                    fmt::format("clamp_tile_int32({}, {}, {});", idst, (uint)params[0], (uint)params[1])};
             } else {
                 op_init_and_name = {
                     "clamp_tile_init();",
@@ -711,7 +714,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
-            op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            op_init_and_name = {
+                "alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
@@ -728,9 +732,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
     return op_init_and_name;
 }
 
+template <typename T>
 std::map<std::string, std::string> get_defines_impl(
     UnaryOpType op_type,
-    const std::vector<float>& params,
+    std::span<const T> params,
     const std::string& idst,
     std::string init_def,
     std::string func_def,
@@ -835,40 +840,77 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
     }
 }
 
+template <typename T>
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
-    const std::optional<std::vector<float>>& params,
+    std::optional<std::span<const std::type_identity_t<T>>> params,
     const std::string& id,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(op_type, params.value_or(std::vector<float>{}), idst, init_def, func_def, input_dtype);
+    return get_defines_impl(op_type, params.value_or(std::span<const T>{}), idst, init_def, func_def, input_dtype);
 }
 
-std::pair<std::string, std::string> get_op_init_and_func(
+template std::map<std::string, std::string> get_defines<float>(
     UnaryOpType op_type,
-    const std::vector<float>& params,
+    std::optional<std::span<const float>> params,
+    const std::string& id,
     const std::string& idst,
-    std::optional<DataType> input_dtype) {
+    std::optional<DataType> input_dtype);
+
+template std::map<std::string, std::string> get_defines<std::int32_t>(
+    UnaryOpType op_type,
+    std::optional<std::span<const std::int32_t>> params,
+    const std::string& id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template std::map<std::string, std::string> get_defines<std::uint32_t>(
+    UnaryOpType op_type,
+    std::optional<std::span<const std::uint32_t>> params,
+    const std::string& id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template <typename T>
+std::pair<std::string, std::string> get_op_init_and_func(
+    UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
     return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
+template std::pair<std::string, std::string> get_op_init_and_func<float>(
+    UnaryOpType op_type, std::span<const float> params, const std::string& idst, std::optional<DataType> input_dtype);
+
+template std::pair<std::string, std::string> get_op_init_and_func<std::int32_t>(
+    UnaryOpType op_type,
+    std::span<const std::int32_t> params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>(
+    UnaryOpType op_type,
+    std::span<const std::uint32_t> params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
 std::map<std::string, std::string> get_block_defines(
-    const std::vector<UnaryWithParam>& op_chain,
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
-    std::vector<std::pair<std::string, std::string>> op_init_and_name;
     std::map<std::string, std::string> block_defines;
     std::string block_define = "";
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
-        block_defines.merge(
-            get_defines_impl(op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def, input_dtype));
+        block_defines.merge(std::visit(
+            [&](auto params) {
+                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, input_dtype);
+            },
+            op_chain[i].get_params()));
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;

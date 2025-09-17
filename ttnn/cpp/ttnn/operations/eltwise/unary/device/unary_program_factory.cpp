@@ -52,7 +52,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].op_type == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);
@@ -99,14 +99,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
-    if (!ops_chain[0].params.empty()) {
-        switch (ops_chain[0].op_type) {
-            case UnaryOpType::HARDSHRINK: value1 = ops_chain[0].params[0]; break;
+    if (!ops_chain[0].empty()) {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
             case UnaryOpType::WHERE_TSS:
-                value1 = ops_chain[0].params[0];
-                value2 = ops_chain[0].params[1];
+                value1 = *ops_chain[0].get_param_if<float>(0);
+                value2 = *ops_chain[0].get_param_if<float>(1);
                 if (input.dtype() == DataType::INT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
@@ -116,7 +116,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             default: break;
         }
     }
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root, input.dtype());
+    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
