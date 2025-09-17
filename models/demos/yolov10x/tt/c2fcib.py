@@ -26,12 +26,16 @@ class TtnnC2fCIB:
             device,
             parameters.cv1,
             self.conv_pt.cv1,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2 = Conv(
             device,
             parameters.cv2,
             self.conv_pt.cv2,
             use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         self.m = [

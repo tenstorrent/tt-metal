@@ -25,8 +25,17 @@ class TtnnC2f:
             parameters.cv1,
             self.conv_pt.cv1,
             deallocate_activation=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
-        self.cv2 = Conv(device, parameters.cv2, self.conv_pt.cv2, deallocate_activation=True)
+        self.cv2 = Conv(
+            device,
+            parameters.cv2,
+            self.conv_pt.cv2,
+            deallocate_activation=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
 
         self.m = [
             TtnnBottleNeck(self.shortcut, device=self.device, parameters=self.parameters[_], conv_pt=self.conv_pt.m[_])

@@ -87,13 +87,25 @@ class TtnnAttention:
             packer_l1_acc=False,
         )
 
-        attn = ttnn.matmul(q, k, compute_kernel_config=compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.matmul(
+            q,
+            k,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
         attn = ttnn.multiply(attn, self.scale)
 
         attn = ttnn.softmax(attn, dim=-1)
 
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        attn = ttnn.matmul(v, attn, compute_kernel_config=compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.matmul(
+            v,
+            attn,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
 
         attn = ttnn.reshape(attn, (1, 320, 1, 400))
         attn = ttnn.permute(attn, (0, 2, 3, 1))

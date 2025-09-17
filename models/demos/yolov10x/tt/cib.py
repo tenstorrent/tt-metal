@@ -59,7 +59,7 @@ class TtnnCIB:
             self.conv_pt.cv1[4],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
-            enable_weights_double_buffer=False,
+            enable_weights_double_buffer=True,
         )
 
     def __call__(self, input_tensor):
