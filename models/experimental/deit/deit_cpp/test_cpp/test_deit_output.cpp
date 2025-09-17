@@ -162,6 +162,7 @@ void test_deit_output_inference() {
     }
     
     // Device cleanup is handled automatically by MeshDevice
+    device->close();
 }
 
 } // anonymous namespace

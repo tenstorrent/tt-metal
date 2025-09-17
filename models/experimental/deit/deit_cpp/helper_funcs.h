@@ -55,6 +55,22 @@ ttnn::Tensor from_torch(
 
 at::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = false);
 
+/**
+ * Apply layer normalization
+ * 
+ * @param input Input tensor
+ * @param weight Weight tensor for normalization
+ * @param bias Bias tensor for normalization
+ * @param eps Epsilon value for numerical stability
+ * @return Normalized tensor
+ */
+ttnn::Tensor apply_layernorm(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& weight,
+    const ttnn::Tensor& bias,
+    float eps = 1e-5
+);
+
 } // namespace helper_funcs
 
 #endif // DEIT_CPP_TT_CPP_HELPER_FUNCS_H
