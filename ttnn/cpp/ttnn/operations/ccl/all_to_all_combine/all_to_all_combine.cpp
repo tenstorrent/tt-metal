@@ -36,7 +36,6 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
-    printf("running all to all combine\n");
     return ttnn::prim::all_to_all_combine(
         input_tensor,
         expert_mapping_tensor,

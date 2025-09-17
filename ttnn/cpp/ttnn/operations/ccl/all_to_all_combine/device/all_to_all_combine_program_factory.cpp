@@ -147,11 +147,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
-    constexpr auto metadata_scratch_cb_id = tt::CBIndex::c_5;
-    CircularBufferConfig cb_metadata_scratch_config =
-        CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_scratch_cb_id, metadata_data_format}})
-            .set_page_size(metadata_scratch_cb_id, aligned_metadata_page_size_bytes);
-
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
     constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
@@ -180,7 +175,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
     CreateCircularBuffer(program, sender_core_grid, cb_local_experts_config);
     CreateCircularBuffer(program, sender_core_grid, cb_metadata_config);
-    // CreateCircularBuffer(program, sender_core_grid, cb_metadata_scratch_config);
     CreateCircularBuffer(program, sender_core_grid, client_interface_cb_config);
 
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
@@ -200,7 +194,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mapping_page_size_bytes,
         metadata_page_size_bytes,
         operation_attributes.locally_reduced,
-        // metadata_scratch_cb_id,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
@@ -273,7 +266,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         sender_core_grid,
         writer_config);
 
-    printf("running all to all combine program factory\n");
     std::vector<uint32_t> reader_runtime_args = {
         mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
