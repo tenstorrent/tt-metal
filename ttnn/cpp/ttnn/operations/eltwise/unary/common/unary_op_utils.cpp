@@ -499,9 +499,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RSQRT:
             op_init_and_name = {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false>({});", idst)};
             break;
-        case UnaryOpType::SQRT:
-            op_init_and_name = {"sqrt_tile_init<false>();", fmt::format("sqrt_tile<false>({});", idst)};
-            break;
+        case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
         case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
