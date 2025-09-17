@@ -249,7 +249,7 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
                         x
                         for x in job.tests
                         if x.full_test_name
-                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300DeviceFixture::EthValidatePhysicalCoreConversion"
+                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300MeshDeviceFixture::EthValidatePhysicalCoreConversion"
                     ]
                 )
                 == 1
