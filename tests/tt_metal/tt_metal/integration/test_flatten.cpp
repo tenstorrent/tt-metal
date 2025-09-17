@@ -211,7 +211,6 @@ bool flatten_stress(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = mesh_device->worker_core_from_logical_core({0, 0});
 
@@ -222,11 +221,9 @@ bool flatten_stress(
 
     uint32_t dram_buffer_size = single_tile_size * num_tiles * 32;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config = {.size = dram_buffer_size};
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 8;
     tt_metal::CircularBufferConfig cb_src0_config =
@@ -267,8 +264,8 @@ bool flatten_stress(
     // Inside the loop, run async runtime functions
     for (int i = 0; i < 1000; i++) {
         // Create Device Buffers Asynchronously
-        auto src_dram_buffer = CreateBuffer(dram_config);
-        auto dst_dram_buffer = CreateBuffer(dram_config);
+        auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
         // Create the source vector
         std::shared_ptr<std::vector<uint32_t>> src_vec =
@@ -278,16 +275,16 @@ bool flatten_stress(
         std::vector<uint32_t> golden = gold_standard_flatten(*src_vec, {num_tiles_r * 32, num_tiles_c * 32});
         // Set the runtime args asynchronously
         auto compute_runtime_args = {
-            src_dram_buffer->address(), uint32_t(0), num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
-        auto writer_runtime_args = {dst_dram_buffer->address(), uint32_t(0), num_tiles * 32};
+            uint32_t(src_dram_buffer->address()), uint32_t(0), num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
+        auto writer_runtime_args = {uint32_t(dst_dram_buffer->address()), uint32_t(0), num_tiles * 32};
 
         SetRuntimeArgs(program, flatten_kernel, core, compute_runtime_args);
         SetRuntimeArgs(program, unary_writer_kernel, core, writer_runtime_args);
 
         // Async write input
-        EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
+        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
-        AssignGlobalBufferToProgram(src_dram_buffer, program);
+        AssignGlobalBufferToProgram(std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();
@@ -296,7 +293,7 @@ bool flatten_stress(
         distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
-        EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord, true);
 
         // Validation of data
         TT_FATAL(
