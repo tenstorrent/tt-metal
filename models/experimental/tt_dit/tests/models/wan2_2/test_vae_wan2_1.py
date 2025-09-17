@@ -249,6 +249,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -256,6 +257,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -344,6 +346,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -351,6 +354,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -461,6 +465,7 @@ def test_wan_conv3d(
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -468,6 +473,7 @@ def test_wan_conv3d(
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -587,6 +593,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -594,6 +601,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -711,6 +719,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -718,6 +727,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -845,6 +855,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         ((2, 4), 1, 0),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -852,6 +863,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -994,11 +1006,13 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((2, 4), 0, 1),
         ((1, 8), 0, 1),
         ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "2x4_h0_w1",
         "1x8_h0_w1",
         "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -1187,11 +1201,17 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
         ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
+        ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
+        "1x8_h0_w1",
+        "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
