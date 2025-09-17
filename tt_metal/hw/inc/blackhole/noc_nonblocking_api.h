@@ -686,11 +686,22 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     ASSERT((dest_addr & 0x3) == 0);
     uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
 
-    // Flush to make sure write left L1 before updating it
+    // Flush to make sure write left L1 before updating it. Both posted and non-posted counters
+    // need to be checked because we don't know, in the moment, the history of spoofed writes and
+    // if they were posted or non-posted.
+    //
+    // An alternative to this is to force the spoofed write to be posted. However this breaks some
+    // niche user code cases. For example, when a user wants to send some data via an inline write
+    // (say if they need to send data where src/dest are not aligned), and they need to signal to
+    // a consumer when the write has completed (when the data and consumer are on different cores -
+    // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
+    // case; it was not chosen as an approach.
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_sent(noc));
+        while (!ncrisc_noc_posted_writes_sent(noc));
     }
 
     volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
