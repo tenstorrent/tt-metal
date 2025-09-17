@@ -88,7 +88,7 @@ This is a bit uglier than using a range-based for loop, but you still get better
 ## Shard Pages Iterator 🧩
 
 ### Usage
-You can use the shard pages iterator to iterate over pages in a shard with a step >= 1 in row-major order. It works **only** for sharded tensors.
+You can use the shard pages iterator to iterate over pages in a single shard with a step >= 1 in row-major order. It works **only** for sharded tensors.
 - One required argument is `shard_id`, which is the shard's ID in row-major order within the sharded tensor.
 - You can specify `start_page_offset` and `end_page_offset`. You can imagine a flattened range of pages iterated over by the shard pages iterator. Then `start_page_offset` and `end_page_offset` would crop this range from the start and end. Note that generally page IDs in one shard are not contiguous.
 
@@ -158,7 +158,7 @@ for (uint32_t i = 0; i < num_shards; ++i) {
 In case the tensor shape is not divisible by the shard shape, the tensor shape is padded. The Shard Pages iterator iterates over **logical** pages, so padded pages are ignored. This also means two `shard_pages()` calls with the same offsets can have different sizes if they are created for different shards.
 
 ### Advanced Usage 🔧
-Like with a Page Accessor, you can iterate over pages with a positive step > 1.
+Like with a Page Accessor, you can iterate over pages with a positive step >= 1.
 
 ## When Should You Use Each Iterator? 🤔
 
@@ -286,6 +286,7 @@ void kernel_main() {
         uint32_t shard_id = first_shard_id + i * num_cores;
         auto shard_pages = tensor_accessor_src.shard_pages(shard_id);
         for (const auto& page : shard_pages) {
+            ASSERT(tensor_accessor_src.is_local_addr(page.noc_addr()));
             noc_async_write_page(/*id=*/page.page_id(), /*addrgen=*/tensor_accessor_dst, /*src_local_l1_addr=*/page.noc_addr());
             noc_async_writes_flushed();
         }
@@ -296,6 +297,6 @@ void kernel_main() {
 
 </details>
 
-Note that we don't need a CB and a separate kernel for the writer for such an optimized variant, since there is no possibility of having a remote→remote NOC transaction. So the core can issue a direct NOC transaction from local to local or remote core.
+Note that we don't need a CB and a separate kernel for the writer for such an optimized variant, since there is no possibility of having a remote->remote NOC transaction. So the core can issue a direct NOC transaction from local to local or remote core.
 
 In practice, this approach gives a [2x+ speedup](https://github.com/tenstorrent/tt-metal/pull/25902) depending on input/output sharding.
