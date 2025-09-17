@@ -880,6 +880,21 @@ std::pair<std::string, std::string> get_op_init_and_func(
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
+template std::pair<std::string, std::string> get_op_init_and_func<float>(
+    UnaryOpType op_type, std::span<const float> params, const std::string& idst, std::optional<DataType> input_dtype);
+
+template std::pair<std::string, std::string> get_op_init_and_func<std::int32_t>(
+    UnaryOpType op_type,
+    std::span<const std::int32_t> params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>(
+    UnaryOpType op_type,
+    std::span<const std::uint32_t> params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
