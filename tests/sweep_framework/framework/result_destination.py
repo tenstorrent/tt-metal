@@ -359,14 +359,32 @@ class FileResultDestination(ResultDestination):
                 return None
             if isinstance(value, str):
                 return value
+
+            # Handle numpy numeric types first (before checking for regular float/int)
+            try:
+                import numpy as np
+
+                if isinstance(value, np.number):
+                    if np.isnan(value):
+                        return None
+                    if np.isinf(value):
+                        return "inf" if value > 0 else "-inf"
+                    return str(value)
+            except ImportError:
+                pass
+
+            # Handle regular Python numeric types
             if isinstance(value, (int, float)):
                 # Handle special float cases
                 if isinstance(value, float):
-                    if value.is_nan():
+                    import math
+
+                    if math.isnan(value):
                         return None
-                    if value.is_infinite():
+                    if math.isinf(value):
                         return "inf" if value > 0 else "-inf"
                 return str(value)
+
             # For any other type, convert to string
             return str(value)
 
