@@ -4357,7 +4357,6 @@ def test_conv2d_panoptic(
         has_bias=has_bias,
         deallocate_activation=True,
         shard_layout=shard_layout,
-        enable_split_reader=True if shard_layout == HS else False,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
 
@@ -4454,7 +4453,6 @@ def test_conv_dram_panoptic(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
-        enable_split_reader=True if shard_layout == HS else False,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
     )
