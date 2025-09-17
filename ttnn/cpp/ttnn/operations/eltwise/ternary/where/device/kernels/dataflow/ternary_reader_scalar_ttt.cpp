@@ -61,6 +61,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
+    constexpr bool has_sharding = false;
 
     const uint32_t tiles_per_n = C * HtWt;
     const uint32_t tiles_per_d = N * tiles_per_n;
@@ -75,7 +76,7 @@ void kernel_main() {
     uint32_t start_c = offset_n / HtWt;
     uint32_t start_th = offset_c / Wt;
     uint32_t start_tw = offset_c % Wt;
-    uint32_t end_tw = (dst_shard_width != 0) ? (start_tw + dst_shard_width) : Wt;
+    uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
@@ -113,39 +114,40 @@ void kernel_main() {
         for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
             for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
                 for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
+                    // for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
 #if SRC_BCAST_PREDICATE
-                        cb_reserve_back(predicate_cb, onetile);
+                    cb_reserve_back(predicate_cb, onetile);
 #if !SRC_SHARDED_PREDICATE
-                        uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                        noc_async_read_tile(tile_offset + th, s0, l1_write_addr_predicate);
-                        noc_async_read_barrier();
+                    uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
+                    noc_async_read_tile(tile_offset, s0, l1_write_addr_predicate);
+                    noc_async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
-                        cb_push_back(predicate_cb, onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
+                    cb_push_back(predicate_cb, onetile);
 #endif
 #if SRC_BCAST_TRUE
-                        cb_reserve_back(true_cb, onetile);
+                    cb_reserve_back(true_cb, onetile);
 #if !SRC_SHARDED_TRUE
-                        uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                        noc_async_read_tile(true_tile_offset + th, s1, l1_write_addr_true);
-                        noc_async_read_barrier();
+                    uint32_t l1_write_addr_true = get_write_ptr(true_cb);
+                    noc_async_read_tile(true_tile_offset, s1, l1_write_addr_true);
+                    noc_async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
-                        cb_push_back(true_cb, onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT_B(true_cb);
+                    cb_push_back(true_cb, onetile);
 #endif
 
-                        // False tensor broadcast (same as true tensor)
+                    // False tensor broadcast (same as true tensor)
 #if SRC_BCAST_FALSE
-                        cb_reserve_back(false_cb, onetile);
+                    cb_reserve_back(false_cb, onetile);
 #if !SRC_SHARDED_FALSE
-                        uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                        noc_async_read_tile(false_tile_offset + th, s2, l1_write_addr_false);
-                        noc_async_read_barrier();
+                    uint32_t l1_write_addr_false = get_write_ptr(false_cb);
+                    noc_async_read_tile(false_tile_offset, s2, l1_write_addr_false);
+                    noc_async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_C(false_cb);
-                        cb_push_back(false_cb, onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT_C(false_cb);
+                    cb_push_back(false_cb, onetile);
 #endif
+                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_PREDICATE
@@ -179,7 +181,7 @@ void kernel_main() {
 #endif
                         }
                         // next row of tiles should start at the first column for non-sharded case
-                        if (dst_shard_width == 0) {
+                        if constexpr (!has_sharding) {
                             start_tw = 0;
                         }
 #if !SRC_BCAST_PREDICATE && !SRC_SHARDED_PREDICATE
