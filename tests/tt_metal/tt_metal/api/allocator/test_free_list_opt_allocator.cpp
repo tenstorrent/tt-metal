@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <stddef.h>
 #include <optional>
 #include <utility>
@@ -344,4 +345,29 @@ TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     auto b = allocator.allocate(1_KiB);
     ASSERT_TRUE(b.has_value());
     ASSERT_EQ(b.value(), 1_KiB);
+}
+
+TEST(FreeListOptTest, ReallocateAtSameAddressWithAllocateAtAddress) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    /*
+     * Any non-zero address stress tests necessary guard against stale metablocks in allocate_at_address impl:
+     * 1. Allocate, then deallocate results in two block_addresses_
+          * If address is 0, then first block_address_ is the fully merged and alive metablock
+          * If address is non-zero, then first block_address_ is the stale (previously allocated) metablock
+     * 2. segregated_list will fail to find the reallocated address if the stale metablock is not skipped
+          * You can build in Debug mode or switch to TT_FATAL for this assert:
+            TT_FATAL(it != segregated_list.end(), "Block not found in size segregated list");
+    */
+    const size_t alloc_address = 1_KiB;
+
+    // Allocate with allocate_at_address
+    auto a = allocator.allocate_at_address(alloc_address, 1_KiB);
+    ASSERT_THAT(a, ::testing::Optional(alloc_address));
+
+    allocator.deallocate(a.value());
+
+    // Try to reallocate at the same address
+    auto a_realloc = allocator.allocate_at_address(alloc_address, 1_KiB);
+    ASSERT_THAT(a_realloc, ::testing::Optional(alloc_address));
 }
