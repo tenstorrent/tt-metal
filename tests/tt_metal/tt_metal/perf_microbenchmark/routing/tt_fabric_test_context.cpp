@@ -31,8 +31,7 @@ void TestContext::read_telemetry() {
             for (const auto& link_index : link_indices) {
                 const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
                 const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                // TODO: Filter tunneler/router
-                // For now, skip if not link up
+
                 TT_FATAL(
                     cluster.is_ethernet_link_up(physical_chip_id, eth_core),
                     "Ethernet link is not up for {}",
@@ -90,8 +89,6 @@ void TestContext::clear_telemetry() {
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
         for (const auto& eth_core : active_eth_cores) {
-            // TODO: Filter tunneler/router
-            // For now, skip if not link up
             if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) continue;
 
             std::vector<CoreCoord> cores = {eth_core};
