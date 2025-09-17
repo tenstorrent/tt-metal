@@ -6,7 +6,6 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "assert.hpp"
-#include "dev_msgs.h"
 #include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
@@ -721,10 +720,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg =
-                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-                msg->kernel_config.host_assigned_id = program.get_runtime_id();
+                auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -735,14 +732,14 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
-                    msg,
-                    go_msg,
+                    kg->launch_msg.view(),
+                    kg->go_msg.view(),
                     device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
             // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -763,7 +760,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
             not_done_cores.insert(physical_core);
         }
     }
-    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -853,7 +850,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -868,9 +866,9 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 kernel->get_kernel_programmable_core_type(),
                                 kernel->get_kernel_processor_class(),
                                 kernel->get_kernel_processor_type(0));
-                            const auto& rta_offset = kg->launch_msg.kernel_config.rta_offset[processor_index];
+                            auto rta_offset = kernel_config.rta_offset()[processor_index];
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset;
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -887,7 +885,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
-                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset;
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "

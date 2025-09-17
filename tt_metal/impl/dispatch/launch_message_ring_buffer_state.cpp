@@ -6,26 +6,26 @@
 
 #include <cstdint>
 
-#include "dev_msgs.h"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
 void LaunchMessageRingBufferState::inc_mcast_wptr(uint32_t inc_val) {
     multicast_cores_launch_message_wptr_ =
-        (multicast_cores_launch_message_wptr_ + inc_val) & (launch_msg_buffer_num_entries - 1);
+        (multicast_cores_launch_message_wptr_ + inc_val) & (dev_msgs::launch_msg_buffer_num_entries - 1);
 }
 
 void LaunchMessageRingBufferState::inc_unicast_wptr(uint32_t inc_val) {
     unicast_cores_launch_message_wptr_ =
-        (unicast_cores_launch_message_wptr_ + inc_val) & (launch_msg_buffer_num_entries - 1);
+        (unicast_cores_launch_message_wptr_ + inc_val) & (dev_msgs::launch_msg_buffer_num_entries - 1);
 }
 
 void LaunchMessageRingBufferState::set_mcast_wptr(uint32_t val) {
-    multicast_cores_launch_message_wptr_ = val & (launch_msg_buffer_num_entries - 1);
+    multicast_cores_launch_message_wptr_ = val & (dev_msgs::launch_msg_buffer_num_entries - 1);
 }
 
 void LaunchMessageRingBufferState::set_unicast_wptr(uint32_t val) {
-    unicast_cores_launch_message_wptr_ = val & (launch_msg_buffer_num_entries - 1);
+    unicast_cores_launch_message_wptr_ = val & (dev_msgs::launch_msg_buffer_num_entries - 1);
 }
 
 uint32_t LaunchMessageRingBufferState::get_mcast_wptr() const { return multicast_cores_launch_message_wptr_; }
