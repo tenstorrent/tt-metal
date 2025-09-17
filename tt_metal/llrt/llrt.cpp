@@ -27,6 +27,29 @@
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+namespace {
+void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_core) {
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
+    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
+    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
+    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
+    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
+    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+    log_critical(
+        tt::LogMetal,
+        "Device {}: Virtual core {},Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        device_id,
+        virtual_core.str(),
+        port_status,
+        retrain_count,
+        rx_link_up);
+}
+}  // namespace
+
 namespace tt {
 
 // llrt = lower-level runtime
@@ -258,6 +281,11 @@ void wait_until_cores_done(
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
+                for (const auto& core : not_done_phys_cores) {
+                    if (internal_::is_active_eth_core(device_id, core)) {
+                        print_aerisc_training_status(device_id, core);
+                    }
+                }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
@@ -431,9 +459,10 @@ void return_to_base_firmware_and_wait_for_heartbeat(
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
+                print_aerisc_training_status(device_id, virtual_core);
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
-                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.10.0",
+                    "Try resetting the board. Minimum tt-firmware version is 18.10.0",
                     device_id,
                     virtual_core.str());
             }
