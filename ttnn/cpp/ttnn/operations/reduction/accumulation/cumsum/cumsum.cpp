@@ -24,7 +24,8 @@ Tensor CumsumOperation::invoke(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
-    return common::accumulation_invoke(std::move(optional_out), reverse_order, memory_config, AccumulationOp::CUMSUM);
+    return common::accumulation_invoke(
+        input_tensor, dim, dtype, std::move(optional_out), reverse_order, memory_config, AccumulationOp::CUMSUM);
 }
 
 }  // namespace ttnn::operations::reduction::accumulation
