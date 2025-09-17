@@ -104,6 +104,7 @@ enum SfpuType {
     fmod,
     ceil,
     unused,
+    reshuffle_rows,
     cumsum,
     fill,
     prelu,
