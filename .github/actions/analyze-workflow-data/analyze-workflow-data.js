@@ -850,6 +850,16 @@ async function run() {
 
     // Create authenticated Octokit client for PR info
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
+    // Log effective token scopes to help debug permissions
+    try {
+      const probe = await octokit.request('GET /rate_limit');
+      const scopes = probe.headers?.['x-oauth-scopes'] || '';
+      const accepted = probe.headers?.['x-accepted-oauth-scopes'] || '';
+      core.info(`Token scopes: ${scopes || '(none reported)'}`);
+      if (accepted) core.info(`Accepted-oauth-scopes header: ${accepted}`);
+    } catch (e) {
+      core.info(`Failed to probe token scopes: ${e.message}`);
+    }
 
     // Generate primary report
     const mainReport = await buildReport(filteredGrouped, octokit, github.context);
