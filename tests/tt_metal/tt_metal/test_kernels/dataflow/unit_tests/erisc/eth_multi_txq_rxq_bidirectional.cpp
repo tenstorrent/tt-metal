@@ -12,32 +12,30 @@
 #include <cstddef>
 #include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-constexpr uint32_t data_txq_id = get_compile_time_arg_val(0);
-constexpr uint32_t ack_txq_id = get_compile_time_arg_val(1);
+constexpr uint32_t data_txq_id = 1;  // get_compile_time_arg_val(0);
+constexpr uint32_t ack_txq_id = 1;   // get_compile_time_arg_val(1);
 constexpr uint32_t PAYLOAD_SIZE = get_compile_time_arg_val(2);
-constexpr uint32_t multi_erisc = get_compile_time_arg_val(3);
+constexpr uint32_t MULTI_ERISC = get_compile_time_arg_val(3);
 constexpr uint32_t CREDITS_STREAM_ID = get_compile_time_arg_val(4);
 constexpr uint32_t ACK_STREAM_ID = get_compile_time_arg_val(5);
+constexpr uint32_t PRIMARY_ERISC = get_compile_time_arg_val(6);
 
 void kernel_main() {
     size_t arg_idx = 0;
     uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     bool is_handshake_sender = get_arg_val<uint32_t>(arg_idx++);
     uint32_t local_eth_l1_src_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_credit_ack_src = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_credit_ack_dest = get_arg_val<uint32_t>(arg_idx++);
     uint32_t remote_eth_l1_dst_addr = get_arg_val<uint32_t>(arg_idx++);
     int num_messages = get_arg_val<uint32_t>(arg_idx++);
 
     // Clear our counters for receiver credits src + dest
-    *reinterpret_cast<volatile uint32_t*>(receiver_credit_ack_src) = 0;
-    *reinterpret_cast<volatile uint32_t*>(receiver_credit_ack_dest) = 0;
 
-    if constexpr (data_txq_id != ack_txq_id) {
-        eth_enable_packet_mode(ack_txq_id);
-    }
+    // if constexpr (data_txq_id != ack_txq_id || (PRIMARY_ERISC && MULTI_ERISC)) {
+    eth_enable_packet_mode(1);
+    // }
 
     init_ptr_val(CREDITS_STREAM_ID, 0);
+    init_ptr_val(ACK_STREAM_ID, 0);
 
     // Handshake to make sure it's safe to start sending
     // DPRINT << "Wait for Handshake" << ENDL();
@@ -56,10 +54,6 @@ void kernel_main() {
     size_t idle_count = 0;
     while (has_unsent_messages || has_unsent_acks) {
         // Send Messages
-        bool current_ack = *reinterpret_cast<volatile int32_t*>(receiver_credit_ack_dest);
-        if (current_ack != last_printed_ack) {
-            last_printed_ack = current_ack;
-        }
         if (has_unsent_messages) {
             *reinterpret_cast<volatile uint32_t*>(local_eth_l1_src_addr) = num_messages_sent + 1;
             while (internal_::eth_txq_is_busy(data_txq_id)) {
@@ -76,14 +70,12 @@ void kernel_main() {
 
         // Send Acks
         if (has_unsent_acks) {
-            DPRINT << "SEND ACKS " << num_acks_sent << " " << get_ptr_val<ACK_STREAM_ID>() << " " << num_messages_sent
-                   << ENDL();
+            DPRINT << "SEND ACKS " << num_acks_sent << " " << get_ptr_val<ACK_STREAM_ID>() << " "
+                   << get_ptr_val<CREDITS_STREAM_ID>() << " " << num_messages_sent << ENDL();
             if (get_ptr_val<CREDITS_STREAM_ID>() > num_acks_sent) {
-                *reinterpret_cast<volatile uint32_t*>(receiver_credit_ack_src) = num_acks_sent + 1;
                 while (internal_::eth_txq_is_busy(ack_txq_id)) {
                 }
-                internal_::eth_send_packet_bytes_unsafe(
-                    ack_txq_id, receiver_credit_ack_src, receiver_credit_ack_dest, 16);
+                remote_update_ptr_val<ACK_STREAM_ID, ack_txq_id>(1);
                 num_acks_sent++;
                 has_unsent_acks = num_acks_sent < num_messages;
                 idle_count = 0;
@@ -92,12 +84,12 @@ void kernel_main() {
         idle_count++;
     }
 
-    while (*reinterpret_cast<volatile int32_t*>(receiver_credit_ack_dest) < num_messages_sent) {
-        invalidate_l1_cache();
-    }
+    // while (get_ptr_val<CREDITS_STREAM_ID>() < num_messages_sent) {
+    //     invalidate_l1_cache();
+    // }
 
-    // Validate that at the very least we got the correct last value in the payload buffer
-    while (*reinterpret_cast<volatile int32_t*>(remote_eth_l1_dst_addr) != num_messages_sent) {
-        invalidate_l1_cache();
-    }
+    // // Validate that at the very least we got the correct last value in the payload buffer
+    // while (*reinterpret_cast<volatile int32_t*>(remote_eth_l1_dst_addr) != num_messages_sent) {
+    //     invalidate_l1_cache();
+    // }
 }

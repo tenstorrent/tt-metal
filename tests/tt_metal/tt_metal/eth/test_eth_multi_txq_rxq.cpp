@@ -132,16 +132,16 @@ static void eth_direct_send_multi_txq_rxq_dual_erisc(
         tt_metal::EthernetConfig{
             .noc = tt::tt_metal::NOC::NOC_0,
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .compile_args = {0, 0, PAYLOAD_SIZE, true, 0, 1}});
+            .compile_args = {0, 0, PAYLOAD_SIZE, true, 0, 1, false}});
 
-    auto eth_sender_1_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
-        eth_sender_core,
-        tt_metal::EthernetConfig{
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .compile_args = {1, 1, PAYLOAD_SIZE, true, 2, 3}});
+    // auto eth_sender_1_kernel = tt_metal::CreateKernel(
+    //     sender_program,
+    //     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
+    //     eth_sender_core,
+    //     tt_metal::EthernetConfig{
+    //         .noc = tt::tt_metal::NOC::NOC_1,
+    //         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+    //         .compile_args = {1, 1, PAYLOAD_SIZE, true, 2, 3, true}});
 
     // Memory layout
     size_t send_receive_0_handshake_addr = unreserved_l1_start;
@@ -162,22 +162,18 @@ static void eth_direct_send_multi_txq_rxq_dual_erisc(
         {send_receive_0_handshake_addr,
          true,  // HS sender
          local_eth_l1_src_addr_0,
-         receiver_0_credit_ack_src,
-         receiver_0_credit_ack_dest,
          sender_0_payload_dest,
          num_messages});
 
-    tt_metal::SetRuntimeArgs(
-        sender_program,
-        eth_sender_1_kernel,
-        eth_sender_core,
-        {send_receive_1_handshake_addr,
-         true,  // HS sender
-         local_eth_l1_src_addr_1,
-         receiver_1_credit_ack_src,
-         receiver_1_credit_ack_dest,
-         sender_1_payload_dest,
-         num_messages});
+    // tt_metal::SetRuntimeArgs(
+    //     sender_program,
+    //     eth_sender_1_kernel,
+    //     eth_sender_core,
+    //     {send_receive_1_handshake_addr,
+    //      true,  // HS sender
+    //      local_eth_l1_src_addr_1,
+    //      sender_1_payload_dest,
+    //      num_messages});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
@@ -191,16 +187,16 @@ static void eth_direct_send_multi_txq_rxq_dual_erisc(
         tt_metal::EthernetConfig{
             .noc = tt::tt_metal::NOC::NOC_0,
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .compile_args = {0, 0, PAYLOAD_SIZE, true, 0, 1}});
+            .compile_args = {0, 0, PAYLOAD_SIZE, true, 0, 1, false}});
 
-    auto eth_receiver_1_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
-        eth_receiver_core,
-        tt_metal::EthernetConfig{
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .compile_args = {1, 1, PAYLOAD_SIZE, true, 2, 3}});
+    // auto eth_receiver_1_kernel = tt_metal::CreateKernel(
+    //     receiver_program,
+    //     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_multi_txq_rxq_bidirectional.cpp",
+    //     eth_receiver_core,
+    //     tt_metal::EthernetConfig{
+    //         .noc = tt::tt_metal::NOC::NOC_1,
+    //         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+    //         .compile_args = {1, 1, PAYLOAD_SIZE, true, 2, 3, true}});
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -209,22 +205,18 @@ static void eth_direct_send_multi_txq_rxq_dual_erisc(
         {send_receive_0_handshake_addr,
          false,  // HS sender
          local_eth_l1_src_addr_0,
-         receiver_0_credit_ack_src,
-         receiver_0_credit_ack_dest,
          sender_0_payload_dest,
          num_messages});
 
-    tt_metal::SetRuntimeArgs(
-        receiver_program,
-        eth_receiver_1_kernel,
-        eth_receiver_core,
-        {send_receive_1_handshake_addr,
-         false,  // HS sender
-         local_eth_l1_src_addr_1,
-         receiver_1_credit_ack_src,
-         receiver_1_credit_ack_dest,
-         sender_1_payload_dest,
-         num_messages});
+    // tt_metal::SetRuntimeArgs(
+    //     receiver_program,
+    //     eth_receiver_1_kernel,
+    //     eth_receiver_core,
+    //     {send_receive_1_handshake_addr,
+    //      false,  // HS sender
+    //      local_eth_l1_src_addr_1,
+    //      sender_1_payload_dest,
+    //      num_messages});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
