@@ -1170,7 +1170,7 @@ class WanDecoder:
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def __call__(self, z_BTHWC):
+    def __call__(self, z_BTHWC, logical_h):
         B, T, H, W, C = z_BTHWC.shape
 
         self.clear_cache()
@@ -1182,8 +1182,8 @@ class WanDecoder:
         for i in range(T):
             # Process one frame at a time
             self._conv_idx = [0]
-            out_BTHWC = self.decoder(
-                x_BTHWC[:, i : i + 1, :, :, :], feat_cache=self._feat_cache, feat_idx=self._conv_idx
+            out_BTHWC, new_logical_h = self.decoder(
+                x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
             # Channels first
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
@@ -1198,4 +1198,4 @@ class WanDecoder:
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
-        return (output_BCTHW,)
+        return (output_BCTHW, new_logical_h)
