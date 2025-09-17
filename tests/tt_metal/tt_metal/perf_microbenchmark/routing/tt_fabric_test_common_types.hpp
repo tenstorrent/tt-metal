@@ -135,8 +135,7 @@ struct ParsedTestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
-
-    // New field
+    uint32_t num_top_level_iterations = 1;
     bool check_for_cycles = false;
 };
 
@@ -159,6 +158,10 @@ struct TestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
+
+    // Cycle detection fields
+    bool check_for_cycles = false;
+    uint32_t num_top_level_iterations = 1;
 };
 
 // ======================================================================================
