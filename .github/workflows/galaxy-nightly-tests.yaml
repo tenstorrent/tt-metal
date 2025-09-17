@@ -2,6 +2,11 @@ name: "Galaxy nightly tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
   schedule:
     - cron: "0 0 * * 6" # Runs every Saturday at 12am UTC
 
@@ -22,4 +27,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      extra-tag: ${{ github.event.inputs.extra-tag || 'in-service' }}
       topology: topology-6u
