@@ -4,6 +4,7 @@
 
 #include <fmt/ostream.h>
 #include <cstdint>
+#include <cstdlib>
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -76,14 +77,37 @@ int main() {
         std::vector<uint32_t> dram_copy_compile_time_args;
         TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
         TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
-        KernelHandle dram_copy_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = dram_copy_compile_time_args});
+        
+        // Check if KERNEL_BINARY_PATH environment variable is set to use pre-compiled binary
+        // The path must point to the exact .elf file, which for DataMovementProcessor::RISCV_0 is:
+        // <cache_dir>/<git_hash>/<build_key>/kernels/<kernel_full_name>/brisc/brisc.elf
+        // Example: export KERNEL_BINARY_PATH=/home/prybicki/.cache/tt-metal-cache/5a70c1f7b9/4096/kernels/loopback_dram_copy_<hash>/brisc/brisc.elf
+        const char* binary_path = std::getenv("KERNEL_BINARY_PATH");
+        
+        KernelHandle dram_copy_kernel_id;
+        if (binary_path) {
+            fmt::print("Loading pre-compiled kernel from: {}\n", binary_path);
+            // Use the new CreateKernelFromBinary API to load pre-compiled kernel
+            dram_copy_kernel_id = CreateKernelFromBinary(
+                program,
+                binary_path,
+                core,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = dram_copy_compile_time_args});
+        } else {
+            fmt::print("Using JIT compilation\n");
+            // Use the standard CreateKernel API with JIT compilation
+            dram_copy_kernel_id = CreateKernel(
+                program,
+                OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
+                core,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = dram_copy_compile_time_args});
+        }
 
         // Initialize the input buffer with random data.
         std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
