@@ -255,20 +255,33 @@ class ResBlock:
         )
         return output
 
-    def sharded_reshape_tilize(self, x, shape):
+    def pre_all_gather_reshape_norm_1(self, x, shape):
         N, T, H, W, C = shape
         dim_2_1 = ttnn.reshape(x, [N * T, 1, H * W, C])
         residual = ttnn.tilize_with_zero_padding(
             dim_2_1,
             use_multicore=True,
         )
-        dim_2_1 = ttnn.reshape(dim_2_1, [1, 1, N * T, H * W * C])
-        output = ttnn.tilize_with_zero_padding(
-            dim_2_1,
-            use_multicore=True,
-        )
+        assert not (C % 32)
+        if not (H * W * (C // 32) % 32):
+            output = ttnn.reshape(residual, [N * T, 1, H * W * (C // 32), 32])
+            gather_dim = 2
+        else:
+            output = ttnn.reshape(residual, [1, 1, N * T, H * W * C])
+            gather_dim = 3
         ttnn.deallocate(dim_2_1)
-        return residual, output
+        return gather_dim, residual, output
+
+    def pre_all_gather_reshape_norm_2(self, x, shape):
+        N, T, H, W, C = shape
+        assert not (C % 32)
+        if not (H * W * (C // 32) % 32):
+            x = ttnn.reshape(x, (N * T, 1, H * W * (C // 32), 32))
+            gather_dim = 2
+        else:
+            x = ttnn.reshape(x, (1, 1, N * T, H * W * C))
+            gather_dim = 3
+        return gather_dim, x
 
     def sharded_reshape_untilize_tilize(self, x, shapes):
         dim0, dim1, dim2, dim3 = shapes
@@ -300,14 +313,14 @@ class ResBlock:
         shapes = self.get_tensor_shapes(x_NTHWC)
         N, T, H, W, C = shapes
         if self.parallel_config.w_parallel.factor > 1:
-            residual_tiled_NTHWC, x_tiled_NTHWC = self.sharded_reshape_tilize(x_NTHWC, shapes)
+            gather_dim, residual_tiled_NTHWC, x_tiled_NTHWC = self.pre_all_gather_reshape_norm_1(x_NTHWC, shapes)
             ttnn.deallocate(x_NTHWC)
             residual_tiled_NTHWC = ttnn.reallocate(residual_tiled_NTHWC)
             all_gather_output = vae_all_gather(
                 self.ccl_manager,
                 x_tiled_NTHWC,
                 cluster_axis=self.parallel_config.w_parallel.mesh_axis,
-                dim=3,
+                dim=gather_dim,
                 reshape=False,
             )
             ttnn.deallocate(x_tiled_NTHWC)
@@ -315,6 +328,7 @@ class ResBlock:
                 all_gather_output,
                 (N * T, 1, H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor, C),
             )
+            ttnn.deallocate(all_gather_output)
         else:
             x_tiled_NTHWC = self.reshape_tilize(x_NTHWC, shapes)
             ttnn.deallocate(x_NTHWC)
@@ -381,15 +395,13 @@ class ResBlock:
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
 
         if self.parallel_config.w_parallel.factor > 1:
-            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize_no_deallocate(
-                x_conv1_tiled_NTHWC, (1, 1, N * T, H * W * C)
-            )
+            gather_dim, x_conv1_tiled_NTHWC = self.pre_all_gather_reshape_norm_2(x_conv1_tiled_NTHWC, shapes)
             ttnn.deallocate(x_conv1_NTHWC)
             x_conv1_tiled_NTHWC = vae_all_gather(
                 self.ccl_manager,
                 x_conv1_tiled_NTHWC,
                 cluster_axis=self.parallel_config.w_parallel.mesh_axis,
-                dim=3,
+                dim=gather_dim,
                 reshape=False,
             )
             x_conv1_tiled_NTHWC = ttnn.reshape(
