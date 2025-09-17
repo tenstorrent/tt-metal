@@ -75,7 +75,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         batch_size = x.shape[0]
 
         # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = seq_len if "gemma-3" in self.args.base_model_name else self.args.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len if self.args.is_gemma else self.args.VISION_MAX_MM_SEQ
 
         x_in = x
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
