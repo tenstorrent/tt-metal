@@ -310,8 +310,8 @@ FORCE_INLINE
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
-    DPRINT << "FORWARD_PAYLOAD: dst_chip=" << packet_header->dst_start_node_id
-           << " payload_size=" << packet_header->payload_size_bytes << ENDL();
+    // DPRINT << "FORWARD_PAYLOAD: dst_chip=" << packet_header->dst_start_node_id
+    //       << " payload_size=" << packet_header->payload_size_bytes << ENDL();
     if constexpr (increment_pointers) {
         update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     }

@@ -316,7 +316,8 @@ enum PacketLocalForwardType : uint8_t {
 // did_something=true (i.e. no progress was made), then we allow for context switch in case
 // the link is down
 bool did_something;
-
+uint32_t my_channel;
+uint32_t my_info;
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -828,13 +829,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     const tt_l1_ptr fabric_router_l1_config_t* routing_table =
         reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-    // DEBUG: Print routing decision
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
-    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-
-    DPRINT << "My_x " << my_x << " My_y " << my_y << ENDL();
-
     // Template version for constexpr edm_index
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
@@ -874,104 +868,104 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             transaction_id);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
-            DPRINT << "DEST CHIP IS ME" << ENDL();
+            // DPRINT << "I'm: "<< HEX() << my_info << "Dest Chip Is Me" << ENDL();
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             if (mcast_active) {
-                // This packet is in an active mcast
-                if constexpr (my_direction == NORTH || my_direction == SOUTH) {
-                    if constexpr (my_direction == NORTH) {
-                        if (packet_start->mcast_params[SOUTH]) {
-                            packet_start->mcast_params[SOUTH]--;
-                            constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                            forward_payload_to_downstream_edm<
-                                enable_deadlock_avoidance,
-                                vc1_has_different_downstream_dest,
-                                false>(
-                                packet_start,
-                                payload_size_bytes,
-                                cached_routing_fields,
-                                get_downstream_interface.template operator()<edm_index>(),
-                                transaction_id);
-                        }
-                    } else if constexpr (my_direction == SOUTH) {
-                        if (packet_start->mcast_params[NORTH]) {
-                            packet_start->mcast_params[NORTH]--;
-                            constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                            forward_payload_to_downstream_edm<
-                                enable_deadlock_avoidance,
-                                vc1_has_different_downstream_dest,
-                                false>(
-                                packet_start,
-                                payload_size_bytes,
-                                cached_routing_fields,
-                                get_downstream_interface.template operator()<edm_index>(),
-                                transaction_id);
-                        }
-                    }
-                    // Trunk routers check for east/west mcast branch forwarding.
-                    if (packet_start->mcast_params[EAST]) {
-                        // decrement east hop count
-                        cached_routing_fields.value = packet_start->mcast_params[EAST] - 1;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
-                        constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                        forward_payload_to_downstream_edm<
-                            enable_deadlock_avoidance,
-                            vc1_has_different_downstream_dest,
-                            false,
-                            false>(
-                            packet_start,
-                            payload_size_bytes,
-                            cached_routing_fields,
-                            get_downstream_interface.template operator()<edm_index>(),
-                            transaction_id);
-                    }
-                    if (packet_start->mcast_params[WEST]) {
-                        // decrement west hop count
-                        cached_routing_fields.value = (packet_start->mcast_params[WEST] - 1) << 16;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
-                        constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                        forward_payload_to_downstream_edm<
-                            enable_deadlock_avoidance,
-                            vc1_has_different_downstream_dest,
-                            false,
-                            false>(
-                            packet_start,
-                            payload_size_bytes,
-                            cached_routing_fields,
-                            get_downstream_interface.template operator()<edm_index>(),
-                            transaction_id);
-                    }
-                } else if constexpr (my_direction == EAST) {
-                    if (packet_start->mcast_params[WEST]) {
-                        // decrement west hop count
-                        packet_start->mcast_params[WEST]--;
-                        constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                        forward_payload_to_downstream_edm<
-                            enable_deadlock_avoidance,
-                            vc1_has_different_downstream_dest,
-                            false>(
-                            packet_start,
-                            payload_size_bytes,
-                            cached_routing_fields,
-                            get_downstream_interface.template operator()<edm_index>(),
-                            transaction_id);
-                    }
-                } else if constexpr (my_direction == WEST) {
-                    if (packet_start->mcast_params[EAST]) {
-                        // decrement east hop count
-                        packet_start->mcast_params[EAST]--;
-                        constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                        forward_payload_to_downstream_edm<
-                            enable_deadlock_avoidance,
-                            vc1_has_different_downstream_dest,
-                            false>(
-                            packet_start,
-                            payload_size_bytes,
-                            cached_routing_fields,
-                            get_downstream_interface.template operator()<edm_index>(),
-                            transaction_id);
-                    }
-                }
+                // // This packet is in an active mcast
+                // if constexpr (my_direction == NORTH || my_direction == SOUTH) {
+                //     if constexpr (my_direction == NORTH) {
+                //         if (packet_start->mcast_params[SOUTH]) {
+                //             packet_start->mcast_params[SOUTH]--;
+                //             constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+                //             forward_payload_to_downstream_edm<
+                //                 enable_deadlock_avoidance,
+                //                 vc1_has_different_downstream_dest,
+                //                 false>(
+                //                 packet_start,
+                //                 payload_size_bytes,
+                //                 cached_routing_fields,
+                //                 get_downstream_interface.template operator()<edm_index>(),
+                //                 transaction_id);
+                //         }
+                //     } else if constexpr (my_direction == SOUTH) {
+                //         if (packet_start->mcast_params[NORTH]) {
+                //             packet_start->mcast_params[NORTH]--;
+                //             constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+                //             forward_payload_to_downstream_edm<
+                //                 enable_deadlock_avoidance,
+                //                 vc1_has_different_downstream_dest,
+                //                 false>(
+                //                 packet_start,
+                //                 payload_size_bytes,
+                //                 cached_routing_fields,
+                //                 get_downstream_interface.template operator()<edm_index>(),
+                //                 transaction_id);
+                //         }
+                //     }
+                //     // Trunk routers check for east/west mcast branch forwarding.
+                //     if (packet_start->mcast_params[EAST]) {
+                //         // decrement east hop count
+                //         cached_routing_fields.value = packet_start->mcast_params[EAST] - 1;
+                //         // north/south hop counts will be cleared when making trunk->branch trun.
+                //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+                //         forward_payload_to_downstream_edm<
+                //             enable_deadlock_avoidance,
+                //             vc1_has_different_downstream_dest,
+                //             false,
+                //             false>(
+                //             packet_start,
+                //             payload_size_bytes,
+                //             cached_routing_fields,
+                //             get_downstream_interface.template operator()<edm_index>(),
+                //             transaction_id);
+                //     }
+                //     if (packet_start->mcast_params[WEST]) {
+                //         // decrement west hop count
+                //         cached_routing_fields.value = (packet_start->mcast_params[WEST] - 1) << 16;
+                //         // north/south hop counts will be cleared when making trunk->branch trun.
+                //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+                //         forward_payload_to_downstream_edm<
+                //             enable_deadlock_avoidance,
+                //             vc1_has_different_downstream_dest,
+                //             false,
+                //             false>(
+                //             packet_start,
+                //             payload_size_bytes,
+                //             cached_routing_fields,
+                //             get_downstream_interface.template operator()<edm_index>(),
+                //             transaction_id);
+                //     }
+                // } else if constexpr (my_direction == EAST) {
+                //     if (packet_start->mcast_params[WEST]) {
+                //         // decrement west hop count
+                //         packet_start->mcast_params[WEST]--;
+                //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+                //         forward_payload_to_downstream_edm<
+                //             enable_deadlock_avoidance,
+                //             vc1_has_different_downstream_dest,
+                //             false>(
+                //             packet_start,
+                //             payload_size_bytes,
+                //             cached_routing_fields,
+                //             get_downstream_interface.template operator()<edm_index>(),
+                //             transaction_id);
+                //     }
+                // } else if constexpr (my_direction == WEST) {
+                //     if (packet_start->mcast_params[EAST]) {
+                //         // decrement east hop count
+                //         packet_start->mcast_params[EAST]--;
+                //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+                //         forward_payload_to_downstream_edm<
+                //             enable_deadlock_avoidance,
+                //             vc1_has_different_downstream_dest,
+                //             false>(
+                //             packet_start,
+                //             payload_size_bytes,
+                //             cached_routing_fields,
+                //             get_downstream_interface.template operator()<edm_index>(),
+                //             transaction_id);
+                //     }
+                // }
             }
         } else {
             // Unicast forward packet to downstream
@@ -979,8 +973,13 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             ASSERT(downstream_channel != INVALID_DIRECTION);
             const auto downstream_direction =
                 static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
-            // DPRINT << "FORWARDING TO DIRECTION: " << (uint32_t)downstream_direction << ENDL();
+            DPRINT << HEX() << my_info << " Fwd To: " << (uint32_t)downstream_channel
+                   << " Dir: " << (uint32_t)downstream_direction << ENDL();
+            // DPRINT << " Fwd To: "<< downstream_channel << ENDL();
+            // DPRINT << " Dir: "<< (uint32_t)downstream_direction << ENDL();
             const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
+            DPRINT << HEX() << my_info << " Edm Index: " << (uint32_t)edm_index << ENDL();
+
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                 packet_start,
                 payload_size_bytes,
@@ -1794,9 +1793,9 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
-                DPRINT << "PACKET_RECEIVED: dst_chip=" << packet_header->dst_start_chip_id
-                       << " dst_mesh=" << packet_header->dst_start_mesh_id
-                       << " payload_size=" << packet_header->payload_size_bytes << ENDL();
+                // DPRINT << "rx: dst_chip=" << packet_header->dst_start_chip_id << ENDL();
+                //<< " dst_mesh=" << packet_header->dst_start_mesh_id
+                //<< " payload_size=" << packet_header->payload_size_bytes << ENDL();
                 receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
@@ -2364,7 +2363,6 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode();
         }
     }
-    DPRINT << "EDM starting up" << ENDL();
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -2659,6 +2657,25 @@ void kernel_main() {
     tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1> downstream_edm_noc_interface_vc1;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids_ordered);
+
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    // if (my_x < 5) {
+    //     my_channel = my_x + (my_x - 1);
+    // } else {
+    //     my_channel = (9 - my_x) * 2;
+    // }
+    // if (my_y == 6) {
+    //     my_channel += 8;
+    // }
+
+    tt_l1_ptr fabric_router_l1_config_t* rt =
+        reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    // my_info = (rt->my_device_id) << 24 | my_y << 16  | my_x << 8 | (my_direction << 4) | my_channel;
+    my_info = (rt->my_device_id) << 24 | my_y << 16 | my_x << 8 | dateline_connection << 4 | my_direction;
+
+    DPRINT << "Router my_info: " << HEX() << my_info << ENDL();
 
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
