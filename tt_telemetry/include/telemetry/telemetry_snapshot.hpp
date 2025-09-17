@@ -21,6 +21,7 @@
 
 #include <nlohmann/json.hpp>
 #include <telemetry/metric.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 struct TelemetrySnapshot {
     // String-based telemetry data maps: path -> value
@@ -54,13 +55,24 @@ struct TelemetrySnapshot {
 
     /**
      * Merge another snapshot into this one.
-     * This replaces the functionality of TelemetryDataStore::update_from_snapshot().
      * @param other The snapshot to merge into this one
+     * @param validate If true (default), perform validation checks for consistency
      */
-    void merge_from(const TelemetrySnapshot& other) {
+    void merge_from(const TelemetrySnapshot& other, bool validate = true) {
+        if (validate) {
+            merge_from_with_validation(other);
+        } else {
+            merge_from_fast(other);
+        }
+    }
+
+private:
+    /**
+     * Fast path: merge without validation (original implementation)
+     */
+    void merge_from_fast(const TelemetrySnapshot& other) {
         // Update unit label maps if they are provided
         if (!other.metric_unit_display_label_by_code.empty() || !other.metric_unit_full_label_by_code.empty()) {
-            // Merge unit label maps (TODO: assert we don't have any redefinitions)
             for (const auto& [code, label] : other.metric_unit_display_label_by_code) {
                 metric_unit_display_label_by_code[code] = label;
             }
@@ -99,6 +111,109 @@ struct TelemetrySnapshot {
             double_metric_timestamps[path] = timestamp;
         }
     }
+
+    /**
+     * Validation path: merge with comprehensive validation checks
+     */
+    void merge_from_with_validation(const TelemetrySnapshot& other) {
+        // Validate and merge unit label maps
+        if (!other.metric_unit_display_label_by_code.empty() || !other.metric_unit_full_label_by_code.empty()) {
+            // Validate display label map
+            for (const auto& [code, label] : other.metric_unit_display_label_by_code) {
+                auto result = metric_unit_display_label_by_code.insert({code, label});
+                if (!result.second) {  // Key already exists
+                    if (result.first->second != label) {
+                        log_error(
+                            tt::LogAlways,
+                            "Unit display label redefinition detected for code {}: existing='{}', new='{}'",
+                            code,
+                            result.first->second,
+                            label);
+                    }
+                }
+            }
+
+            // Validate full label map
+            for (const auto& [code, label] : other.metric_unit_full_label_by_code) {
+                auto result = metric_unit_full_label_by_code.insert({code, label});
+                if (!result.second) {  // Key already exists
+                    if (result.first->second != label) {
+                        log_error(
+                            tt::LogAlways,
+                            "Unit full label redefinition detected for code {}: existing='{}', new='{}'",
+                            code,
+                            result.first->second,
+                            label);
+                    }
+                }
+            }
+        }
+
+        // Validate and merge bool metrics
+        for (const auto& [path, value] : other.bool_metrics) {
+            // Check if this path exists in other metric types
+            if (uint_metrics.find(path) != uint_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and uint", path);
+                continue;  // Skip this update
+            }
+            if (double_metrics.find(path) != double_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and double", path);
+                continue;  // Skip this update
+            }
+            bool_metrics[path] = value;
+        }
+
+        // Merge bool metadata
+        for (const auto& [path, timestamp] : other.bool_metric_timestamps) {
+            bool_metric_timestamps[path] = timestamp;
+        }
+
+        // Validate and merge uint metrics
+        for (const auto& [path, value] : other.uint_metrics) {
+            // Check if this path exists in other metric types
+            if (bool_metrics.find(path) != bool_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and bool", path);
+                continue;  // Skip this update
+            }
+            if (double_metrics.find(path) != double_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and double", path);
+                continue;  // Skip this update
+            }
+            uint_metrics[path] = value;
+        }
+
+        // Merge uint metadata
+        for (const auto& [path, unit] : other.uint_metric_units) {
+            uint_metric_units[path] = unit;
+        }
+        for (const auto& [path, timestamp] : other.uint_metric_timestamps) {
+            uint_metric_timestamps[path] = timestamp;
+        }
+
+        // Validate and merge double metrics
+        for (const auto& [path, value] : other.double_metrics) {
+            // Check if this path exists in other metric types
+            if (bool_metrics.find(path) != bool_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and bool", path);
+                continue;  // Skip this update
+            }
+            if (uint_metrics.find(path) != uint_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and uint", path);
+                continue;  // Skip this update
+            }
+            double_metrics[path] = value;
+        }
+
+        // Merge double metadata
+        for (const auto& [path, unit] : other.double_metric_units) {
+            double_metric_units[path] = unit;
+        }
+        for (const auto& [path, timestamp] : other.double_metric_timestamps) {
+            double_metric_timestamps[path] = timestamp;
+        }
+    }
+
+public:
 };
 
  static inline void to_json(nlohmann::json &j, const TelemetrySnapshot &t) {
