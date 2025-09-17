@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
@@ -105,6 +105,12 @@ static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
     {"Mux", FabricTensixConfig::MUX},
 });
 
+static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_mapper({
+    {"STRICT_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
+    {"RELAXED_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE},
+    {"DYNAMIC_RECONFIGURATION_SETUP_MODE", FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -113,6 +119,8 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"one_to_all", HighLevelTrafficPattern::OneToAll},
+    {"all_to_one", HighLevelTrafficPattern::AllToOne},
+    {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -272,9 +280,10 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
+    CmdlineParser(const std::vector<std::string>& input_args);
 
     std::optional<std::string> get_yaml_config_path();
+    bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
@@ -285,7 +294,18 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
+    std::optional<std::string> filter_type;
+    std::optional<std::string> filter_value;
 };
+
+CmdlineParser::CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {
+    if (test_args::has_command_option(input_args_, "--filter")) {
+        auto filter = test_args::get_command_option(input_args_, "--filter", "");
+        auto splitter = filter.find('.');
+        filter_type = filter.substr(0, splitter);
+        filter_value = filter.substr(splitter + 1);
+    }
+}
 
 const std::string no_default_test_yaml_config = "";
 
@@ -438,6 +458,13 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
     TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
     test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
 
+    if (test_yaml["top_level_iterations"]) {
+        test_config.num_top_level_iterations = parse_scalar<uint32_t>(test_yaml["top_level_iterations"]);
+        if (test_config.num_top_level_iterations == 0) {
+            TT_THROW("top_level_iterations must be greater than 0");
+        }
+    }
+
     if (test_yaml["parametrization_params"]) {
         test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
     }
@@ -552,6 +579,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
         fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
     }
 
+    if (fabric_setup_yaml["fabric_reliability_mode"]) {
+        auto reliability_mode_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_reliability_mode"]);
+        fabric_setup.fabric_reliability_mode =
+            detail::fabric_reliability_mode_mapper.from_string(reliability_mode_str, "FabricReliabilityMode");
+    } else {
+        log_info(tt::LogTest, "No fabric reliability mode specified, defaulting to STRICT_SYSTEM_HEALTH_SETUP_MODE");
+        fabric_setup.fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    }
+
     if (fabric_setup_yaml["num_links"]) {
         fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
     } else {
@@ -607,6 +643,288 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     }
 
     return std::nullopt;
+}
+
+inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
+    if (filter_type.has_value()) {
+        if (filter_type.value() == "name" || filter_type.value() == "Name") {
+            return test_config.name == filter_value;
+        } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
+            auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+            if (filter_value == "Ring") {
+                topo = tt::tt_fabric::Topology::Ring;
+            } else if (filter_value == "Linear") {
+                topo = tt::tt_fabric::Topology::Linear;
+            } else if (filter_value == "Mesh") {
+                topo = tt::tt_fabric::Topology::Mesh;
+            } else if (filter_value == "Torus") {
+                topo = tt::tt_fabric::Topology::Torus;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.topology == topo;
+        } else if (filter_type.value() == "routing_type" || filter_type.value() == "Routing_Type") {
+            auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
+            if (filter_value == "LowLatency") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
+            } else if (filter_value == "Dynamic") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.routing_type == r_type;
+        } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
+            if (filter_value == "true") {
+                return test_config.benchmark_mode;
+            } else if (filter_value == "false") {
+                return !test_config.benchmark_mode;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
+        } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
+            if (filter_value == "true") {
+                return test_config.global_sync;
+            } else if (filter_value == "false") {
+                return !test_config.global_sync;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported sync filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
+        } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_links");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_links_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_links : num_links_vec) {
+                            if (num_links == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return test_config.fabric_setup.num_links == stoi(filter_value.value());
+        } else if (filter_type.value() == "ntype") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ntype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ntype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ntype : ntype_vec) {
+                            if (ntype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // soft filter
+            std::optional<tt::tt_fabric::NocSendType> ntype;
+            ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ntype.has_value()) {
+                        if (pattern.ntype.value() == ntype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ntype.has_value() && pattern.ntype.value() != ntype;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
+                checker = test_config.defaults.value().ntype.value() == ntype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "ftype") {
+            // soft filter
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ftype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ftype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ftype : ftype_vec) {
+                            if (ftype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            std::optional<tt::tt_fabric::ChipSendType> ftype;
+            ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ftype.has_value()) {
+                        if (pattern.ftype.value() == ftype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ftype.has_value() && pattern.ftype.value() != ftype.value();
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
+                checker = test_config.defaults.value().ftype.value() == ftype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "num_packets") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_packets");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_packets_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_packets : num_packets_vec) {
+                            if (num_packets == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // soft filter
+            uint32_t num_packets = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.num_packets.has_value()) {
+                        if (pattern.num_packets.value() == num_packets) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.num_packets.has_value() && pattern.num_packets.value() != num_packets;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
+                checker = test_config.defaults.value().num_packets.value() == num_packets;
+            }
+            return checker;
+        } else if (filter_type.value() == "size") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("size");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& size_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& size : size_vec) {
+                            if (size == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            uint32_t size = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.size.has_value()) {
+                        if (pattern.size.value() == size) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.size.has_value() && pattern.size.value() != size;
+                            }),
+                        sender.patterns.end());
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
+                checker = test_config.defaults.value().size.value() == size;
+            }
+            return checker;
+        } else if (filter_type.value() == "pattern") {
+            bool checker = false;
+            if (test_config.patterns.has_value()) {
+                for (auto& high_level_pattern : test_config.patterns.value()) {
+                    if (high_level_pattern.type == filter_value.value()) {
+                        checker = true;
+                        break;
+                    }
+                }
+            }
+            return checker;
+        } else {
+            log_info(
+                tt::LogTest,
+                "Unsupported filter type: '{}'. Supported types are: name, topology, routing_type, benchmark_mode, "
+                "sync, num_links, ntype, ftype, num_packets, size, pattern",
+                filter_type.value());
+            return false;
+        }
+    }
+    return true;
 }
 
 inline void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
@@ -782,6 +1100,7 @@ inline void CmdlineParser::print_help() {
         LogTest,
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
+    log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
 }
 
 // YamlConfigParser private helpers
@@ -919,7 +1238,8 @@ public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
         device_info_provider_(device_info_provider), route_manager_(route_manager), gen_(gen) {}
 
-    std::vector<TestConfig> build_tests(const std::vector<ParsedTestConfig>& raw_configs) {
+    std::vector<TestConfig> build_tests(
+        const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser) {
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
@@ -927,6 +1247,10 @@ public:
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
+                if (!cmdline_parser.check_filter(p_config, false)) {
+                    log_info(LogTest, "Skipping part of test '{}' due to filter criteria.", p_config.name);
+                    continue;
+                }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
                 built_tests.insert(
                     built_tests.end(),
@@ -1020,7 +1344,18 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                max_iterations = std::max(max_iterations, p.iterations.value_or(1));
+                if (p.iterations.has_value()) {
+                    max_iterations = std::max(max_iterations, p.iterations.value());
+                } else if (p.type == "all_to_one") {
+                    // Dynamically calculate iterations for all_to_one patterns based on number of devices
+                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
+                    max_iterations = std::max(max_iterations, num_devices);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for all_to_one pattern in test '{}'",
+                        num_devices,
+                        p_config.name);
+                }
             }
         }
 
@@ -1324,6 +1659,10 @@ private:
                 } else {
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
+            } else if (pattern.type == "all_to_one") {
+                expand_all_to_one_unicast(test, defaults, iteration_idx);
+            } else if (pattern.type == "all_to_one_random") {
+                expand_all_to_one_random_unicast(test, defaults);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1364,6 +1703,22 @@ private:
         } else {
             add_senders_from_pairs(test, all_pairs, base_pattern);
         }
+    }
+
+    void expand_all_to_one_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
+        if (!filtered_pairs.empty()) {
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        }
+    }
+
+    void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1530,7 +1885,7 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns)};
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
@@ -1743,7 +2098,6 @@ private:
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;
-
     // Randomization helpers
     template <typename T>
     T get_random_choice(const std::vector<T>& choices) {
@@ -1875,6 +2229,9 @@ private:
 
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
+    }
+    static std::string to_string(FabricReliabilityMode mode) {
+        return detail::fabric_reliability_mode_mapper.to_string(mode, "FabricReliabilityMode");
     }
 
     static std::string to_string(tt::tt_fabric::Topology topology) {
@@ -2049,6 +2406,10 @@ private:
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.fabric_reliability_mode.has_value()) {
+            out << YAML::Key << "fabric_reliability_mode";
+            out << YAML::Value << to_string(config.fabric_reliability_mode.value());
         }
         if (config.topology == Topology::Torus && config.torus_config.has_value()) {
             out << YAML::Key << "torus_config";

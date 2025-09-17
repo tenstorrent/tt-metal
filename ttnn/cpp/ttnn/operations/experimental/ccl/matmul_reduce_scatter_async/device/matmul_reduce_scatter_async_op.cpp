@@ -23,7 +23,7 @@ MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::MatmulReduceScatterAsync{
-        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, std::move(devices)};
+        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, devices};
 }
 
 }  // namespace matmul_reduce_scatter_async_detail
@@ -101,7 +101,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->reduce_scatter_minimal_async_struct.devices,
@@ -177,7 +177,12 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
         this->reduce_scatter_minimal_async_struct.output_mem_config,
         this->reduce_scatter_minimal_async_struct.intermediate_mem_config,
         this->reduce_scatter_minimal_async_struct.topology,
-        this->reduce_scatter_minimal_async_struct.sub_device_id,
+        this->reduce_scatter_minimal_async_struct.sub_device_id.has_value(),
+        this->reduce_scatter_minimal_async_struct.sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                  this->reduce_scatter_minimal_async_struct.sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->reduce_scatter_minimal_async_struct.cluster_axis,
         this->reduce_scatter_minimal_async_struct.barrier_semaphore.has_value(),
         this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
@@ -268,6 +273,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         matmul_struct.create_output_tensors({input_tensor, weight_tensor}, optional_output_tensors)[0];
 
     /* ReduceScatter setup */
+    constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
         devices,
         dim,
@@ -282,7 +288,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         sub_device_id,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
+        DEFAULT_WORKERS_PER_LINK,
         std::nullopt);
 
     std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(

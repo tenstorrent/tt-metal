@@ -23,7 +23,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -58,7 +57,7 @@ Tensor host_function(const Tensor& input_tensor) {
     auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = UnaryFunction(input_buffer[index].to_float());
+        auto value = UnaryFunction(static_cast<float>(input_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
 

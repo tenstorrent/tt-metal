@@ -28,7 +28,6 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -144,7 +143,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
             for (int i = 0; i < buf_size_datums; i++) {
                 EXPECT_EQ(
-                    static_cast<int>(std::floor(bfloat16(readback_data[i]).to_float())),
+                    static_cast<int>(std::floor(static_cast<float>(bfloat16(readback_data[i])))),
                     static_cast<int>(-1 * sqrt(input_val)));
             }
         }

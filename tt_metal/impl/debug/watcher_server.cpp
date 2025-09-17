@@ -30,10 +30,10 @@
 #include "metal_soc_descriptor.h"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
@@ -140,7 +140,16 @@ void WatcherServer::Impl::attach_devices() {
 
 void WatcherServer::Impl::detach_devices() {
     // If server isn't running, and wasn't killed due to an error, nothing to do here.
+    auto close_file = [](FILE*& file) {
+        if (file != nullptr) {
+            std::fclose(file);
+            file = nullptr;
+        }
+    };
     if (!server_thread_ and !server_killed_due_to_error_) {
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
         return;
     }
 
@@ -179,10 +188,9 @@ void WatcherServer::Impl::detach_devices() {
 
         // Watcher server closed, can use dma library again.
         MetalContext::instance().rtoptions().set_disable_dma_ops(false);
-
-        // Close files
-        std::fclose(logfile_);
-        logfile_ = nullptr;
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
     }
 }
 
@@ -239,8 +247,8 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 void WatcherServer::Impl::read_kernel_ids_from_file() {
     std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f;
-    if ((f = fopen(fname.c_str(), "r")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "r");
+    if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
@@ -248,8 +256,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     size_t len;
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
-        s = s.substr(0, s.length() - 1);            // Strip newline
-        int k_id = stoi(s.substr(0, s.find(":")));  // Format is {k_id}: {kernel}
+        s = s.substr(0, s.length() - 1);  // Strip newline
         kernel_names_.push_back(s.substr(s.find(":") + 2));
     }
 }
@@ -271,8 +278,6 @@ double WatcherServer::Impl::get_elapsed_secs() {
 }
 
 void WatcherServer::Impl::create_log_file() {
-    FILE* f;
-
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
@@ -281,7 +286,8 @@ void WatcherServer::Impl::create_log_file() {
     if (rtoptions.get_watcher_skip_logging()) {
         fname = "/dev/null";
     }
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create log file\n");
     }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
@@ -311,13 +317,13 @@ void WatcherServer::Impl::create_log_file() {
 }
 
 void WatcherServer::Impl::create_kernel_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
     kernel_names_.clear();
@@ -329,12 +335,12 @@ void WatcherServer::Impl::create_kernel_file() {
 }
 
 void WatcherServer::Impl::create_kernel_elf_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
-    if ((f = fopen(fname.c_str(), "w")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "w");
+    if (!f) {
         TT_THROW("Watcher failed to create kernel ELF file\n");
     }
     kernel_elf_file_ = f;
@@ -376,14 +382,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
     data->assert_status.which = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
     // Initialize pause flags to 0
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->pause_status.flags[idx] = 0;
-    }
-
+    memset(&data->pause_status, 0, sizeof data->pause_status);
     // Initialize stack usage data to unset
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.cpu[idx].min_free = 0;
-    }
+    memset(&data->stack_usage, 0, sizeof data->stack_usage);
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
@@ -393,29 +394,15 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
 
     // Initialize Debug Delay feature
     std::map<CoreCoord, debug_insert_delays_msg_t> debug_delays_val;
-    for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
-         (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
-         delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
-        bool this_chip_enabled = rtoptions.get_feature_all_chips(delay_feature) ||
-                                 std::find(chip_ids.begin(), chip_ids.end(), device_id) != chip_ids.end();
+    constexpr tt::llrt::RunTimeDebugFeatures debug_delay_features[] = {
+        tt::llrt::RunTimeDebugFeatureReadDebugDelay,
+        tt::llrt::RunTimeDebugFeatureWriteDebugDelay,
+        tt::llrt::RunTimeDebugFeatureAtomicDebugDelay};
+    for (auto delay_feature : debug_delay_features) {
+        const std::vector<chip_id_t>& chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
+        bool this_chip_enabled =
+            rtoptions.get_feature_all_chips(delay_feature) || std::ranges::find(chip_ids, device_id) != chip_ids.end();
         if (this_chip_enabled) {
-            static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-            debug_insert_delays_msg_t delay_setup;
-
-            // Create the mask based on the feature
-            uint32_t hart_mask = rtoptions.get_feature_riscv_mask(delay_feature);
-            switch (delay_feature) {
-                case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
-                case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
-                    delay_setup.write_delay_riscv_mask = hart_mask;
-                    break;
-                case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
-                    delay_setup.atomic_delay_riscv_mask = hart_mask;
-                    break;
-                default: break;
-            }
-
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
                 const auto& delayed_cores = rtoptions.get_feature_cores(delay_feature);
                 if (delayed_cores.count(core_type) == 0) {
@@ -433,14 +420,23 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
+                        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+                        // Create the mask based on the feature
+                        uint32_t processor_mask =
+                            rtoptions.get_feature_processors(delay_feature).get_processor_mask(programmable_core_type);
                         // Update the masks for the core
-                        if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
-                            debug_delays_val[virtual_core].read_delay_riscv_mask |= delay_setup.read_delay_riscv_mask;
-                            debug_delays_val[virtual_core].write_delay_riscv_mask |= delay_setup.write_delay_riscv_mask;
-                            debug_delays_val[virtual_core].atomic_delay_riscv_mask |=
-                                delay_setup.atomic_delay_riscv_mask;
-                        } else {
-                            debug_delays_val.insert({virtual_core, delay_setup});
+                        auto& delay_setup = debug_delays_val[virtual_core];
+                        switch (delay_feature) {
+                            case tt::llrt::RunTimeDebugFeatureReadDebugDelay:
+                                delay_setup.read_delay_processor_mask |= processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
+                                delay_setup.write_delay_processor_mask |= processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
+                                delay_setup.atomic_delay_processor_mask |= processor_mask;
+                                break;
+                            default: TT_THROW("Unexpected debug delay feature");
                         }
                     } else {
                         log_warning(
@@ -467,9 +463,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}. Delay cycles: {}",
             device_id,
             delay.first.str().c_str(),
-            delay.second.read_delay_riscv_mask,
-            delay.second.write_delay_riscv_mask,
-            delay.second.atomic_delay_riscv_mask,
+            delay.second.read_delay_processor_mask,
+            delay.second.write_delay_processor_mask,
+            delay.second.atomic_delay_processor_mask,
             rtoptions.get_watcher_debug_delay());
     }
 
@@ -492,7 +488,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device_id,
                 worker_core,
                 tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
@@ -510,7 +506,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
             virtual_core,
             watcher_init_val,

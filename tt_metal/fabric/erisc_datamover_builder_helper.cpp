@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
+#include "builder/fabric_core_placement.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
@@ -10,6 +11,7 @@
 
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
 #include "erisc_datamover_builder_helper.hpp"
+#include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 
 namespace tt::tt_fabric {
 
@@ -269,67 +271,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (size_t l = 0; l < num_links; l++) {
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
-                // currently is_galaxy is only being passed in through the fabric unit test, once we switch to fabric
-                // device init, will use proper cluster type to decide which machine it is. For the optimzation on noc
-                // selection, we empirically optimize on 3/4 links for linear, and 4 links on ring, as less links caused
-                // perf degradation, potentially caused by sw overhead of checking two nocs.
-                bool enable_core_placement_opt = false;
-                if (is_galaxy) {
-                    if (topology == Topology::Ring) {
-                        enable_core_placement_opt = (num_links > 3) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
-                    } else {
-                        enable_core_placement_opt = (num_links > 2) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
-                    }
-                }
-                if (enable_core_placement_opt) {
-                    if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
-                        log_info(
-                            tt::LogOp,
-                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            *(edm_fwd.local_fabric_node_id.mesh_id),
-                            edm_fwd.local_fabric_node_id.chip_id,
-                            edm_fwd.my_noc_x,
-                            edm_fwd.my_noc_y,
-                            edm_bwd.my_noc_x,
-                            edm_bwd.my_noc_y,
-                            l);
-                        for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
-                            edm_fwd.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                            edm_bwd.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
-                            edm_fwd.config.receiver_channel_local_write_noc_ids[i] = 1;
-                            edm_bwd.config.receiver_channel_local_write_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_fwd.config.num_sender_channels; i++) {
-                            edm_fwd.config.sender_channel_ack_noc_ids[i] = 1;
-                            edm_bwd.config.sender_channel_ack_noc_ids[i] = 0;
-                        }
-                    } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
-                        log_info(
-                            tt::LogOp,
-                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            *(edm_fwd.local_fabric_node_id.mesh_id),
-                            edm_fwd.local_fabric_node_id.chip_id,
-                            edm_fwd.my_noc_x,
-                            edm_fwd.my_noc_y,
-                            edm_bwd.my_noc_x,
-                            edm_bwd.my_noc_y,
-                            l);
-                        for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
-                            edm_fwd.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                            edm_bwd.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                        }
-                        for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
-                            edm_fwd.config.receiver_channel_local_write_noc_ids[i] = 1;
-                            edm_bwd.config.receiver_channel_local_write_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_fwd.config.num_sender_channels; i++) {
-                            edm_fwd.config.sender_channel_ack_noc_ids[i] = 0;
-                            edm_bwd.config.sender_channel_ack_noc_ids[i] = 1;
-                        }
-                    }
-                }
+
+                tt::tt_fabric::core_placement::CorePlacementContext cctx{
+                    .topology = topology,
+                    .is_galaxy = is_galaxy,
+                    .num_links = num_links,
+                };
+                tt::tt_fabric::core_placement::apply_core_placement_optimizations(cctx, edm_fwd, edm_bwd, l);
             }
         }
 

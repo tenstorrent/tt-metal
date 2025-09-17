@@ -15,18 +15,17 @@ Description:
 from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
+from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
-from ttexalens.tt_exalens_lib import parse_elf
 from ttexalens.context import Context
-from utils import ORANGE, RST
 from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data"],
+    depends=["inspector_data", "elfs_cache"],
 )
 
 
@@ -46,7 +45,7 @@ class DispatcherCoreData:
 
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context):
+    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
         self.inspector_data = inspector_data
         if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
@@ -62,8 +61,8 @@ class DispatcherData:
         if not os.path.exists(idle_erisc_elf_path):
             raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
 
-        self._brisc_elf = parse_elf(brisc_elf_path, context)
-        self._idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
+        self._brisc_elf = elfs_cache[brisc_elf_path]
+        self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
 
         # Check if debug info is obtained correctly
         if not self._brisc_elf:
@@ -88,23 +87,6 @@ class DispatcherData:
                 "TRISC1": self._brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
                 "TRISC2": self._brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
             },
-            "dispatch_core_processor_classes": {
-                "BRISC": self._brisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"
-                ].value,
-                "NCRISC": self._brisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"
-                ].value,
-                "TRISC0": self._brisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
-                ].value,
-                "TRISC1": self._brisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
-                ].value,
-                "TRISC2": self._brisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
-                ].value,
-            },
         }
 
         # Enumerators for eth block
@@ -112,17 +94,6 @@ class DispatcherData:
             "ProcessorTypes": {
                 "ERISC": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
                 "ERISC0": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
-            },
-            "dispatch_core_processor_classes": {
-                "ERISC": self._idle_erisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
-                ].value,
-                "ERISC0": self._idle_erisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
-                ].value,
-                "ERISC1": self._idle_erisc_elf.enumerators[
-                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"
-                ].value,
             },
         }
 
@@ -149,7 +120,6 @@ class DispatcherData:
 
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
-        proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
@@ -186,7 +156,7 @@ class DispatcherData:
             watcher_kernel_id = (
                 mem_access(
                     fw_elf,
-                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
+                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
                     loc_mem_reader,
                 )[0][0]
                 & 0xFFFF
@@ -259,7 +229,8 @@ class DispatcherData:
 @triage_singleton
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
-    return DispatcherData(inspector_data, context)
+    elfs_cache = get_elfs_cache(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -58,7 +58,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     uint32_t batch_idx_buffer_addr = 0;
     tt::DataFormat batch_idx_data_format = tt::DataFormat::UInt32;  // Assuming batch_idx is uint32
     uint32_t batch_idx_stick_size_B = 4;                            // Assuming scalar uint32
-    bool batch_idx_is_dram = false;
 
     if (use_batch_idx_tensor) {
         const auto& tensor = batch_idx_tensor.value();
@@ -66,7 +65,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
         TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
-        batch_idx_is_dram = tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
     tt_metal::IDevice* device = input_tensor.device();
@@ -101,7 +99,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     auto page_table_buffer = page_table_tensor.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, Wt};
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)src0_cb_index,
@@ -110,14 +108,16 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         num_blocks_of_work_per_head,
         block_size_t,
         Wt,
+        log2_page_table_stick_size_B,
         page_table_stick_size_B,
+        // New compile-time args for batch_idx_tensor
         (uint32_t)use_batch_idx_tensor,
-        cb_batch_idx_id,
-        batch_idx_stick_size_B,
+        cb_batch_idx_id,        // Meaningful only if use_batch_idx_tensor is true
+        batch_idx_stick_size_B  // Meaningful only if use_batch_idx_tensor is true
     };
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(use_batch_idx_tensor ? batch_idx_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(batch_idx_tensor.has_value() ? batch_idx_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(

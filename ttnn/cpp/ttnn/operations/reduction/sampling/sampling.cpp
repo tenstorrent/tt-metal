@@ -32,25 +32,4 @@ ttnn::Tensor SamplingOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor SamplingOperation::invoke(
-    const Tensor& input_values_tensor,
-    const Tensor& input_indices_tensor,
-    const Tensor& k,
-    const Tensor& p,
-    const Tensor& temp,
-    const std::optional<uint32_t>& seed,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        DefaultQueueId,
-        input_values_tensor,
-        input_indices_tensor,
-        k,
-        p,
-        temp,
-        seed,
-        sub_core_grids,
-        std::move(optional_output_tensor));
-}
-
 }  // namespace ttnn::operations::reduction

@@ -9,6 +9,9 @@ import ttnn
 def bf16_tensor(
     x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
 ) -> ttnn.Tensor:
+    """
+    Replicates or shards a tensor based on the mesh_axis and shard_dim
+    """
     assert (mesh_axis is None) == (shard_dim is None)
     mesh_mapper = None
     if mesh_axis is not None:

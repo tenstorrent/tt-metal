@@ -6,7 +6,7 @@
 from loguru import logger
 
 
-from models.utility_functions import comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_pcc, skip_for_grayskull
 import torch
 import ttnn
 

@@ -90,7 +90,7 @@ void find_max_value_in_row() {
                     copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register);
+                    add_binary_tile(working_register, mask_register, working_register);
                 }
             }
 
@@ -143,7 +143,7 @@ void find_max_value_in_row() {
                     copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register);
+                    add_binary_tile(working_register, mask_register, working_register);
                 }
             }
 
@@ -251,7 +251,7 @@ void calculate_sum_exp_x() {
 
         if (col > 0) {
             add_binary_tile_init();
-            add_binary_tile(working_register, tile_register);
+            add_binary_tile(working_register, tile_register, working_register);
         }
     }
     tile_regs_commit();
@@ -291,7 +291,8 @@ void calculate_sum_exp_x() {
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
             sub_binary_tile_init();
-            sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
+            sub_binary_tile(
+                working_register, max_value_register, working_register);  // subtract max value from each tile
 
             exp_tile_init<false>();
             exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
@@ -312,7 +313,7 @@ void calculate_sum_exp_x() {
 
             if (col > 0) {
                 add_binary_tile_init();
-                add_binary_tile(accum_register, working_register);
+                add_binary_tile(accum_register, working_register, accum_register);
             }
         }
         cb_pop_front(cb_input, block_size);
@@ -428,7 +429,7 @@ void MAIN {
 #endif
 
                 mul_binary_tile_init();
-                mul_binary_tile(block_idx, sum_exp_register);  // multiply by scaler
+                mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler
             }
             tile_regs_commit();
 

@@ -11,8 +11,8 @@
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt {

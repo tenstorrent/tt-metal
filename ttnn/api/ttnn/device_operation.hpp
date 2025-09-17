@@ -10,11 +10,13 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -68,6 +70,52 @@ auto compute_program_hash(
     }
 }
 
+// Helper to create a mesh workload from a WorkloadFactory that may or may not
+// provide create_mesh_workload. If missing, synthesize it from create_at.
+template <typename WorkloadFactory, typename device_operation_t>
+static auto create_mesh_workload_from_workload_factory(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+    if constexpr (requires(
+                      const typename device_operation_t::operation_attributes_t& operation_attributes,
+                      const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                      const typename device_operation_t::tensor_args_t& tensor_args,
+                      typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                      WorkloadFactory::create_mesh_workload(
+                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                  }) {
+        return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinate& mesh_coordinate,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_at(
+                                 operation_attributes, mesh_coordinate, tensor_args, tensor_return_value);
+                         }) {
+        using shared_variables_t = typename WorkloadFactory::shared_variables_t;
+        tt::tt_metal::distributed::MeshWorkload mesh_workload;
+        std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+        for (const auto& coord : tensor_coords.coords()) {
+            auto cached_program =
+                WorkloadFactory::create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+            mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+            shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        }
+        return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+    } else {
+        static_assert(
+            tt::stl::concepts::always_false_v<WorkloadFactory>,
+            "WorkloadFactory must implement create_mesh_workload(operation_attributes, tensor_coords, tensor_args, "
+            "tensor_return_value) or create_at(operation_attributes, mesh_coordinate, tensor_args, "
+            "tensor_return_value, tensor_coords)");
+    }
+}
+
 struct CheckDeviceBufferIsAllocated {
     std::size_t index = 0;
 
@@ -110,7 +158,7 @@ inline void log_operation(
     log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 
     log_debug(tt::LogOp, "Attributes:");
-    for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for ([[maybe_unused]] const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
         log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
@@ -246,7 +294,7 @@ void create_and_cache_mesh_workload(
                     tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
                 }
             }
-            auto cached_workload = WorkloadFactory::create_mesh_workload(
+            auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
             if (program_cache.is_enabled()) {
@@ -329,7 +377,7 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
     }
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    auto mesh_device = first_tensor.mesh_device();
+    auto mesh_device = first_tensor.device();
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;

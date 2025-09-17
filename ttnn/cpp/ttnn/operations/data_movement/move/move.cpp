@@ -182,9 +182,4 @@ ttnn::Tensor MoveOperation::invoke(
     return move(queue_id, input_tensor, output_mem_config);
 }
 
-ttnn::Tensor MoveOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, output_mem_config);
-}
-
 }  // namespace ttnn::operations::data_movement

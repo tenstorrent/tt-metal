@@ -32,21 +32,4 @@ ttnn::Tensor MoeOperation::invoke(
         .at(0);
 }
 
-auto MoeOperation::invoke(
-    const Tensor& input_tensor,
-    const Tensor& expert_mask_tensor,
-    const Tensor& topk_mask_tensor,
-    const uint16_t k,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor,
-        expert_mask_tensor,
-        topk_mask_tensor,
-        k,
-        memory_config,
-        std::move(optional_output_tensor));
-}
-
 }  // namespace ttnn::operations::reduction

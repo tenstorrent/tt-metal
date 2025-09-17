@@ -201,7 +201,7 @@ class MLP1D(AbstractModule):
             "w3": linear_op_config,
             "mul": MulConfig(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 dim=-1,  # We are scattering across the feature dimension (last one)
@@ -308,7 +308,7 @@ class MLP1D(AbstractModule):
             ),
             "mul": MulConfig(
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -372,12 +372,12 @@ class MLP1D(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "reduce_scatter_async": {
-                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
@@ -461,12 +461,12 @@ class MLP1D(AbstractModule):
         ttnn.deallocate(x)
 
         # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
-        ttnn.deallocate(w1_out)
+        # w1_out_activated = cls._silu_workaround(w1_out)
+        # ttnn.deallocate(w1_out)
 
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection with dynamic program configs, no need to reshard as we are using dram activations

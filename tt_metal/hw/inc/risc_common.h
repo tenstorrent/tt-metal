@@ -52,12 +52,6 @@ inline uint32_t READ_REG(uint32_t addr) {
     return ptr[0];
 }
 
-// This enum is used to specify the dest location type for inline writes.
-// It is needed because inline writes use all 4 memory ports and may hang on Blackhole when there is back-pressure.
-// This hang only manifests when the inline writes are issued to a L1 location. The workaround on BH is for inline
-// writes to L1 to use noc async writes.
-enum class InlineWriteDst : uint8_t { DEFAULT = 0, L1 = 1, REG = 2 };
-
 inline uint32_t dram_io_incr_ptr(uint32_t curr_ptr, uint32_t incr, uint32_t buf_size_q_slots) {
     uint32_t next_ptr = curr_ptr + incr;
     uint32_t double_buf_size_q_slots = 2 * buf_size_q_slots;
@@ -197,14 +191,34 @@ inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #else
 #pragma GCC unroll 128
     for (int i = 0; i < 128; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #endif
+}
+
+// Zero a buffer in L1 memory
+void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
+    for (uint32_t i = 0; i < size_bytes / 4; i++) {
+        buf[i] = 0;
+    }
+}
+
+// Get the wall clock timestamp. Reading RISCV_DEBUG_REG_WALL_CLOCK_L samples/freezes (for readback)
+// upper 32 bits of the 64-bit timestamp. Upper 32 bits are read from RISCV_DEBUG_REG_WALL_CLOCK_H.
+inline uint64_t get_timestamp() {
+    volatile uint timestamp_low = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint timestamp_high = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+}
+
+// Get only the lower 32 bits of the wall clock timestamp
+inline uint32_t get_timestamp_32b() {
+    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
 #endif

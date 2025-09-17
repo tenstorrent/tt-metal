@@ -21,7 +21,8 @@ struct RuntimeQueryResponse {
     std::optional<std::string> error_message;
 };
 
-static constexpr int NUM_TRACE_EXECUTIONS = 10;
+static constexpr size_t NUM_TRACE_EXECUTIONS = 20;
+static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
 
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
@@ -89,8 +90,12 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
 template <typename TraceID>
 uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     try {
+        for (size_t i = 0; i < WARMUP_TRACE_EXECUTIONS; ++i) {
+            ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
+        }
+
         uint64_t duration = 0;
-        for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
+        for (size_t i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
             ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
@@ -98,6 +103,7 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
         }
 
         ttnn::operations::trace::release_trace(device, trace_id);
+
         return duration / NUM_TRACE_EXECUTIONS;
 
     } catch (const std::exception& e) {

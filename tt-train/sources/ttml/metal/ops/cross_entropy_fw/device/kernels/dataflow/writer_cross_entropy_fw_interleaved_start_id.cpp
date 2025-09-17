@@ -18,10 +18,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    const DataFormat data_format = get_dataformat(cb_output_idx);
-
-    const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
-        .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto output_args = TensorAccessorArgs<2>();
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
     uint32_t end_row = start_row + num_rows_to_process;
 

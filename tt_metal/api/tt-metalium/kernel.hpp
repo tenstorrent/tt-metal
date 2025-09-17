@@ -26,9 +26,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace ll_api {
@@ -93,6 +93,7 @@ public:
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
+    std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
@@ -144,6 +145,7 @@ protected:
     CoreRangeSet core_range_set_;
     uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
+    std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_;
@@ -166,7 +168,8 @@ private:
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
-        const std::map<std::string, std::string>& defines);
+        const std::map<std::string, std::string>& defines = {},
+        const std::unordered_map<std::string, uint32_t>& named_compile_args = {});
 
     // Only allow KernelImpl to inherit from Kernel.
     friend class KernelImpl;

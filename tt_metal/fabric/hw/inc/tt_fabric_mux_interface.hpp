@@ -37,13 +37,11 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 
     auto mux_channel_credits_stream_id = get_mux_channel_stream_id_from_channel_id(fabric_mux_channel_id);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
-        true,      /* ignored, connected_to_persistent_fabric */
-        direction, /* ignored, direction */
+        true, /* ignored, connected_to_persistent_fabric */
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_base_address,
         fabric_mux_num_buffers_per_channel,
-        fabric_mux_flow_control_address,
         fabric_mux_connection_handshake_address,
         fabric_mux_connection_info_address,
         fabric_mux_channel_buffer_size_bytes,

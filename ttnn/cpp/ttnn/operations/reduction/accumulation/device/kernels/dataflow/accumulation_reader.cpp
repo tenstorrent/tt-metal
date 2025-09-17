@@ -18,7 +18,7 @@ constexpr union {
 void kernel_main() {
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
 
-    constexpr bool input_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto input_addrg_args = TensorAccessorArgs<0>();
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
@@ -43,14 +43,13 @@ void kernel_main() {
     constexpr int32_t ACC_START_VALUE_I16{0x1};
     constexpr int32_t ACC_START_VALUE_I8{0x1};
 
-    const auto& input_data_format = get_dataformat(cb_in);
-
     uint32_t ublock_size_bytes = get_tile_size(cb_in);
 
     const uint32_t input_tile_bytes = ublock_size_bytes;
     uint32_t scaler = 0;
 
     if (accumulation_op == AccumulationOp::CUMPROD) {
+        const auto& input_data_format = get_dataformat(cb_in);
         switch (input_data_format) {
             case DataFormat::Float32: scaler = ACC_START_VALUE_F32; break;
             case DataFormat::Float16_b:
@@ -74,8 +73,7 @@ void kernel_main() {
         data_start[i] = scaler;
     }
 
-    InterleavedAddrGenFast<input_dram> input_addrg = {
-        .bank_base_address = input_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr, input_tile_bytes);
 
     cb_push_back(cb_start, ONE_TILE);
 

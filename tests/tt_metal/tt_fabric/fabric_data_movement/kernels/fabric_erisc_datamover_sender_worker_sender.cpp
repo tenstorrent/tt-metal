@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -67,8 +67,8 @@ void kernel_main() {
     const uint32_t receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
-        .bank_base_address = dest_addr, .page_size = page_size};
+    constexpr auto dst_args = TensorAccessorArgs<5>();
+    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr, page_size);
 
     sender.open<true>();
 

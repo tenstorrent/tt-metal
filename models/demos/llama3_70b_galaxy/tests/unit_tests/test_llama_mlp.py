@@ -9,11 +9,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
@@ -33,7 +33,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (32,),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -131,10 +131,9 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
         logger.info("llama MLP Done")
+        tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]  # (1, 8, bsz, 8192) -> (1, 1, bsz, 8192)
 
-        tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
-
-        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :, : model_args.dim])
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

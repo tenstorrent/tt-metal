@@ -129,9 +129,9 @@ tests:
       data_size: 2048
       num_transactions: 10
     pattern_expansions:
-      - type: "all_to_all_devices"
+      - type: "all_to_all_device_unicast"
         core_coord: [0, 0]
-      - type: "all_to_all_devices"
+      - type: "all_to_all_device_unicast"
         core_coord: [0, 1]
   - name: "all_hosts_random_sockets_pattern_test"
     num_iterations: 3
@@ -144,3 +144,13 @@ tests:
       - type: "all_hosts_random_sockets"
         core_coord: [0, 0]
         num_sockets: 4
+  - name: "all_device_broadcast_pattern_test"
+    num_iterations: 2
+    memory_config:
+      fifo_size: 2048
+      page_size: 512
+      data_size: 4096
+      num_transactions: 15
+    pattern_expansions:
+      - type: "all_device_broadcast"
+        core_coord: [0, 0]

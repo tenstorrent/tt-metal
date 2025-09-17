@@ -55,15 +55,17 @@ struct ExecuteUnaryCompositeOpWithFloats {
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
         const Tensor& input_tensor,
-        std::optional<float> min = std::nullopt,
-        std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        std::optional<std::variant<float, int32_t>> min = std::nullopt,
+        std::optional<std::variant<float, int32_t>> max = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
@@ -149,9 +151,6 @@ constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::
 constexpr auto cbrt = ttnn::register_operation<
     "ttnn::cbrt",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
-constexpr auto cosh = ttnn::register_operation<
-    "ttnn::cosh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
@@ -178,9 +177,6 @@ constexpr auto normalize_hw = ttnn::register_operation<
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
-constexpr auto selu = ttnn::register_operation<
-    "ttnn::selu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();

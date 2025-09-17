@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_segformer_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -66,24 +67,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = false;
-
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
         (std::uint32_t)q_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
         (std::uint32_t)q_out_h_tiles,
         (std::uint32_t)q_out_w_tiles,
         (std::uint32_t)q_out_HtWt,
         (std::uint32_t)num_q_heads,  // q_out_c
     };
+    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
 
     ///////////// K transpose ////////////////////
     std::map<std::string, std::string> reader_defines;

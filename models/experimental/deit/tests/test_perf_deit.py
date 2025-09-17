@@ -11,7 +11,7 @@ import ttnn
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,

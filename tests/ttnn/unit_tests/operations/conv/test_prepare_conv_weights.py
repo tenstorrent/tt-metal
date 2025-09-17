@@ -73,7 +73,6 @@ def prepare_conv_weights_func(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
@@ -349,7 +348,6 @@ def test_prepare_bias(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
@@ -420,7 +418,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
-@skip_for_blackhole("#26435: Not fully tested on Blackhole")
+@pytest.mark.skip("#26435: prepare weights is broken for dram sliced convs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",

@@ -39,7 +39,7 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/utils.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -532,7 +532,7 @@ int main(int argc, char** argv) {
         }
 
         DeviceData device_data(
-            device, all_workers_g, l1_data_addr, dram_data_addr, 0, paged_test, DRAM_DATA_SIZE_WORDS);
+            device, all_workers_g, l1_data_addr, dram_data_addr, nullptr, paged_test, DRAM_DATA_SIZE_WORDS);
 
         if (is_paged_dram_test() && debug_g) {
             initialize_dram_banks(device);
@@ -541,7 +541,8 @@ int main(int argc, char** argv) {
         // Generate commands once and write them to prefetcher core.
         vector<uint32_t> cmds;
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
-        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         const uint32_t spoof_prefetch_core_sem_0_id =
             tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);

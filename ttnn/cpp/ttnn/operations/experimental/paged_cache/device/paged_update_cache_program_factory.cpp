@@ -8,8 +8,8 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_update_cache_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -59,12 +59,10 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
-    bool index_is_dram = true;
     if (use_index_tensor) {
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
-        index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
 
@@ -76,7 +74,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     uint32_t page_table_stick_size = 0;
     uint32_t log2_page_table_stick_size = 0;
     tt::DataFormat page_table_data_format = tt::DataFormat::Int32;
-    bool page_table_is_dram = true;
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
@@ -86,8 +83,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
-
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
     uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
@@ -174,6 +169,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
+        log2_page_size,
         index_stick_size,
         // page_table args
         (std::uint32_t)is_paged_cache,
@@ -181,16 +177,16 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         (std::uint32_t)block_size,
         (std::uint32_t)block_size_t,
         (std::uint32_t)max_blocks_per_seq,
+        log2_page_table_stick_size,
         page_table_stick_size,
         cb_pagetable_id,
         St,
         in0_sequential_mode_semaphore_id,
     };
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(is_paged_cache ? page_table.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
@@ -213,7 +209,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
     };
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {
         src0_cb_index,

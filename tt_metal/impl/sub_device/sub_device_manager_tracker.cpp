@@ -25,6 +25,7 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -87,7 +88,9 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 }
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    TT_FATAL(!device_->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
     }

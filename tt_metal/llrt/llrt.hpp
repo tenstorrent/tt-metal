@@ -12,14 +12,14 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "tt_target_device.hpp"
 #include <tt_stl/span.hpp>
 // clang-format off
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 
 struct go_msg_t;
@@ -60,27 +60,9 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
-    std::string_view path,
+    const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
-    std::function<void(ll_api::memory&)> update_callback = nullptr);
-
-// TODO: try using "stop" method from device instead, it's the proper way of asserting reset
-
-// CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
-// NOC coord is also synonymous to routing / physical coord
-// dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) {
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
-}
-template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr) {
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
-}
-
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
+    const std::function<void(ll_api::memory&)>& update_callback = nullptr);
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 
@@ -112,9 +94,14 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack = true,
-    int timeout_ms = 30000);
+    int timeout_ms = 10000);
+
+// Wait for a heartbeat from the active ethernet core, if supported
+// Used to check if the base firmware is running and ready to service the eth mailbox
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
 }  // namespace internal_
 

@@ -24,6 +24,7 @@ enum class UnaryOpType {
     LOG10,
     SIN,
     COS,
+    COSH,
     ABS,
     ABS_INT32,
     SIGN,
@@ -112,6 +113,8 @@ enum class UnaryOpType {
     WHERE_TSS,
     SOFTSIGN,
     CELU,
+    CLAMP_TSS,
+    SELU,
 };
 
 enum class VecMode {

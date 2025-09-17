@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "debug/assert.h"
 
 namespace tt::tt_fabric {

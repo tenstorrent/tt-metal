@@ -34,14 +34,17 @@ void kernel_main() {
 
     constexpr uint32_t St = get_compile_time_arg_val(15);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(16));  // semaphore for receiver
+
+    constexpr auto s0_args = TensorAccessorArgs<17>();
+
     constexpr uint32_t head_offset_t = Wt * St;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
+    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    constexpr auto dst_args = TensorAccessorArgs<17>();
-    const auto s0 = TensorAccessor(dst_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;

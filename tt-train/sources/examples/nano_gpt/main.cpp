@@ -27,6 +27,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "utils.hpp"
@@ -44,7 +45,7 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
+using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
 void model_to_eval(Model &model) {
     model->eval();
@@ -374,6 +375,7 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
+    bool use_no_op = false;
     bool use_moreh_adamw = false;
     // works only for AdamW
     bool use_kahan_summation = false;
@@ -406,6 +408,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
+    config.use_no_op = training_config["use_no_op"].as<bool>(config.use_no_op);
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
@@ -502,6 +505,7 @@ int main(int argc, char **argv) {
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = false;
+    std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -510,6 +514,8 @@ int main(int argc, char **argv) {
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
         ->default_val(save_and_exit_path);
+    app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
+        ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
@@ -795,6 +801,11 @@ int main(int argc, char **argv) {
         },
         config.transformer_config);
 
+    if (!safetensors_path.empty()) {
+        fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
+        model->load_from_safetensors(safetensors_path);
+        fmt::print("Model loaded from safetensors\n");
+    }
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
@@ -840,7 +851,10 @@ int main(int argc, char **argv) {
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
     adamw_params.use_kahan_summation = config.use_kahan_summation;
-    if (!config.enable_mpi) {
+
+    if (config.use_no_op) {
+        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
+    } else if (!config.enable_mpi) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -851,19 +865,20 @@ int main(int argc, char **argv) {
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer =
-        [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+    auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
-        } else if (use_moreh_adamw) {
+        } else if (config.use_no_op) {
+            return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
+        } else if (config.use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
     };
 
-    auto optimizer = select_optimizer(config.use_moreh_adamw);
+    auto optimizer = select_optimizer();
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
@@ -874,6 +889,8 @@ int main(int argc, char **argv) {
         fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mh_workers);
         optimizer_ptr->receive_weights();
         fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mh_workers);
+    } else if (config.use_no_op) {
+        fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
@@ -892,6 +909,16 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi && config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+    }
+
+    if (device_config.enable_ddp) {
+        auto num_devices = static_cast<uint32_t>(device->num_devices());
+        if (config.batch_size % num_devices != 0) {
+            throw std::logic_error(fmt::format(
+                "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
+                config.batch_size,
+                num_devices));
+        }
     }
 
     auto get_samples_count = [&config](uint32_t global_step) {
@@ -944,7 +971,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp && !config.enable_mpi) {
+                if (device_config.enable_ddp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 

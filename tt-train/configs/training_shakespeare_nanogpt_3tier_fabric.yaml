@@ -36,4 +36,5 @@ eval_config:
   top_p: 1.0
 
 device_config:
+  enable_ddp: true
   mesh_shape: [1, 8]

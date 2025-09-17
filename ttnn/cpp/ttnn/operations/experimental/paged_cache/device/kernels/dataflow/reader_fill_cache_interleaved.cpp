@@ -12,9 +12,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
+
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
+
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

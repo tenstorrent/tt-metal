@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ttnn import *
+import ttnn
 import json
+from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
 
 
 def convert_enum_values_to_strings(data):
-    """Convert enum integer values to human-readable strings for PostgreSQL storage."""
+    """Convert enum integer values to human-readable strings"""
     if not isinstance(data, dict):
         return data
 
@@ -76,11 +78,11 @@ def deserialize(object):
             return str(object)
 
 
-def serialize_for_postgres(object, warnings=[]):
+def serialize_structured(object, warnings=[]):
     if "to_json" in dir(object):
         json_str = object.to_json()
         try:
-            # Parse the JSON string to make it queryable in PostgreSQL JSONB
+            # Parse the JSON string
             parsed_data = json.loads(json_str)
             # Convert enum integers to human-readable strings
             parsed_data = convert_enum_values_to_strings(parsed_data)
@@ -98,7 +100,7 @@ def serialize_for_postgres(object, warnings=[]):
         return str(object)
 
 
-def deserialize_for_postgres(object):
+def deserialize_structured(object):
     if isinstance(object, dict):
         type = eval(object["type"])
         data = object["data"]
@@ -162,18 +164,11 @@ def convert_enum_strings_to_values(data):
     return result
 
 
-def deserialize_vector_for_postgres(test_vector):
+def deserialize_vector_structured(test_vector):
     """
-    Deserialize a test vector that was serialized for PostgreSQL storage.
+    Deserialize a test vector from a human-readable JSON to TTNN enums
     """
     param_names = test_vector.keys()
-    test_vector = [deserialize_for_postgres(test_vector[elem]) for elem in test_vector]
-    test_vector = dict(zip(param_names, test_vector))
-    return test_vector
-
-
-def deserialize_vector(test_vector):
-    param_names = test_vector.keys()
-    test_vector = [deserialize(test_vector[elem]) for elem in test_vector]
+    test_vector = [deserialize_structured(test_vector[elem]) for elem in test_vector]
     test_vector = dict(zip(param_names, test_vector))
     return test_vector

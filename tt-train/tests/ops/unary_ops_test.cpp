@@ -77,7 +77,6 @@ TEST_F(UnaryOpsTest, Silu) {
     auto C = 1;
     auto H = 20;
     auto W = 5;
-    auto len = static_cast<float>(N * C * H * W);
     xt::xarray<float> a = xt::empty<float>({N, C, H, W});
     ttml::core::parallel_generate(
         std::span{a.data(), a.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);

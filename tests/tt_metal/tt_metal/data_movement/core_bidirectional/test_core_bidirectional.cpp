@@ -39,7 +39,7 @@ struct CoreBidirectionalConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirectionalConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBidirectionalConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
     /* ================ SETUP ================ */
@@ -150,7 +150,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
     /* ================ RUNNING THE PROGRAM ================ */
 
     // Setup Input
-    size_t element_size_bytes = bfloat16::SIZEOF;
+    size_t element_size_bytes = sizeof(bfloat16);
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     std::vector<uint32_t> packed_input = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
@@ -201,7 +201,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -233,7 +233,7 @@ void directed_ideal_test(
 }
 
 void same_vc_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -244,7 +244,7 @@ void same_vc_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},
@@ -340,7 +340,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDiffer
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
     // Test ID base
-    uint32_t test_id_base = 146;
+    uint32_t test_id_base = 144;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -356,7 +356,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
     // Test ID base
-    uint32_t test_id_base = 150;
+    uint32_t test_id_base = 145;
     bool same_kernel = false;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -374,7 +374,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
     // Test ID
-    uint32_t test_id = 144;
+    uint32_t test_id = 146;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
@@ -385,7 +385,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
     // Test ID
-    uint32_t test_id = 145;
+    uint32_t test_id = 147;
     bool same_kernel = false;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
@@ -398,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesD
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
     // Test ID
-    uint32_t test_id = 147;
+    uint32_t test_id = 148;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};

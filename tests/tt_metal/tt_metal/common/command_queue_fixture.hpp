@@ -4,15 +4,16 @@
 
 #pragma once
 
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -68,7 +69,7 @@ class CommandQueueBufferFixture : public CommandQueueFixture {};
 
 class CommandQueueProgramFixture : public CommandQueueFixture {};
 
-class UnitMeshCQFixture : public DispatchFixture {
+class UnitMeshCQFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -204,7 +205,7 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
-class UnitMeshCQSingleCardFixture : virtual public DispatchFixture {
+class UnitMeshCQSingleCardFixture : virtual public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -291,7 +292,7 @@ class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
-class UnitMeshCQMultiDeviceFixture : public DispatchFixture {
+class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -375,6 +376,8 @@ protected:
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
+
+class UnitMeshCQMultiDeviceProgramFixture : public UnitMeshCQMultiDeviceFixture {};
 
 class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 

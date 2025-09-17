@@ -86,41 +86,72 @@ class Pipeline:
         self.executor = executor
         self.output_tensors = []
         self.preallocated_output_tensors = False
+        self.output_schema = None
 
     def compile(self, host_input):
         logger.debug(f"Compiling pipeline model with input_shape={list(host_input.shape)}")
         self.executor.compile(host_input)
+        self.output_schema = self.executor.get_output_schema()
         return self
+
+    def _copy_to_structured_host_tensor(self, device_struct, host_struct, cq_id):
+        if isinstance(device_struct, ttnn.Tensor):
+            ttnn.copy_device_to_host_tensor(device_struct, host_struct, blocking=False, cq_id=cq_id)
+        elif isinstance(device_struct, (list, tuple)):
+            for device_t, host_t in zip(device_struct, host_struct):
+                self._copy_to_structured_host_tensor(device_t, host_t, cq_id)
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(device_struct)}")
+
+    def _cpu_structured_tensor(self, device_struct, cq_id):
+        if isinstance(device_struct, ttnn.Tensor):
+            return device_struct.cpu(blocking=False, cq_id=cq_id)
+        elif isinstance(device_struct, (list, tuple)):
+            return [self._cpu_structured_tensor(t, cq_id) for t in device_struct]
+        else:
+            return device_struct
 
     def enqueue(self, host_inputs: list):
         if not all([input.storage_type() == ttnn.StorageType.HOST for input in host_inputs]):
             raise ValueError("All input tensors must be on host")
+
+        device_outputs = self.executor.execute(host_inputs)
+
         if self.preallocated_output_tensors:
             if len(host_inputs) > len(self.output_tensors):
                 raise ValueError(
-                    f"Number of inputs ({len(host_inputs)}) exceeds the number of pre-allocated output tensors ({len(self.output_tensors)})."
+                    f"Number of inputs ({len(host_inputs)}) exceeds the number of pre-allocated output slots ({len(self.output_tensors)})."
                 )
-            for i, output_tensor in enumerate(self.executor.execute(host_inputs)):
-                ttnn.copy_device_to_host_tensor(
-                    output_tensor, self.output_tensors[i], blocking=False, cq_id=self.executor.get_read_cq()
+            for i, device_output_struct in enumerate(device_outputs):
+                host_output_struct = self.output_tensors[i]
+                self._copy_to_structured_host_tensor(
+                    device_output_struct, host_output_struct, self.executor.get_read_cq()
                 )
         else:
             self.output_tensors = []
-            for t in self.executor.execute(host_inputs):
-                host_tensor = t.cpu(blocking=False, cq_id=self.executor.get_read_cq())
-                self.output_tensors.append(host_tensor)
+            for device_output_struct in device_outputs:
+                host_output_struct = self._cpu_structured_tensor(device_output_struct, self.executor.get_read_cq())
+                self.output_tensors.append(host_output_struct)
         return self
 
-    def preallocate_output_tensors_on_host(
-        self, number_of_tensors_to_allocate, output_shape, output_dtype, output_layout
-    ):
-        logger.debug(f"Preallocating memory for {number_of_tensors_to_allocate} output tensors on host")
+    def _create_structured_host_tensor(self, schema):
+        # Check if schema is a leaf node (shape, dtype, layout) or a structure
+        if isinstance(schema, (list, tuple)) and not all(isinstance(x, int) for x in schema[0]):
+            return [self._create_structured_host_tensor(s) for s in schema]
+        else:
+            shape, dtype, layout = schema
+            if not isinstance(shape, ttnn.Shape):
+                shape = ttnn.Shape(shape)
+            return ttnn.allocate_tensor_on_host(shape, dtype, layout, self.executor.device)
+
+    def preallocate_output_tensors_on_host(self, number_of_tensors_to_allocate: int):
+        if self.output_schema is None:
+            raise RuntimeError("Pipeline must be compiled before pre-allocating output tensors.")
+
+        logger.debug(f"Preallocating memory for {number_of_tensors_to_allocate} output slots on host")
         self.preallocated_output_tensors = True
-        if not isinstance(output_shape, ttnn.Shape):
-            output_shape = ttnn.Shape(output_shape)
         self.output_tensors = [
-            ttnn.allocate_tensor_on_host(output_shape, output_dtype, output_layout, self.executor.device)
-            for _ in range(number_of_tensors_to_allocate)
+            self._create_structured_host_tensor(self.output_schema) for _ in range(number_of_tensors_to_allocate)
         ]
         return self
 

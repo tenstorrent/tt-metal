@@ -5,16 +5,18 @@
 from dataclasses import dataclass
 
 import torch
-from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-    TokenResult,
-    sample_top_p,
-)
 from loguru import logger
 
 import ttnn
+from models.common.llama_models import (
+    CompletionMessage,
+    StopReason,
+    TokenResult,
+    create_vision_mask,
+    encode_content,
+    extract_images_from_messages,
+    sample_top_p,
+)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -22,6 +24,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.model_config import CheckpointType
 
 
 @dataclass(frozen=True)
@@ -37,7 +40,7 @@ class SamplingParams:
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
+    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -51,14 +54,20 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
+        self.processor = processor
         self.tokenizer = tokenizer
-        self.formatter = formatter
         self.data_parallel = len(self.model)
         self.prev_page_table = None
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        **kwargs,
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -80,6 +89,7 @@ class Generator:
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
+            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
@@ -95,6 +105,12 @@ class Generator:
             )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
+            # Check if 'pixel_values' exists and index it safely
+            if local_kwargs.get("pixel_values", None) is not None:
+                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
+                if "image_grid_thw" in local_kwargs:
+                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
                 page_table=page_table_user,
@@ -102,22 +118,37 @@ class Generator:
                 last_token_idx=last_token_idx,
                 kv_cache=model_kv_cache,
                 model_id=model_id,
+                **local_kwargs,
             )
-            out_list.append(logits)
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
+            if self.data_parallel > 1:
+                out_list.append(logits)
+            else:
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    logits, last_token_idx=(last_token_idx % 32)
+                )
+                del logits
 
-        for idx, out in enumerate(out_list):
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model
+        # Process the logits after all the prefill are done in data parallel mode
+        if self.data_parallel > 1:
+            for idx, out in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
+                last_token_idx = seq_len - 1
+                user_id = empty_slots[idx]
+                model_id = user_id // max_batch_size_per_model
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx % 32)
+                )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
+    def prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+    ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -167,6 +198,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
@@ -178,6 +210,7 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -194,6 +227,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -484,6 +518,61 @@ class Generator:
         self,
         vision_images,
         vision_masks,
+        tokens,
+        xattn_caches,
+        total_lens,
+        prompt_lens,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        empty_slots=None,
+        **kwargs,
+    ):
+        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+            logits = self.prefill_forward_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                pixel_values=vision_images,
+                **kwargs,
+            )
+
+            return logits, None, None, None, None
+
+        else:
+            (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            ) = self.prefill_forward_llama_vision(
+                vision_images,
+                vision_masks,
+                tokens,
+                xattn_caches,
+                total_lens,
+                prompt_lens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                cross_page_table=cross_page_table,
+                empty_slots=empty_slots,
+            )
+
+            return (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            )
+
+    # Note: This function is called by vLLM
+    def prefill_forward_llama_vision(
+        self,
+        vision_images,
+        vision_masks,
         tokens: torch.Tensor,
         xattn_caches,
         total_lens,
@@ -577,7 +666,7 @@ class Generator:
         )
 
     # Note: This function is called by vLLM
-    def decode_forward(
+    def decode_forward_llama_vision(
         self,
         start_pos,
         tokens,
@@ -640,6 +729,45 @@ class Generator:
             return self.process_decode_output_host(to_host)
         else:
             return tt_logits
+
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        prefill_cross_attention_masks,
+        prefill_full_text_row_masked_out_mask,
+        decode_cross_attention_masks,
+        decode_full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+    ):
+        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+            return self.decode_forward_text(
+                tokens,
+                start_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+        else:
+            return self.decode_forward_llama_vision(
+                start_pos,
+                tokens,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                xattn_caches,
+                page_table,
+                kv_cache,
+                cross_page_table,
+                enable_trace,
+                read_from_device,
+            )
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
@@ -1106,15 +1234,14 @@ class Generator:
 
     def generate(
         self,
-        model_input,
+        vision_images,
+        vision_mask,
+        prompt_tokens,
         max_gen_len: int,
         temperature: float = 0.6,
         top_p: float = 0.9,
     ):
         # Do initial prefill
-        vision_images = model_input.vision.images
-        vision_mask = model_input.vision.mask
-        prompt_tokens = model_input.tokens
         prefill_len = len(prompt_tokens)
         total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
 
@@ -1161,7 +1288,8 @@ class Generator:
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
-            return next_token, self.tokenizer.decode(next_token.tolist())
+            decoder = self.tokenizer or self.processor
+            return next_token, decoder.decode(next_token.tolist())
 
         next_token, text = sample(logits)
 
@@ -1201,11 +1329,20 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
+        encoder = self.processor or self.tokenizer
+        model_input = encoder.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        vision_images = extract_images_from_messages(messages) or None
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], encoder.image_token_id) or None
+
         tokens = []
 
         stop_reason = None
         for result in self.generate(
-            model_input=self.formatter.encode_dialog_prompt(messages, tool_prompt_format=False),
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"][0],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
@@ -1219,36 +1356,48 @@ class Generator:
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
 
-        message = self.formatter.decode_assistant_message(tokens, stop_reason)
+        decoder = self.tokenizer or self.processor
+        message = decoder.decode(tokens, skip_special_tokens=True)
 
-        return ChatPrediction(generation=message)
+        return CompletionMessage(message)
 
     def text_completion(
         self,
-        content: InterleavedTextMedia,
+        content,
         temperature: float = 0.6,
         top_p: float = 0.9,
         max_gen_len=None,
     ):
+        """Supports only vision models at the moment"""
         model_id = 0
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        model_input = self.formatter.encode_content(content)
+        vision_images = []
+        image_token = getattr(self.processor, "image_token", None) or getattr(self.tokenizer, "image_token", None)
+        text = encode_content(content, vision_images, image_token)
+        vision_images = vision_images or None
+        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
 
         tokens = []
 
         for result in self.generate(
-            model_input=model_input,
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
         ):
             tokens.append(result.token)
 
-        generation = self.tokenizer.decode(tokens)
+        decoder = self.tokenizer or self.processor
+        generation = decoder.decode(tokens, skip_special_tokens=True)
 
-        return CompletionPrediction(generation=generation)
+        return generation
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly

@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
 
     // Get the device from the tensor
     const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
     // Get a representation of the topology
 
     // Create the program
