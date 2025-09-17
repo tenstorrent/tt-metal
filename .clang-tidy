@@ -54,7 +54,6 @@ Checks: >
   -cppcoreguidelines-macro-to-enum,
   -cppcoreguidelines-macro-usage,
   -cppcoreguidelines-misleading-capture-default-by-value,
-  -cppcoreguidelines-missing-std-forward,
   -cppcoreguidelines-narrowing-conversions,
   -cppcoreguidelines-noexcept-move-operations,
   -cppcoreguidelines-noexcept-swap,
