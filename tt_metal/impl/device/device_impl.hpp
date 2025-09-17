@@ -46,8 +46,8 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other);
-    Device& operator=(Device&& other);
+    Device(Device&& other) noexcept;
+    Device& operator=(Device&& other) noexcept;
 
     tt::ARCH arch() const override;
 
@@ -177,7 +177,9 @@ public:
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        this->mesh_device = mesh_device;
+    };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;

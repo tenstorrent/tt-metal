@@ -15,7 +15,7 @@
 namespace tt::scaleout_tools {
 
 // Helper function to generate deployment descriptor textproto content
-std::string generate_deployment_descriptor(std::string node_type_string) {
+std::string generate_deployment_descriptor(const std::string& node_type_string) {
     std::ostringstream oss;
     oss << "hosts: {\n";
     oss << "  hall: \"0\"\n";
@@ -29,7 +29,7 @@ std::string generate_deployment_descriptor(std::string node_type_string) {
 }
 
 // Helper function to generate cluster config textproto content for a single node
-std::string generate_cluster_config(std::string node_type_string) {
+std::string generate_cluster_config(const std::string& node_type_string) {
     std::ostringstream oss;
     oss << "graph_templates {\n";
     oss << "  key: \"single_" << node_type_string << "\"\n";

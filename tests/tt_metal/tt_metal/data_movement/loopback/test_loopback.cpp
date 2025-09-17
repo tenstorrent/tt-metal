@@ -41,7 +41,7 @@ struct LoopbackConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();

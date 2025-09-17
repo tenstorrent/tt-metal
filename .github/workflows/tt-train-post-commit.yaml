@@ -18,7 +18,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 45
       enable-watcher:
         required: false
         type: boolean
