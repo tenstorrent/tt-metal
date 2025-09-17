@@ -394,7 +394,7 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
     auto shard_grid = ttnn::CoreRangeSet({
         ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(7, 7))
     });
-    auto shard_spec = tt::tt_metal::ShardSpec(shard_grid, {32, 32}/*, ShardOrientation::ROW_MAJOR, ShardMode::PHYSICAL*/);
+    auto shard_spec = tt::tt_metal::ShardSpec(shard_grid, {32, 32});
     auto width_sharded_mem_config = ttnn::MemoryConfig{
         .memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
         .buffer_type = ttnn::BufferType::L1,
