@@ -129,6 +129,8 @@ void MAIN {
         cb_wait_front(idx_tmp_cb_id, 1);
     }
 
+    DPRINT << "nsticks_per_core_by_nblocks: " << nsticks_per_core_by_nblocks << ENDL();
+
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -159,15 +161,19 @@ void MAIN {
                 if constexpr (return_indices) {
                     // UNPACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
                     // UNPACK(tt::compute::common::print_full_tile(right_inc_tmp_cb_id));
-                    tilize_init_short_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id, topk_output_tiles);
-                    pack_reconfig_data_format(idx_tmp_cb_id);
-                    tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
-                    tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_scratch_in_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id);
+                    // tilize_init_short_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id, topk_output_tiles);
+                    // pack_reconfig_data_format(idx_tmp_cb_id);
+                    // tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
+                    // tilize_block_no_pack(idx_tmp_cb_id, topk_output_tiles, index_scratch_in_dst_idx,
+                    // topk_cb_tile_idx); tilize_uninit_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id);
                     tilize_init_short_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id, topk_output_tiles);
                     pack_reconfig_data_format(curr_in_cb_id);
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
+                    copy_tile_to_dst_init_short(idx_tmp_cb_id);
+                    pack_reconfig_data_format(idx_tmp_cb_id);
+                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
+                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
 
                     if (first_c_block) {
                         max_reduce_with_indices_init();
@@ -179,25 +185,34 @@ void MAIN {
                         if (current_idx_col + right_inc + kernel_w > in_w_padded) {
                             // we reached the edge, wrap down and to the left
                             current_idx_col = pad_l;
-                            tilize_init_short_with_dt_no_pack(
-                                curr_in_cb_id, down_left_wrap_inc_tmp_cb_id, topk_output_tiles);
+                            // tilize_init_short_with_dt_no_pack(
+                            //     curr_in_cb_id, down_left_wrap_inc_tmp_cb_id, topk_output_tiles);
+                            // pack_reconfig_data_format(down_left_wrap_inc_tmp_cb_id);
+                            // tilize_block_no_pack(
+                            //     down_left_wrap_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
+                            // tilize_uninit_with_dt_no_pack(down_left_wrap_inc_tmp_cb_id, idx_tmp_cb_id);
+                            copy_tile_to_dst_init_short(down_left_wrap_inc_tmp_cb_id);
                             pack_reconfig_data_format(down_left_wrap_inc_tmp_cb_id);
-                            tilize_block_no_pack(
-                                down_left_wrap_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
-                            tilize_uninit_with_dt_no_pack(down_left_wrap_inc_tmp_cb_id, idx_tmp_cb_id);
+                            copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            // dprint_tensix_dest_reg(inc_dst_idx);
                             // UNPACK(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
                         } else {
                             // we are still in the same row, move to the right
                             current_idx_col += right_inc;
-                            tilize_init_short_with_dt_no_pack(curr_in_cb_id, right_inc_tmp_cb_id, topk_output_tiles);
+                            // tilize_init_short_with_dt_no_pack(curr_in_cb_id, right_inc_tmp_cb_id, topk_output_tiles);
+                            // pack_reconfig_data_format(right_inc_tmp_cb_id);
+                            // tilize_block_no_pack(right_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx,
+                            // topk_cb_tile_idx); tilize_uninit_with_dt_no_pack(right_inc_tmp_cb_id, idx_tmp_cb_id);
+                            copy_tile_to_dst_init_short(right_inc_tmp_cb_id);
                             pack_reconfig_data_format(right_inc_tmp_cb_id);
-                            tilize_block_no_pack(right_inc_tmp_cb_id, topk_output_tiles, inc_dst_idx, topk_cb_tile_idx);
-                            tilize_uninit_with_dt_no_pack(right_inc_tmp_cb_id, idx_tmp_cb_id);
+                            copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            // dprint_tensix_dest_reg(inc_dst_idx);
                             // UNPACK(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
                         }
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
+                    dprint_tensix_dest_reg(index_dst_idx);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -230,11 +245,7 @@ void MAIN {
                     tensix_sync();
                 }
 
-                if (first_c_block) {
-                    tensix_sync();
-                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                    tensix_sync();
-                }
+                DPRINT << "output_faces: " << output_faces << ENDL();
 
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
@@ -242,20 +253,16 @@ void MAIN {
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+                PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
 
                 if (last_c_block) {
-                    tensix_sync();
-                    pack_untilize_dest_init<topk_output_tiles>(idx_tmp_cb_id, 32, 4);
-                    tensix_sync();
-
-                    pack_untilize_dest<
-                        topk_output_tiles,
-                        topk_output_tiles,
-                        false,
-                        false,
-                        TILE_C_DIM,
-                        index_scratch_out_dst_idx>(
-                        idx_tmp_cb_id, 1, 0, 32, 4);  // write back to the idx tmp cb to be used in the next iteration
+                    cb_reserve_back(idx_tmp_cb_id, 1);
+                    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(idx_tmp_cb_id)));
+                    pack_tile(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
+                    cb_push_back(idx_tmp_cb_id, 1);
+                    cb_wait_front(idx_tmp_cb_id, 1);
+                    cb_pop_front(idx_tmp_cb_id, 1);
+                    // PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
 
                     // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
                     // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK

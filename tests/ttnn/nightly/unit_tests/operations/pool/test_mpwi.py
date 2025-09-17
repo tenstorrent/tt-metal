@@ -11,8 +11,8 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 17
-    in_w = 17
+    in_h = 4
+    in_w = 3
     in_c = 16
     kernel_size = [3, 3]
     stride = [1, 1]
@@ -145,10 +145,10 @@ def test_max_pool2d_with_indices(device):
     ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
     ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
 
-    # print("TTNN:")
-    # print(ttnn_output_reshaped[0, :, :, 0])
-    # print("PyTorch:")
-    # print(torch_output_reshaped[0, :, :, 0])
+    print("TTNN:")
+    print(ttnn_indices_reshaped[0, :, :, 0])
+    print("PyTorch:")
+    print(torch_indices_reshaped[0, :, :, 0])
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:

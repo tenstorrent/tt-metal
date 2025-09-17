@@ -19,6 +19,8 @@
 #define TILE_WIDTH 32
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
+#define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
+#define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -384,8 +386,14 @@ void kernel_main() {
                 uint16_t hw = h * window_w + w;
                 const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
                 for (uint32_t c = 0; c < fill_c; ++c) {
+                    uint32_t face_h = hw / FACE_HEIGHT;
+                    uint32_t face_w = c / FACE_WIDTH;
+                    uint32_t face_offset = (face_w + face_h * FACES_PER_TILE_WIDTH) * FACE_SIZE;
+                    uint32_t intra_face_h = hw % FACE_HEIGHT;
+                    uint32_t intra_face_w = c % FACE_WIDTH;
+                    uint32_t intra_face_offset = intra_face_w + intra_face_h * FACE_WIDTH;
                     uint16_t index = init_index + kernel_idx;
-                    idx_ptr[hw * write_inc + c] = index;
+                    idx_ptr[face_offset + intra_face_offset] = index;
                 }
                 kernel_idx++;
             }
