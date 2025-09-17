@@ -86,7 +86,6 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    print(f"Loaded checkpoint for {tt_model_args.base_model_name} with {checkpoint.keys()} keys")
 
     if tt_model_args.is_gemma:
         model = TtGemmaModel(
@@ -162,7 +161,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "test_type,max_seq_len",
-    (("normal", 2048),),
+    (("normal", 8 * 1024),),
     ids=["normal"],
 )
 @pytest.mark.parametrize(
@@ -278,51 +277,43 @@ def test_multimodal_demo_text(
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    bee_image = PIL_Image.open(
-        BytesIO(
-            requests.get(
-                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg"
-            ).content
-        )
-    ).convert("RGB")
-    logger.info(f"Bee image dimensions: {bee_image.size} (width x height)")
-
     if multi_image:
-        cats_image_1 = PIL_Image.open(
-            BytesIO(
-                requests.get(
-                    "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
-                ).content
-            )
-        ).convert("RGB")
-        cats_image_2 = PIL_Image.open(
-            BytesIO(
-                requests.get(
-                    "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.png"
-                ).content
-            )
-        ).convert("RGB")
-        logger.info(f"Cats images dimensions: {cats_image_1.size} and {cats_image_2.size} (width x height)")
+        handwriting_dataset_base_url = (
+            "https://huggingface.co/datasets/tavishm/100-handwritten-medical-records/resolve/main/"
+        )
+        handwriting_dataset_images_names = [
+            "1wMr9ofP.jpg",
+            "4J7Jyojz.jpg",
+            "68eycMkU.jpg",
+            "8RQQmApQ.jpg",
+            "A9Dx6iCN.jpg",
+            "ANQONi6m.jpg",
+            "BMfPWBSX.jpg",
+            "By829MQ1.jpg",
+        ]
+        handwriting_dataset_images = [
+            PIL_Image.open(BytesIO(requests.get(f"{handwriting_dataset_base_url}{image_name}").content))
+            for image_name in handwriting_dataset_images_names
+        ]
+        num_handwritten_images = len(handwriting_dataset_images)
 
         # Trace capture dialogs with random images
         multi_image_dialogs = [
             [
                 UserMessage(
-                    content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
+                    content=[ImageMedia(image=handwriting_dataset_images[i]) for i in range(num_handwritten_images)]
+                    + ["Read the handwriting on all these images."]
                 )
             ],
         ]
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
         [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
     ]
 
     if multi_image:
-        trace_dialogs = multi_image_dialogs + trace_dialogs
+        trace_dialogs = multi_image_dialogs
 
     if len(trace_dialogs) < max_batch_size:
         trace_dialogs *= max_batch_size // len(trace_dialogs)
