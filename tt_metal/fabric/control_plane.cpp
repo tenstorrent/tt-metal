@@ -529,8 +529,8 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     TT_FATAL(
-        user_chip_ids.size() >= mesh_container.size(),
-        "Number of chips visible ({}) is less than number of chips specified in mesh graph descriptor ({})",
+        user_chip_ids.size() == mesh_container.size(),
+        "Number of chips visible ({}) is not equal to number of chips specified in mesh graph descriptor ({})",
         user_chip_ids.size(),
         mesh_container.size());
 
