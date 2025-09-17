@@ -20,6 +20,22 @@
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
 
+// Zero out a single page (where wr ptr points) for a given circular buffer.
+template <uint32_t cb_id>
+ALWI void zero_out_page() {
+    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
+    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_id);
+
+    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
+        write_addr += MEM_ZEROS_SIZE;
+    }
+    noc_async_read_barrier();
+}
+
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
@@ -72,7 +88,7 @@ template <
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
+    uint32_t in_nbytes_leftover,
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -81,6 +97,7 @@ template <
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
     uint32_t in_nbytes_c,
+    uint32_t shard_width_bytes,
     bool is_large_kernel,
     bool last_tile_is_partial,
     uint32_t dilation_h,
@@ -93,7 +110,7 @@ ALWI void read_window_with_top_left_index(
     // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
-    constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
+    constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (window_h * window_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
@@ -107,13 +124,13 @@ ALWI void read_window_with_top_left_index(
         }
     }
 #endif
-
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
             read_bytes =
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
+
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         cb_reserve_back(in_cb_id, 1);
         uint32_t in_idx_l1_write_addr = 0;
@@ -122,11 +139,14 @@ ALWI void read_window_with_top_left_index(
             cb_reserve_back(in_idx_cb_id, 1);
         }
         uint32_t processed_sticks = 0;
+        if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+            zero_out_page<in_cb_id>();
+        }
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                    in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
@@ -137,7 +157,7 @@ ALWI void read_window_with_top_left_index(
                 }
                 if constexpr (return_indices) {
                     const uint32_t idx_read_offset =
-                        in_idx_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                        in_idx_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
                     noc_async_read_one_packet(
                         get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
                     if constexpr (tilize_reconfig) {
@@ -246,7 +266,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes
-    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nbytes_leftover = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -278,19 +298,13 @@ void kernel_main() {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
-    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(31);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(31);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
     constexpr uint32_t stride_w = get_compile_time_arg_val(33);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-
-    // TODO this should go in the initialization condition below
-    if constexpr (last_tile_is_partial) {
-        clear_out_tiles<in_cb_id, clear_value_cb_id>();
-    }
-
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
@@ -407,7 +421,7 @@ void kernel_main() {
                 window_h,
                 window_w,
                 in_w_padded,
-                in_aligned_nbytes_c,
+                in_nbytes_leftover,
                 in_c,
                 max_sticks_for_reduction,
                 total_elems_to_reduce,
@@ -415,7 +429,8 @@ void kernel_main() {
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
-                in_nbytes_padded_c,
+                in_nbytes_c,
+                shard_width_bytes,
                 is_large_kernel,
                 last_tile_is_partial,
                 dilation_h,
@@ -441,7 +456,7 @@ void kernel_main() {
             window_h,
             window_w,
             in_w_padded,
-            in_aligned_nbytes_c,
+            in_nbytes_leftover,
             in_c,
             max_sticks_for_reduction,
             total_elems_to_reduce,
@@ -449,7 +464,8 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            in_nbytes_padded_c,
+            in_nbytes_c,
+            shard_width_bytes,
             is_large_kernel,
             last_tile_is_partial,
             dilation_h,

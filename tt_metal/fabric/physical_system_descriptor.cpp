@@ -272,7 +272,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         host_to_mobo_name_[host_name] = std::move(mobo_name);
     }
     for (auto& [host_name, rank] : other.get_host_to_rank_map()) {
-        host_to_rank_[host_name] = std::move(rank);
+        host_to_rank_[host_name] = rank;
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
@@ -605,7 +605,7 @@ ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
-std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end()) {
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {

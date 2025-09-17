@@ -51,9 +51,9 @@ enum class MeshScope {
 
 class ControlPlane {
 public:
-    explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
+        const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     ~ControlPlane();
@@ -312,6 +312,9 @@ private:
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
+
+    template <uint8_t dim, bool compressed>
+    void write_all_to_all_routing_fields(MeshId mesh_id) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

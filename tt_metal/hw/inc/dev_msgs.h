@@ -52,6 +52,8 @@ struct profiler_msg_template_t {
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
+// Deprecated in favor of dev_mem_map.h. Keep to avoid breaking changes.
+#include "eth_l1_address_map.h"
 
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -107,19 +109,6 @@ enum dispatch_mode {
     DISPATCH_MODE_HOST,
 };
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 enum noc_index {
     NOC_0 = 0,
     NOC_1 = 1,
@@ -139,8 +128,13 @@ struct rta_offset_t {
 };
 
 // Maximums across all archs
+#ifndef CODEGEN
+// Do not expose in HAL interface.
+// Eventually they should be removed from this file.
+// And host code should get them from HAL.
 constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
 constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+#endif
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };
@@ -151,8 +145,7 @@ struct kernel_config_msg_t {
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[8];  // CODEGEN:skip
+    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];

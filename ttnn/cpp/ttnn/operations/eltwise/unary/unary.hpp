@@ -8,17 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 namespace ttnn {
-
-namespace operations {
-
-namespace unary {
-
-struct UnaryWithParam;
-
-template <UnaryOpType... unary_op_types>
-struct ExecuteUnaryInvokeResult {
-    using type = ComplexTensor;
-};
+namespace operations::unary {
 
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
@@ -28,8 +18,7 @@ struct ExecuteUnary {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static typename ExecuteUnaryInvokeResult<unary_op_types...>::type invoke(
-        const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+    static ComplexTensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
 
 template <UnaryOpType unary_op_type>
@@ -114,7 +103,17 @@ struct Unary_chain {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const std::vector<UnaryWithParam>& ops_chain,
+        const std::vector<EltwiseUnaryWithParam>& ops_chain,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Selu {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float scale = 1.050700987,
+        float alpha = 1.673263242,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -354,8 +353,7 @@ struct Clamp {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace unary
-}  // namespace operations
+}  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
@@ -414,6 +412,7 @@ REGISTER_UNARY_OPERATION(atan, ATAN);
 REGISTER_UNARY_OPERATION(atanh, ATANH);
 REGISTER_UNARY_OPERATION(cos, COS);
 REGISTER_UNARY_OPERATION(acosh, ACOSH);
+REGISTER_UNARY_OPERATION(cosh, COSH);
 REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
@@ -439,6 +438,7 @@ REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
 REGISTER_UNARY_OPERATION(silu, SILU);
 REGISTER_UNARY_OPERATION(sin, SIN);
 REGISTER_UNARY_OPERATION(sqrt, SQRT);
+REGISTER_UNARY_OPERATION(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
@@ -457,7 +457,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 
 // Unaries with fast_and_approximate_mode default true
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log, LOG);
@@ -508,6 +507,8 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
+
+constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();

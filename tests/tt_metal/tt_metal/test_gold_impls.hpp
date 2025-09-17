@@ -100,15 +100,21 @@ inline std::vector<uint16_t> gold_bcast_op(
                         case BcastDim::HW: b_index = c + n * C; break;             // bcast tensor is nc
                         default: TT_THROW("Unexpected broadcast mode in gold_bcast_op");
                     }
-                    float bval = bfloat16(bcast_vals[b_index]).to_float();
+                    float bval = static_cast<float>(std::bit_cast<bfloat16>(bcast_vals[b_index]));
                     float result1 = 0.0f;
                     switch (bcast_op) {
-                        case BcastOp::ADD: result1 = bfloat16(src_vec[offs]).to_float() + bval; break;
-                        case BcastOp::SUB: result1 = bfloat16(src_vec[offs]).to_float() - bval; break;
-                        case BcastOp::MUL: result1 = bfloat16(src_vec[offs]).to_float() * bval; break;
+                        case BcastOp::ADD:
+                            result1 = static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])) + bval;
+                            break;
+                        case BcastOp::SUB:
+                            result1 = static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])) - bval;
+                            break;
+                        case BcastOp::MUL:
+                            result1 = static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])) * bval;
+                            break;
                         default: TT_THROW("Unexpected bcast_op");
                     }
-                    result[offs] = bfloat16(result1).to_uint16();
+                    result[offs] = std::bit_cast<uint16_t>(bfloat16(result1));
                 }
             }
         }
@@ -121,7 +127,7 @@ inline std::vector<uint16_t> gold_bcast_op(
 // Returns C=A*B, A and B are row-major untilized
 // Accumulates in FP32
 inline std::vector<uint16_t> gold_bmm(
-    const std::vector<uint32_t> shapeA,
+    const std::vector<uint32_t>& shapeA,
     const std::vector<uint16_t>& A,
     const std::vector<uint32_t>& shapeB,
     const std::vector<uint16_t>& B,
@@ -150,11 +156,11 @@ inline std::vector<uint16_t> gold_bmm(
                     auto offsB = addrB.offs(0, ib, k, n);
                     auto offsC = addrC.offs(0, ib, m, n);
 
-                    float aa = bfloat16(A[offsA]).to_float();
-                    float bb = bfloat16(B[offsB]).to_float();
+                    float aa = static_cast<float>(std::bit_cast<bfloat16>(A[offsA]));
+                    float bb = static_cast<float>(std::bit_cast<bfloat16>(B[offsB]));
                     resultf[offsC] += aa * bb;
                     if (acc16) {
-                        resultf[offsC] = bfloat16(resultf[offsC]).to_float();
+                        resultf[offsC] = static_cast<float>(bfloat16(resultf[offsC]));
                     }
                 }
             }
@@ -166,7 +172,7 @@ inline std::vector<uint16_t> gold_bmm(
         for (int m = 0; m < M; m++) {
             for (int n = 0; n < N; n++) {
                 auto offsC = addrC.offs(0, ib, m, n);
-                result[offsC] = bfloat16(resultf[offsC]).to_uint16();
+                result[offsC] = std::bit_cast<uint16_t>(bfloat16(resultf[offsC]));
             }
         }
     }

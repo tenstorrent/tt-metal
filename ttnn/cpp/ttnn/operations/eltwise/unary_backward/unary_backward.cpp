@@ -504,7 +504,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
-    ttnn::rsqrt(queue_id, input, true, output_mem_config, input_grad);
+    ttnn::rsqrt(queue_id, input, output_mem_config, input_grad);
     ttnn::power(queue_id, input_grad.value(), 3, output_mem_config, input_grad);
     ttnn::multiply(
         queue_id,
@@ -616,7 +616,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor in_sq = ttnn::square(input, output_mem_config);
-    Tensor in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
+    Tensor in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
@@ -663,7 +663,6 @@ std::vector<Tensor> ExecuteUnaryBackwardAcos::invoke(
     Tensor in_rsqrt = ttnn::rsqrt(
         ttnn::add(
             ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config),
-        true,
         output_mem_config);
     in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
@@ -690,12 +689,12 @@ std::vector<Tensor> ExecuteUnaryBackwardAcos::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardAtan::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::SQUARE},
-        UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::RECIP}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RECIP}};
     Tensor grad_a =
         ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_a);
@@ -1005,13 +1004,13 @@ std::vector<Tensor> ExecuteUnaryBackwardAtanh::invoke(
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::SQUARE},
-        UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::NEG},
-        UnaryWithParam{UnaryOpType::RECIP}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::NEG},
+        EltwiseUnaryWithParam{UnaryOpType::RECIP}};
 
     Tensor grad_a =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
@@ -1046,13 +1045,13 @@ std::vector<Tensor> ExecuteUnaryBackwardAtanh::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardAsin::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::SQUARE},
-        UnaryWithParam{UnaryOpType::NEG},
-        UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::RSQRT, true}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::NEG},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
 
     Tensor grad_result =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
@@ -1086,12 +1085,12 @@ std::vector<Tensor> ExecuteUnaryBackwardAsin::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardAsinh::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::SQUARE},
-        UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::RSQRT, true}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
     Tensor grad_result =
         ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
@@ -1214,13 +1213,13 @@ std::vector<Tensor> ExecuteUnaryBackwardCeil::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSoftsign::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::ABS},
-        UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::SQUARE},
-        UnaryWithParam{UnaryOpType::RECIP}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::ABS},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::RECIP}};
     grad_tensor.emplace_back(
         ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;

@@ -5,8 +5,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <umd/device/types/arch.h>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/arch.hpp>                    // tt::ARCH
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <map>
 #include <optional>
 #include <string>

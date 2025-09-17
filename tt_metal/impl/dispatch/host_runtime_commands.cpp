@@ -196,7 +196,7 @@ void EnqueueWriteBuffer(
     std::vector<uint32_t>& src,
     bool blocking) {
     // TODO(agrebenisan): Move to deprecated
-    EnqueueWriteBuffer(cq, std::move(buffer), src.data(), blocking);
+    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
 }
 
 void EnqueueReadBuffer(
@@ -216,7 +216,7 @@ void EnqueueReadBuffer(
 
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     const BufferRegion& region,
     bool blocking) {
@@ -251,7 +251,7 @@ void EnqueueWriteSubBuffer(
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
-    cq.enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
+    cq.enqueue_write_buffer(buffer, std::move(src), region, blocking);
 }
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
