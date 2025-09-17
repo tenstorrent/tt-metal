@@ -22,6 +22,7 @@
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
+#include "models/distributed/qwen.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "models/qwen.hpp"
