@@ -121,3 +121,30 @@ def test_rsub_4D(device, n, c, h, w):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 62])),
+    ),
+)
+@pytest.mark.parametrize("scalar", [-2147483648, -7383640, 1147483640, 6, -9, 16775716, 7383690, 2147483647])
+def test_rsub_int32_full_range(input_shapes, scalar, device):
+    num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
+    uniform_values = torch.linspace(-2147483648, 2147483647, num_elements, dtype=torch.int32)
+    corner_cases = torch.tensor([0, -0, 1, -1, 2147483647, -2147483648], dtype=torch.int32)
+    torch_input_tensor = torch.cat([uniform_values, corner_cases])
+    torch_input_tensor = torch_input_tensor[-num_elements:].reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.rsub(input_tensor, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    golden_tensor = golden_function(torch_input_tensor, scalar)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output))

@@ -748,38 +748,14 @@ Tensor ExecuteRsub::invoke(
         use_legacy);
 }
 
+template <typename T>
 Tensor ExecuteRsub::invoke(
     const Tensor& input_tensor_a,
-    const float input_b,
+    const T& input_b,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
-        return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
-            input_tensor_a,
-            input_b,
-            output_dtype,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
-    }
-
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::RSUB>::invoke(
-        input_tensor_a, input_b, memory_config, optional_output_tensor);
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::operations::unary::Rsub::invoke(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise AND
@@ -1129,5 +1105,20 @@ Tensor ExecuteBitwiseRightShift::invoke(
         ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::RIGHT_SHIFT, int32_t>::invoke(
             input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
+
+// Explicit template instantiations for ExecuteRsub
+template Tensor ExecuteRsub::invoke<float>(
+    const Tensor& input_tensor_a,
+    const float& input_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+
+template Tensor ExecuteRsub::invoke<int32_t>(
+    const Tensor& input_tensor_a,
+    const int32_t& input_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
 
 }  // namespace ttnn::operations::binary

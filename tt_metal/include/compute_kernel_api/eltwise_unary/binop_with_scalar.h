@@ -41,10 +41,6 @@ ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, DIV_UNARY>(idst, param1)));
 }
 
-ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, param1)));
-}
-
 // clang-format off
 /**
 * Performs element-wise add operation with int32 scalar. The DST
