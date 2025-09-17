@@ -11,21 +11,20 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: true
-  clip_grad_norm_max_norm: 1.0
+  use_clip_grad_norm: false
   tokenizer_path: "data/qwen-tokenizer.json" 
-  tokenizer_type: "tiktoken"
+  tokenizer_type: "bbpe"
   transformer_config:
     num_heads: 14
     num_groups: 2
     embedding_dim: 896
     intermediate_dim: 4864
     dropout_prob: 0.0
-    num_blocks: 16
-    vocab_size: 32000 # not using Qwen vocab size (151936), see comment about tokenizer choice above.
+    num_blocks: 24
+    vocab_size: 151665
     max_sequence_length: 2048
     runner_type: memory_efficient
-    theta: 500000.0
+    theta: 10000.0
 
 # if you want to run as eval with weighgts from hugging face:
 # nano_gpt --safetensors /path/to/Qwen/Qwen2.5-0.5B/  -c configs/training_shakespeare_qwen2_5_0_5B.yaml --eval 1
