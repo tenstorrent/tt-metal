@@ -245,10 +245,17 @@ bool get_routing_info(uint16_t target_num, volatile uint8_t* out_route_buffer) {
                 return decode_route_to_buffer_by_hops(target_num, out_route_buffer);
             }
         } else {
-            static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
             routing_info =
                 reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-            return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
+            if constexpr (target_as_dev) {
+                tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+                    reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+                uint16_t my_device_id = routing_table->my_device_id;
+                uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
+                return routing_info->decode_route_to_buffer(hops, out_route_buffer);
+            } else {
+                return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
+            }
         }
     } else {
         routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
