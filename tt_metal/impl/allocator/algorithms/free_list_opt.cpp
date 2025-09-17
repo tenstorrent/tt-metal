@@ -185,11 +185,13 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     ssize_t target_block_index = -1;
     DeviceAddr start_address = absolute_start_address - offset_bytes_;
     for (size_t i = 0; i < block_address_.size(); i++) {
-        size_t block_start = block_address_[i];
-        size_t block_end = block_start + block_size_[i];
-        if (start_address >= block_start && start_address + alloc_size <= block_end) {
-            target_block_index = i;
-            break;
+        if (meta_block_is_allocated_[i]) {
+            size_t block_start = block_address_[i];
+            size_t block_end = block_start + block_size_[i];
+            if (start_address >= block_start && start_address + alloc_size <= block_end) {
+                target_block_index = i;
+                break;
+            }
         }
     }
 
