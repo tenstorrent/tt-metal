@@ -50,9 +50,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {UnaryWithParam{UnaryOpType::SQUARE}, UnaryWithParam{UnaryOpType::RECIP}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE}, EltwiseUnaryWithParam{UnaryOpType::RECIP}};
     Tensor recip_mul = ttnn::multiply(
         grad,
         ttnn::unary_chain(ttnn::hypot(input, other, output_mem_config), ops_chain, output_mem_config),
@@ -214,10 +215,10 @@ std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     grad_tensor.emplace_back(grad);
     const Tensor& grad_r = grad.real();
     const Tensor& grad_i = grad.imag();
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::NEG}, UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::NEG}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
     ComplexTensor grad_b = ComplexTensor(
         {ttnn::unary_chain(grad_r, ops_chain, output_mem_config),
          ttnn::unary_chain(grad_i, ops_chain, output_mem_config)});
