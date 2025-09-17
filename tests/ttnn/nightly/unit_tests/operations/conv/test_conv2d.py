@@ -4558,11 +4558,13 @@ def test_conv2d_ch_split_dram_panoptic(
         (768, 32),  # input 8x2 vs 8x4 output
     ),
 )
+@pytest.mark.parametrize("transpose_shard", [False, True])
 def test_conv_bs_grid(
     device,
     torch_tensor_map,
     output_channels,
     input_channels,
+    transpose_shard,
 ):
     run_conv(
         device,
@@ -4583,9 +4585,59 @@ def test_conv_bs_grid(
         None,
         shard_layout=BS,
         has_bias=False,
-        input_dtype=ttnn.bfloat16
+        input_dtype=ttnn.bfloat16,
+        transpose_shards=transpose_shard,
     )
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels",
+    (
+        (128, 128),  # larger input 8x8 vs 8x4
+        (256, 128),  # equal grids 8x8
+        (32, 128),  # single output column 8x1
+    ),
+)
+@pytest.mark.parametrize("transpose_shard", [False, True])
+def test_conv_bs_grid_pre_sharded(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    transpose_shard,
+):
+    input_height = input_width = 32
+    batch = 1
+    grid_size = device.compute_with_storage_grid_size()
+    sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(1, 1, batch * input_height * input_width, input_channels),
+        core_grid=ttnn.CoreGrid(x=grid_size.x, y=grid_size.y),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_shard else ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        3,
+        3,
+        1,
+        1,
+        0,
+        None,
+        shard_layout=BS,
+        has_bias=False,
+        input_dtype=ttnn.bfloat16,
+        sharded_cfg=sharded_cfg,
+    )
 
 # fmt: off
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
