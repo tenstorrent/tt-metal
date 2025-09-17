@@ -223,11 +223,12 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
       );
       core.info(`[run ${runId}] Attempt 1: fetched ${runAnnotations.length} annotations`);
       const fromRun = [];
-      for (const ann of runAnnotations) {
+        for (const ann of runAnnotations) {
         if (fromRun.length >= maxSnippets) break;
-        if (ann.annotation_level && ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+          if (ann.annotation_level && ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning' && ann.annotation_level !== 'notice') continue;
         const label = ann.path ? `${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}` : undefined;
-        const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+          const textRaw = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+          const text = textRaw || (ann.raw_details || '').trim();
         if (!text) continue;
         const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
         fromRun.push({ snippet, label });
@@ -292,12 +293,13 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
           core.info(`[run ${runId}] Job ${job.id}: received ${annotations.length} annotations`);
           for (const ann of annotations) {
             if (snippets.length >= maxSnippets) break;
-            if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+            if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning' && ann.annotation_level !== 'notice') continue;
             const labelParts = [];
             if (job.name) labelParts.push(job.name);
             if (ann.path) labelParts.push(`${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}`);
             const label = labelParts.join(' - ') || undefined;
-            const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+            const textRaw = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+            const text = textRaw || (ann.raw_details || '').trim();
             if (!text) continue;
             const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
             snippets.push({ snippet, label });
@@ -361,9 +363,10 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
             core.info(`[run ${runId}] Check run ${cr.id}: received ${annotations.length} annotations`);
             for (const ann of annotations) {
               if (snippets.length >= maxSnippets) break;
-              if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning') continue;
+              if (ann.annotation_level !== 'failure' && ann.annotation_level !== 'warning' && ann.annotation_level !== 'notice') continue;
               const label = ann.path ? `${ann.path}${ann.start_line ? `:${ann.start_line}` : ''}` : undefined;
-              const text = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+              const textRaw = ((ann.title ? `${ann.title}: ` : '') + (ann.message || '')).trim();
+              const text = textRaw || (ann.raw_details || '').trim();
               if (!text) continue;
               const snippet = text.length > 600 ? text.slice(0, 600) + '…' : text;
               snippets.push({ snippet, label });
