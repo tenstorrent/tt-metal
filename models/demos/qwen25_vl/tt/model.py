@@ -239,8 +239,10 @@ class DropInVisionTransformer(torch.nn.Module):
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
+
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
+
             # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
@@ -275,8 +277,10 @@ class DropInVisionTransformer(torch.nn.Module):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             rot_mats = [cos, sin]
+
             # 5. Prepare input tensor for the TT model using window_index
             tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+
             # --- TT Model Execution ---
             tt_out = self.tt_model(
                 tt_input,
@@ -292,6 +296,7 @@ class DropInVisionTransformer(torch.nn.Module):
                     device=self.model_args.mesh_device,
                 ),
             )
+
             # deallocate device tensors that are not needed by decode
             ttnn.deallocate(tt_input)
             ttnn.deallocate(cos)
@@ -304,6 +309,7 @@ class DropInVisionTransformer(torch.nn.Module):
             tt_output_torch = ttnn.to_torch(
                 tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
             )
+
             # deallocate TT output
             ttnn.deallocate(tt_out)
 
@@ -311,15 +317,20 @@ class DropInVisionTransformer(torch.nn.Module):
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
+
             # 3. Apply reverse window indexing to match reference model output order
             reverse_indices = torch.argsort(window_index)
             final_output = tt_output_torch[reverse_indices, :]
+
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
                 reference_output = self.reference_model.forward(pixel_values, grid_thw)
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
+
             final_outputs.append(final_output)
+
+        # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
 
 
