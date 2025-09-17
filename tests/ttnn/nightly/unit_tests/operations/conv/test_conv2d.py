@@ -4676,13 +4676,15 @@ def test_conv2d_activation_reuse(
     )
 
 
-@skip_for_blackhole()
+# this test case represents the first conv in unet on WH;
+# the test case is useful since it hits case where shards on cores don't start from the beginning
+# of the row of the output image - and this happens if we divide the workload on 63 cores
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place, num_cores",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, None, False, 63),
     ),
 )
 @pytest.mark.parametrize(
@@ -4716,20 +4718,25 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
     output_layout,
     in_place,
     enable_activation_reuse,
+    num_cores,
 ):
     batch_size = 1
     groups = 4
     input_channels = groups * input_channels
     output_channels = groups * output_channels
 
-    input_core_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
-        }
+    # Get device grid size and create core range set based on num_cores
+    grid_size = device.compute_with_storage_grid_size()
+
+    # Use ttnn's built-in function to create core range set with row-wise allocation
+    input_core_range_set = ttnn.num_cores_to_corerangeset(
+        target_num_cores=num_cores,
+        grid_size=grid_size,
+        row_wise=True,
     )
+
     memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_range_set, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
     )
 
     run_conv(

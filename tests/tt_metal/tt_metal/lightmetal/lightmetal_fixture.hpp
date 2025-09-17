@@ -38,7 +38,7 @@ protected:
         const size_t trace_region_size,
         const bool replay_manages_device = false,
         const bool replay_binary = true,
-        const std::string trace_bin_path = "") {
+        const std::string& trace_bin_path = "") {
         // Skip writing to disk by default, unless user sets env var for local testing
         write_bin_to_disk_ = tt::parse_env("LIGHTMETAL_SAVE_BINARY", false);
         replay_manages_device_ = replay_manages_device;
