@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import trace
 import torch
 from tqdm import tqdm
 
@@ -128,7 +129,28 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_host(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on host.
+        """
+        host_inputs = self.prepare_inputs_prefill(tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True)
+        return host_inputs
+
+
+    def transform_prefill_inputs_device(
+        self,
+        tokens,
+        tt_rot_mats_prefill_global,
+        tt_rot_mats_prefill_local,
+        tt_page_table,
+        tt_chunk_page_table
+    ):
+        tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        return tt_tokens, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+    
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -140,13 +162,18 @@ class Transformer(LightweightModule):
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
-            device=self.mesh_device,
+            device=self.mesh_device if not trace_enabled else None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+
+        #we do it this way because we want to run this when all our inputs are on the device
+        if trace_enabled:
+            tokens_embd = self.embd(tokens)
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        else:
+            tokens_embd = tokens
 
         # Slice the rot mats to the prefill seqlen
         assert (
@@ -169,7 +196,7 @@ class Transformer(LightweightModule):
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=self.mesh_device if not trace_enabled else None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -180,7 +207,7 @@ class Transformer(LightweightModule):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=self.mesh_device if not trace_enabled else None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
