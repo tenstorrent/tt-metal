@@ -20,6 +20,7 @@ const std::string& get_reports_dir();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
 auto loop_and_wait_with_timeout(
     FuncBody&& func_body,
@@ -51,6 +52,7 @@ auto loop_and_wait_with_timeout(
         } while (wait_condition(args...));
     }
 }
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
 template <typename T>

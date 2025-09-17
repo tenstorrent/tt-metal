@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
@@ -36,7 +37,7 @@ inline auto run(
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_device_operation<ConcreteOperation>()) {
-        auto operation = DeviceOperation(concrete_op);
+        auto operation = DeviceOperation(std::forward<ConcreteOperation>(concrete_op));
         return run<OutputTensors>(
             std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
     } else {
@@ -59,7 +60,7 @@ inline auto run_without_autoformat(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    auto operation = DeviceOperation<OutputTensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_without_autoformat<OutputTensors>(
         std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
 }
@@ -80,7 +81,7 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> Tensors {
-    auto operation = DeviceOperation<Tensors>(concrete_op);
+    auto operation = DeviceOperation<Tensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_with_autoformat(
         std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, cq_id);
 }
@@ -106,7 +107,7 @@ inline auto run_with_autoformat(
     const OptionalTensors& optional_output_tensors = {},
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    auto operation = DeviceOperation<OutputTensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_with_autoformat(
         std::move(operation),
         input_tensors,

@@ -61,10 +61,11 @@ namespace {
 
 template <typename Container, typename Func>
 void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& func) {
+    Func&& callable = std::forward<Func>(func);
     for (auto it = container.begin(); it != container.end(); ++it) {
         const auto& coord = *it;
         if (mesh_device->is_local(coord)) {
-            func(coord);
+            std::invoke(callable, coord);
         }
     }
 }

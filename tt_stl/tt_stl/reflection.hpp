@@ -510,7 +510,8 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -648,7 +649,8 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>

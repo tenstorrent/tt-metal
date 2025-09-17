@@ -27,6 +27,7 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
 
     auto&& callable = std::forward<F>(work_fn);
     auto saved_args = std::make_tuple(std::forward<Args>(args)...);
+    auto intermediate_callable = std::forward<IntermediateF>(intermediate_fn);
 
     for (int i = 0; i < num_threads; ++i) {
         threads[i] = std::thread([i,
@@ -55,7 +56,11 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
         });
     }
 
-    threads[num_threads] = std::thread([&]() mutable {
+    threads[num_threads] = std::thread([&m,
+                                        &go_cv,
+                                        &threads_ready,
+                                        total_threads,
+                                        intermediate_callable = std::move(intermediate_callable)]() mutable {
         std::unique_lock lk{m};
         threads_ready++;
         if (threads_ready == total_threads) {
@@ -63,7 +68,7 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
         }
         go_cv.wait(lk, [&] { return threads_ready == total_threads; });
 
-        intermediate_fn();
+        intermediate_callable();
     });
 
     for (auto& thread : threads) {

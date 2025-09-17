@@ -121,7 +121,7 @@ public:
     void track_program(Program* program, const IDevice* device);
 
     template <class... Args>
-    void track_function_start(std::string_view function_name, Args&&... args) {
+    void track_function_start(std::string_view function_name, const Args&... args) {
         if (processors.empty()) {
             return;
         }
@@ -142,7 +142,7 @@ public:
     }
 
     template <class ReturnType>
-    void track_function_end(ReturnType&& output_tensors) {
+    void track_function_end(const ReturnType& output_tensors) {
         if (processors.empty()) {
             return;
         }
