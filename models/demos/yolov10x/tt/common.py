@@ -101,12 +101,12 @@ class TtYolov10Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if "bias" in conv_pth:
-            self.bias = conv_pth.bias
+        if len(conv_pth) > 1 and conv_pth[1] is not None:
+            self.bias = conv_pth[1]
         else:
             self.bias = None
 
-        self.weight = conv_pth.weight
+        self.weight = conv_pth[0]
 
     def __call__(self, x):
         if self.is_detect:
@@ -172,7 +172,7 @@ class Conv:
             activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         self.conv = TtYolov10Conv2D(
             parameter.conv,
-            conv_pt.conv,
+            conv_pt,
             device=device,
             is_detect=is_detect,
             is_dfl=is_dfl,

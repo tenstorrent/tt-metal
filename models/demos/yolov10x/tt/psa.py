@@ -16,7 +16,7 @@ except ModuleNotFoundError:
 
 
 class TtnnPSA:
-    def __init__(self, device=None, parameters=None, conv_pt=None):
+    def __init__(self, device=None, parameters=None, conv_pt=None, path=""):
         self.device = device
         self.parameters = parameters
         self.conv_pt = conv_pt
@@ -24,7 +24,7 @@ class TtnnPSA:
         self.cv1 = Conv(
             device,
             parameters.cv1,
-            self.conv_pt.cv1,
+            self.conv_pt[f"{path}.cv1"],
             deallocate_activation=True,
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
@@ -34,7 +34,7 @@ class TtnnPSA:
         self.cv2 = Conv(
             device,
             parameters.cv2,
-            self.conv_pt.cv2,
+            self.conv_pt[f"{path}.cv2"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -46,13 +46,14 @@ class TtnnPSA:
             attn_ratio=0.5,
             device=self.device,
             parameters=self.parameters.attn,
-            conv_pt=self.conv_pt.attn,
+            conv_pt=self.conv_pt,
+            path=f"{path}.attn",
         )
 
         self.ffn_0 = Conv(
             device,
             parameters.ffn[0],
-            self.conv_pt.ffn[0],
+            self.conv_pt[f"{path}.ffn.0"],
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -61,7 +62,7 @@ class TtnnPSA:
         self.ffn_1 = Conv(
             device,
             parameters.ffn[1],
-            self.conv_pt.ffn[1],
+            self.conv_pt[f"{path}.ffn.1"],
             enable_identity=True,
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
