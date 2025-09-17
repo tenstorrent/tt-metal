@@ -188,7 +188,7 @@ public:
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                             .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
-                        };
+                            .topology = this->fixture_->get_topology()};
 
                         // For sync patterns, we use a dummy destination core and fixed sync address
                         // The actual sync will be handled by atomic operations
@@ -272,7 +272,7 @@ public:
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                     .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
-                };
+                    .topology = this->fixture_->get_topology()};
 
                 TestTrafficConfig traffic_config = {
                     .parameters = traffic_parameters,
@@ -540,10 +540,6 @@ private:
         std::vector<FabricNodeId> dst_node_ids;
         std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
 
-        bool is_torus_2d_unicast = (fixture_->get_topology() == Topology::Torus) &&
-                                   (fixture_->is_2D_routing_enabled()) &&
-                                   (traffic_config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
-
         if (traffic_config.hops.has_value()) {
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
@@ -552,7 +548,7 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            if (!(fixture_->is_dynamic_routing_enabled()) && !is_torus_2d_unicast) {
+            if (!(fixture_->is_dynamic_routing_enabled())) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
         }
@@ -563,10 +559,6 @@ private:
         if (fixture_->is_2D_routing_enabled() &&
             traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());
-        }
-
-        if (is_torus_2d_unicast && hops.has_value()) {
-            hops = std::nullopt;
         }
 
         uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
