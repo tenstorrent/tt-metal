@@ -207,8 +207,8 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
  * Try to extract a test identifier from the nearby log lines or path.
  */
 function extractTestLabelBackward(lines, errIdx) {
-  const runRegex = /\[\s*RUN\s*\]/i; // allow prefixes
-  const failedRegex = /\bFAILED\b/i;   // allow prefixes
+  const runRegex = /\[\s*RUN\s*\]/; // case-sensitive
+  const failedRegex = /\bFAILED\b/;   // case-sensitive
   for (let i = errIdx; i >= 0; i--) {
     const line = lines[i] || '';
     if (runRegex.test(line) || failedRegex.test(line)) {
@@ -791,7 +791,7 @@ async function run() {
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     // Helper to get up to N most-recent failing runs (excluding successes) from a run list
-    const getRecentFailingRuns = (runs, limit = 5) => {
+  const getRecentFailingRuns = (runs, limit = 1) => {
       return runs
         .filter(r => r.head_branch === 'main' && r.conclusion !== 'success')
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
@@ -823,21 +823,8 @@ async function run() {
           }
           // Error snippets for the first failing run (best-effort)
           item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
-          // Repeated errors across recent failing runs
-          const failingRuns = getRecentFailingRuns(filteredGrouped.get(item.name) || [], 5);
-          const counts = new Map();
-          for (const fr of failingRuns) {
-            const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
-            for (const sn of snippets) {
-              const key = sn.snippet; // count by text only
-              counts.set(key, (counts.get(key) || 0) + 1);
-            }
-          }
-          item.repeated_errors = Array.from(counts.entries())
-            .filter(([_, c]) => c >= 2)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([snippet, count]) => ({ snippet, count }));
+          // Omit repeated errors logic (simplified)
+          item.repeated_errors = [];
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
           if (changeRef) {
@@ -891,19 +878,8 @@ async function run() {
           }
           // Error snippets for the first failing run in window
           item.error_snippets = await fetchErrorSnippetsForRun(octokit, github.context, item.first_failed_run_id, 5);
-          const failingRuns = getRecentFailingRuns(filteredGrouped.get(item.name) || [], 5);
-          const counts = new Map();
-          for (const fr of failingRuns) {
-            const snippets = await fetchErrorSnippetsForRun(octokit, github.context, fr.id, 3);
-            for (const sn of snippets) {
-              counts.set(sn.snippet, (counts.get(sn.snippet) || 0) + 1);
-            }
-          }
-          item.repeated_errors = Array.from(counts.entries())
-            .filter(([_, c]) => c >= 2)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([snippet, count]) => ({ snippet, count }));
+          // Omit repeated errors (simplified)
+          item.repeated_errors = [];
         }
         // Mirror into the corresponding change entry
         const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -954,17 +930,14 @@ async function run() {
             // Error snippets first
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml].join('\n');
-            let repeatedList = '';
-            const repeatedHtml = renderRepeatedErrorsTable(it.repeated_errors || []);
-            repeatedList = ['','  - Repeated errors across failed runs (table below):','', repeatedHtml].join('\n');
+            errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
             if (it.no_success_in_window) {
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
             const commitsHtml = renderCommitsTable(it.commits_between || []);
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml].join('\n');
+            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
@@ -983,17 +956,14 @@ async function run() {
             // Error snippets first
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml2].join('\n');
-            let repeatedList = '';
-            const repeatedHtml2 = renderRepeatedErrorsTable(it.repeated_errors || []);
-            repeatedList = ['','  - Repeated errors across failed runs (table below):','', repeatedHtml2].join('\n');
+            errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
             if (it.no_success_in_window) {
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsHtml2 = renderCommitsTable(it.commits_between || []);
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2].join('\n');
+            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, repeatedList, commitsList].filter(Boolean).join('\n');
           }
           return base;
