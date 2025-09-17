@@ -142,6 +142,25 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+inline __attribute__((always_inline)) uint32_t
+old_noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+
+    // If dst_noc_addr is not L1 aligned then we need to offset the src address by 4B since inline write dst address
+    // needs to respect 4B alignment.
+    ASSERT((dst_noc_addr & 0x3) == 0);
+    uint32_t offset = dst_noc_addr & 0xF;
+    uint32_t src_addr = OLD_MEM_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#ifdef COMPILE_FOR_TRISC
+    ASSERT(0);  // we do not have L1 space for inline values for TRISCs.
+#endif
+    src_addr += noc * MEM_L1_INLINE_SIZE_PER_NOC + offset;
+    return src_addr;
+}
+
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no

@@ -306,7 +306,12 @@ struct EdmChannelWorkerInterface {
         // writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
         ASSERT((dest_addr & 0x3) == 0);
 
-        // src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
+        invalidate_l1_cache();
+        uint32_t old_src_addr = old_noc_get_interim_inline_value_addr(noc, 0);
+        volatile tt_l1_ptr uint32_t* old_interim_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(old_src_addr);
+        WATCHER_RING_BUFFER_PUSH(*old_interim_addr_ptr);
+        ASSERT(*old_interim_addr_ptr == 0);
 
         // Flush to make sure write left L1 before updating it
         WAYPOINT("NCBW");

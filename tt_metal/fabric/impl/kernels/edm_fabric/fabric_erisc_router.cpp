@@ -2355,6 +2355,14 @@ void kernel_main() {
         }
     }
 
+    uint32_t src_addr = old_noc_get_interim_inline_value_addr(tt::tt_fabric::worker_handshake_noc, 0);
+    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    *interim_addr_ptr = 0;
+    asm volatile("fence" ::: "memory");
+    invalidate_l1_cache();
+    volatile uint32_t read_back = *interim_addr_ptr;
+    ASSERT(read_back == 0);
+
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
