@@ -52,7 +52,7 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
-        -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+        ${{ (matrix.test-info.arch == 'wormhole_b0' || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
