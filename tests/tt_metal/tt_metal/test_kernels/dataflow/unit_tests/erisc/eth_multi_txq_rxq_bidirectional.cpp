@@ -15,9 +15,9 @@
 constexpr uint32_t data_txq_id = get_compile_time_arg_val(0);
 constexpr uint32_t ack_txq_id = get_compile_time_arg_val(1);
 constexpr uint32_t PAYLOAD_SIZE = get_compile_time_arg_val(2);
-
-static constexpr uint32_t CREDITS_STREAM_ID = 0;
-static constexpr uint32_t ACK_STREAM_ID = 1;
+constexpr uint32_t multi_erisc = get_compile_time_arg_val(3);
+constexpr uint32_t CREDITS_STREAM_ID = get_compile_time_arg_val(4);
+constexpr uint32_t ACK_STREAM_ID = get_compile_time_arg_val(5);
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -40,11 +40,13 @@ void kernel_main() {
     init_ptr_val(CREDITS_STREAM_ID, 0);
 
     // Handshake to make sure it's safe to start sending
+    // DPRINT << "Wait for Handshake" << ENDL();
     if (is_handshake_sender) {
         erisc::datamover::handshake::sender_side_handshake(handshake_addr);
     } else {
         erisc::datamover::handshake::receiver_side_handshake(handshake_addr);
     }
+    // DPRINT << "Handshake Done TXQ ID = " << data_txq_id << " ACK TXQ ID " << ack_txq_id << ENDL();
 
     bool has_unsent_messages = true;
     bool has_unsent_acks = true;
@@ -74,6 +76,8 @@ void kernel_main() {
 
         // Send Acks
         if (has_unsent_acks) {
+            DPRINT << "SEND ACKS " << num_acks_sent << " " << get_ptr_val<ACK_STREAM_ID>() << " " << num_messages_sent
+                   << ENDL();
             if (get_ptr_val<CREDITS_STREAM_ID>() > num_acks_sent) {
                 *reinterpret_cast<volatile uint32_t*>(receiver_credit_ack_src) = num_acks_sent + 1;
                 while (internal_::eth_txq_is_busy(ack_txq_id)) {
