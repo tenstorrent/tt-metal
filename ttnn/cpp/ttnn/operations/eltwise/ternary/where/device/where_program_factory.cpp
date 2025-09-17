@@ -735,14 +735,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = true_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_FALSE"] = "0";  // False is scalar for TTS
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";  // Predicate (CB0)
+        reader_defines["SRC_SHARDED_B"] = true_sharded ? "1" : "0";       // True tensor (CB1)
+        reader_defines["SRC_SHARDED_C"] = "0";                            // False is scalar for TTS
 
         // Set broadcast defines for TTS row broadcast
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor
-        reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
+        // CB0 = predicate, CB1 = true tensor (false is scalar for TTS)
+        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";  // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";  // Second tensor (CB1)
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
@@ -756,14 +756,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = "0";  // True is scalar for TST
-        reader_defines["SRC_SHARDED_FALSE"] = false_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";  // Predicate (CB0)
+        reader_defines["SRC_SHARDED_B"] = false_sharded ? "1" : "0";      // False tensor (CB1)
+        reader_defines["SRC_SHARDED_C"] = "0";                            // True is scalar for TST
 
         // Set broadcast defines for TST row broadcast
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = "0";                          // True is scalar
-        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";  // CB1 uses false tensor
+        // CB0 = predicate, CB1 = false tensor (true is scalar for TST)
+        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = false_is_bcast ? "1" : "0";  // Second tensor (CB1)
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
@@ -975,14 +975,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // TTS row broadcast configuration
-        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_FALSE"] = "0";  // False is scalar for TTS
+        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";  // Predicate (CB0)
+        kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";  // True tensor (CB1)
     } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // TST row broadcast configuration
-        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_TRUE"] = "0";  // True is scalar for TST
-        kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";   // Predicate (CB0)
+        kernel_defines["BCAST_B"] = false_is_bcast ? "1" : "0";  // False tensor (CB1)
     }
     if ((variant == WhereVariant::TTS) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {

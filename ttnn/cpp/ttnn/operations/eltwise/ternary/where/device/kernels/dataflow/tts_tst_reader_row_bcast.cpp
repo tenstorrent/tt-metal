@@ -10,8 +10,8 @@
 void kernel_main() {
     // Standard first 5 arguments
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
-    const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // false tensor address
-    const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // unused for TST (but expected by kernel interface)
+    const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true_value tensor address or false_value tensor address
+    const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // unused for TTS/TST (but expected by kernel interface)
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
     const uint32_t start_id = get_arg_val<uint32_t>(4);   // start_tile_id
 
@@ -25,24 +25,24 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(11);
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-    const uint32_t false_nD_stride = get_arg_val<uint32_t>(15);
-    const uint32_t false_d_stride = get_arg_val<uint32_t>(16);
-    const uint32_t false_n_stride = get_arg_val<uint32_t>(17);
-    const uint32_t false_c_stride = get_arg_val<uint32_t>(18);
-    const uint32_t false_num_tiles = get_arg_val<uint32_t>(19);
+    const uint32_t cND = get_arg_val<uint32_t>(14);              // collapsed dims > 5
+    const uint32_t src_b_nD_stride = get_arg_val<uint32_t>(15);  // TTS: true strides, TST: false strides
+    const uint32_t src_b_d_stride = get_arg_val<uint32_t>(16);
+    const uint32_t src_b_n_stride = get_arg_val<uint32_t>(17);
+    const uint32_t src_b_c_stride = get_arg_val<uint32_t>(18);
+    const uint32_t src_b_num_tiles = get_arg_val<uint32_t>(19);
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;    // predicate
-    constexpr auto cb_id_src_c = tt::CBIndex::c_1;  // false tensor
+    constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // TTS: true tensor, TST: false tensor
 
-    // Compile-time args layout for TST: 2 CB ids, then 2 TensorAccessorArgs blocks
+    // Compile-time args layout: 2 CB ids, then 2 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     const auto src = TensorAccessor(src0_args, src0_addr, get_tile_size(cb_id_src));
-    const auto src_c = TensorAccessor(src1_args, src1_addr, get_tile_size(cb_id_src_c));
+    const auto src_b = TensorAccessor(src1_args, src1_addr, get_tile_size(cb_id_src_b));
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
@@ -65,7 +65,7 @@ void kernel_main() {
 
     // this is the INPUT tile offset for predicate
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
-#if !SRC_BCAST_PREDICATE
+#if !SRC_BCAST_A
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
@@ -73,18 +73,18 @@ void kernel_main() {
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
 
-    // For false tensor (CB1) - use false tensor strides
-    uint32_t tile_offset_c =
-        start_nd * false_nD_stride + start_d * false_d_stride + start_n * false_n_stride + start_c * false_c_stride;
-#if !SRC_BCAST_FALSE
-    tile_offset_c += start_th * Wt;
+    // For src_b tensor (CB1) - use src_b tensor strides
+    uint32_t tile_offset_b =
+        start_nd * src_b_nD_stride + start_d * src_b_d_stride + start_n * src_b_n_stride + start_c * src_b_c_stride;
+#if !SRC_BCAST_B
+    tile_offset_b += start_th * Wt;
 #endif
-    uint32_t next_c_shift_c = false_c_stride - HtWt;
-    uint32_t next_n_shift_c = false_n_stride - false_c_stride * C;
-    uint32_t next_d_shift_c = false_d_stride - false_n_stride * N;
-    uint32_t next_nd_shift_c = false_nD_stride - false_d_stride * D;
+    uint32_t next_c_shift_b = src_b_c_stride - HtWt;
+    uint32_t next_n_shift_b = src_b_n_stride - src_b_c_stride * C;
+    uint32_t next_d_shift_b = src_b_d_stride - src_b_n_stride * N;
+    uint32_t next_nd_shift_b = src_b_nD_stride - src_b_d_stride * D;
 
-    // Main loop for reading tiles
+    // Main loop for reading tiles - TTT ROW BROADCAST PATTERN
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
         for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
@@ -93,78 +93,78 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th, start_tw = 0) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                             cb_reserve_back(cb_id_src, onetile);
                             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
                             noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
 #endif
-#if !SRC_SHARDED_FALSE
-                            // read a tile from src_c (false tensor)
-                            cb_reserve_back(cb_id_src_c, onetile);
-                            uint32_t l1_write_addr_c = get_write_ptr(cb_id_src_c);
-                            noc_async_read_tile(tile_offset_c + tw, src_c, l1_write_addr_c);
+#if !SRC_SHARDED_B
+                            // read a tile from src_b (TTS: true tensor, TST: false tensor)
+                            cb_reserve_back(cb_id_src_b, onetile);
+                            uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
+                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
 #endif
-#if !SRC_SHARDED_PREDICATE || !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_A || !SRC_SHARDED_B
                             noc_async_read_barrier();
 #endif
-#if SRC_BCAST_PREDICATE && !BCAST_LLK  // no sharding support for row bcast yet
+#if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW(cb_id_src);
 #endif
-#if SRC_BCAST_FALSE && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_C(cb_id_src_c);
+#if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
 #endif
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                             cb_push_back(cb_id_src, onetile);
 #endif
-#if !SRC_SHARDED_FALSE
-                            cb_push_back(cb_id_src_c, onetile);
+#if !SRC_SHARDED_B
+                            cb_push_back(cb_id_src_b, onetile);
 #endif
                         }
                         if (dst_shard_width == 0) {
                             // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-#if !SRC_BCAST_PREDICATE
+#if !SRC_BCAST_A
                         tile_offset += Wt;
 #endif
-#if !SRC_BCAST_FALSE
-                        tile_offset_c += Wt;
+#if !SRC_BCAST_B
+                        tile_offset_b += Wt;
 #endif
                     }
-#if !SRC_SHARDED_PREDICATE
-#if SRC_BCAST_PREDICATE
+#if !SRC_SHARDED_A
+#if SRC_BCAST_A
                     tile_offset += c_stride;
 #else
                     tile_offset += next_c_shift;
 #endif
 #endif
-#if !SRC_SHARDED_FALSE
-#if SRC_BCAST_FALSE
-                    tile_offset_c += false_c_stride;
+#if !SRC_SHARDED_B
+#if SRC_BCAST_B
+                    tile_offset_b += src_b_c_stride;
 #else
-                    tile_offset_c += next_c_shift_c;
+                    tile_offset_b += next_c_shift_b;
 #endif
 #endif
                 }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                 tile_offset += next_n_shift;
 #endif
-#if !SRC_SHARDED_FALSE
-                tile_offset_c += next_n_shift_c;
+#if !SRC_SHARDED_B
+                tile_offset_b += next_n_shift_b;
 #endif
             }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
             tile_offset += next_d_shift;
 #endif
-#if !SRC_SHARDED_FALSE
-            tile_offset_c += next_d_shift_c;
+#if !SRC_SHARDED_B
+            tile_offset_b += next_d_shift_b;
 #endif
         }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
         tile_offset += next_nd_shift;
 #endif
-#if !SRC_SHARDED_FALSE
-        tile_offset_c += next_nd_shift_c;
+#if !SRC_SHARDED_B
+        tile_offset_b += next_nd_shift_b;
 #endif
     }
 }
