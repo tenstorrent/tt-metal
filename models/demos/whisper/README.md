@@ -42,5 +42,5 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 ```
 
 ## Notes:
-- By default, demo tests (Conditional Generation, Audio Classification) run using all available devices.
-- To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
+- By default, demo tests (Conditional Generation, Audio Classification) run on a single device (1) and all available devices.
+- To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.

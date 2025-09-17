@@ -510,7 +510,9 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, mesh_device,
     [(1, 1)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
+# To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
+# By default, the test runs on a single device (1) and all available devices.
 def test_demo_for_audio_classification_inference(
     input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
 ):
@@ -534,8 +536,10 @@ def test_demo_for_audio_classification_inference(
     "num_inputs,batch_size_per_device",
     [(1, 1)],
 )
+# To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
+# By default, the test runs on a single device (1) and all available devices.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
 def test_demo_for_audio_classification_dataset(
     input_path, ttnn_model, mesh_device, num_inputs, batch_size_per_device, is_ci_env
 ):
@@ -565,9 +569,9 @@ def test_demo_for_audio_classification_dataset(
     "model_repo",
     ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
 )
-@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
-# To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
-# By default, it uses all available devices.
+@pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
+# To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
+# By default, the test runs on a single device (1) and all available devices.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
     input_path, ttnn_model, mesh_device, num_inputs, model_repo, is_ci_env, batch_size_per_device
@@ -576,14 +580,14 @@ def test_demo_for_conditional_generation(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
     total_batch = mesh_device.get_num_devices() * batch_size_per_device
-    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
+    if is_ci_env and model_repo == "distil-whisper/distil-large-v3" and mesh_device.get_num_devices() == 1:
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
             else:
                 expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 7.40, "decode_t/s/u": 41.1}
+            expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
             "prefill_t/s": (1 / ttft) * total_batch,
@@ -606,9 +610,9 @@ def test_demo_for_conditional_generation(
     "batch_size_per_device",
     [(1)],
 )
-@pytest.mark.parametrize("mesh_device", [available_devices], indirect=True)
-# To run the demo with a specific number of devices, replace `available_devices` in the `mesh_device` parameter with the desired number.
-# By default, it uses all available devices.
+@pytest.mark.parametrize("mesh_device", [1, available_devices], indirect=True)
+# To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
+# By default, the test runs on a single device (1) and all available devices.
 def test_demo_for_conditional_generation_dataset(ttnn_model, mesh_device, model_repo, is_ci_env, batch_size_per_device):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
