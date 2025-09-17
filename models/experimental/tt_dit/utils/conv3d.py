@@ -115,6 +115,33 @@ def count_convs(obj):
     return count
 
 
+def conv_pad_height(tensor_BTHWC, h_factor):
+    """
+    For Wan2.2, in some parallism schemes height can't be fractured by the factor.
+    This function pads the height to the next multiple of the factor.
+    """
+    B, T, H, W, C = tensor_BTHWC.shape
+
+    # Calculate padding needed to make H divisible by h_factor
+    pad_h = (h_factor - H % h_factor) % h_factor
+
+    if pad_h > 0:
+        # Pad height dimension with zeros
+        tensor_BTHWC = torch.nn.functional.pad(tensor_BTHWC, (0, 0, 0, 0, 0, pad_h))
+
+    # Return padded tensor and original height for later unpadding
+    return tensor_BTHWC, H
+
+
+def conv_unpad_height(tensor_BTHWC, logical_h):
+    """
+    For Wan2.2, remove height padding that was added by conv_pad_height.
+    """
+    B, T, H, W, C = tensor_BTHWC.shape
+    # Slice out the original height dimension
+    return tensor_BTHWC[:, :, :logical_h, :, :]
+
+
 def conv_pad_in_channels(tensor):
     C_in = tensor.shape[-1]
     padded_C_in = aligned_channels(C_in)
