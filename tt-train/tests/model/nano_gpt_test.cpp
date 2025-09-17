@@ -348,19 +348,22 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST_F(NanoLlamaTest, NIGHTLY_Default) {
-    if (should_run_nightly_tests()) {
-        train_test();
+    if (!should_run_nightly_tests()) {
+        GTEST_SKIP() << "Skipping Nightly test.";
     }
+    train_test();
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
 }
