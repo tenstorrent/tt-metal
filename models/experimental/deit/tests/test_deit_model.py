@@ -24,18 +24,14 @@ def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
 
     with torch.no_grad():
         # setup pytorch model
-        model = DeiTForImageClassification.from_pretrained(
-            "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1"
-        )
+        model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
         model.eval()
         state_dict = model.state_dict()
         base_address = "deit"
 
         # synthesize the input
         image = hf_cat_image_sample_input
-        image_processor = AutoImageProcessor.from_pretrained(
-            "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1"
-        )
+        image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
         input_image = image_processor(images=image, return_tensors="pt")
         input_image = input_image["pixel_values"]
 
