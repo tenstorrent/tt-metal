@@ -9,7 +9,6 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "debug/dprint.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
 
@@ -50,9 +49,6 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
 
-    DPRINT << "[WR] route-intent dst_mesh=" << (uint32_t)dst_mesh_id << " dst_dev=" << (uint32_t)dst_dev_id
-           << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
-
     // Fabric header (2D dynamic routing): route to (dst_mesh_id, dst_dev_id)
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
 #if defined(DYNAMIC_ROUTING_ENABLED)
@@ -66,12 +62,7 @@ void kernel_main() {
         /*dst_mesh_id*/ dst_mesh_id,
         /*ew_dim*/ 0);
 
-    DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
-
     sender.open<true>();
-
-    DPRINT << "[WR] open conn dst_dev=" << dst_dev_id << " dst_mesh=" << dst_mesh_id << " total_pages=" << TOTAL_PAGES
-           << "\n";
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
@@ -88,18 +79,12 @@ void kernel_main() {
         fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
 
-        DPRINT << "[WR] page " << i << " noc_lo=0x" << HEX() << (uint32_t)(dest_noc_addr & 0xffffffffu) << " noc_hi=0x"
-               << (uint32_t)(dest_noc_addr >> 32) << DEC() << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
-
-        DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
-
         // 1) send payload (no header)
         sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
         // 2) send header (completes the packet)
         sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 
         cb_pop_front(CB_ID, 1);
-        DPRINT << "[WR] page " << i << " sent\n";
     }
 
     noc_async_writes_flushed();
@@ -113,14 +98,8 @@ void kernel_main() {
         fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
 
-        DPRINT << "[WR] sem-inc dst noc_hi=0x" << HEX() << sem_hi << " noc_lo=0x" << sem_lo << DEC() << " rx_xy=("
-               << rx_noc_x << "," << rx_noc_y << ")\n";
-        DPRINT << "[WR] send_type(seminc)=" << (uint32_t)header->noc_send_type << "\n";
-
         sender.wait_for_empty_write_slot();
         sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-        DPRINT << "[WR] sem bump sent\n";
     }
-    DPRINT << "[WR] close conn\n";
     sender.close();
 }
