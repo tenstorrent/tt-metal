@@ -175,16 +175,16 @@ WebSocketClients::WebSocketClients(const std::vector<std::string>& endpoints, Te
     // Start the system
     running_ = true;
 
+    // Initial connection attempts
+    for (const auto& endpoint : endpoints_) {
+        attempt_connection(endpoint);
+    }
+
     // Start event loop thread
     event_loop_thread_ = std::thread(&WebSocketClients::event_loop, this);
 
     // Start retry thread
     retry_thread_ = std::thread(&WebSocketClients::retry_loop, this);
-
-    // Initial connection attempts
-    for (const auto& endpoint : endpoints_) {
-        attempt_connection(endpoint);
-    }
 
     std::cout << "🔌 [WebSocketClients] Started with " << endpoints_.size() << " endpoints" << std::endl;
 }
