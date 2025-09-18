@@ -4,6 +4,7 @@
 
 import torch
 import ttnn
+
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
@@ -236,6 +237,8 @@ class ColParallelLinear:
             output = ttnn.gelu(output, fast_and_approximate_mode=False)
         elif self.activation_fn == "quick_gelu":
             output = output * ttnn.sigmoid(1.702 * output)  # quick approx gelu
+        elif self.activation_fn == "silu":
+            output = ttnn.silu(output, fast_and_approximate_mode=False)
         elif self.activation_fn == "swiglu":
             output, gate = ttnn.chunk(output, 2, -1)
             output = output * ttnn.silu(gate)
