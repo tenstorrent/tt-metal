@@ -891,7 +891,7 @@ def test_qwen_demo_text(
             )
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
-                tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+                tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 

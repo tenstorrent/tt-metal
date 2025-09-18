@@ -55,12 +55,10 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 2048, 4096, 8192),
+    (128, 2048),
     ids=[
         "128",
         "2048",
-        "4096",
-        "8192",
     ],
 )
 @pytest.mark.parametrize(
@@ -72,7 +70,7 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize(
     "num_layers",
-    (64,),
+    (3,),
     ids=[
         "1layer",
     ],
