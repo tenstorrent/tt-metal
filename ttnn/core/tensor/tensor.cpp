@@ -718,10 +718,10 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
         placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
     }
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    log_info(tt::LogAlways, "Creating tensor with distribution_shape: {}", tensor_topology.distribution_shape());
-    log_info(tt::LogAlways, "Creating tensor with placements: {}", placements);
-    log_info(tt::LogAlways, "Creating tensor with coords: {}", coords);
-    log_info(tt::LogAlways, "Creating tensor with shape: {}", device->shape());
+    // log_info(tt::LogAlways, "Creating tensor with distribution_shape: {}", tensor_topology.distribution_shape());
+    // log_info(tt::LogAlways, "Creating tensor with placements: {}", placements);
+    // log_info(tt::LogAlways, "Creating tensor with coords: {}", coords);
+    // log_info(tt::LogAlways, "Creating tensor with shape: {}", device->shape());
     auto tensor = Tensor(std::move(device_storage), tensor_spec, tensor_topology);
     log_info(
         tt::LogAlways, "Created tensor with distribution_shape: {}", tensor.tensor_topology().distribution_shape());
