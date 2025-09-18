@@ -310,25 +310,8 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, weights_mesh_mapp
     )
 
 
-# def custom_preprocessor(model, name, mesh_mapper=None):
-#     parameters = {}
-#     if isinstance(model, nn.Conv2d):
-#         parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-#         if model.bias is not None:
-#             bias = model.bias.reshape((1, 1, 1, -1))
-#             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-
-#     if isinstance(model, Conv):
-#         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)
-#         parameters["conv"] = {}
-#         parameters["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-#         bias = bias.reshape((1, 1, 1, -1))
-#         parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-
-#     return parameters
-
-
-def create_yolov10x_model_parameters(model: YOLOv10, input_tensor: torch.Tensor, device):
+def create_yolov10x_model_parameters(model: YOLOv10, device):
+    input_tensor = torch.randn(1, 3, 640, 640)
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
