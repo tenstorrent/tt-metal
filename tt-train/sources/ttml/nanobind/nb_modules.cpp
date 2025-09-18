@@ -26,14 +26,22 @@ namespace ttml::modules {
 
 void py_module_types(nb::module_& m) {
     nb::export_enum<RunMode>(m);
-    nb::export_enum<models::llama::RunnerType>(m);
-    nb::export_enum<models::llama::WeightTyingType>(m);
+    nb::export_enum<models::common::transformer::RunnerType>(m);
+    nb::export_enum<models::common::transformer::WeightTyingType>(m);
+
+    nb::export_enum<models::gpt2::PositionalEmbeddingType>(m);
 
     nb::class_<ModuleBase>(m, "ModuleBase");
     nb::class_<models::BaseTransformer, ModuleBase>(m, "BaseTransformer");
+
+    nb::class_<models::gpt2::TransformerConfig>(m, "GPT2TransformerConfig");
+    nb::class_<models::gpt2::Transformer>(m, "GPT2Transformer");
+
     nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");
+
     nb::class_<models::llama::LlamaConfig>(m, "LlamaConfig");
     nb::class_<models::llama::Llama, models::BaseTransformer>(m, "Llama");
+
     nb::class_<MultiLayerPerceptronParameters>(m, "MultiLayerPerceptronParameters");
     nb::class_<MultiLayerPerceptron, ModuleBase>(m, "MultiLayerPerceptron");
 }
@@ -56,6 +64,38 @@ void py_module(nb::module_& m) {
         auto py_base_transformer =
             static_cast<nb::class_<models::BaseTransformer, ModuleBase>>(m.attr("BaseTransformer"));
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
+    }
+
+    {
+        auto py_gpt2_transformer_config =
+            static_cast<nb::class_<models::gpt2::TransformerConfig>>(m.attr("GPT2TransformerConfig"));
+        py_gpt2_transformer_config.def(
+            nb::init<
+                uint32_t,
+                uint32_t,
+                float,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                models::gpt2::RunnerType,
+                models::gpt2::WeightTyingType,
+                models::gpt2::PositionalEmbeddingType,
+                bool>(),
+            nb::arg("num_heads") = 6,
+            nb::arg("embedding_dim") = 384,
+            nb::arg("dropout_prob") = 0.2F,
+            nb::arg("num_blocks") = 32,
+            nb::arg("vocab_size") = 256,
+            nb::arg("max_sequence_length") = 256,
+            nb::arg("runner_type") = models::gpt2::RunnerType::Default,
+            nb::arg("weight_tying") = models::gpt2::WeightTyingType::Disabled,
+            nb::arg("positional_embedding_type") = models::gpt2::PositionalEmbeddingType::Trainable,
+            nb::arg("use_composite_layernorm") = false);
+        auto py_gpt2 =
+            static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(m.attr("GPT2Transformer"));
+        py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+        py_gpt2.def_static(
+            "create", [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); });
     }
 
     {
