@@ -541,6 +541,8 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
+                attn_mask=attn_mask,
+                is_causal=True if attn_mask is None else False,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
@@ -856,6 +858,7 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
+                attn_mask=attn_mask,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
