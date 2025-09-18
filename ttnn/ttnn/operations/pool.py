@@ -26,8 +26,6 @@ def golden_maxpool2d(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
-    # Handle padding format conversion
-    # ttnn uses [pad_t, pad_b, pad_l, pad_r] while torch expects (pad_h, pad_w) or specific 4D format
     if isinstance(padding, (list, tuple)) and len(padding) == 4:
         # Apply padding using torch.nn.functional.pad with 4D format
         # ttnn format: [pad_t, pad_b, pad_l, pad_r]
