@@ -46,11 +46,13 @@ class TtnnDWConv:
             def __init__(self, dwconv_params):
                 self.weight = dwconv_params.conv.weight
                 # For DWConv, bias comes from BatchNorm if it exists
-                if hasattr(dwconv_params, 'bn') and hasattr(dwconv_params.bn, 'bias'):
+                if "bn" in dwconv_params and "bias" in dwconv_params.bn:
                     self.bias = dwconv_params.bn.bias
                 # If no bias in bn, check conv layer
-                elif hasattr(dwconv_params.conv, 'bias') and dwconv_params.conv.bias is not None:
+                elif "bias" in dwconv_params.conv and dwconv_params.conv.bias is not None:
                     self.bias = dwconv_params.conv.bias
+                else:
+                    self.bias = None
         
         conv_pt_flat = FlattenedParams(conv_pt)
         
