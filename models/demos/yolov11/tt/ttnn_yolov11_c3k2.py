@@ -4,7 +4,8 @@
 
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, reshard_if_possible, sharded_concat
+from models.demos.yolov7.tt.common import TtYOLOv7Matmul
+from models.demos.yolov11.tt.common import deallocate_tensors, reshard_if_possible, sharded_concat
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K
 
@@ -20,29 +21,33 @@ class TtnnC3k2:
     def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False):
         self.is_bk_enabled = is_bk_enabled
         self.parameter = parameter
-        self.cv1_a = TtnnConv(
-            device,
-            parameter.cv1,
-            conv_pt.cv1.a,
-            reshard=reshard,
-            split_weights=True,
-        )  # matmul
-        self.cv1_b = TtnnConv(
-            device,
-            parameter.cv1,
-            conv_pt.cv1.b,
-            reshard=reshard,
-            split_weights=True,
-        )  # matmul
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # need resahrd as input is in RM
+        # self.cv1_a = TtnnConv(
+        #     device,
+        #     parameter.cv1,
+        #     conv_pt.cv1.a,
+        #     reshard=reshard,
+        #     split_weights=True,
+        # )  # matmul
+        self.cv1_a = TtYOLOv7Matmul(None, conv_pt.cv1.a.conv)
+        self.cv1_b = TtYOLOv7Matmul(None, conv_pt.cv1.b.conv)
+        # self.cv1_b = TtnnConv(
+        #     device,
+        #     parameter.cv1,
+        #     conv_pt.cv1.b,
+        #     reshard=reshard,
+        #     split_weights=True,
+        # )  # matmul
+        # self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # need resahrd as input is in RM
+        self.cv2 = TtYOLOv7Matmul(None, conv_pt.cv2.conv)
         if is_bk_enabled:
             self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
         else:
             self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0])
 
     def __call__(self, device, x, use_shard_concat=True, tile_shape=32):
-        print("c3k2 wt bias for cv1", self.cv1_a.conv.weight.shape, self.cv1_a.conv.bias.shape)
-        cv1_a = self.cv1_a(device, x)
+        # print("c3k2 wt bias for cv1", self.cv1_a.conv.weight.shape, self.cv1_a.conv.bias.shape)
+        cv1_a = self.cv1_a(device, x)  # [1, 1, 25600, 16]
+        print("cv1_a is done", cv1_a.shape, cv1_a.memory_config())
         cv1_b = self.cv1_b(device, x)
         print("outputs are", cv1_a.shape, cv1_b.shape)
         # p(cv1_a, "c3k2 cv1_a")
@@ -76,6 +81,8 @@ class TtnnC3k2:
             x = ttnn.concat((cv1_a, cv1_b, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         p(x, "concat out is")
         x = reshard_if_possible(x)
+        p(x, "after resahrd concat out is")
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)  # internal tilize involves s2l and l2s
         # if x.is_sharded() and (x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0):
         #     print("BEFORE IS", x.memory_config().shard_spec.shape)
         #     aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(

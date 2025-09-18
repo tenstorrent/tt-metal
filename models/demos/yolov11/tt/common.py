@@ -29,7 +29,7 @@ class Yolov11Conv2D:
         core_count=64,
     ):
         self.core_count = core_count
-        print("corec ount is ", self.core_count)
+        # print("corec ount is ", self.core_count)
         self.is_detect = is_detect
         self.activation = activation
         self.is_dfl = is_dfl
@@ -66,7 +66,7 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
         if self.core_count is not None:
-            print("config overrider")
+            # print("config overrider")
             shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
             self.conv_config.core_grid = shard_grid
             self.conv_config.override_sharding_config = True
@@ -275,11 +275,11 @@ def reshard_if_possible(x):  # reshards if shard_spec is not multiples of 32
     if x.is_sharded() and (
         x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0
     ):
-        print("BEFORE IS", x.memory_config().shard_spec.shape)
+        # print("BEFORE IS", x.memory_config().shard_spec.shape)
         aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
             x.memory_config().shard_spec.shape[1]
         )
-        print("after IS", aligned_h, aligned_w)
+        # print("after IS", aligned_h, aligned_w)
         resharded_memory_config = ttnn.create_sharded_memory_config(
             shape=(aligned_h, aligned_w),
             core_grid=x.memory_config().shard_spec.grid,

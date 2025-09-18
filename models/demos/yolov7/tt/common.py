@@ -6,6 +6,13 @@ import ttnn
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtYOLOv7Conv2D:
     def __init__(
         self,
@@ -219,23 +226,32 @@ class TtYOLOv7Matmul:
     def _prepare_weights_and_bias(self, device):
         """Prepare weights and bias tensors for computation."""
         if not self._weights_processed:
+            # if self.weights.is_device_tensor():  # need to remove this overhead
+            p(self.weights, "weights t")
+            p(self.bias, "bias t")
+            self.weights = self.weights.cpu()
+            # self.weights = ttnn.to_device(self.weights,device=device)
+            # self.weights = ttnn.to_dtype(self.weights, ttnn.bfloat16)
             # Convert weights to tiled layout
             self.weights = ttnn.convert_conv_weight_tensor_to_tiled_layout(
                 self.weights,
                 self.weights.shape[1] // self.tile_size,
-                self.weights.shape[0] // self.tile_size,
+                max(1, self.weights.shape[0] // self.tile_size),
                 output_dtype=ttnn.bfloat16,
             )
             self.weights = ttnn.to_dtype(self.weights, self.weight_dtype)
             self.weights = ttnn.to_device(self.weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._weights_processed = True
+            p(self.weights, "processed weights t")
 
         if not self._bias_processed:
             # Convert bias to tiled layout
+            self.bias = self.bias.cpu()  # to remove this
             self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT)
             self.bias = ttnn.to_dtype(self.bias, self.bias_dtype)
             self.bias = ttnn.to_device(self.bias, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._bias_processed = True
+            p(self.bias, "processed bias t")
 
     def _create_compute_config(self, device):
         """Create compute kernel configuration."""
@@ -340,6 +356,7 @@ class TtYOLOv7Matmul:
             num_cores = self._create_shard_grid().num_cores()
             per_core_M = (nhw + 32 * num_cores - 1) // (32 * num_cores)
             per_core_N = output_channels // 32
+            print("cacl is ", per_core_M, per_core_N)
         else:  # For DRAM and block sharded
             # Both M and N dimensions can be distributed
             per_core_M = (nhw + 32 * grid_h - 1) // (32 * grid_h)
@@ -363,16 +380,37 @@ class TtYOLOv7Matmul:
 
         # Calculate dynamic shard shapes and per-core values based on input tensor
         input_shard_shape, output_shard_shape = self._calculate_shard_shapes(input_tensor)
-        per_core_M, per_core_N = self._calculate_per_core_values(input_tensor)
+        self.per_core_M, self.per_core_N = self._calculate_per_core_values(input_tensor)
 
         # Update per-core values for this specific call
-        self.per_core_M = per_core_M
-        self.per_core_N = per_core_N
-
+        # self.per_core_M = per_core_M
+        # self.per_core_N = per_core_N
+        self.in0_block_w = input_tensor.shape[-1] // 32 if input_tensor.shape[-1] % 32 == 0 else 1
+        self.out_block_h = self.per_core_M
+        self.out_block_w = self.per_core_N
         # Create configurations
+
+        max_subblock_w_h = 4 if self.fp32_dest_acc_en else 8
+        # Key constraint: subblock cannot exceed block size
+        max_possible_w = min(max_subblock_w_h, self.per_core_N)
+        max_possible_h = min(max_subblock_w_h, self.per_core_M)
+
+        self.out_subblock_w = max([i for i in range(1, max_possible_w + 1) if self.per_core_N % i == 0])
+        self.out_subblock_h = max(
+            [
+                i
+                for i in range(1, max_possible_h + 1)
+                if self.per_core_M % i == 0 and i * self.out_subblock_w <= max_subblock_w_h
+            ]
+        )
+        # max_subblock_w_h = 4 if self.fp32_dest_acc_en else 8
+        # self.out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if self.per_core_N % i == 0])
+        # self.out_subblock_h = max([
+        #     i for i in range(1, max_subblock_w_h + 1)
+        #     if self.per_core_M % i == 0 and i * self.out_subblock_w <= max_subblock_w_h
+        # ])
         compute_config = self._create_compute_config(device)
         matmul_config = self._create_matmul_config()
-
         # Create memory configurations based on type
         if self.memory_config_type == "dram":
             input_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -407,11 +445,16 @@ class TtYOLOv7Matmul:
         # Add memory_config only if not DRAM (for DRAM, let ttnn decide)
         if self.memory_config_type != "dram":
             linear_args["memory_config"] = output_memory_config
-
+        print("linear args are", linear_args)
+        hw = input_tensor.shape[-2]
         output_tensor = ttnn.linear(**linear_args)
 
         output_tensor = output_tensor[:, :, : -self.pad_input, :] if self.pad_input > 0 else output_tensor
-
+        p(output_tensor, "out are ")
+        if output_tensor.shape[2] != hw:
+            print("sliceuhhh")
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x = x[:, :, :hw, :]
         return output_tensor
 
 
