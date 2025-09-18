@@ -129,6 +129,7 @@ struct ParsedTestConfig {
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool telemetry_enabled = false;  // Enable telemetry for performance testing
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
@@ -149,6 +150,7 @@ struct TestConfig {
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool telemetry_enabled = false;
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;

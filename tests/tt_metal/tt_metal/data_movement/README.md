@@ -9,7 +9,7 @@ This test suite includes tests using both fast dispatch (Mesh Device API) and sl
 Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `GenericMeshDeviceFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
 
 ### Slow Dispatch
-Some test suites use slow dispatch mode for reliable program execution. These tests use `DeviceFixture` and execute programs directly using `tt::tt_metal::detail::LaunchProgram()`. Tests requiring slow dispatch include:
+Some test suites use slow dispatch mode for reliable program execution. These tests use `MeshDeviceFixture`. With TT-Mesh, APIs for executing programs in slow dispatch are the same as in fast dispatch, using `tt::tt_metal::distributed::EnqueueMeshWorkload`. Tests requiring slow dispatch include:
 - **Deinterleave Hardcoded** (IDs 200-201)
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
@@ -69,7 +69,7 @@ Follow these steps to add new tests to this test suite.
 
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
     - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
-    - **Slow Dispatch**: Use `DeviceFixture` only if fast dispatch APIs don't work for your specific test case
+    - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".

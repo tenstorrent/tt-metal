@@ -33,6 +33,7 @@ tt::tt_metal::operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_c
     bool padding_exists,
     uint32_t ncores_nhw,
     uint32_t ncores_c,
+    uint32_t num_cores_x,
     uint32_t max_out_nsticks_per_core,
     uint32_t max_ref_size,
     uint32_t in_out_shard_size_delta,
