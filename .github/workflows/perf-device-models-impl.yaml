@@ -82,6 +82,14 @@ jobs:
             pytest models/demos/yolov11/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
+      - name: yolov11m tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "yolov11m"
+          commands: |
+            pytest models/demos/yolov11m/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov10x tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
