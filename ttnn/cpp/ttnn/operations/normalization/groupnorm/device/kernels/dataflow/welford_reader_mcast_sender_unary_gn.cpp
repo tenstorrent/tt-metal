@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
+#include "tt-metalium/constants.hpp"
+#include "noc_parameters.h"
 
 void kernel_main() {
     // clang-format off
@@ -62,7 +65,7 @@ void kernel_main() {
     constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(2);
     constexpr uint32_t num_batch_group = get_compile_time_arg_val(3);
     constexpr uint32_t num_batches = get_compile_time_arg_val(4);
-    uint32_t num_groups = num_batch_group / num_batches;
+    constexpr uint32_t num_groups = num_batch_group / num_batches;
 
     constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
@@ -83,15 +86,16 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
+    // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
+    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(21);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(22);
 
-    // 21 and 22 are used in welford version but unused in this version
     constexpr auto src0_args = TensorAccessorArgs<23>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
@@ -225,20 +229,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;  // sharded cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
-    const DataFormat out_data_format = get_dataformat(cb_out0);
-    const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
@@ -262,12 +260,11 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    const uint32_t num_reads_of_input = 3;
+    const uint32_t num_reads_of_input = 2;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
-        num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        out_block_h_last = residual % out_block_h_normal;
+        num_out_blocks_padded++;
+        out_block_h_last = block_h % num_out_blocks;
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required = num_out_blocks_padded * num_mcast_cores * 16 / single_tile_size_bytes;
@@ -275,235 +272,201 @@ void kernel_main() {
         cb_ex_external_tiles_required++;
     }
 
-        index_b_offset = 0;
-        for (uint32_t b = 0; b < num_batches; ++b) {
-            index_g_offset = 0;
-            row_offset = num_cols_per_group;
+    index_b_offset = 0;
+    for (uint32_t b = 0; b < num_batches; ++b) {
+        index_g_offset = 0;
+        row_offset = num_cols_per_group;
 
-            for (uint32_t m = 0; m < num_groups; ++m) {
-            //The following loop is for the 3 passes of input tensor required for GroupNorm
-            //First Pass: Calculates average value
-            //Second Pass: Calculates the Variance value
-            //Third Pass: Calculates final value
-            //Definition: num_read_of_input = 3
-                for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
-                    uint32_t out_block_start_id_offset = 0;
-                    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-                    uint32_t cb_ex_external_bytes_written = 0;
-                    cb_reserve_back(cb_ex_external, cb_ex_external_tiles_required);
-                    for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+        for (uint32_t m = 0; m < num_groups; ++m) {
+            // The following loop is for the 2 passes of input tensor required for GroupNorm
+            // First Pass: Calculates average and variance value
+            // Second Pass: Calculates final value
+            // Definition: num_read_of_input = 2
+            for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
+                uint32_t out_block_start_id_offset = 0;
+                uint32_t cb_ex_external_bytes_written = 0;
+
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
-                        if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                            out_block_h_actual = out_block_h_last;
+                    if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                        out_block_h_actual = out_block_h_last;
                             out_block_hw_actual = out_block_hw_last;
-                        } else {
-                            out_block_h_actual = out_block_h_normal;
+                    } else {
+                        out_block_h_actual = out_block_h_normal;
                             out_block_hw_actual = out_block_hw_normal;
-                        }
+                    }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                        const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                        const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+                    const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+                    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+                    uint32_t l1_write_addr;
+                    l1_write_addr = get_write_ptr(cb_in0);
+                    cb_reserve_back(cb_in0, out_block_hw_normal);
+                    for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                        for (uint32_t nt = 0; nt < block_w; nt++) {
+                            noc_async_read_tile(
+                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                    index_b_offset + index_g_offset,
+                                src_a,
+                                l1_write_addr);
+                            l1_write_addr += src0_tile_bytes;
+                            noc_async_read_barrier();
+                        }
+                    }
+                    cb_push_back(cb_in0, out_block_hw_normal);
+#endif
+                    if (cur_read_iteration == 1) {
+                        const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
+
+                        // add or copy with previous output results
+                        uint32_t block_w_curr =
+                            index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
+                        const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
                         uint32_t l1_write_addr;
-                        l1_write_addr = get_write_ptr(cb_in0);
-                        cb_reserve_back(cb_in0, out_block_hw_normal);
+                        l1_write_addr = get_write_ptr(cb_reread_out);
+                        cb_reserve_back(cb_reread_out, out_block_hw_normal);
+
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                            for (uint32_t nt = 0; nt < block_w; nt++) {
+                            for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                                 noc_async_read_tile(
-                                    start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                    out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                         index_b_offset + index_g_offset,
-                                    src_a,
+                                    dst_a,
                                     l1_write_addr);
-                                l1_write_addr += src0_tile_bytes;
+                                l1_write_addr += dst_tile_bytes;
                                 noc_async_read_barrier();
                             }
                         }
-                        cb_push_back(cb_in0, out_block_hw_normal);
-#endif
-                        if (cur_read_iteration== 0 || cur_read_iteration== 1) {
-                            // wait for local data ready
-                            if (cur_read_iteration== 0) {
-                                cb_wait_front(cb_ex_partial, 1);
-                            } else {
-                                cb_wait_front(cb_ex2_partial, 1);
-                            }
-
-                            // read self Ex partial - on the first iteration, read a full tile for overwriting
-                            // garbage in L1, on subsequent just treat it as another core
-                            uint32_t l1_read_addr_ex_par =
-                                cur_read_iteration== 0 ? get_read_ptr(cb_ex_partial) : get_read_ptr(cb_ex2_partial);
-                            uint64_t noc_addr_ex_par =
-                                get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
-                            uint32_t read_size = (cb_ex_external_bytes_written % single_tile_size_bytes > 0)
-                                                     ? num_bytes_read
-                                                     : single_tile_size_bytes;
-			    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
-                            l1_write_addr_external += 16;
-                            cb_ex_external_bytes_written += 16;
-                            noc_async_read_barrier();
-
-                            if constexpr (num_mcast_cores > 1) {
-                                // wait for all other cores data ready
-                                noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
-                                noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-                                // read data from other cores
-                                for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                                    uint64_t noc_addr_ex_par =
-                                        get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
-                                    l1_write_addr_external += 16;
-                                    cb_ex_external_bytes_written += 16;
-                                    noc_async_read_barrier();
-                                }
-                            }
-                            if (cur_read_iteration== 0) {
-                                cb_pop_front(cb_ex_partial, 1);
-                            } else {
-                                cb_pop_front(cb_ex2_partial, 1);
-                            }
-
-                            if constexpr (num_mcast_cores > 1) {
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_semaphore_noc_addr,
-                                    num_mcast_cores_mid_group,
-                                    false);
-                                if (has_mcast_first_group) {
-                                    noc_semaphore_set_multicast(
-                                        reduce_sender_semaphore_addr,
-                                        reduce_sender_first_group_semaphore_noc_addr,
-                                        num_mcast_cores_first_group,
-                                        false);
-                                }
-                                if (has_mcast_last_group) {
-                                    noc_semaphore_set_multicast(
-                                        reduce_sender_semaphore_addr,
-                                        reduce_sender_last_group_semaphore_noc_addr,
-                                        num_mcast_cores_last_group,
-                                        false);
-                                }
-                            }
-                        } else if (cur_read_iteration == 2) {
-                            const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
-
-                            // add or copy with previous output results
-                            uint32_t block_w_curr =
-                                index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
-
-                            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
-                            uint32_t l1_write_addr;
-                            l1_write_addr = get_write_ptr(cb_reread_out);
-                            cb_reserve_back(cb_reread_out, out_block_hw_normal);
-
-                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                                for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                    noc_async_read_tile(
-                                        out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                            index_b_offset + index_g_offset,
-                                        dst_a,
-                                        l1_write_addr);
-                                    l1_write_addr += dst_tile_bytes;
-                                    noc_async_read_barrier();
-                                }
-                            }
-                            cb_push_back(cb_reread_out, out_block_hw_normal);
-                        }
-                        out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
+                        cb_push_back(cb_reread_out, out_block_hw_normal);
                     }
-                    if (cur_read_iteration== 0 || cur_read_iteration == 1) {
-                        cb_push_back(cb_ex_external, cb_ex_external_tiles_required);
+                    out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
+                }
 
-                        if constexpr (num_mcast_cores > 1) {
-                            uint32_t cb_mcast;
-                            if (cur_read_iteration== 0) {
-                                cb_mcast = cb_ex;
-                            } else if (cur_read_iteration== 1) {
-                                cb_mcast = cb_ex2;
-                            }
+                if (cur_read_iteration == 0) {
+                    cb_reserve_back(cb_ex_global, 2);
+                    cb_wait_front(cb_ex_partial, 2);
 
-                            // global reduce
-                            cb_wait_front(cb_mcast, 1);
+                    // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+                    auto local_read_ptr = get_read_ptr(cb_ex_partial);
+                    auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
+                    auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_read_ptr + single_tile_size_bytes);
 
-                            // mcast to other cores
-                            uint32_t l1_read_addr_ex = get_read_ptr(cb_mcast);
+                    auto local_result = combine_welford_stats<tt::constants::TILE_WIDTH, num_channels_per_group * num_rows_per_group / tt::constants::TILE_WIDTH, 2>(p_local_means, p_local_vars);
+
+                    // Write this to cb_ex_global
+                    auto global_means_ptr = get_write_ptr(cb_ex_global);
+                    volatile uint16_t* p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
+                    auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
+                    volatile uint16_t* p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
+                    p_global_means[0] = local_result.mean;
+                    p_global_vars[0] = local_result.variance;
+
+                    cb_pop_front(cb_ex_partial, 2);
+
+                    if constexpr (num_mcast_cores > 1) {
+                        // Wait until all other cores have signaled that their partial data is ready
+                        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
+                        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+                        for (uint32_t i = 1; i < num_mcast_cores; ++i) {
+                            uint64_t noc_means_addr =
+                                get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
+                            uint64_t noc_vars_addr =
+                                get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
+                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
+                        }
+                        noc_async_read_barrier();
+                    }
+
+                    // Read mean and variance arrays from cb_ex_global, then combine using Welford
+                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+
+                    // Write this to cb_ex_global
+                    p_global_means[0] = global_result.mean;
+                    p_global_vars[0] = global_result.variance;
+
+                    if constexpr (num_mcast_cores > 1) {
+                        // mcast to other cores
+                        noc_async_write_multicast(
+                            global_means_ptr,
+                            multicast_data_noc | global_means_ptr,
+                            2 * single_tile_size_bytes,
+                            num_mcast_cores_mid_group,
+                            true);
+                        noc_semaphore_set_multicast(
+                            reduce_sender_semaphore_addr,
+                            reduce_sender_semaphore_noc_addr,
+                            num_mcast_cores_mid_group,
+                            false);
+
+                        if (has_mcast_first_group) {
                             noc_async_write_multicast(
-                                l1_read_addr_ex,
-                                multicast_data_noc | l1_read_addr_ex,
-                                num_bytes_read,
-                                num_mcast_cores_mid_group,
+                                global_means_ptr,
+                                multicast_first_group_data_noc | global_means_ptr,
+                                2 * single_tile_size_bytes,
+                                num_mcast_cores_first_group,
                                 true);
                             noc_semaphore_set_multicast(
                                 reduce_sender_semaphore_addr,
-                                reduce_sender_semaphore_noc_addr,
-                                num_mcast_cores_mid_group,
+                                reduce_sender_first_group_semaphore_noc_addr,
+                                num_mcast_cores_first_group,
                                 false);
-
-                            if (has_mcast_first_group) {
-                                noc_async_write_multicast(
-                                    l1_read_addr_ex,
-                                    multicast_first_group_data_noc | l1_read_addr_ex,
-                                    num_bytes_read,
-                                    num_mcast_cores_first_group,
-                                    true);
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_first_group_semaphore_noc_addr,
-                                    num_mcast_cores_first_group,
-                                    false);
-                            }
-
-                            if (has_mcast_last_group) {
-                                noc_async_write_multicast(
-                                    l1_read_addr_ex,
-                                    multicast_last_group_data_noc | l1_read_addr_ex,
-                                    num_bytes_read,
-                                    num_mcast_cores_last_group,
-                                    true);
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_last_group_semaphore_noc_addr,
-                                    num_mcast_cores_last_group,
-                                    false);
-                            }
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_mcast, 1);
                         }
-                    }
-                }
-                if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w;
-                        row_offset = num_cols_per_group;
 
-                    } else {
-                        index_g_offset += block_w_minus_one;
-                        row_offset += num_cols_per_group;
+                        if (has_mcast_last_group) {
+                            noc_async_write_multicast(
+                                global_means_ptr,
+                                multicast_last_group_data_noc | global_means_ptr,
+                                2 * single_tile_size_bytes,
+                                num_mcast_cores_last_group,
+                                true);
+                            noc_semaphore_set_multicast(
+                                reduce_sender_semaphore_addr,
+                                reduce_sender_last_group_semaphore_noc_addr,
+                                num_mcast_cores_last_group,
+                                false);
+                        }
+                        noc_async_write_barrier();
                     }
-                } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = num_cols_per_group;
 
-                    } else if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset + group_row_offset;
-
-                    } else {
-                        row_offset += num_cols_per_group;
-                    }
-                } else {
-                    if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset - tile_w_minux_group_size;
-                    } else {
-                        row_offset += num_cols_per_group;
-                        index_g_offset += block_w_minus_two;
-                    }
+                    cb_push_back(cb_ex_global, 2);
                 }
             }
-            index_b_offset += num_tiles_per_batch;
+            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                if (row_offset == tt::constants::TILE_WIDTH) {
+                    index_g_offset += block_w;
+                    row_offset = num_cols_per_group;
+
+                } else {
+                    index_g_offset += block_w_minus_one;
+                    row_offset += num_cols_per_group;
+                }
+            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                if (row_offset == tt::constants::TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = num_cols_per_group;
+
+                } else if (row_offset > tt::constants::TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset + group_row_offset;
+
+                } else {
+                    row_offset += num_cols_per_group;
+                }
+            } else {
+                if (row_offset > tt::constants::TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset - tile_w_minux_group_size;
+                } else {
+                    row_offset += num_cols_per_group;
+                    index_g_offset += block_w_minus_two;
+                }
+            }
         }
+        index_b_offset += num_tiles_per_batch;
+    }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
@@ -511,7 +474,7 @@ void kernel_main() {
         cb_wait_front(cb_repack_out, per_core_N);
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
