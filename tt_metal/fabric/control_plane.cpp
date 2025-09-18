@@ -700,22 +700,29 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    // Get the number of ports per chip from a local mesh
+    //
+    std::uint32_t num_ports_per_chip = 0;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
-        // Get the number of ports per chip from any chip in the local mesh
-        std::uint32_t num_ports_per_chip = 0;
-        const auto& local_mesh_chip_id_container =
-            this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-        for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
-            const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
-            auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-            num_ports_per_chip = tt::tt_metal::MetalContext::instance()
-                                     .get_cluster()
-                                     .get_soc_desc(physical_chip_id)
-                                     .get_cores(CoreType::ETH)
-                                     .size();
-            break;
+        if (this->is_local_mesh(mesh_id)) {
+            // Get the number of ports per chip from any chip in the local mesh
+            const auto& local_mesh_chip_id_container =
+                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+            for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
+                const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
+                auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+                num_ports_per_chip = tt::tt_metal::MetalContext::instance()
+                                        .get_cluster()
+                                        .get_soc_desc(physical_chip_id)
+                                        .get_cores(CoreType::ETH)
+                                        .size();
+                break;
+            }
         }
+    }
+    for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
+        MeshId mesh_id{mesh_id_val};
         const auto& global_mesh_chip_id_container = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id);
         for (const auto& [_, src_fabric_chip_id] : global_mesh_chip_id_container) {
             const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
@@ -768,19 +775,6 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     for (std::uint32_t src_mesh_id_val = 0; src_mesh_id_val < router_inter_mesh_routing_table.size();
          src_mesh_id_val++) {
         MeshId src_mesh_id{src_mesh_id_val};
-        std::uint32_t num_ports_per_chip = 0;
-        const auto& local_mesh_chip_id_container =
-            this->routing_table_generator_->mesh_graph->get_chip_ids(src_mesh_id, host_rank_id);
-        for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
-            const auto src_fabric_node_id = FabricNodeId(src_mesh_id, src_fabric_chip_id);
-            auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-            num_ports_per_chip = tt::tt_metal::MetalContext::instance()
-                                     .get_cluster()
-                                     .get_soc_desc(physical_chip_id)
-                                     .get_cores(CoreType::ETH)
-                                     .size();
-            break;
-        }
         const auto& global_mesh_chip_id_container =
             this->routing_table_generator_->mesh_graph->get_chip_ids(src_mesh_id);
         for (const auto& [_, src_fabric_chip_id] : global_mesh_chip_id_container) {
@@ -1230,7 +1224,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.mesh_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_mesh_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, fabric_node_id.chip_id);
+            const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
             const auto& dst_fabric_chip_eth_chans =
                 this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
             for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
