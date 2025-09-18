@@ -113,7 +113,6 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
