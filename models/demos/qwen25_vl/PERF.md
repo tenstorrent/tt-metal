@@ -4,7 +4,7 @@ Performance collected from [demo/demo.py](demo/demo.py) with the `batch-1` test 
 
 ## Text Performance
 
-This configuration uses bfp4 MLP and bfp8 attention weights for all models except:
+This configuration uses bfp4 MLP and bfp8 attention weights for all models.
 
 | Model             | Device      | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|---------------|-----------|
