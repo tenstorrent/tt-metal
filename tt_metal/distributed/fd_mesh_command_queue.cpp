@@ -188,6 +188,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     for (auto device : mesh_device_->get_devices()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
+            device->id(),
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
@@ -653,6 +654,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
+            mesh_device_->get_device(coord)->id(),
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
@@ -827,7 +829,12 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         event_dispatch::read_events_from_completion_queue(
-            read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
+            read_event_descriptor.single_device_descriptor,
+            mmio_device_id,
+            device->id(),
+            channel,
+            id_,
+            device->sysmem_manager());
     });
 }
 
