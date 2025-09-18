@@ -1,9 +1,5 @@
 name: Galaxy Multi-user Isolation Tests
 on:
-  push:
-    branches:
-      - main
-      - slee/multiusergalaxy
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
@@ -11,8 +7,8 @@ on:
         required: false
         default: true
         type: boolean
-  # schedule:
-  #   - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+  schedule:
+    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
   build-artifact:
