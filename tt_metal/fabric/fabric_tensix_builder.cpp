@@ -54,13 +54,6 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
             }
             auto neighbors = control_plane.get_chip_neighbors(fabric_node_id, direction);
 
-            log_info(
-                tt::LogTest,
-                "fabric_node_id {} direction {} active_eth_chans {}",
-                fabric_node_id,
-                direction,
-                active_eth_chans.size());
-
             // assume same neighbor per direction
             TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
             TT_FATAL(
@@ -89,8 +82,6 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
 
         max_eth_channels = std::max(max_eth_channels, non_dispatch_active_channels.size());
     }
-
-    log_info(tt::LogTest, "max_eth_channels {}", max_eth_channels);
 
     return max_eth_channels;
 }
@@ -158,9 +149,8 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     TT_FATAL(
         num_used_riscs_per_tensix_ == 1,
-        "Currently only support one mux per tensix {} {}",
-        max_eth_channels,
-        logical_fabric_mux_cores_.size());
+        "Currently only support one mux per tensix but got {} muxes per tensix",
+        num_used_riscs_per_tensix_);
 
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
