@@ -53,7 +53,8 @@ void calc_numeric_stable(
         }
         cb_reserve_back(cb_out, ndst);
         for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
+            exp_tile<0>(
+                wt8);  // exp on DST[0] // for dim 1, flag value set to 1. Hence passing 0 to use exp 21f version
             pack_tile(wt8, cb_out);     // reuse the exps buffer again, this time in a circular manner
         }
         cb_push_back(cb_out, ndst);
@@ -154,7 +155,8 @@ void MAIN {
             cb_reserve_back(cb_x, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
 #ifndef NUMERIC_STABLE
-                exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
+                exp_tile<0>(
+                    wt8);  // exp on DST[0] // for dim 1, flag value set to 1. Hence passing 0 to use exp 21f version
 #endif
                 pack_tile(wt8, cb_x);  // reuse the exps buffer again, this time in a circular manner
             }
@@ -209,7 +211,8 @@ void MAIN {
                 cb_reserve_back(cb_x, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
 #ifndef NUMERIC_STABLE
-                    exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
+                    exp_tile<0>(wt8);  // exp on DST[0] // for dim 1, flag value set to 1. Hence passing 0 to use exp
+                                       // 21f version
 #endif
                     pack_tile(wt8, cb_x);  // DST[0]->cb_id[wt]
                 }
@@ -239,7 +242,8 @@ void MAIN {
 
                 cb_reserve_back(cb_exps, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
+                    exp_tile<0>(wt8);  // exp on DST[0] // for dim 1, flag value set to 1. Hence passing 0 to use exp
+                                       // 21f version
                     pack_tile(wt8, cb_exps);    // DST[0]->cb_id[wt]
                 }
                 cb_push_back(cb_exps, ndst);
