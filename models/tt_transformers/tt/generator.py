@@ -298,7 +298,7 @@ class Generator:
         tt_current_pos = []
         tt_rot_mat_idxs = []
         tt_page_table = []
-
+        tt_attention_mask = []
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
@@ -307,11 +307,13 @@ class Generator:
                 tt_current_pos_i,
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
+                tt_attention_mask_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
+            tt_attention_mask.append(tt_attention_mask_i)
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -322,6 +324,7 @@ class Generator:
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
+                attn_mask=tt_attention_mask[i],
             )
             tt_logits.append(tt_logits_i)
 

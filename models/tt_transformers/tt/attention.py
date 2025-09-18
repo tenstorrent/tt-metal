@@ -40,8 +40,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
+    # cos = cos.unsqueeze(unsqueeze_dim)
+    # sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -416,12 +416,7 @@ class Attention(LightweightModule):
         ]
 
     def forward_decode(
-        self,
-        x: ttnn.Tensor,
-        current_pos,
-        rot_mats=None,
-        page_table=None,
-        kv_cache=None,
+        self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None, attn_mask=None
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -503,35 +498,62 @@ class Attention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
+        # q_heads_pre_rot_1BQD = ttnn.sharded_to_interleaved(q_heads_pre_rot_1BQD, ttnn.L1_MEMORY_CONFIG)
+        # rot_mats[0] = ttnn.sharded_to_interleaved(rot_mats[0], ttnn.L1_MEMORY_CONFIG)
+        # rot_mats[1] = ttnn.sharded_to_interleaved(rot_mats[1], ttnn.L1_MEMORY_CONFIG)
+
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
-
+        # q_heads_1BQD = ttnn.experimental.rotary_embedding(
+        #     q_heads_pre_rot_1BQD,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     None,
+        # )
+        # q_heads_1BQD = ttnn.interleaved_to_sharded(q_heads_1BQD, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
         # K Rotary Embeddings
+        # k_heads_pre_rot_1BKD = ttnn.sharded_to_interleaved(k_heads_pre_rot_1BKD, ttnn.L1_MEMORY_CONFIG)
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+        # k_heads_1BKD = ttnn.experimental.rotary_embedding(
+        #     k_heads_pre_rot_1BKD,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     None,
+        # )
+        # k_heads_1BKD = ttnn.interleaved_to_sharded(k_heads_1BKD, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
 
-        # import pdb; pdb.set_trace()
-        # q_heads_pre_rot_1BQD_torch = ttnn.to_torch(q_heads_pre_rot_1BQD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
-        # k_heads_pre_rot_1BKD_torch = ttnn.to_torch(k_heads_pre_rot_1BKD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
-        # q_heads_1BQD_torch, k_heads_1BKD_torch = apply_rotary_pos_emb(q_heads_pre_rot_1BQD_torch, k_heads_pre_rot_1BKD_torch, rot_mats[2], rot_mats[3])
-        # q_heads_1BQD_b = ttnn.from_torch(
+        # q_heads_pre_rot_1BQD_torch = ttnn.to_torch(q_heads_pre_rot_1BQD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)))
+        # k_heads_pre_rot_1BKD_torch = ttnn.to_torch(k_heads_pre_rot_1BKD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)))
+        # q_heads_1BQD_torch, k_heads_1BKD_torch = apply_rotary_pos_emb(q_heads_pre_rot_1BQD_torch, k_heads_pre_rot_1BKD_torch, rot_mats[0], rot_mats[1])
+        # q_heads_1BQD = ttnn.from_torch(
         #     q_heads_1BQD_torch,
         #     device=self.mesh_device,
         #     dtype=q_heads_pre_rot_1BQD.dtype,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        #     layout=q_heads_pre_rot_1BQD.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)),
+        #     memory_config=ttnn.create_sharded_memory_config(
+        #         shape=(32, 128),
+        #         core_grid=ttnn.CoreGrid(y=1, x=1),
+        #         strategy=ttnn.ShardStrategy.HEIGHT,
+        #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
         # )
-        # q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD_b, q_heads_1BQD.memory_config())
-        # k_heads_1BKD_b = ttnn.from_torch(
+        # k_heads_1BKD = ttnn.from_torch(
         #     k_heads_1BKD_torch,
         #     device=self.mesh_device,
-        #     dtype=k_heads_1BKD.dtype,
-        #     layout=k_heads_1BKD.layout,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        #     dtype=k_heads_pre_rot_1BKD.dtype,
+        #     layout=k_heads_pre_rot_1BKD.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)),
+        #     memory_config=ttnn.create_sharded_memory_config(
+        #         shape=(32, 128),
+        #         core_grid=ttnn.CoreGrid(y=1, x=1),
+        #         strategy=ttnn.ShardStrategy.HEIGHT,
+        #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
         # )
-        # k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD_b, k_heads_1BKD.memory_config())
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
@@ -573,16 +595,50 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            # max_seq_len = keys.shape[-2]
+            # current_pos_int = ttnn.to_torch(current_pos, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0].item()
+            # attention_mask = torch.full([1, 1, 1, max_seq_len], -1e9, dtype=torch.float32)
+            # attention_mask[..., max(0, current_pos_int - 512) : min(max_seq_len, current_pos_int + 512 + 1)] = 0
+            # q_heads_torch = ttnn.to_torch(q_heads_1BQD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=2)).transpose(2, 1)
+            # keys_torch = ttnn.to_torch(keys, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1), dtype=torch.bfloat16)
+            # keys_torch_zeros = torch.zeros_like(keys_torch)
+            # keys_torch[..., current_pos_int:, :] = keys_torch_zeros[..., current_pos_int:, :]
+            # values_torch = ttnn.to_torch(values, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1), dtype=torch.bfloat16)
+            # values_torch_zeros = torch.zeros_like(values_torch)
+            # values_torch[..., current_pos_int:, :] = values_torch_zeros[..., current_pos_int:, :]
+            # attn_output_1G4D_torch = torch.nn.functional.scaled_dot_product_attention(q_heads_torch, keys_torch, values_torch, enable_gqa=True, scale=self.scale, attn_mask=attention_mask)
+
+            # attn_mask_b = ttnn.as_tensor(
+            #     self.torch_sliding_window_matrix[:, :, current_pos_int:current_pos_int+1, :].transpose(2, 1),
+            #     dtype=ttnn.bfloat16,
+            #     layout=ttnn.TILE_LAYOUT,
+            #     device=self.mesh_device,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=2),
+            # )
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
+                is_causal=False,
+                # attn_mask=attn_mask[:, :, current_pos_int:current_pos_int+1, :].reshape(1, 1, 4, -1),
+                attn_mask=attn_mask,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention(
+            #     q_heads_1BQD,
+            #     keys,
+            #     values,
+            #     is_causal=True,
+            #     scale=self.scale,
+            #     attn_mask=tt_mask,
+            #     compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+            #     program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+            # )
 
         ttnn.deallocate(q_heads_1BQD)
 
@@ -726,6 +782,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        attn_mask=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -800,6 +857,13 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
+        # q_heads_1QSD = ttnn.experimental.rotary_embedding(
+        #     q_heads_1QSD_pre_rot,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     None,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
@@ -811,26 +875,31 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
-
-        # q_heads_1QSD_pre_rot_torch = ttnn.to_torch(q_heads_1QSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
-        # k_heads_1KSD_pre_rot_torch = ttnn.to_torch(k_heads_1KSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
-        # q_heads_1QSD_torch, k_heads_1KSD_torch = apply_rotary_pos_emb(q_heads_1QSD_pre_rot_torch, k_heads_1KSD_pre_rot_torch, rot_mats[2], rot_mats[3])
-        # q_heads_1QSD_b = ttnn.from_torch(
+        # k_heads_1KSD = ttnn.experimental.rotary_embedding(
+        #     k_heads_1KSD_pre_rot,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     None,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        # q_heads_1QSD_pre_rot_torch = ttnn.to_torch(q_heads_1QSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)))[0]
+        # k_heads_1KSD_pre_rot_torch = ttnn.to_torch(k_heads_1KSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)))[0]
+        # q_heads_1QSD_torch, k_heads_1KSD_torch = apply_rotary_pos_emb(q_heads_1QSD_pre_rot_torch, k_heads_1KSD_pre_rot_torch, rot_mats[0], rot_mats[1])
+        # # import pdb; pdb.set_trace()
+        # q_heads_1QSD = ttnn.from_torch(
         #     q_heads_1QSD_torch,
         #     device=self.mesh_device,
-        #     dtype=q_heads_pre_rot_1BQD.dtype,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        #     dtype=q_heads_1QSD_pre_rot.dtype,
+        #     layout=k_heads_1KSD_pre_rot.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)),
         # )
-        # q_heads_1QSD_b = ttnn.to_memory_config(q_heads_1QSD_b, q_heads_1QSD.memory_config())
-        # k_heads_1KSD_b = ttnn.from_torch(
+        # k_heads_1KSD = ttnn.from_torch(
         #     k_heads_1KSD_torch,
         #     device=self.mesh_device,
-        #     dtype=k_heads_1BKD.dtype,
-        #     layout=k_heads_1BKD.layout,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        #     dtype=k_heads_1KSD_pre_rot.dtype,
+        #     layout=k_heads_1KSD_pre_rot.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=(1, 8)),
         # )
-        # k_heads_1KSD = ttnn.to_memory_config(k_heads_1KSD_b, k_heads_1KSD.memory_config())
 
         ttnn.deallocate(q_heads_1QSD_pre_rot)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
@@ -884,7 +953,6 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
-
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
@@ -904,11 +972,16 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
+            # import pdb; pdb.set_trace()
+            # seq_len = x_11SH.shape[-2]
+            # attention_mask = torch.full([1, 1, seq_len, seq_len], -1e9, dtype=torch.float32)
+            # attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=True,
+                is_causal=False,
+                attn_mask=attn_mask,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -990,6 +1063,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        attn_mask=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1000,9 +1074,12 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                attn_mask=attn_mask,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_decode(
+                x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache, attn_mask=attn_mask
+            )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)
