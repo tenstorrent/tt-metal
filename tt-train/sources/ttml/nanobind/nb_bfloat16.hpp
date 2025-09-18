@@ -8,6 +8,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
+#include <api/tt-metalium/bfloat16.hpp>
+
 namespace nanobind::detail {
 template <>
 struct dtype_traits<bfloat16> {

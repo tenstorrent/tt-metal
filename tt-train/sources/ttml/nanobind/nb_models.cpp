@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/shared_ptr.h>
 
 #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"

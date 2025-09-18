@@ -456,12 +456,19 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
 nanobind_add_module(_ttml ${TTML_SRC_NANOBIND})
 target_link_libraries(

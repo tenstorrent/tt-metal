@@ -6,6 +6,7 @@
 
 #include <nanobind/ndarray.h>
 
+#include "nb_bfloat16.hpp"
 #include "nb_fwd.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

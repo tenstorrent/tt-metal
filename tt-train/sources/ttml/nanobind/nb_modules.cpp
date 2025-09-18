@@ -3,8 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/autocast_tensor.hpp"
+#include "models/gpt2.hpp"
+#include "models/linear_regression.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "nb_export_enum.hpp"
@@ -44,6 +51,9 @@ void py_module(nb::module_& m) {
             return make_numpy_tensor(w->get_value(autograd::PreferredPrecision::FULL));
         });
     }
+
+    m.def("create_linear_regression_model", &models::linear_regression::create);
+    m.def("load_gpt2_model_from_safetensors", &models::gpt2::load_model_from_safetensors);
 }
 
 }  // namespace ttml::modules

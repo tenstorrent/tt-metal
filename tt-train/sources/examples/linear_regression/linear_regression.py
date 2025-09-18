@@ -85,10 +85,10 @@ def train_ttml_linear_regression(
     Trains TTML linear regression (2D -> 1D generalizes via n_features).
     Shapes TTML expects: [B, 1, 1, n_features] for inputs, [B, 1, 1, 1] for targets.
     """
-    model = _ttml.autograd.create_linear_regression_model(n_features, 1)
-    loss_fn = _ttml.autograd.mse_loss
-    opt_cfg = _ttml.autograd.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
-    opt = _ttml.autograd.SGD(model.parameters(), opt_cfg)
+    model = _ttml.modules.create_linear_regression_model(n_features, 1)
+    loss_fn = _ttml.ops.mse_loss
+    opt_cfg = _ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
+    opt = _ttml.optimizers.SGD(model.parameters(), opt_cfg)
     model.train()
 
     num_samples = x_train.shape[0]
@@ -113,7 +113,7 @@ def train_ttml_linear_regression(
             return
             opt.zero_grad()
             tt_pred = model(tt_x)
-            tt_loss = loss_fn(tt_pred, tt_y, _ttml.autograd.ReduceType.MEAN)
+            tt_loss = loss_fn(tt_pred, tt_y, _ttml.ops.ReduceType.MEAN)
             tt_loss.backward(False)
             opt.step()
 

@@ -9,9 +9,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
-    const auto cpu_tensor = tensor.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
-    const auto tensor_spec = cpu_tensor.tensor_spec();
-    const auto impl = [&tensor_spec]<typename T>(const tt::tt_metal::Tensor& t) {
+    const auto impl = []<typename T>(const tt::tt_metal::Tensor& t, const tt::tt_metal::TensorSpec& tensor_spec) {
         const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
 
         const auto tensor_shape_rank = tensor_shape.rank();
@@ -22,7 +20,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
         std::vector<int64_t> numpy_strides(tensor_strides.rank());
         std::copy(tensor_strides.cbegin(), tensor_strides.cend(), numpy_strides.begin());
 
-        const auto tensor_data = tt::tt_metal::host_buffer::get_as<const T>(t);
+        const auto tensor_data = tt::tt_metal::host_buffer::get_as<T>(t);
 
         const auto return_data_copy_with_capsule = [&](const auto& src) {
             T* numpy_data = new T[src.size()];
@@ -33,27 +31,40 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& tensor) {
                 numpy_data, tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
         };
 
-        return return_data_copy_with_capsule(t.to_vector<T>());
-        // if (tt::tt_metal::tensor_impl::logical_matches_physical(t.tensor_spec())) {
-        //     return return_data_copy_with_capsule(tensor_data);
-        // }
-        // const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(tensor_data, t.tensor_spec());
-        // return return_data_copy_with_capsule(decoded_data);
-    };
-
-    const auto ensure_row_major = [&impl]<typename T>(const tt::tt_metal::Tensor& t) {
-        if (t.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
-            return impl.template operator()<T>(
-                ttnn::untilize_with_unpadding(ttnn::DefaultQueueId, t, t.logical_shape(), std::nullopt));
+        if (tt::tt_metal::tensor_impl::logical_matches_physical(tensor_spec)) {
+            return return_data_copy_with_capsule(tensor_data);
         }
-        return impl.template operator()<T>(t);
+        const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(tensor_data, tensor_spec);
+        return return_data_copy_with_capsule(decoded_data);
     };
 
-    switch (tensor_spec.data_type()) {
-        case tt::tt_metal::DataType::INT32: return ensure_row_major.template operator()<int32_t>(tensor);
-        case tt::tt_metal::DataType::UINT32: return ensure_row_major.template operator()<uint32_t>(tensor);
-        case tt::tt_metal::DataType::FLOAT32: return ensure_row_major.template operator()<float>(tensor);
-        case tt::tt_metal::DataType::BFLOAT16: return ensure_row_major.template operator()<bfloat16>(tensor);
+    const auto ensure_row_major = [&impl]<typename T>(
+                                      const tt::tt_metal::Tensor& t, const tt::tt_metal::TensorSpec& tensor_spec) {
+        if (t.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+            tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(t.logical_shape().rank(), 0));
+            int logical_rank = t.logical_shape().rank();
+            for (int index = -1; index >= -logical_rank; --index) {
+                output_tensor_end[index] = t.logical_shape()[index] - 1;
+            }
+
+            return impl.template operator()<T>(
+                ttnn::untilize_with_unpadding(ttnn::DefaultQueueId, t, output_tensor_end, std::nullopt), tensor_spec);
+        }
+        return impl.template operator()<T>(t, tensor_spec);
+    };
+
+    const auto& cpu_tensor = tensor.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
+    const auto& cpu_tensor_spec = tensor.tensor_spec();
+
+    switch (cpu_tensor_spec.data_type()) {
+        case tt::tt_metal::DataType::INT32:
+            return ensure_row_major.template operator()<int32_t>(cpu_tensor, cpu_tensor_spec);
+        case tt::tt_metal::DataType::UINT32:
+            return ensure_row_major.template operator()<uint32_t>(cpu_tensor, cpu_tensor_spec);
+        case tt::tt_metal::DataType::FLOAT32:
+            return ensure_row_major.template operator()<float>(cpu_tensor, cpu_tensor_spec);
+        case tt::tt_metal::DataType::BFLOAT16:
+            return ensure_row_major.template operator()<bfloat16>(cpu_tensor, cpu_tensor_spec);
         case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
         case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
         case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
@@ -103,7 +114,7 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
         return ttnn::tilize_with_zero_padding(
                    ttnn::DefaultQueueId,
                    tt::tt_metal::Tensor::from_span(
-                       tt::stl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
+                       ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
             .to_device(device, tensor_memory_config);
     };
 
