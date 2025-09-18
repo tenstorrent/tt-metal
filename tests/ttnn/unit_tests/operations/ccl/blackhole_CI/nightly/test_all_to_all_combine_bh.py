@@ -373,7 +373,7 @@ def trace_all_to_all_combine(
     indirect=True,
 )
 @pytest.mark.parametrize("num_devices", [8])
-@pytest.mark.parametrize("mesh_shape", [(1, 1)])
+@pytest.mark.parametrize("mesh_shape", [(1, 8)])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
