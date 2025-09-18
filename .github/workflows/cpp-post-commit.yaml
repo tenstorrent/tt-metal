@@ -90,10 +90,8 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: >-
-      ${{
-        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-ubuntu-2204-{0}-stable', inputs.runner))
-      }}
+    runs-on:
+      - ${{ ((inputs.runner == 'N150' && 'tt-ubuntu-2204-n150-stable') || (inputs.runner == 'N300' && 'tt-ubuntu-2204-n300-stable')) }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
