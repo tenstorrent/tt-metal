@@ -131,14 +131,19 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward_prefill(
-        cls, x: ttnn.Tensor, row_idx: int, user_id: int, rope_tensors: dict, cfg: RunPrefillConfig
+        cls,
+        x: ttnn.Tensor,
+        user_id: int,
+        row_idx: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        raise NotImplementedError("This is untested.")
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA1D.forward_prefill(mla_norm_out, row_idx, user_id, rope_tensors, cfg["mla"])
+        mla_out = MLA1D.forward_prefill(mla_norm_out, user_id, row_idx, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual

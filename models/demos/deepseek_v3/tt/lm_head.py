@@ -244,6 +244,13 @@ class LMHead(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
