@@ -60,6 +60,37 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descripto
     return create_node_descriptor(node_type);
 }
 
+void create_port_connection(
+    Board& board_a,
+    Board& board_b,
+    PortType port_type,
+    HostId host_a_id,
+    HostId host_b_id,
+    TrayId board_a_id,
+    TrayId board_b_id,
+    PortId port_a_id,
+    PortId port_b_id) {
+    const auto& available_a = board_a.get_available_port_ids(port_type);
+    const auto& available_b = board_b.get_available_port_ids(port_type);
+
+    if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
+        throw std::runtime_error(
+            std::string(enchantum::to_string(port_type)) + " Port " + std::to_string(*port_a_id) +
+            " not available on board " + std::to_string(*board_a_id) + " in host " + std::to_string(*host_a_id));
+    }
+    if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
+        throw std::runtime_error(
+            std::string(enchantum::to_string(port_type)) + " Port " + std::to_string(*port_b_id) +
+            " not available on board " + std::to_string(*board_b_id) + " in host " + std::to_string(*host_b_id));
+    }
+
+    if (board_a.get_arch() != board_b.get_arch()) {
+        throw std::runtime_error("Trying to connect boards with different architectures");
+    }
+
+    board_a.mark_port_used(port_type, port_a_id);
+    board_b.mark_port_used(port_type, port_b_id);
+}
 // Build node from descriptor with port connections and validation
 Node build_node(
     const std::string& node_descriptor_name,
@@ -114,26 +145,16 @@ Node build_node(
             TrayId board_b_id = TrayId(conn.port_b().tray_id());
             PortId port_b_id = PortId(conn.port_b().port_id());
 
-            // Validate and mark ports as used
-            auto& board_a = template_node.boards.at(board_a_id);
-            auto& board_b = template_node.boards.at(board_b_id);
-
-            const auto& available_a = board_a.get_available_port_ids(*port_type);
-            const auto& available_b = board_b.get_available_port_ids(*port_type);
-
-            if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
-                throw std::runtime_error(
-                    port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
-                    std::to_string(*board_a_id) + " in node " + node_descriptor_name);
-            }
-            if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
-                throw std::runtime_error(
-                    port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
-                    std::to_string(*board_b_id) + " in node " + node_descriptor_name);
-            }
-
-            board_a.mark_port_used(*port_type, port_a_id);
-            board_b.mark_port_used(*port_type, port_b_id);
+            create_port_connection(
+                template_node.boards.at(board_a_id),
+                template_node.boards.at(board_b_id),
+                *port_type,
+                host_id,
+                host_id,
+                board_a_id,
+                board_b_id,
+                port_a_id,
+                port_b_id);
 
             // Store connection
             template_node.inter_board_connections[*port_type].emplace_back(
@@ -262,29 +283,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             HostId host_a_id = resolve_path_from_proto(path_a, graph_instance, cluster_descriptor);
             HostId host_b_id = resolve_path_from_proto(path_b, graph_instance, cluster_descriptor);
 
-            // Validate and mark ports as used for direct node connections
-            if (path_a.size() == 1 && path_b.size() == 1 && resolved->nodes.count(path_a[0]) &&
-                resolved->nodes.count(path_b[0])) {
-                auto& board_a = resolved->nodes.at(path_a[0]).boards.at(board_a_id);
-                auto& board_b = resolved->nodes.at(path_b[0]).boards.at(board_b_id);
-
-                const auto& available_a = board_a.get_available_port_ids(*port_type);
-                const auto& available_b = board_b.get_available_port_ids(*port_type);
-
-                if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
-                    throw std::runtime_error(
-                        port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
-                        std::to_string(*board_a_id) + " in node " + path_a[0]);
-                }
-                if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
-                    throw std::runtime_error(
-                        port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
-                        std::to_string(*board_b_id) + " in node " + path_b[0]);
-                }
-
-                board_a.mark_port_used(*port_type, port_a_id);
-                board_b.mark_port_used(*port_type, port_b_id);
-            }
+            // Can't use create_port_connection here because we don't have all the nodes yet
 
             // Store connection with resolved HostId
             resolved->internal_connections[*port_type].emplace_back(
@@ -442,13 +441,16 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::CABLE_3, "3m"},
         {CableLength::CABLE_5, "5m"},
         {CableLength::UNKNOWN, "UNKNOWN"}};
+
+    const std::unordered_map<tt::ARCH, std::string> speed_str = {
+        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
 
-    CablingGenerator::get_all_connections_of_type(
-        root_instance_, {PortType::QSFP_DD_400G, PortType::QSFP_DD_800G}, conn_list);
+    CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
         output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
@@ -469,6 +471,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
+        // Get arch from node
+        // Assume arch for start and end are the same
+        // This is validated in create_port_connection
+        auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
+
         CableLength cable_l = calc_cable_length(host1, host2);
         if (loc_info) {
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
@@ -483,7 +490,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << ",";
 
             output_file << cable_length_str.at(cable_l) << ",";
-            output_file << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC") << std::endl;
+            output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
+                        << std::endl;
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << ",";
             output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << std::endl;
@@ -535,16 +543,16 @@ void CablingGenerator::generate_logical_chip_connections() {
 }
 
 void CablingGenerator::generate_connections_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph) {
-    // Lambda to create connections between two ports
-    auto create_port_connection = [&](PortType port_type,
-                                      const Board& start_board,
-                                      const Board& end_board,
-                                      HostId start_host_id,
-                                      TrayId start_tray_id,
-                                      PortId start_port_id,
-                                      HostId end_host_id,
-                                      TrayId end_tray_id,
-                                      PortId end_port_id) {
+    // Lambda to add connections between two ports
+    auto add_port_connection = [&](PortType port_type,
+                                   const Board& start_board,
+                                   const Board& end_board,
+                                   HostId start_host_id,
+                                   TrayId start_tray_id,
+                                   PortId start_port_id,
+                                   HostId end_host_id,
+                                   TrayId end_tray_id,
+                                   PortId end_port_id) {
         const auto& start_channels = start_board.get_port_channels(port_type, start_port_id);
         const auto& end_channels = end_board.get_port_channels(port_type, end_port_id);
         auto asic_channel_pairs =
@@ -565,7 +573,7 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
         for (const auto& [tray_id, board] : node.boards) {
             for (const auto& [port_type, connections] : board.get_internal_connections()) {
                 for (const auto& [port_a_id, port_b_id] : connections) {
-                    create_port_connection(
+                    add_port_connection(
                         port_type, board, board, host_id, tray_id, port_a_id, host_id, tray_id, port_b_id);
                 }
             }
@@ -579,9 +587,9 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
                 TrayId board_b_id = board_b.first;
                 PortId port_b_id = board_b.second;
 
-                const auto& board_a_ref = node.boards.at(board_a_id);
-                const auto& board_b_ref = node.boards.at(board_b_id);
-                create_port_connection(
+                auto& board_a_ref = node.boards.at(board_a_id);
+                auto& board_b_ref = node.boards.at(board_b_id);
+                add_port_connection(
                     port_type,
                     board_a_ref,
                     board_b_ref,
@@ -602,12 +610,14 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
             auto [host_b_id, tray_b_id, port_b_id] = conn_b;
 
             // Look up nodes using HostId
-            const Node* node_a = host_id_to_node_.at(host_a_id);
-            const Node* node_b = host_id_to_node_.at(host_b_id);
+            Node* node_a = host_id_to_node_.at(host_a_id);
+            Node* node_b = host_id_to_node_.at(host_b_id);
 
-            const auto& board_a_ref = node_a->boards.at(tray_a_id);
-            const auto& board_b_ref = node_b->boards.at(tray_b_id);
+            auto& board_a_ref = node_a->boards.at(tray_a_id);
+            auto& board_b_ref = node_b->boards.at(tray_b_id);
             create_port_connection(
+                board_a_ref, board_b_ref, port_type, host_a_id, host_b_id, tray_a_id, tray_b_id, port_a_id, port_b_id);
+            add_port_connection(
                 port_type, board_a_ref, board_b_ref, host_a_id, tray_a_id, port_a_id, host_b_id, tray_b_id, port_b_id);
         }
     }
@@ -628,7 +638,7 @@ void CablingGenerator::populate_host_id_to_node() {
 
 void CablingGenerator::populate_host_id_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph) {
     // Add direct nodes in this graph
-    for (const auto& [node_name, node] : graph->nodes) {
+    for (auto& [node_name, node] : graph->nodes) {
         host_id_to_node_[node.host_id] = &node;
     }
 

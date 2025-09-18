@@ -136,7 +136,7 @@ private:
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;
-    std::map<HostId, const Node*> host_id_to_node_;  // Global lookup map for HostId -> Node reference
+    std::map<HostId, Node*> host_id_to_node_;  // Global lookup map for HostId -> Node reference
     // Guaranteed to be sorted
     std::vector<LogicalChannelConnection> chip_connections_;
     std::vector<Host> deployment_hosts_;
