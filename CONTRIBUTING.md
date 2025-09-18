@@ -249,7 +249,7 @@ structure our tests with this framework is to bundle it into a single
 executable.
 
 You can use `--gtest_filter` to filter out the specific test you'd like.
-For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
+For example, to build and run the `MeshDispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the tests:
@@ -259,7 +259,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_api --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -268,7 +268,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="MeshDeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state
