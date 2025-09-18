@@ -8,17 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 namespace ttnn {
-
-namespace operations {
-
-namespace unary {
-
-struct UnaryWithParam;
-
-template <UnaryOpType... unary_op_types>
-struct ExecuteUnaryInvokeResult {
-    using type = ComplexTensor;
-};
+namespace operations::unary {
 
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
@@ -28,8 +18,7 @@ struct ExecuteUnary {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static typename ExecuteUnaryInvokeResult<unary_op_types...>::type invoke(
-        const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+    static ComplexTensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
 
 template <UnaryOpType unary_op_type>
@@ -114,7 +103,7 @@ struct Unary_chain {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const std::vector<UnaryWithParam>& ops_chain,
+        const std::vector<EltwiseUnaryWithParam>& ops_chain,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -364,8 +353,7 @@ struct Clamp {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace unary
-}  // namespace operations
+}  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
