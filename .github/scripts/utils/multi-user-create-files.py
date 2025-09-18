@@ -43,6 +43,7 @@ def multi_user_containers(num_containers, image):
         os.makedirs(f"/home/{username}/.cache/tt-metal-cache-{i}", exist_ok=True)
     return services
 
+
 parser = argparse.ArgumentParser(description="Generate multi-user container YAML and hostfile.")
 parser.add_argument("--num-containers", type=int, default=4, help="Number of containers to create")
 parser.add_argument("--image", type=str, required=True, help="Docker image to use for containers")
