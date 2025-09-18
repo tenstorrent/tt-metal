@@ -98,7 +98,7 @@ FORCE_INLINE void copy_input_to_output(
 }
 
 // performs scatter on data loaded to cb with load_to_cb
-template <typename number_type, typename index_type>
+template <typename number_type, typename index_type, DataFormat number_dataformat>
 FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_cb,
     const uint32_t& index_cb,
@@ -107,7 +107,8 @@ FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
-    const uint32_t& index_chunk_size) {
+    const uint32_t& index_chunk_size,
+    const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
     const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
     const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
     const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
@@ -137,8 +138,84 @@ FORCE_INLINE void scatter_along_chunk(
         if (index_value >= input_stick_size) {
             continue;
         }
-        volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
-        output_l1_write_ptr[index_value - input_offset] = source_value;
+
+        const uint32_t& output_index = index_value - input_offset;
+        if constexpr (number_dataformat == DataFormat::Float16_b) {
+            const uint32_t source_value_u32 = static_cast<uint32_t>(source_l1_read_ptr[index_in_index_chunk]) << 16;
+            float source_value{};
+            std::memcpy(&source_value, &source_value_u32, sizeof(source_value));
+            const uint32_t output_value_u32 = static_cast<uint32_t>(output_l1_write_ptr[output_index]) << 16;
+            float output_value{};
+            std::memcpy(&output_value, &output_value_u32, sizeof(output_value));
+            float result = output_value;
+            switch (scatter_reduction_type) {
+                case ScatterReductionType::INVALID: {
+                    result = source_value;
+                    break;
+                }
+
+                case ScatterReductionType::ADD: {
+                    result += source_value;
+                    break;
+                }
+
+                case ScatterReductionType::MULTIPLY: {
+                    result *= source_value;
+                    break;
+                }
+
+                case ScatterReductionType::AMIN: {
+                    result = std::min(output_value, source_value);
+                    break;
+                }
+
+                case ScatterReductionType::AMAX: {
+                    result = std::max(output_value, source_value);
+                    break;
+                }
+
+                default: {
+                    result = source_value;
+                    break;
+                }
+            }
+            uint32_t result_u32{};
+            std::memcpy(&result_u32, &result, sizeof(result_u32));
+            output_l1_write_ptr[output_index] = static_cast<uint16_t>(result_u32 >> 16);
+        } else {
+            volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
+            switch (scatter_reduction_type) {
+                case ScatterReductionType::INVALID: {
+                    output_l1_write_ptr[output_index] = source_value;
+                    break;
+                }
+
+                case ScatterReductionType::ADD: {
+                    output_l1_write_ptr[output_index] += source_value;
+                    break;
+                }
+
+                case ScatterReductionType::MULTIPLY: {
+                    output_l1_write_ptr[output_index] *= source_value;
+                    break;
+                }
+
+                case ScatterReductionType::AMIN: {
+                    output_l1_write_ptr[output_index] = std::min(output_l1_write_ptr[output_index], source_value);
+                    break;
+                }
+
+                case ScatterReductionType::AMAX: {
+                    output_l1_write_ptr[output_index] = std::max(output_l1_write_ptr[output_index], source_value);
+                    break;
+                }
+
+                default: {
+                    output_l1_write_ptr[output_index] = source_value;
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -223,7 +300,7 @@ void kernel_main() {
                         index_stick_id);
                     cb_wait_front(ctas.index_cb, ONE_PAGE);
                     cb_wait_front(ctas.source_cb, ONE_PAGE);
-                    scatter_along_chunk<input_std_type, index_std_type>(
+                    scatter_along_chunk<input_std_type, index_std_type, get_dataformat(ctas.input_cb)>(
                         ctas.input_cb,
                         ctas.index_cb,
                         ctas.source_cb,
@@ -231,7 +308,8 @@ void kernel_main() {
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
-                        index_chunk_length);
+                        index_chunk_length,
+                        ctas.scatter_reduction_type);
                     cb_pop_front(ctas.source_cb, ONE_PAGE);
                     cb_pop_front(ctas.index_cb, ONE_PAGE);
                 }
