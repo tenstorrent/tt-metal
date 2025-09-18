@@ -1,3 +1,4 @@
+include(CheckFunctionExists)
 cmake_minimum_required(VERSION 3.22...3.30)
 project(metal_example_sfpu_eltwise_chain)
 
