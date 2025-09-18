@@ -7,19 +7,19 @@ on:
   workflow_call:
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-wheel: true
-      version: 24.04
+  # build-artifact:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     build-wheel: true
+  #     version: 24.04
   models-perf:
-    needs: build-artifact
+    # needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-basic-dev-amd64:aa9cfcfd625957b0e64d84acafcf9b9b03361d31
+      build-artifact-name: packages-ubuntu-24.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-401ead4898231696d3245e524425f6907a2a6c5a-17825227018
+      wheel-artifact-name: eager-dist-cp312-ubuntu-24.04-any-401ead4898231696d3245e524425f6907a2a6c5a-17825227018
