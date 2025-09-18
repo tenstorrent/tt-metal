@@ -26,6 +26,7 @@ test_suite_bh_umd_unit_tests() {
     # so makes sense we broke it
     # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
+    ./build/test/umd/api/api_tests
 }
 
 # Function to run BH single PCIe small ML model tests
