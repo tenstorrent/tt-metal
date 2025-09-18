@@ -41,12 +41,9 @@ class MemoryBank(nn.Module):
         device = embed.device
 
         save_period = track_instances.save_period
-        if self.training:
-            saved_idxes = scores > 0
-        else:
-            saved_idxes = (save_period == 0) & (scores > self.save_thresh)
-            save_period[save_period > 0] -= 1
-            save_period[saved_idxes] = self.save_period
+        saved_idxes = (save_period == 0) & (scores > self.save_thresh)
+        save_period[save_period > 0] -= 1
+        save_period[saved_idxes] = self.save_period
 
         saved_embed = embed[saved_idxes]
         if len(saved_embed) > 0:

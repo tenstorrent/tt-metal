@@ -15,8 +15,6 @@ from einops import rearrange
 
 from typing import Any, Dict, List, Sequence, Tuple, Union
 
-Pose = Tuple[float, float, float]  # (x, y, yaw)
-
 
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(min=0, max=1)
@@ -214,15 +212,7 @@ class Instances:
 
         ret = Instances(self._image_size)
         for k, v in self._fields.items():
-            if k == "kalman_models" and isinstance(item, torch.Tensor):
-                ret_list = []
-                for i, if_true in enumerate(item):
-                    if if_true:
-                        ret_list.append(self.kalman_models[i])
-                ret.set(k, ret_list)
-
-            else:
-                ret.set(k, v[item])
+            ret.set(k, v[item])
         return ret
 
     def __len__(self) -> int:
@@ -267,72 +257,6 @@ class Instances:
         return s
 
     __repr__ = __str__
-
-
-class CollisionNonlinearOptimizer:
-    def __init__(
-        self,
-        trajectory_len: int,
-        dt: float,
-        sigma: float,
-        alpha_collision: float,
-        obj_pixel_pos: List[List[Tuple[float, float]]],
-        device: str = "cpu",
-    ):
-        self.dt = dt
-        self.trajectory_len = trajectory_len
-        self.sigma = sigma
-        self.alpha_collision = alpha_collision
-        self.obj_pixel_pos = obj_pixel_pos
-        self.device = device
-
-        # Initialize state trajectory as a learnable parameter (x, y)
-        self.state = torch.nn.Parameter(torch.zeros(2, trajectory_len, device="cpu", dtype=torch.float32))
-
-        # Reference trajectory placeholder
-        self.ref_traj = torch.zeros(2, trajectory_len, device="cpu", dtype=torch.float32)
-
-    def set_reference_trajectory(self, reference_trajectory: Sequence["Pose"]):
-        reference_tensor = torch.tensor(reference_trajectory, dtype=torch.float32, device="cpu").T
-        self.ref_traj = reference_tensor.clone()
-
-        with torch.no_grad():
-            self.state.copy_(self.ref_traj)
-
-    def _compute_cost(self) -> torch.Tensor:
-        # Stage cost: follow reference trajectory
-        alpha_xy = 1.0
-
-        diff = self.state - self.ref_traj
-        squared_error = diff**2
-        error_sum = torch.sum(squared_error)
-        cost_stage = alpha_xy * error_sum
-
-        # Collision cost
-        cost_collision = 0.0
-        normalizer = 1 / (2.507 * self.sigma)
-
-        for t, obstacles in enumerate(self.obj_pixel_pos):
-            x, y = self.state[0, t], self.state[1, t]
-            for col_x, col_y in obstacles:
-                dist_sq = (x - col_x) ** 2 + (y - col_y) ** 2
-                cost_collision += self.alpha_collision * normalizer * torch.exp(-dist_sq / (2 * self.sigma**2))
-
-        return cost_stage + cost_collision
-
-    def solve(self, lr: float = 0.05, steps: int = 200):
-        """
-        Optimize the trajectory using gradient descent (Adam).
-        """
-        optimizer = torch.optim.Adam([self.state], lr=lr)
-
-        for step in range(steps):
-            optimizer.zero_grad()
-            cost = self._compute_cost()
-            cost.backward()
-            optimizer.step()
-
-        return self.state.detach().cpu().T.numpy()
 
 
 def bivariate_gaussian_activation(ip):

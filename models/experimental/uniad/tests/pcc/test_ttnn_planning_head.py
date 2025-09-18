@@ -61,7 +61,7 @@ def create_uniad_model_parameters(model, device=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator):
-    reference_model = PlanningHeadSingleMode(bev_h=50, bev_w=50, embed_dims=256, planning_steps=6, planning_eval=True)
+    reference_model = PlanningHeadSingleMode(bev_h=50, bev_w=50, embed_dims=256, planning_steps=6)
 
     reference_model = load_torch_model(
         torch_model=reference_model, layer="planning_head", model_location_generator=model_location_generator
@@ -92,11 +92,10 @@ def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator)
         bev_w=50,
         embed_dims=256,
         planning_steps=6,
-        planning_eval=True,
     )
 
     ttnn_output = ttnn_model(
         ttnn_bev_embed, ttnn_occ_mask, ttnn_bev_pos, ttnn_sdc_traj_query, ttnn_sdc_track_query, command
     )
 
-    logger.info(assert_with_pcc(torch_output["sdc_traj"], ttnn.to_torch(ttnn_output["sdc_traj"]), pcc=0.99))
+    logger.info(assert_with_pcc(torch_output["sdc_traj"], ttnn_output["sdc_traj"], pcc=0.99))

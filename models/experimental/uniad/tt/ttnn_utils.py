@@ -354,28 +354,6 @@ def rot_2d(yaw):
 
 # taken from mmdet3d/structures/bbox_3d/base_box3d.py
 class TtBaseInstance3DBoxes:
-    """Base class for 3D Boxes.
-    Note:
-        The box is bottom centered, i.e. the relative position of origin in the
-        box is (0.5, 0.5, 0).
-    Args:
-        tensor (Tensor or np.ndarray or Sequence[Sequence[float]]): The boxes
-            data with shape (N, box_dim).
-        box_dim (int): Number of the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw). Defaults to 7.
-        with_yaw (bool): Whether the box is with yaw rotation. If False, the
-            value of yaw will be set to 0 as minmax boxes. Defaults to True.
-        origin (Tuple[float]): Relative position of the box origin.
-            Defaults to (0.5, 0.5, 0). This will guide the box be converted to
-            (0.5, 0.5, 0) mode.
-    Attributes:
-        tensor (Tensor): Float matrix with shape (N, box_dim).
-        box_dim (int): Integer indicating the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw, ...).
-        with_yaw (bool): If True, the value of yaw will be set to 0 as minmax
-            boxes.
-    """
-
     YAW_AXIS: int = 0
 
     def __init__(
@@ -451,34 +429,7 @@ class TtLiDARInstance3DBoxes(TtBaseInstance3DBoxes):
 
 
 class Instances:
-    """
-    This class represents a list of instances in an image.
-    It stores the attributes of instances (e.g., boxes, masks, labels, scores) as "fields".
-    All fields must have the same ``__len__`` which is the number of instances.
-    All other (non-field) attributes of this class are considered private:
-    they must start with '_' and are not modifiable by a user.
-    Some basic usage:
-    1. Set/get/check a field:
-       .. code-block:: python
-          instances.gt_boxes = Boxes(...)
-          print(instances.pred_masks)  # a tensor of shape (N, H, W)
-          print('gt_masks' in instances)
-    2. ``len(instances)`` returns the number of instances
-    3. Indexing: ``instances[indices]`` will apply the indexing on all the fields
-       and returns a new :class:`Instances`.
-       Typically, ``indices`` is a integer vector of indices,
-       or a binary mask of length ``num_instances``
-       .. code-block:: python
-          category_3_detections = instances[instances.pred_classes == 3]
-          confident_detections = instances[instances.scores > 0.9]
-    """
-
     def __init__(self, image_size: Tuple[int, int], ttnn_device=None, **kwargs: Any):
-        """
-        Args:
-            image_size (height, width): the spatial size of the image.
-            kwargs: fields to add to this `Instances`.
-        """
         self._image_size = image_size
         self._fields: Dict[str, Any] = {}
         for k, v in kwargs.items():
@@ -562,13 +513,6 @@ class Instances:
         return ret
 
     def __getitem__(self, item: Union[int, slice, torch.BoolTensor]) -> "Instances":
-        """
-        Args:
-            item: an index-like object and will be used to index all the fields.
-        Returns:
-            If `item` is a string, return the data in the corresponding field.
-            Otherwise, returns an `Instances` where all fields are indexed by `item`.
-        """
         if type(item) == int:
             if item >= len(self) or item < -len(self):
                 raise IndexError("Instances index out of range!")
@@ -577,24 +521,15 @@ class Instances:
 
         ret = Instances(self._image_size, ttnn_device=self.device)
         for k, v in self._fields.items():
-            # if index by torch.BoolTensor
-            if k == "kalman_models" and isinstance(item, torch.Tensor):
-                ret_list = []
-                for i, if_true in enumerate(item):
-                    if if_true:
-                        ret_list.append(self.kalman_models[i])
-                ret.set(k, ret_list)
-
+            if isinstance(v, ttnn.Tensor):
+                v = ttnn.to_torch(v)
+                if isinstance(item, ttnn.Tensor):
+                    item = ttnn.to_torch(item).bool()
+                v = v[item]
+                v = ttnn.from_torch(v, device=self.device, layout=ttnn.TILE_LAYOUT)
+                ret.set(k, v)
             else:
-                if isinstance(v, ttnn.Tensor):
-                    v = ttnn.to_torch(v)
-                    if isinstance(item, ttnn.Tensor):
-                        item = ttnn.to_torch(item).bool()
-                    v = v[item]
-                    v = ttnn.from_torch(v, device=self.device, layout=ttnn.TILE_LAYOUT)
-                    ret.set(k, v)
-                else:
-                    ret.set(k, v)
+                ret.set(k, v)
         return ret
 
     def __len__(self) -> int:
@@ -628,15 +563,8 @@ class Instances:
             v0 = values[0]
             for i in range(len(values)):
                 values[i] = ttnn.to_layout(values[i], layout=ttnn.TILE_LAYOUT)
-                # values[i] = ttnn.to_torch(values[i])
             if isinstance(v0, torch.Tensor):
                 values = torch.cat(values, dim=0)
-            elif isinstance(v0, list):
-                print("Here 2")
-                # values = list(itertools.chain(*values))
-            elif hasattr(type(v0), "cat"):
-                print("Here 3")
-                # values = type(v0).cat(values)
             else:
                 if values[1].shape[0] > 0:
                     values = ttnn.concat(values, dim=1)

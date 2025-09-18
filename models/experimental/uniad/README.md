@@ -4,7 +4,6 @@
 
 ### Python Package dependencies
     - MMCV : Use `pip install mmcv` command to install
-    - Casadi: Use `pip install casadi` command to install
     - mmcv-full: Use `pip install mmcv-full` command to install
 
 Note: UniAD model tests run successfully only on Python 3.10.12.

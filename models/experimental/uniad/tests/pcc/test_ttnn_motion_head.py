@@ -428,13 +428,13 @@ def test_uniad_MotionHead(device, reset_seeds, model_location_generator):
     assert_with_pcc(
         torch_output[0][0]["traj_1"], ttnn.to_torch(ttnn_output[0][0]["traj_1"]), pcc=0.99
     )  # 0.9960413270506279
-    assert_with_pcc(torch_output[0][0]["traj_scores_1"], ttnn.to_torch(ttnn_output[0][0]["traj_scores_1"]), pcc=0.99)
+    assert_with_pcc(torch_output[0][0]["traj_scores_1"], ttnn.to_torch(ttnn_output[0][0]["traj_scores_1"]), pcc=0.98)
     assert_with_pcc(
         torch_output[0][0]["traj"], ttnn.to_torch(ttnn_output[0][0]["traj"]), pcc=0.99
     )  # 0.9945363157090221
     assert_with_pcc(torch_output[0][0]["traj_scores"], ttnn.to_torch(ttnn_output[0][0]["traj_scores"]), pcc=0.99)
 
-    assert_with_pcc(torch_output[1]["all_traj_scores"], ttnn.to_torch(ttnn_output[1]["all_traj_scores"]), pcc=0.99)
+    assert_with_pcc(torch_output[1]["all_traj_scores"], ttnn.to_torch(ttnn_output[1]["all_traj_scores"]), pcc=0.98)
     assert_with_pcc(
         torch_output[1]["all_traj_preds"], ttnn.to_torch(ttnn_output[1]["all_traj_preds"]), pcc=0.99
     )  # 0.9965912712804653

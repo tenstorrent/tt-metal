@@ -342,9 +342,7 @@ class UniAD(nn.Module):
                 predict_modes=6,
             )
         if planning_head:
-            self.planning_head = PlanningHeadSingleMode(
-                bev_h=50, bev_w=50, embed_dims=256, planning_steps=6, planning_eval=True
-            )
+            self.planning_head = PlanningHeadSingleMode(bev_h=50, bev_w=50, embed_dims=256, planning_steps=6)
 
     @property
     def with_planning_head(self):

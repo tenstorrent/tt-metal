@@ -320,11 +320,7 @@ class TtUniAD:
                 bev_w=50,
                 embed_dims=256,
                 planning_steps=6,
-                planning_eval=True,
             )
-
-        # self.task_loss_weight = task_loss_weight
-        # assert set(task_loss_weight.keys()) == {"track", "occ", "motion", "map", "planning"}
 
     @property
     def with_planning_head(self):

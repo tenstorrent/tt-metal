@@ -6,7 +6,6 @@ import ttnn
 
 import torch
 from models.experimental.uniad.tt.ttnn_utils import bivariate_gaussian_activation_plan_head
-from models.experimental.uniad.reference.utils import CollisionNonlinearOptimizer
 
 from models.experimental.uniad.tt.ttnn_transformer_decoder_layer import TtTransformerDecoderLayer
 
@@ -121,15 +120,6 @@ class TtPlanningHeadSingleMode:
         bev_w=200,
         embed_dims=256,
         planning_steps=6,
-        loss_planning=None,
-        loss_collision=None,
-        planning_eval=True,
-        use_col_optim=True,
-        col_optim_args=dict(
-            occ_filter_range=5.0,
-            sigma=1.0,
-            alpha_collision=5.0,
-        ),
         with_adapter=True,
     ):
         self.device = device
@@ -180,11 +170,6 @@ class TtPlanningHeadSingleMode:
 
         self.mlp_fuser = [ttnn.linear, ttnn.layer_norm, ttnn.relu]
         self.pos_embed = parameters.pos_embed.weight
-
-        self.use_col_optim = use_col_optim
-        self.occ_filter_range = col_optim_args["occ_filter_range"]
-        self.sigma = col_optim_args["sigma"]
-        self.alpha_collision = col_optim_args["alpha_collision"]
 
         # TODO: reimplement it with down-scaled feature_map
         self.with_adapter = with_adapter
@@ -282,11 +267,6 @@ class TtPlanningHeadSingleMode:
         sdc_traj_all = ttnn.to_torch(sdc_traj_all, dtype=torch.float32)
         occ_mask = ttnn.to_torch(occ_mask, dtype=torch.float32)
 
-        if self.use_col_optim and not self.training:
-            # post process, only used when testing
-            assert occ_mask is not None
-            sdc_traj_all = self.collision_optimization(sdc_traj_all, occ_mask)
-
         return dict(
             sdc_traj=sdc_traj_all,
             sdc_traj_all=sdc_traj_all,
@@ -300,81 +280,3 @@ class TtPlanningHeadSingleMode:
 
         outs_planning = self(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
         return outs_planning
-
-    def collision_optimization_tt(self, sdc_traj_all, occ_mask):
-        pos_xy_t = []
-        valid_occupancy_num = 0
-
-        if occ_mask.shape[2] == 1:
-            occ_mask = ttnn.squeeze(occ_mask, 2)
-        occ_horizon = occ_mask.shape[1]
-        assert occ_horizon == 5
-
-        sdc_traj_all = ttnn.to_torch(sdc_traj_all, dtype=torch.float32)
-
-        for t in range(self.planning_steps):
-            cur_t = min(t + 1, occ_horizon - 1)
-
-            temp = ttnn.to_torch(occ_mask[0][cur_t])
-            pos_xy = torch.nonzero(temp, as_tuple=False)
-            pos_xy = pos_xy[:, [1, 0]]
-            pos_xy = ttnn.from_torch(pos_xy, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=self.device)
-
-            a = (pos_xy[:, 0] - self.bev_h // 2) * 0.5 + 0.25
-            b = (pos_xy[:, 1] - self.bev_w // 2) * 0.5 + 0.25
-
-            a = ttnn.unsqueeze(a, 1)
-            b = ttnn.unsqueeze(b, 1)
-            pos_xy = ttnn.concat([a, b], dim=-1)  # PCC:1.0
-
-            pos_xy = ttnn.to_torch(pos_xy)
-
-            keep_index = (
-                torch.sum((sdc_traj_all[0, t, :2][None, :] - pos_xy[:, :2]) ** 2, axis=-1) < self.occ_filter_range**2
-            )
-            pos_xy_t.append(pos_xy[keep_index].cpu().detach().numpy())
-
-            pos_xy = ttnn.from_torch(pos_xy, layout=ttnn.TILE_LAYOUT)
-
-        col_optimizer = CollisionNonlinearOptimizer(
-            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t, device=self.device
-        )
-        col_optimizer.set_reference_trajectory(sdc_traj_all[0].cpu().detach().numpy())
-        sol = col_optimizer.solve()
-        sdc_traj_optim = torch.tensor(sol[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
-        return sdc_traj_optim
-
-    def collision_optimization(self, sdc_traj_all, occ_mask):
-        pos_xy_t = []
-        valid_occupancy_num = 0
-
-        if occ_mask.shape[2] == 1:
-            occ_mask = occ_mask.squeeze(2)
-        occ_horizon = occ_mask.shape[1]
-        assert occ_horizon == 5
-
-        for t in range(self.planning_steps):
-            cur_t = min(t + 1, occ_horizon - 1)
-            pos_xy = torch.nonzero(occ_mask[0][cur_t], as_tuple=False)
-            pos_xy = pos_xy[:, [1, 0]]
-            pos_xy[:, 0] = (pos_xy[:, 0] - self.bev_h // 2) * 0.5 + 0.25
-            pos_xy[:, 1] = (pos_xy[:, 1] - self.bev_w // 2) * 0.5 + 0.25
-
-            # filter the occupancy in range
-            keep_index = (
-                torch.sum((sdc_traj_all[0, t, :2][None, :] - pos_xy[:, :2]) ** 2, axis=-1) < self.occ_filter_range**2
-            )
-            pos_xy_t.append(pos_xy[keep_index].cpu().detach().numpy())
-            valid_occupancy_num += torch.sum(keep_index > 0)
-        if valid_occupancy_num == 0:
-            return sdc_traj_all
-
-        col_optimizer = CollisionNonlinearOptimizer(
-            self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t, device=self.device
-        )
-        col_optimizer.set_reference_trajectory(sdc_traj_all[0].cpu().detach().numpy())
-        sol = col_optimizer.solve()
-        result = torch.tensor(sol[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
-        # convert to ttnn
-        result = ttnn.from_torch(result, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        return result
