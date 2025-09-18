@@ -36,7 +36,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -174,18 +174,21 @@ std::vector<bfloat16> gold_broadcast(
 
             switch (op) {
                 case EltwiseOp::ADD: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() + broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) + static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::SUB: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() - broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) - static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::MUL: {
                     golden[i * num_cols + j] =
-                        bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_packed() & srca_fid_mask))
-                            .to_float() *
-                        bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_packed() & srcb_fid_mask)).to_float();
+                        static_cast<float>(std::bit_cast<bfloat16>(
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(src_a[i * num_cols + j]) & srca_fid_mask))) *
+                        static_cast<float>(std::bit_cast<bfloat16>(
+                            static_cast<uint16_t>(std::bit_cast<uint16_t>(broadcast_value) & srcb_fid_mask)));
                     break;
                 }
                 default: {
@@ -199,13 +202,18 @@ std::vector<bfloat16> gold_broadcast(
     return golden;
 }
 
-void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig& test_config) {
+void run_single_core_broadcast(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BroadcastConfig& test_config) {
     if (test_config.eltwise_op == EltwiseOp::SUB && test_config.broadcast_dim == BroadcastDim::ROW &&
         test_config.api_convention != ApiConvention::DEFAULT) {
         GTEST_SKIP();  // FIXME sub_tiles_bcast_rows and sub_bcast_rows_init_short dont exist
     }
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
 
@@ -216,15 +224,13 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         log_info(tt::LogTest, "Tile shape is {{{}, {}}}", tile_height, tile_width);
     }
 
-    uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = single_tile_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
 
-    auto src_a_dram_buffer = CreateBuffer(dram_config);
+    auto src_a_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_src_a_cb_config =
         tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
@@ -232,7 +238,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
             .set_tile_dims(0, tile_dims);
     tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
-    auto src_b_dram_buffer = CreateBuffer(dram_config);
+    auto src_b_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_src_b_cb_config =
         tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
@@ -240,7 +246,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
             .set_tile_dims(1, tile_dims);
     tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_dst_cb_config =
         tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
@@ -324,10 +330,10 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         });
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 
@@ -350,13 +356,14 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
-    tt_metal::detail::WriteToBuffer(src_a_dram_buffer, tilized_input0);
-    tt_metal::detail::WriteToBuffer(src_b_dram_buffer, tilized_input1);
+    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
+    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, dest_buffer_data);
+    distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
     auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
     bool result = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -368,7 +375,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
 }  // namespace unit_tests::compute::broadcast
 
 class BroadcastParameterizedDeviceFixture
-    : public DeviceFixture,
+    : public MeshDeviceFixture,
       public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {};
 
 TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {

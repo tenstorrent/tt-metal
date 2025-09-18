@@ -288,7 +288,7 @@ void Hal::initialize_bh() {
         uint32_t mailbox_base =
             MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
         return mailbox_base + offsetof(blackhole::EthFwMailbox, arg) +
-               (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
+               (arg_index * sizeof(((blackhole::EthFwMailbox*)nullptr)->arg[0]));
     };
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
@@ -321,7 +321,10 @@ void Hal::initialize_bh() {
     this->eth_fw_is_cooperative_ = false;
     this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
-        AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
+        dev_msgs::AddressableCoreType::TENSIX,
+        dev_msgs::AddressableCoreType::ETH,
+        dev_msgs::AddressableCoreType::PCIE,
+        dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_BH;

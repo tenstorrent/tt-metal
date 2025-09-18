@@ -35,9 +35,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -52,8 +52,11 @@ public:
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
-            devices_ = tt::tt_metal::detail::CreateDevices(ids);
-
+            auto reserved_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+                ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
+            for (const auto& [id, device] : reserved_devices) {
+                devices_[id] = device;
+            }
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
         }
@@ -67,10 +70,12 @@ public:
 
     void TearDown() {
         device_open = false;
-        tt::tt_metal::detail::CloseDevices(devices_);
+        for (const auto& [device_id, device_ptr] : devices_) {
+            device_ptr->close();
+        }
     }
 
-    std::map<chip_id_t, tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -84,8 +89,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    tt_metal::IDevice* device0,
-    tt_metal::IDevice* device1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -120,21 +125,12 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
     tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, rt_args());
 
-    // // Launch
-    try {
-        tt::tt_metal::detail::CompileProgram(device0, program0);
-        tt::tt_metal::detail::CompileProgram(device1, program1);
-    } catch (std::exception& e) {
-        log_error(tt::LogTest, "Failed compile: {}", e.what());
-        throw e;
-    }
-
     return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
 }
 
 void run(
-    tt_metal::IDevice* device0,
-    tt_metal::IDevice* device1,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device0,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device1,
     tt_metal::Program& program0,
     tt_metal::Program& program1,
     tt_metal::KernelHandle local_kernel,
@@ -156,22 +152,43 @@ void run(
     tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, rt_args());
     tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, rt_args());
 
+    tt::tt_metal::distributed::MeshCoordinate zero_coord0 =
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device0->shape().dims());
+    tt::tt_metal::distributed::MeshCoordinateRange device_range0 =
+        tt::tt_metal::distributed::MeshCoordinateRange(zero_coord0, zero_coord0);
+
+    tt::tt_metal::distributed::MeshCoordinate zero_coord1 =
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device1->shape().dims());
+    tt::tt_metal::distributed::MeshCoordinateRange device_range1 =
+        tt::tt_metal::distributed::MeshCoordinateRange(zero_coord1, zero_coord1);
+
+    tt::tt_metal::distributed::MeshWorkload mesh_workload0 = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload0, std::move(program0), device_range0);
+
+    tt::tt_metal::distributed::MeshWorkload mesh_workload1 = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload1, std::move(program1), device_range1);
+
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, program0); });
-        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, program1); });
+        // For slow dispatch mode, use threads with mesh workloads
+        std::thread th2 = std::thread([&] {
+            tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, true);
+        });
+        std::thread th1 = std::thread([&] {
+            tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, true);
+        });
 
         th2.join();
         th1.join();
     } else {
-        tt_metal::EnqueueProgram(device0->command_queue(), program0, false);
-        tt_metal::EnqueueProgram(device1->command_queue(), program1, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, false);
 
         std::cout << "Calling Finish" << std::endl;
-        tt_metal::Finish(device0->command_queue());
-        tt_metal::Finish(device1->command_queue());
+        tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
     }
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device0);
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device1);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device0->get_devices()[0]);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device1->get_devices()[0]);
 }
 
 int main(int argc, char** argv) {
@@ -211,7 +228,7 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
-    if (arch == tt::ARCH::GRAYSKULL) {
+    if (arch != tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
@@ -221,7 +238,7 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
@@ -230,8 +247,9 @@ int main(int argc, char** argv) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
-        if (cluster.is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
-            std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
+        if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
+            std::tie(device_id, eth_receiver_core) =
+                device_0->get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;
