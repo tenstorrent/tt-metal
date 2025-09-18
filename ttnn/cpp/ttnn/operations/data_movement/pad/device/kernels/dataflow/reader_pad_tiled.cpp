@@ -48,8 +48,6 @@ void kernel_main() {
                 break;
             }
         }
-        // DPRINT << "within_input_region: " << (uint32_t)within_input_region << ENDL();
-        DPRINT << "written pages: " << out_pages_written << ENDL();
 
         if (within_input_region) {
             cb_reserve_back(input_cb_id, 1);
@@ -58,11 +56,9 @@ void kernel_main() {
             noc_async_read(src_noc_addr, l1_write_addr, page_size);
             noc_async_read_barrier();
             cb_push_back(input_cb_id, 1);
-            DPRINT << "SENT PAGE" << ENDL();
             input_page_offset++;
             next_index_u32(input_odo, input_page_shape, num_dims);
         }
         next_index_u32(output_odo, output_page_shape, num_dims);
     }
-    DPRINT << "Finished!" << ENDL();
 }
