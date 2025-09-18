@@ -254,25 +254,6 @@ void EnqueueWriteSubBuffer(
     cq.enqueue_write_buffer(buffer, std::move(src), region, blocking);
 }
 
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
-    ZoneScoped;
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::LaunchProgram((IDevice*)&cq, program);
-    }
-    detail::DispatchStateCheck(true);
-
-    IDevice* device = cq.device();
-    detail::CompileProgram(device, program);
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_region(device);
-    cq.enqueue_program(program, blocking);
-    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-    // leaks on device.
-    program.impl().release_buffers();
-}
-
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch conservatively flushes all work since there's no cq.
