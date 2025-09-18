@@ -192,7 +192,7 @@ def run_max_pool(
             torch_input,
             (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
             mode="constant",
-            value=0,
+            value=float("-inf"),
         )
         torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
     else:
@@ -648,5 +648,49 @@ def test_max_pool2d_output_formats_and_layouts(
         shard_scheme=shard_startegy,
         out_dtype=out_dtype,
         output_layout=output_layout,
+        nightly_skips=False,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 128, 16, 16],
+    ],
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    [
+        (5, 5),
+    ],
+)
+@pytest.mark.parametrize(
+    "padding_4d",
+    [
+        (2, 2, 1, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "stride",
+    [
+        (1, 1),
+    ],
+)
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
+def test_max_pool_4d_padding(input_shape, kernel_size, padding_4d, stride, device, tensor_map, in_dtype):
+    dilation = (1, 1)
+    ceil_mode = False
+
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding_4d,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        in_dtype,
+        ceil_mode=ceil_mode,
         nightly_skips=False,
     )
