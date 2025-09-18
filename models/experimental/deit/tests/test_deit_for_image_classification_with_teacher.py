@@ -19,9 +19,7 @@ from models.experimental.deit.tt.deit_for_image_classification_with_teacher impo
 )
 
 
-def test_deit_for_image_classification_with_teacher_inference(
-    device, hf_cat_image_sample_input, pcc=0.95
-):
+def test_deit_for_image_classification_with_teacher_inference(device, hf_cat_image_sample_input, pcc=0.95):
     with torch.no_grad():
         image = hf_cat_image_sample_input
 
@@ -29,7 +27,7 @@ def test_deit_for_image_classification_with_teacher_inference(
         image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
         inputs = image_processor(images=image, return_tensors="pt")
 
-        torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
+        torch_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
         torch_model.eval()
         state_dict = torch_model.state_dict()
         config = torch_model.config

@@ -32,7 +32,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
     image = hf_cat_image_sample_input
 
-   image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
     inputs = image_processor(image, return_tensors="pt")
 
