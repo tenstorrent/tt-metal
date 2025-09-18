@@ -9,7 +9,6 @@ from models.demos.yolov4.tt.common import Conv
 class Down4:
     def __init__(self, device, parameters, conv_args) -> None:
         self.parameters = parameters
-        self.parameters = parameters
         self.conv1 = Conv(
             device,
             conv_args.c1,
