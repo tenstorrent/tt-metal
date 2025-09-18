@@ -268,6 +268,22 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
 
 std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
+
+    // For BINARY_PATH kernels, return the actual binary paths
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        if (this->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+            // Compute kernels have 3 binaries (trisc0, trisc1, trisc2)
+            for (int i = 0; i < this->expected_num_binaries(); i++) {
+                file_paths.push_back(fmt::format("{}/trisc{}.elf", this->kernel_src_.path_.string(), i));
+            }
+        } else {
+            // DataMovement and Ethernet kernels have a single binary
+            file_paths.push_back(this->kernel_src_.path_.string());
+        }
+        return file_paths;
+    }
+
+    // For JIT-compiled kernels, return the build output paths
     auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -593,7 +609,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-        TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -632,7 +648,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-        TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
