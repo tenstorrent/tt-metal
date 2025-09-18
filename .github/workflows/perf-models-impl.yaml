@@ -44,7 +44,6 @@ jobs:
             -v ${{ github.workspace }}:${{ github.workspace }}
             -w ${{ github.workspace }}
             --user 0
-            -v "$RUNNER_TEMP/pip-cache:/pip-cache"
 
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix['test-info'].arch }}
