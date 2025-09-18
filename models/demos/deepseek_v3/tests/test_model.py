@@ -42,7 +42,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        # ("prefill", 512), # TODO: Uncomment once MLA prefill works
+        ("prefill", 128, 1),
         # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
     ],
 )
