@@ -346,6 +346,14 @@ void set_or_update_runtime_arguments(
 
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
+            } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
+                // Calculate freq and counter like binary_ng for scalar broadcast
+                uint32_t start_t = start_tile_id % (cHt * cWt);
+                uint32_t freq = cHt * cWt;   // scalar broadcast frequency
+                uint32_t counter = start_t;  // scalar broadcast counter
+
+                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
+                handle_args(program, compute_kernel_id, core, compute_runtime_args);
             } else {
                 // TTT variant without subtile bcast and ROW_BCAST is also handled here
                 std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u, 0u};
@@ -663,12 +671,41 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             true_is_bcast = false;
             false_is_bcast = false;
         }
+    } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
+        // Determine which tensor is actually broadcast based on logical shapes (not padded)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_w = pred_shape[-1];
+        auto true_w = true_shape[-1];
+        auto false_w = false_shape[-1];
+
+        auto pred_h = pred_shape[-2];  // height (second-to-last dimension)
+        auto true_h = true_shape[-2];
+        auto false_h = false_shape[-2];
+
+        auto max_h = std::max({pred_h, true_h, false_h});
+        auto max_w = std::max({pred_w, true_w, false_w});
+
+        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
+        bool true_row_bcast = (true_h == 1 && max_h > 1);
+        bool false_row_bcast = (false_h == 1 && max_h > 1);
+
+        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
+        bool true_col_bcast = (true_w == 1 && max_w > 1);
+        bool false_col_bcast = (false_w == 1 && max_w > 1);
+
+        pred_is_bcast = (pred_row_bcast && pred_col_bcast);
+        true_is_bcast = (true_row_bcast && true_col_bcast);
+        false_is_bcast = (false_row_bcast && false_col_bcast);
     }
 
     // READER KERNEL - Use kernel path from utils
     // Create dataflow defines for column broadcast kernels like binary_ng
     std::map<std::string, std::string> reader_defines;
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+    if (variant == WhereVariant::TTT &&
+        (broadcast_type == WhereBroadcastType::COL_BCAST || broadcast_type == WhereBroadcastType::SCALAR_BCAST)) {
         // Use binary_ng style dataflow defines with predicate and value_true dtypes
         reader_defines = make_dataflow_defines(
             predicate_tensor.dtype(),
@@ -678,7 +715,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add binary_ng style sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
         reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
         reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
         reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
@@ -755,7 +792,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["BCAST_LLK"] = "0";
     }
 
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+    if (variant == WhereVariant::TTT && (broadcast_type == WhereBroadcastType::OUTER_BCAST)) {
         // TODO: Use the sharding config from the tensor args when sharding support is added
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
@@ -902,7 +939,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     std::map<std::string, std::string> kernel_defines;
 
     // Add binary_ng style defines for TTT column broadcast case
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+    if (variant == WhereVariant::TTT &&
+        (broadcast_type == WhereBroadcastType::COL_BCAST || broadcast_type == WhereBroadcastType::SCALAR_BCAST)) {
         // 3-tensor broadcast configuration - set defines for each tensor independently
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
