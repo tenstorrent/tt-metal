@@ -165,11 +165,8 @@ class Embedding1D(AbstractModule):
         embeddings = ttnn.embedding(x, **cfg["embedding"])
         embeddings = ttnn.unsqueeze(embeddings, 0)
 
-        embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
+        embeddings_ag = ttnn.experimental.all_gather_async(embeddings, **cfg["all_gather"])
         ttnn.deallocate(embeddings)
-
-        embeddings_ag = ttnn.experimental.all_gather_async(embeddings_tc, **cfg["all_gather"])
-        ttnn.deallocate(embeddings_tc)
 
         return embeddings_ag
 
