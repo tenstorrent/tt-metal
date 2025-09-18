@@ -228,8 +228,11 @@
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
-<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be 4D</p></li>
-<li><p>For <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*C*H must be a multiple of 32 and W must be ≥64.</p></li>
+<li><p>The op fundamentally operates on 4D tensors with shape [N, C, H, W], and with <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.</p></li>
+<li><p>For <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*C*H must be a multiple of 32</p></li>
+<li><p>W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.</p></li>
+<li><p>The width of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.</p></li>
+<li><p>The padding is currently only supported for bfloat16, float32, int32, and uint32.</p></li>
 <li><p>To enable multicore execution, the width of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> must be ≥8192 and &lt;65536, and <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> must be ≤64.</p></li>
 <li><p>All shape validations are performed on padded shapes.</p></li>
 </ul>

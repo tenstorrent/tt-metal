@@ -2183,13 +2183,14 @@
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.act_block_h_override"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.act_block_h_override</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.act_block_w_div"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.act_block_w_div</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.activation"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.activation</span></code></a></li>
+<li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.config_tensors_in_dram"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.config_tensors_in_dram</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.core_grid"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.core_grid</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.deallocate_activation"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.deallocate_activation</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_act_double_buffer"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.enable_act_double_buffer</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_activation_reuse"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.enable_activation_reuse</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_kernel_stride_folding"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.enable_kernel_stride_folding</span></code></a></li>
-<li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_split_reader"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.enable_split_reader</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_weights_double_buffer"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.enable_weights_double_buffer</span></code></a></li>
+<li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.force_split_reader"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.force_split_reader</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.full_inner_dim"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.full_inner_dim</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.in_place"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.in_place</span></code></a></li>
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.output_layout"><code class="docutils literal notranslate"><span class="pre">Conv2dConfig.output_layout</span></code></a></li>
@@ -2314,15 +2315,15 @@
 </ul>
 </li>
 <li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html">More Basic Tensor Operations</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html">Basic Tensor Operations</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Open-the-Device">Open the Device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Host-Tensor-Creation">Host Tensor Creation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Convert-Host-Tensors-to-TT-NN-Tiled-Tensors-or-Create-Natively-on-Device">Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Host-Tensor-Conversion-and-Creation">Host Tensor Conversion and Creation</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Tile-Based-Arithmetic-Operations">Tile-Based Arithmetic Operations</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Simulated-Broadcasting-(Row-Vector-Expansion)">Simulated Broadcasting (Row Vector Expansion)</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Simulated-Broadcasting---Row-Vector-Expansion">Simulated Broadcasting - Row Vector Expansion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2">

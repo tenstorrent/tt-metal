@@ -156,7 +156,8 @@
 <dt>Where:</dt>
 <dd>
 <ul class="simple">
-<li><p><span class="math notranslate nohighlight">\(\mu\)</span> and <span class="math notranslate nohighlight">\(\sigma^2\)</span> are the mean and variance of the input tensor, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\mu\)</span> is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).</p></li>
+<li><p><span class="math notranslate nohighlight">\(\sigma^2\)</span> is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.</p></li>
 <li><p><span class="math notranslate nohighlight">\(\gamma\)</span> and <span class="math notranslate nohighlight">\(\beta\)</span> are the learnable scale and shift parameters, respectively</p></li>
 <li><p><span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant</p></li>
 </ul>
@@ -181,8 +182,12 @@
 <li><p><strong>residual_input_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – </p></li>
-<li><p><strong>Returns</strong> – ttnn.Tensor: the output tensor.</p></li>
 </ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -273,18 +278,16 @@
 </tr>
 </tbody>
 </table>
-<p>Rank: input rank must be &gt;= 1. See Limitations for additional sharding/distributed constraints.</p>
 </div>
 <dl class="simple">
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
-<li><p>All input tensors must be on-device.</p></li>
+<li><p>All input tensors must be on-device and have a rank &gt;= 1.</p></li>
 <li><p>Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.</p></li>
 <li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
-<li><p><cite>weight</cite>/<cite>bias</cite> tensors:
-- If TILE: last padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
-- If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
+<li><p>If TILE: <cite>weight</cite> and <cite>bias</cite> padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).</p></li>
+<li><p>If ROW_MAJOR: <cite>weight</cite> and <cite>bias</cite> last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
 <li><p>If the input is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> must have identical shard spec and memory config.</p></li>
 </ul>
 </dd>
