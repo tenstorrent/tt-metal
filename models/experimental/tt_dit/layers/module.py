@@ -5,15 +5,20 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections import defaultdict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+
 import ttnn
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator, MutableMapping
-    from typing import Any
+    from collections.abc import Collection, Iterator
+    from typing import Any, DefaultDict
+
+
+TorchStateTree = DefaultDict[str, "TorchStateTree | torch.Tensor"]
 
 
 class IncompatibleKeys(NamedTuple):
@@ -66,12 +71,12 @@ class Module:
 
         super().__delattr__(name)
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+    def _prepare_torch_state(self, state: TorchStateTree) -> None:
         """Prepare Torch state before loading.
 
         This method is meant to be overridden by the inheriting class to modify the Torch state
         before loading. The `state` argument is not a PyTorch state dict but a hierarchically nested
-        dict of dicts containing the same data.
+        defaultdict of defaultdict's containing the same data.
         """
 
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
@@ -178,27 +183,27 @@ class Parameter:
         )
 
 
-def _unflatten_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, Any]:
-    """Turns a PyTorch state dict into a nested dict of dicts."""
-    root = {}
+def _unflatten_state_dict(state_dict: Mapping[str, torch.Tensor]) -> TorchStateTree:
+    """Turns a PyTorch state dict into a nested defaultdict of defaultdicts."""
+    root = tree()
 
     for key, value in state_dict.items():
         *parts, leaf = key.split(".")
 
         node = root
         for p in parts:
-            node = node.setdefault(p, {})
+            node = node[p]
 
         node[leaf] = value
 
     return root
 
 
-def _flatten_state_dict(nested: Mapping[str, Any], *, prefix: str = "") -> dict[str, torch.Tensor]:
-    """Turns a nested dict of dicts back into a PyTorch state dict."""
+def _flatten_state_dict(state: TorchStateTree, *, prefix: str = "") -> dict[str, torch.Tensor]:
+    """Turns a nested defaultdict of defaultdicts back into a PyTorch state dict."""
     state_dict = {}
 
-    for k, v in nested.items():
+    for k, v in state.items():
         child_key = f"{prefix}.{k}" if prefix else k
         if isinstance(v, Mapping):
             state_dict.update(_flatten_state_dict(v, prefix=child_key))
@@ -221,3 +226,18 @@ def _mesh_placements_from_mapping(
         placements[k] = ttnn.PlacementShard(v)
 
     return placements
+
+
+def torch_state_tree() -> TorchStateTree:
+    """Return a recursively autovivifying mapping.
+
+    This is a `defaultdict` that creates nested dicts on demand, letting you write deep assignments
+    without pre-creating parents:
+
+        t = tree()
+        t["a"]["b"]["c"] = torch.randn([10])
+
+    Caveat: indexing (e.g. t["x"]) creates nodes. Use `get`/`in` if you *don't* want to create
+    branches during reads.
+    """
+    return defaultdict(torch_state_tree)

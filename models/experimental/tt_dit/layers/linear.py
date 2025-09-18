@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 
-from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from .module import Module, Parameter
+from .module import Module, Parameter, TorchStateTree
 
 
 class Linear(Module):
@@ -58,7 +58,7 @@ class Linear(Module):
         else:
             self.bias = None
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+    def _prepare_torch_state(self, state: TorchStateTree) -> None:
         if "weight" in state:
             state["weight"] = state["weight"].transpose(0, 1)
 
@@ -155,7 +155,7 @@ class ColParallelLinear(Module):
         else:
             self.bias = None
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+    def _prepare_torch_state(self, state: TorchStateTree) -> None:
         def permute_for_swiglu(tensor):
             assert self.activation_fn == "swiglu"
             ndev = self.mesh_device.shape[self.mesh_axis]
@@ -257,8 +257,8 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        # row-parallel bias must not be replicated across mesh_devices
         if init:
+            # row-parallel bias must not be replicated across mesh_devices
             bias_init = torch.randn([1, out_features])
             if tuple(mesh_device.shape)[mesh_axis] > 1:
                 zero_bias = torch.zeros(1, out_features * (tuple(mesh_device.shape)[mesh_axis] - 1))
@@ -304,27 +304,18 @@ class RowParallelLinear(Module):
         else:
             self.bias = None
 
-    def load_state_dict(self, state_dict):
-        """
-        Loads the state dict into the layer.
-        """
-        weight = state_dict["weight"].transpose(0, 1)
-        bias = state_dict.get("bias", None)
+    def _prepare_torch_state(self, state: TorchStateTree) -> None:
+        if "weight" in state:
+            state["weight"] = state["weight"].transpose(0, 1)
 
-        if self.fsdp_mesh_axis is not None:
-            self.weight = bf16_tensor_2dshard(
-                weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1}
-            )
-        else:
-            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-2)
-        if bias is not None:
-            bias = bias.reshape(1, -1)
+        if "bias" in state:
+            bias = state["bias"].reshape(1, -1)
+
             if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
                 zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
-        else:
-            self.bias = None
+
+            state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         """
