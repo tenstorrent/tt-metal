@@ -52,7 +52,7 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, false);
     fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
-    // Wait Until Program Finishes. The kernel will print the following messages:
+    // Wait Until MeshWorkload Finishes. The kernel will print the following messages:
     // 0:(x=0,y=0):TR0: Hello, I am the UNPACK core running the compute kernel
     // 0:(x=0,y=0):TR1: Hello, I am the MATH core running the compute kernel
     // 0:(x=0,y=0):TR2: Hello, I am the PACK core running the compute kernel
@@ -63,7 +63,7 @@ int main() {
     // TR1: Compute core 1 (MATH)
     // TR2: Compute core 2 (PACK)
 
-    // Wait for the program to finish execution, then close the mesh device.
+    // Wait for the workload to finish execution, then close the mesh device.
     distributed::Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
     mesh_device->close();

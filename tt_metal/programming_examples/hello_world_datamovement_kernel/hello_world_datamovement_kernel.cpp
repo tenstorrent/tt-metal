@@ -58,7 +58,7 @@ int main() {
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
-    // Wait Until Program Finishes. The program should print the following (NC and BR is Data movement core 1 and 0
+    // Wait Until MeshWorkload Finishes. The program should print the following (NC and BR is Data movement core 1 and 0
     // respectively):
     //
     // 0:(x=0,y=0):NC: My logical coordinates are 0,0
