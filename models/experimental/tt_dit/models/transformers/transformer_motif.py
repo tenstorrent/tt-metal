@@ -4,17 +4,20 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
 import ttnn
 
 from ...layers.attention import all_gather
-from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, PatchEmbed
+from ...layers.embeddings import PatchEmbed
+from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, Parameter
 from ...layers.normalization import DistributedLayerNorm
 from ...layers.transformer_block import TransformerBlock
+from ...utils.tensor import bf16_tensor
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping
@@ -23,6 +26,80 @@ if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
     from ...utils.padding import PaddingConfig
+
+
+class TimeTextProjection(Module):
+    def __init__(
+        self,
+        *,
+        embedding_dim: int,
+        pooled_projection_dim: int,
+        time_embed_dim: int = 256,
+        mesh_device: ttnn.MeshDevice | None = None,
+        init: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.mesh_device = mesh_device
+
+        self.timestep_embedder = FeedForward(
+            dim=time_embed_dim, inner_dim=4 * time_embed_dim, dim_out=embedding_dim, mesh_device=mesh_device, init=init
+        )
+        self.text_embedder = FeedForward(
+            dim=pooled_projection_dim,
+            inner_dim=4 * pooled_projection_dim,
+            dim_out=embedding_dim,
+            mesh_device=mesh_device,
+            init=init,
+        )
+
+        self.time_proj_factor = self._create_time_proj_factor(time_embed_dim)
+
+    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+        state["timestep_embedder"] = {
+            "ff1": state.get("timestep_embedder", {}).pop("linear_1"),
+            "ff2": state.get("timestep_embedder", {}).pop("linear_2"),
+        }
+        state["text_embedder"] = {
+            "ff1": state.get("text_embedder", {}).pop("linear_1"),
+            "ff2": state.get("text_embedder", {}).pop("linear_2"),
+        }
+
+    def _create_time_proj_factor(self, num_channels: int) -> ttnn.Tensor:
+        assert num_channels % 2 == 0
+        half_dim = num_channels // 2
+
+        max_period = 10000
+
+        exponent = -math.log(max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32)
+        exponent = exponent / half_dim
+        factor = torch.exp(exponent)
+
+        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+
+    # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
+    # `timestep` tensor.
+    def forward(
+        self,
+        *,
+        timestep: ttnn.Tensor,
+        pooled_projection: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        batch_size = pooled_projection.shape[0]
+
+        assert len(pooled_projection.shape) == 2
+        assert timestep.shape == [batch_size, 1]
+        assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
+
+        emb = timestep * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        timesteps_proj = ttnn.concat([c, s], dim=-1)
+        timesteps_emb = self.timestep_embedder(timesteps_proj)
+
+        text_emb = self.text_embedder(pooled_projection)
+
+        return timesteps_emb + text_emb
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -65,7 +142,7 @@ class MotifTransformer(Module):
             width=sample_size,
             patch_size=patch_size,
             in_channels=in_channels,
-            embed_dim=self.inner_dim,
+            embed_dim=inner_dim,
             pos_embed_max_size=pos_embed_max_size,
             mesh_device=mesh_device,
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -73,17 +150,13 @@ class MotifTransformer(Module):
             init=init,
         )
 
-        self.time_text_embed = CombinedTimestepGuidanceTextProjEmbeddings(
-            embedding_dim=inner_dim,
+        self.time_text_embed = TimeTextProjection(
+            embedding_dim=modulation_dim,
+            time_embed_dim=time_embed_dim,
             pooled_projection_dim=pooled_projection_dim,
             mesh_device=mesh_device,
             init=init,
         )
-        # self.time_text_embed.timestep_embedder.linear_1 = torch.nn.Linear(time_embed_dim, 4 * time_embed_dim)
-        # self.time_text_embed.timestep_embedder.linear_2 = torch.nn.Linear(4 * time_embed_dim, modulation_dim)
-        # self.time_text_embed.text_embedder.linear_1 = torch.nn.Linear(pooled_projection_dim, 4 * pooled_projection_dim)
-        # self.time_text_embed.text_embedder.linear_2 = torch.nn.Linear(4 * pooled_projection_dim, modulation_dim)
-        # self.time_text_embed.time_proj = Timesteps(time_embed_dim, flip_sin_to_cos=True, downscale_freq_shift=0)
 
         self.context_embedder = ColParallelLinear(
             self.ENCODED_TEXT_DIM,
@@ -125,7 +198,7 @@ class MotifTransformer(Module):
             ccl_manager=ccl_manager,
             init=init,
         )
-        # self.norm_out = AdaLayerNormContinuous(self.inner_dim, modulation_dim, elementwise_affine=False, eps=1e-6)
+        # self.norm_out = AdaLayerNormContinuous(inner_dim, modulation_dim, elementwise_affine=False, eps=1e-6)
 
         self.proj_out = Linear(
             inner_dim,
@@ -135,10 +208,13 @@ class MotifTransformer(Module):
         )
 
         self.register_tokens = Parameter(
-            shape=[1, register_token_num, self.inner_dim],
+            shape=[1, register_token_num, inner_dim],
             device=mesh_device,
             init=init,
         )
+
+        # TODO: mesh sharding?
+        self.t_token_proj = Linear(modulation_dim, inner_dim, mesh_device=mesh_device, init=init)
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
@@ -171,8 +247,13 @@ class MotifTransformer(Module):
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
-        spatial = self.x_embedder(spatial)
+        spatial = self.pos_embed(spatial)
         prompt = self.context_embedder(prompt)
+
+        # TODO
+        # hidden_states = torch.cat((self.register_tokens.expand(hidden_states.shape[0], -1, -1), hidden_states), dim=1)
+        # t_token = self.t_token_proj(temb).unsqueeze(1)
+        # encoder_hidden_states = torch.cat([encoder_hidden_states, t_token], dim=1)
 
         for i, block in enumerate(self.transformer_blocks, start=1):
             spatial, prompt = block.forward(
@@ -188,45 +269,39 @@ class MotifTransformer(Module):
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
-        prompt = ttnn.clone(prompt, dtype=spatial.dtype)
+        # hidden_states = hidden_states[:, self.register_tokens.shape[1] :]
 
-        # combined = ttnn.concat([prompt, spatial], dim=1)
-        # del prompt, spatial
+        # Flux:
+        # spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
+        # spatial_time = self.time_embed_out(time_embed)
+        # [scale, shift] = _chunk_time3d(spatial_time, 2)
+        # spatial = all_gather(
+        #     spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
+        # )
+        # spatial = spatial * (1 + scale) + shift
+        # return self.proj_out(spatial)
 
-        for i, block in enumerate(self.single_transformer_blocks, start=1):
-            spatial, prompt = block.forward(
-                # combined=combined,
-                spatial=spatial,
-                prompt=prompt,
-                time_embed=time_embed,
-                # rope=combined_rope,
-                spatial_rope=spatial_rope,
-                prompt_rope=prompt_rope,
-                # sequence_length=spatial_sequence_length + prompt_sequence_length,
-                spatial_sequence_length=spatial_sequence_length,
-                skip_time_embed_activation=True,
-            )
+        spatial_time = self.norm_out_linear(
+            ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG), core_grid=self.core_grid
+        )
+        scale, shift = chunk_time(spatial_time, 2)
 
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(self.mesh_device)
-
-        # spatial = combined[:, prompt_sequence_length:]
-        # del combined
-
-        spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
-
-        spatial_time = self.time_embed_out(time_embed)
-        [scale, shift] = _chunk_time3d(spatial_time, 2)
-
+        spatial = all_gather(
+            spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
+        )
         spatial = all_gather(
             spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
         )
 
-        spatial = spatial * (1 + scale) + shift
+        spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
 
-        return self.proj_out(spatial)
+        return self.proj_out(spatial, core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config)
+
+        # NOTE: While we should be able to gather on sequence after norm and proj, it leads to
+        # terrible outputs for 2x2sp1tp0. Need to debug.
 
     def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+        # First, convert Motif state dict to diffusers compatible (as far as possible) state dict.
         def convert_ada_norm(prefix: str, *, pre_only: bool) -> None:
             ws = state[f"{prefix}.weight"].chunk(6)
             bs = state[f"{prefix}.bias"].chunk(6)
@@ -326,7 +401,7 @@ class MotifTransformer(Module):
                 if add_v_weight is not None:
                     attn["add_v_proj"] = {"weight": add_v_weight @ c_weight, "bias": add_v_weight @ c_bias}
 
-        # diffusers to TT-NN
+        # Second, convert diffusers state dict to tt_dit state dict.
         state["time_embed_out"] = state.get("norm_out", {}).pop("linear", {})  # chunks=2 if sharded
         state["norm_out"] = state.get("norm_out", {}).pop("norm", {})
 
