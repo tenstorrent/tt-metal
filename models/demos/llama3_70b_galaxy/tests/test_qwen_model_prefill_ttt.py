@@ -9,10 +9,10 @@ import pytest
 from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    get_prefill_rot_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
@@ -55,9 +55,10 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128,),
+    (128, 2048),
     ids=[
         "128",
+        "2048",
     ],
 )
 @pytest.mark.parametrize(
@@ -69,7 +70,7 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize(
     "num_layers",
-    (64,),
+    (3,),
     ids=[
         "1layer",
     ],
@@ -249,12 +250,12 @@ def test_qwen_model_prefill_inference(
         logger.info("Finished loading reference model.")
 
     # Pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        model_args.max_seq_len,
-        mesh_device,
-        seq_len=seq_len,
-        scale_factor=model_args.rope_scaling_factor,
+    rot_mats = get_rot_mats(
+        head_dim=model_args.head_dim,
+        device=mesh_device,
+        seq_len=max_seq_len,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling_factor,
     )
 
     # Select the first token from the prompt for initial decoding

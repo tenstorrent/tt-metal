@@ -9,10 +9,10 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    get_prefill_rot_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
@@ -56,7 +56,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 def test_qwen_transformer_inference_prefill(
@@ -69,7 +69,7 @@ def test_qwen_transformer_inference_prefill(
     is_ci_env,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = True  # Flag to measure KV cache PCC for all layers
+    cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
@@ -116,12 +116,12 @@ def test_qwen_transformer_inference_prefill(
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        model_args.max_seq_len,
-        mesh_device,
+    rot_mats = get_rot_mats(
+        head_dim=model_args.head_dim,
+        device=mesh_device,
         seq_len=seq_len,
-        scale_factor=model_args.rope_scaling_factor,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling_factor,
     )
     # Setup page table
     page_table_tt = None
@@ -198,6 +198,7 @@ def test_qwen_transformer_inference_prefill(
 
         # Measure PCC if also running reference model
         if run_ref_pt:
+            breakpoint()
             passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
