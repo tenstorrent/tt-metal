@@ -51,17 +51,19 @@ class DecoderLayer:
         position_idx=None,
     ):
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states_post_norm = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
-            x=hidden_states,
+            x=hidden_states_post_norm,
             mask=attention_mask,
             rope_stuff=position_embeddings,
             position_idx=position_idx,
         )
-        hidden_states = residual + hidden_states
-
+        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, _ = self.mlp(hidden_states)  # diff with llama: router scores
-        hidden_states = residual + hidden_states
+        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+        hidden_states, _ = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
+        hidden_states_post_norm.deallocate(True)
+        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
         return hidden_states

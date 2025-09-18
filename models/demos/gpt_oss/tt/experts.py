@@ -96,18 +96,28 @@ class Experts:
         hidden_states = ttnn.reshape(
             hidden_states, (batch_size, 1, seq_len, self.hidden_size)
         )  # unsqueeze a dim for expert broadcast
-        hidden_states = ttnn.repeat(hidden_states, repeat_dims=(1, self.num_experts, 1, 1))
+        hidden_states_repeated = ttnn.repeat(hidden_states, repeat_dims=(1, self.num_experts, 1, 1))
+        hidden_states.deallocate(True)
+        gate_unclamped = ttnn.matmul(hidden_states_repeated, self.gate_proj, dtype=ttnn.bfloat8_b)
+        gate_unclamped = ttnn.add(gate_unclamped, self.gate_proj_bias, output_tensor=gate_unclamped)
+        up_unclamped = ttnn.matmul(hidden_states_repeated, self.up_proj, dtype=ttnn.bfloat8_b)
+        up_unclamped = ttnn.add(up_unclamped, self.up_proj_bias, output_tensor=up_unclamped)
+        hidden_states_repeated.deallocate(True)
 
-        gate = ttnn.matmul(hidden_states, self.gate_proj) + self.gate_proj_bias
-        up = ttnn.matmul(hidden_states, self.up_proj) + self.up_proj_bias
-
-        gate = ttnn.clamp(gate, min=None, max=self.limit)
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit)
-        glu = gate * ttnn.sigmoid(gate * self.alpha)
-        next_states = ttnn.matmul(((up + 1) * glu), self.down_proj) + self.down_proj_bias
+        gate = ttnn.clamp(gate_unclamped, min=None, max=self.limit)
+        up = ttnn.clamp(up_unclamped, min=-self.limit, max=self.limit)
+        gate_unclamped.deallocate(True)
+        up_unclamped.deallocate(True)
+        glu = ttnn.mul(gate, ttnn.sigmoid(gate * self.alpha), output_tensor=gate)
+        next_states = ttnn.matmul(((up + 1) * glu), self.down_proj, dtype=ttnn.bfloat16)
+        next_states = ttnn.add(next_states, self.down_proj_bias, output_tensor=next_states)
+        # gate.deallocate(True)
+        up.deallocate(True)
+        glu.deallocate(True)
         routing_weights = ttnn.permute(routing_weights, (1, 0))
         routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
-        next_states = next_states * routing_weights
+        next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
+        routing_weights.deallocate(True)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
         if self.mesh_device.shape[1] > 1:
@@ -159,10 +169,8 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
         )
-        gate = (
-            ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-            + self.gate_proj_bias
-        )
+        gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
+        gate = ttnn.add(gate, self.gate_proj_bias, output_tensor=gate)
         gate = ttnn.clamp(gate, min=None, max=self.limit)
 
         up = ttnn.sparse_matmul(
@@ -174,11 +182,8 @@ class Experts:
             output_tile=output_tile,
         )
         ttnn.deallocate(hidden_states_4D)
-
-        up = (
-            ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-            + self.up_proj_bias
-        )
+        up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
+        up = ttnn.add(up, self.up_proj_bias, output_tensor=up)
         up = ttnn.clamp(up, min=-self.limit, max=self.limit)
 
         glu = gate * ttnn.sigmoid(gate * self.alpha)
@@ -207,7 +212,7 @@ class Experts:
         routing_weights = ttnn.permute(routing_weights, (1, 0))
         routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
 
-        next_states = next_states * routing_weights
+        next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
         if self.mesh_device.shape[1] > 1:

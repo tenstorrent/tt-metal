@@ -83,11 +83,9 @@ class Model:
         """
         Create rope embeddings for the given sequence length
         """
-        print(f"DEBUG _CREATE_ROPE_STUFF: Creating rope for seq_len: {seq_len}")
         rope_temp_tensor = torch.randn(1)
         position_ids = torch.arange(seq_len).unsqueeze(0)
         cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
-        print(f"DEBUG _CREATE_ROPE_STUFF: cos shape: {cos.shape}, sin shape: {sin.shape}")
 
         tt_cos = ttnn.from_torch(
             cos.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
@@ -95,19 +93,16 @@ class Model:
         tt_sin = ttnn.from_torch(
             sin.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
-        print(f"DEBUG _CREATE_ROPE_STUFF: tt_cos shape: {tt_cos.shape}, tt_sin shape: {tt_sin.shape}")
 
         return (self.apply_rope, tt_cos, tt_sin)
 
     def _create_rope_for_position(self, current_pos):
         """Create rope embeddings for specific position (for decode) - matches test_demo.py exactly"""
         pos_val = current_pos.item() if hasattr(current_pos, "item") else current_pos
-        print(f"DEBUG _CREATE_ROPE_FOR_POSITION: Creating rope for position: {pos_val}")
         rope_temp_tensor = torch.randn(1)
         # EXACTLY like original test: torch.tensor([cur_pos]).unsqueeze(0)
         position_ids = torch.tensor([pos_val]).unsqueeze(0)
         cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
-        print(f"DEBUG _CREATE_ROPE_FOR_POSITION: cos shape: {cos.shape}, sin shape: {sin.shape}")
 
         tt_cos = ttnn.from_torch(
             cos.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
@@ -115,7 +110,6 @@ class Model:
         tt_sin = ttnn.from_torch(
             sin.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
-        print(f"DEBUG _CREATE_ROPE_FOR_POSITION: tt_cos shape: {tt_cos.shape}, tt_sin shape: {tt_sin.shape}")
 
         return (self.apply_rope, tt_cos, tt_sin)
 
@@ -136,22 +130,15 @@ class Model:
         x = inputs[0]
         current_pos = inputs[1]
 
-        print(f"DEBUG DECODE: Input x shape: {x.shape}")
-        # print(f"DEBUG DECODE: current_pos: {current_pos}")
-
         # For decode mode, we expect single token input
         input_embeds = ttnn.embedding(x, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
-        print(f"DEBUG DECODE: After embedding, input_embeds shape: {input_embeds.shape}")
 
         # Ensure the right shape for decoder layers (remove extra dimensions if 4D)
         if len(input_embeds.shape) == 4:
             # Convert from [1, 1, seq_len, hidden_size] to [1, seq_len, hidden_size]
-            print(f"DEBUG DECODE: Squeezing 4D input to 3D")
             hidden_states = ttnn.squeeze(input_embeds, dim=1)
         else:
             hidden_states = input_embeds
-
-        print(f"DEBUG DECODE: Final hidden_states shape for decoder layers: {hidden_states.shape}")
 
         # Use pre-prepared rope embeddings (stored in instance during prepare_decode_inputs_host)
         if hasattr(self, "_current_rope_stuff") and self._current_rope_stuff is not None:
@@ -171,7 +158,6 @@ class Model:
         for i, decoder_layer in enumerate(self.layers):
             # Each layer picks its appropriate attention mask based on layer type
             layer_mask = attention_masks[decoder_layer.attention_type]
-            # print(f"DEBUG DECODE LAYER {i}: layer_mask shape: {layer_mask.shape if layer_mask is not None else None}")
 
             hidden_states = decoder_layer(
                 hidden_states,
@@ -183,7 +169,6 @@ class Model:
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight)
 
-        print(f"DEBUG DECODE OUTPUT: Final logits shape: {logits.shape}")
         return logits
 
     def ttnn_prefill_forward(
@@ -201,9 +186,6 @@ class Model:
         """
         Prefill forward pass - processes full sequences
         """
-        print(f"DEBUG PREFILL: Input x shape: {x.shape}")
-        print(f"DEBUG PREFILL: get_last_token: {get_last_token}")
-        print(f"DEBUG PREFILL: rot_mats_global provided: {rot_mats_global is not None}")
 
         # x is already embedded input tokens from prepare_inputs_prefill
         # Keep track of original shape for slice operation
@@ -212,12 +194,9 @@ class Model:
         # Ensure the right shape for decoder layers (remove extra dimensions if 4D)
         if is_4d_input:
             # Convert from [1, 1, seq_len, hidden_size] to [1, seq_len, hidden_size]
-            print(f"DEBUG PREFILL: Squeezing 4D input to 3D")
             hidden_states = ttnn.squeeze(x, dim=1)
         else:
             hidden_states = x
-
-        print(f"DEBUG PREFILL: hidden_states shape: {hidden_states.shape}")
 
         # Use provided rotation matrices or create new ones
         seq_len = hidden_states.shape[-2]
@@ -251,12 +230,9 @@ class Model:
 
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight)
-        print(f"DEBUG PREFILL: After matmul, logits shape: {logits.shape}")
 
         # REMOVED: No internal slicing - return full output like original test_demo.py
         # The original test extracts the token OUTSIDE the model, not inside
-        print(f"DEBUG PREFILL: Returning FULL logits (no internal slicing like original test)")
-        print(f"DEBUG PREFILL: Final output logits shape: {logits.shape}")
         return logits
 
     def prepare_inputs_decode(self, inputs):
@@ -264,31 +240,21 @@ class Model:
         Prepare inputs for decode mode
         """
 
-        print(
-            f"DEBUG PREPARE_INPUTS_DECODE: Called with inputs: {[inp.shape if hasattr(inp, 'shape') else inp for inp in inputs]}"
-        )
         host_inputs = self.prepare_decode_inputs_host(inputs)
         tt_cos = host_inputs[2]
         tt_sin = host_inputs[3]
         tt_sliding_mask = host_inputs[5]
-        # Attention masks are stored in self._current_attention_masks during prepare_decode_inputs_host
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        print(f"DEBUG PREPARE_DECODE_HOST: device_inputs: {device_inputs}")
-        tt_cos = device_inputs[2]
-        tt_sin = device_inputs[3]
-        tt_sliding_mask = device_inputs[5]
-        print(
-            f"DEBUG PREPARE_DECODE_HOST: tt_cos shape: {tt_cos.shape}, tt_sin shape: {tt_sin.shape}, tt_sliding_mask shape: {tt_sliding_mask.shape}"
-        )
-        rope_stuff = (self.apply_rope, tt_cos, tt_sin)
-        print(
-            f"DEBUG PREPARE_DECODE_HOST: Created rope_stuff with tt_cos shape: {tt_cos.shape}, tt_sin shape: {tt_sin.shape}"
-        )
-        tt_mask = None
-        print(f"DEBUG: Final tt_sliding_mask shape: {tt_sliding_mask.shape}")
-        attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask}
 
-        # Store both attention masks and rope embeddings in instance to access during ttnn_decode_forward
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        tt_cos_device = device_inputs[2]
+        tt_sin_device = device_inputs[3]
+        tt_sliding_mask_device = device_inputs[5]
+
+        rope_stuff = (self.apply_rope, tt_cos_device, tt_sin_device)
+        tt_mask = None
+        attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask_device}
+
+        # Store references to the DEVICE tensors - these will be automatically updated during trace execution
         self._current_attention_masks = attention_masks
         self._current_rope_stuff = rope_stuff
         return device_inputs
@@ -300,17 +266,14 @@ class Model:
         tokens = inputs[0]
         current_pos = inputs[1]
         page_table = inputs[2]
-        print(f"DEBUG PREPARE_DECODE_HOST: tokens shape: {tokens.shape}")
-        print(f"DEBUG PREPARE_DECODE_HOST: current_pos: {current_pos}")
-        print(f"DEBUG PREPARE_DECODE_HOST: page_table: {page_table.shape if page_table is not None else None}")
+
         # Convert tokens to proper format
         if tokens.dim() == 1:
             tokens = tokens.unsqueeze(0)
 
         # For decode mode, we expect single tokens - NO padding needed
         # (Padding is only needed for prefill mode with longer sequences)
-        print(f"DEBUG PREPARE_DECODE_HOST: tokens after format: {tokens.shape}")
-        print(f"DEBUG PREPARE_DECODE_HOST: NOT padding tokens for decode mode (single token expected)")
+
         tokens = ttnn.from_torch(
             tokens,
             # device=self.mesh_device,
@@ -336,32 +299,27 @@ class Model:
 
         # Prepare attention masks on host (following original test pattern exactly)
         pos_idx = current_pos.item() if hasattr(current_pos, "item") else current_pos
-        print(f"DEBUG PREPARE_DECODE_HOST: pos_idx: {pos_idx}")
         sliding_mask = get_decode_mask(pos_idx, self.hf_config.sliding_window)
         sliding_mask = sliding_mask.repeat(
             1, self.hf_config.num_attention_heads // self.mesh_device.shape[1], 1, 1
         ).transpose(1, 2)
 
         # Debug print the mask shape before padding
-        print(f"DEBUG: Decode sliding_mask shape BEFORE padding: {sliding_mask.shape}")
 
         # Pad to tile alignment (TTNN TILE_LAYOUT requires dimensions to be multiples of 32)
         # current_h = sliding_mask.shape[2]  # heads_per_device
         # if current_h % 32 != 0:
         #     pad_h = 32 - (current_h % 32)
         #     sliding_mask = torch.nn.functional.pad(sliding_mask, (0, 0, 0, pad_h), value=-float("inf"))
-        #     print(f"DEBUG: Padded decode mask from H={current_h} to H={sliding_mask.shape[2]} for tile alignment")
 
         tt_mask = None  # No causal mask needed in decode mode
         tt_sliding_mask = ttnn.from_torch(sliding_mask, device=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
         # Create RoPE embeddings on host for the current position (matching test_demo.py pattern)
-        print(f"DEBUG PREPARE_DECODE_HOST: Creating RoPE for position: {pos_idx}")
         rope_temp_tensor = torch.randn(1)
         # EXACTLY like original test: torch.tensor([cur_pos]).unsqueeze(0)
         position_ids = torch.tensor([pos_idx]).unsqueeze(0)
         cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
-        print(f"DEBUG PREPARE_DECODE_HOST: cos shape: {cos.shape}, sin shape: {sin.shape}")
 
         # Convert to TTNN tensors on device (like original test)
         tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
@@ -373,13 +331,10 @@ class Model:
         """
         Prepare inputs for prefill mode
         """
-        print(f"DEBUG PREPARE_INPUTS_PREFILL: Input tokens shape: {tokens.shape}")
-        print(f"DEBUG PREPARE_INPUTS_PREFILL: start_pos: {start_pos}")
 
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
-            print(f"DEBUG PREPARE_INPUTS_PREFILL: Reshaped 2D tokens to: {tokens.shape}")
 
         tokens = ttnn.from_torch(
             tokens,
@@ -387,19 +342,15 @@ class Model:
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        print(f"DEBUG PREPARE_INPUTS_PREFILL: TTNN tokens shape: {tokens.shape}")
 
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
-        print(f"DEBUG PREPARE_INPUTS_PREFILL: After embedding: {tokens_embd.shape}")
 
         # Ensure proper 4D shape for embedding output
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-            print(f"DEBUG PREPARE_INPUTS_PREFILL: After unsqueeze_to_4D: {tokens_embd.shape}")
 
         # Prepare rotation matrices - create actual rope stuff for compatibility
         seq_len = tokens_embd.shape[-2] if len(tokens_embd.shape) == 4 else tokens_embd.shape[-2]
-        print(f"DEBUG PREPARE_INPUTS_PREFILL: Creating rope for seq_len: {seq_len}")
         rope_stuff = self._create_rope_stuff(seq_len)
         rot_mats_global = rope_stuff  # Pass the rope_stuff as rot_mats_global
         rot_mats_local = None
@@ -429,24 +380,18 @@ class Model:
         """
         Process decode output and convert to torch tensors
         """
-        print(f"DEBUG PROCESS_OUTPUT_DECODE: tt_out shape: {tt_out.shape}")
-        print(f"DEBUG PROCESS_OUTPUT_DECODE: B={B}, S={S}, is_tokens={is_tokens}")
 
         # Follow original test pattern for multi-device tensors
         concat_out = self.concat_device_output(tt_out)
-        print(f"DEBUG PROCESS_OUTPUT_DECODE: concat_out shape: {concat_out.shape}")
 
         if is_tokens:
             # For token output, return the token indices
             result = concat_out[:B, 0]  # [batch_size]
-            print(f"DEBUG PROCESS_OUTPUT_DECODE: token result shape: {result.shape}")
             return result
 
         # Original test uses: ttnn.to_torch(tt_output_tensor)[:, 0, :]
         # For decode, we get position 0 in sequence dimension
         torch_out = concat_out[:, 0, : self.vocab_size]  # [batch, vocab_size]
-        print(f"DEBUG PROCESS_OUTPUT_DECODE: torch_out shape: {torch_out.shape}")
-        print(f"DEBUG PROCESS_OUTPUT_DECODE: torch_out sample (first 10): {torch_out[0, :10]}")
 
         # Reshape to match expected output format [batch, seq=1, vocab_size]
         return torch_out.unsqueeze(1).view(B, S, -1)
@@ -455,67 +400,42 @@ class Model:
         """
         Convert multi-device tensor to torch tensor following original test pattern.
         """
-        print(f"DEBUG CONCAT_DEVICE: Input tt_out shape: {tt_out.shape}")
 
         # Follow the original test pattern for multi-device tensors
         # Get tensor from first device, move to CPU, then convert to torch
         tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        print(f"DEBUG CONCAT_DEVICE: device_tensor shape: {tt_output_tensor.shape}")
 
         tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
-        print(f"DEBUG CONCAT_DEVICE: cpu_tensor shape: {tt_output_tensor.shape}")
 
         torch_tensor = ttnn.to_torch(tt_output_tensor)
-        print(f"DEBUG CONCAT_DEVICE: Final torch_tensor shape: {torch_tensor.shape}")
 
         return torch_tensor
 
     def process_output_prefill(self, tt_out, last_token_idx):
-        last_token_idx = 78
+        last_token_idx = 301
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         Matches original test_demo.py pattern exactly:
         tt_output_tensor = ttnn.get_device_tensors(tt_output)[0]
         prefill_out = ttnn.to_torch(tt_output_tensor)[:, decode_start_pos - 1, :]
         """
-        print(f"🔍 PROCESS_OUTPUT_PREFILL CALLED! 🔍")
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: tt_out shape: {tt_out.shape}")
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: last_token_idx: {last_token_idx}")
 
         # EXACT original test_demo.py pattern:
         # Step 1: Get device tensor from first device
         tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: device tensor shape: {tt_output_tensor.shape}")
 
         # Step 2: Convert to torch (original test does this directly without cpu())
         torch_output = ttnn.to_torch(tt_output_tensor)
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: torch tensor shape: {torch_output.shape}")
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: Full sequence length: {torch_output.shape[1]}")
 
         # Show what tokens we have at different positions for debugging
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: Checking tokens at different positions:")
-        for pos in [last_token_idx - 2, last_token_idx - 1, last_token_idx, last_token_idx + 1]:
-            if 0 <= pos < torch_output.shape[1]:
-                token_logits = torch_output[:, pos, :]
-                predicted_id = torch.argmax(token_logits[0].float(), dim=-1)
-                print(f"  Position {pos}: token ID {predicted_id.item()}")
-            else:
-                print(f"  Position {pos}: out of bounds")
 
         # Step 3: Extract token at last_token_idx (original: [:, decode_start_pos - 1, :])
         result = torch_output[:, last_token_idx, :]
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: extracted result shape: {result.shape}")
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: prefill logits sample (first 10): {result[0, :10]}")
-        print(
-            f"DEBUG PROCESS_OUTPUT_PREFILL: Extracting from position {last_token_idx} (original test uses decode_start_pos - 1)"
-        )
 
         # Check if this matches expected shape - original test shows [1, vocab_size] 2D tensor
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: result.shape should be [1, vocab_size], got: {result.shape}")
 
         # Get the token ID and decode it for comparison
         token_id = torch.argmax(result[0].float(), dim=-1)
-        print(f"DEBUG PROCESS_OUTPUT_PREFILL: Our predicted token ID: {token_id.item()}")
 
         return result  # Return 2D tensor [1, vocab_size] like original test shows
 
@@ -523,15 +443,11 @@ class Model:
         """
         Transform decode inputs on device (e.g., embedding)
         """
-        print(f"DEBUG TRANSFORM: Input tokens shape: {tokens.shape}")
         tt_tokens = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
-        print(f"DEBUG TRANSFORM: After embedding shape: {tt_tokens.shape}")
 
         # Ensure proper 4D shape for embedding output
         if len(tt_tokens.shape) == 3:
-            print(f"DEBUG TRANSFORM: Converting 3D to 4D using unsqueeze_to_4D")
             tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-            print(f"DEBUG TRANSFORM: After unsqueeze_to_4D shape: {tt_tokens.shape}")
 
         return tt_tokens
 

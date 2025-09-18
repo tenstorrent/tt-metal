@@ -201,13 +201,13 @@ class Attention:
     def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None):
         batch_size, seq_len, hidden_size = x.shape
 
-        tt_q = ttnn.matmul(x, self.q_proj) + self.q_proj_bias
+        tt_q = ttnn.matmul(x, self.q_proj, dtype=ttnn.bfloat8_b) + self.q_proj_bias
         tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
 
-        tt_k = ttnn.matmul(x, self.k_proj) + self.k_proj_bias
+        tt_k = ttnn.matmul(x, self.k_proj, dtype=ttnn.bfloat8_b) + self.k_proj_bias
         tt_k = ttnn.reshape(tt_k, [1, seq_len * batch_size, -1, self.head_dim])
 
-        tt_v = ttnn.matmul(x, self.v_proj) + self.v_proj_bias
+        tt_v = ttnn.matmul(x, self.v_proj, dtype=ttnn.bfloat8_b) + self.v_proj_bias
         tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
 
         apply_rope, tt_cos, tt_sin = rope_stuff
@@ -227,12 +227,13 @@ class Attention:
                 tt_k,
                 update_idxs_tensor=position_idx,
             )
+            tt_k.deallocate(True)
             ttnn.experimental.paged_update_cache(
                 v_cache,
                 tt_v,
                 update_idxs_tensor=position_idx,
             )
-
+            tt_v.deallocate(True)
             tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention_decode(
                 tt_q,
                 k_cache,
@@ -246,6 +247,7 @@ class Attention:
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            tt_q.deallocate(True)
 
             tt_sdpa_out = ttnn.transpose(tt_sdpa_out, 1, 2)
             tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
@@ -293,8 +295,11 @@ class Attention:
                 tt_cache=None,
                 position_idx=None,
             )
+            tt_q.deallocate(True)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
 
-        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj) + self.o_proj_bias
+        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16) + self.o_proj_bias
         tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         if self.mesh_device.shape[1] > 1:

@@ -93,7 +93,31 @@ def test_demo_with_generator(
     print("\n=== Running Text Generation Example ===")
 
     # Prepare input using chat template (following original test pattern)
-    prompt = "How many r's in the word 'strawberry'?"
+    # Choose different prompt sizes to test various prefill sequence lengths:
+
+    prompts = {
+        "short": "How many r's in the word 'strawberry'?",
+        "medium": "Explain the differences between machine learning, deep learning, and artificial intelligence. Provide examples of applications for each and discuss their relative strengths and weaknesses in solving real-world problems.",
+        "long": """Please analyze the following scenario and provide a detailed explanation:
+
+A software engineer is working on optimizing a machine learning model for natural language processing. The model uses transformer architecture with attention mechanisms. The engineer needs to decide between two approaches:
+
+1. Implementing dynamic batching with variable sequence lengths to maximize throughput
+2. Using fixed-size batching with padding to ensure consistent memory usage
+
+The model will be deployed in a production environment where it needs to handle:
+- Real-time inference requests with varying input lengths
+- Batch processing jobs with thousands of documents
+- Memory constraints on GPU hardware
+- Latency requirements under 100ms for real-time requests
+
+What factors should the engineer consider when making this decision, and what would you recommend as the optimal approach?""",
+    }
+
+    # Select prompt size (change this to test different prefill lengths)
+    prompt_size = "long"  # Options: "short", "medium", "long"
+    prompt = prompts[prompt_size]
+    print(f"Using {prompt_size} prompt for prefill length testing")
 
     padded_prefill_seq_len = nearest_y(len(prompt) + BASE_PROMPT_LEN, ttnn.TILE_SIZE)
     messages = [
@@ -108,35 +132,27 @@ def test_demo_with_generator(
         padding="max_length",
         max_length=padded_prefill_seq_len,
     )
-    print(f"Input prompt: {prompt}")
-    print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
+    print(f"Input prompt length: {len(prompt)} characters")
+    print(f"Prefill sequence length: {padded_prefill_seq_len} tokens")
     print(f"Input tokens shape: {inputs.input_ids.shape}")
+    print(f"First 100 chars of prompt: {prompt[:100]}...")
+    print(f"Detokenized input (first 200 chars): {tokenizer.decode(inputs.input_ids[0])[:200]}...")
 
     # Calculate the correct position like original test_demo.py
     if hasattr(inputs, "attention_mask") and inputs.attention_mask is not None:
         decode_start_pos = (inputs.attention_mask[0] == 0).nonzero(as_tuple=True)[0][0].item()
         correct_last_token_pos = decode_start_pos - 1
-        print(f"DEBUG: decode_start_pos (first padding): {decode_start_pos}")
-        print(f"DEBUG: correct_last_token_pos (decode_start_pos - 1): {correct_last_token_pos}")
-        print(f"DEBUG: Token at correct position: ID {inputs.input_ids[0, correct_last_token_pos].item()}")
-        print(f"DEBUG: Decoded token: '{tokenizer.decode([inputs.input_ids[0, correct_last_token_pos].item()])}'")
     else:
-        print(f"DEBUG: No attention_mask found, using seq_len - 1")
         correct_last_token_pos = inputs.input_ids.shape[1] - 1
-        print(f"DEBUG: correct_last_token_pos: {correct_last_token_pos}")
 
     # Prefill forward
     print("Running prefill...")
     batch_size = 1
-    prompt_lens = torch.tensor([inputs.input_ids.shape[1]])
-
-    print(f"DEBUG: About to call generator.prefill_forward_text")
-    print(f"DEBUG: tokens shape: {inputs.input_ids.shape}")
-    print(f"DEBUG: prompt_lens: {prompt_lens}")
+    prompt_lens = torch.tensor([len(prompt) + BASE_PROMPT_LEN])
+    print(f"Prompt lens: {prompt_lens}")
 
     prefill_logits = generator.prefill_forward_text(tokens=inputs.input_ids, prompt_lens=prompt_lens, empty_slots=[0])
 
-    print(f"DEBUG: Generator returned, checking if our process_output_prefill was called...")
     print(f"Prefill output shape: {prefill_logits.shape}")
     print(f"Prefill output: {prefill_logits}")
 
@@ -148,7 +164,6 @@ def test_demo_with_generator(
     # Decode forward for a few more tokens
     print("\nRunning decode for additional tokens...")
     current_pos = inputs.input_ids.shape[1]
-    print(f"DEBUG: current_pos: {current_pos}")
     current_pos = 79
     generated_tokens = [next_token_id.item()]
 
@@ -157,14 +172,12 @@ def test_demo_with_generator(
         start_pos = torch.tensor([current_pos + i])
 
         decode_logits = generator.decode_forward_text(
-            tokens=decode_tokens, start_pos=start_pos, enable_trace=True  # Disable tracing for simplicity
+            tokens=decode_tokens, start_pos=start_pos, enable_trace=True  # Tracing should now work correctly
         )
-        print(f"Decode logits shape: {decode_logits.shape}")
 
         next_token_id = torch.argmax(decode_logits[0, 0], dim=-1)
         next_token = tokenizer.decode([next_token_id.item()])
         generated_tokens.append(next_token_id.item())
-        print(f"Token {i+1}: '{next_token}' (ID: {next_token_id.item()})")
 
     # Show full generated text
     full_generated = tokenizer.decode(generated_tokens)

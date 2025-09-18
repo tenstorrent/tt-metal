@@ -312,16 +312,18 @@ class Generator:
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
+        # CRITICAL FIX: Reuse device tensors from compilation instead of creating new ones
+        # This ensures model state points to the same tensors that will be overwritten during execution
         device_inputs = []
         tt_out_trace = []
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            host_inputs = self.model[i].prepare_decode_inputs_host([tokens[i], current_pos[i], user_page_table])
-            print(f"DEBUG CAPTURE_TRACE_TEXT: host_inputs: {host_inputs}")
-            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+
+            # Instead of creating new device tensors, reuse the ones from prepare_inputs_decode compilation
+            # by calling prepare_inputs_decode again which will return the device tensors AND ensure model state matches
+            device_inputs_i = self.model[i].prepare_inputs_decode([tokens[i], current_pos[i], user_page_table])
             device_inputs.append(device_inputs_i)
-            print(f"DEBUG CAPTURE_TRACE_TEXT: device_inputs: {device_inputs}")
 
         for i in range(self.data_parallel):
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
