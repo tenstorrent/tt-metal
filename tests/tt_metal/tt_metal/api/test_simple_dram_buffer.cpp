@@ -24,7 +24,8 @@ using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
-bool SimpleDramLoopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
+bool SimpleDramLoopback(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, size_t local_address, size_t byte_size) {
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     uint32_t dram_channel = mesh_device->allocator()->get_dram_channel_from_bank_id(0);

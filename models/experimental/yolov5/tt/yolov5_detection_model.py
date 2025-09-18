@@ -7,7 +7,7 @@ from torch import nn
 from copy import deepcopy
 from loguru import logger
 
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_upsample import TtYolov5Upsample

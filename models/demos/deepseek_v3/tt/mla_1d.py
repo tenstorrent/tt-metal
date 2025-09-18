@@ -11,6 +11,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -41,7 +42,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.utility_functions import nearest_y
 
 
 class MLA1D(AbstractModule):

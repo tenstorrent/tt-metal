@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import ttnn
 from tt_lib import fallback_ops
 
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.trocr.tt.trocr_configuration import TtTrOCRConfig
 from models.experimental.trocr.tt.trocr_decoder_layer import TtTrOCRDecoderLayer
 from models.experimental.trocr.tt.trocr_embed_tokens import TtTrOCREmbedTokens
