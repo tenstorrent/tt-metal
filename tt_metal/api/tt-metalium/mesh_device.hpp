@@ -16,9 +16,7 @@
 #include <set>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -34,6 +32,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/host_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -326,8 +325,7 @@ public:
      */
     std::unique_ptr<PinnedMemory> pin_memory(
         const MeshCoordinateRangeSet& coordinate_range_set,
-        void* host_buffer,
-        size_t buffer_size,
+        HostBuffer& host_buffer,
         bool map_to_noc = false);
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
