@@ -25,7 +25,7 @@ tt::tt_metal::Tensor sample(
     const tt::tt_metal::Tensor& t,
     float temperature,
     uint32_t seed,
-    std::optional<tt::tt_metal::Tensor> argmax_mask = std::nullopt);
+    std::optional<tt::tt_metal::Tensor> logits_padding_mask = std::nullopt);
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t);
 tt::tt_metal::Tensor to_dram_interleaved(const tt::tt_metal::Tensor& t);
