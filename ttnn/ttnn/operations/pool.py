@@ -61,7 +61,7 @@ def prepare_grid_sample_grid(*args, **kwargs):
 
     Keyword Args:
         padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
-        output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
+        output_dtype (ttnn.DataType, optional): Data type for the output tensor (ttnn.bfloat16 or ttnn.uint16). Default: bfloat16
 
     Returns:
         ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:

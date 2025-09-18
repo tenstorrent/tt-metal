@@ -91,7 +91,7 @@ def _prepare_grid_tensor_host(torch_grid, use_precomputed_grid, grid_dtype, inpu
         # Create precomputed grid
         ttnn_grid_host = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
         ttnn_grid_precomputed = ttnn.prepare_grid_sample_grid(
-            ttnn_grid_host, input_shape_nhwc, padding_mode="zeros", output_dtype=ttnn.bfloat16
+            ttnn_grid_host, input_shape_nhwc, padding_mode="zeros", output_dtype=ttnn.uint16
         )
 
         if grid_batching_factor is not None:

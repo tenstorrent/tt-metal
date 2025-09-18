@@ -109,6 +109,18 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     output_buffer[base_idx + 3] = bfloat16(weight_ne);
                     output_buffer[base_idx + 4] = bfloat16(weight_sw);
                     output_buffer[base_idx + 5] = bfloat16(weight_se);
+                } else if constexpr (std::is_same_v<OutputType, uint16_t>) {
+                    // Store coordinates directly as uint16 (same bit pattern as int16)
+                    uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
+                    uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
+                    output_buffer[base_idx + 0] = h0_bits;
+                    output_buffer[base_idx + 1] = w0_bits;
+
+                    // Convert weights to bfloat16 and store as uint16 (bit representation)
+                    output_buffer[base_idx + 2] = std::bit_cast<uint16_t>(bfloat16(weight_nw));
+                    output_buffer[base_idx + 3] = std::bit_cast<uint16_t>(bfloat16(weight_ne));
+                    output_buffer[base_idx + 4] = std::bit_cast<uint16_t>(bfloat16(weight_sw));
+                    output_buffer[base_idx + 5] = std::bit_cast<uint16_t>(bfloat16(weight_se));
                 }
             }
         }
@@ -153,8 +165,8 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
     TT_FATAL(
-        output_dtype == DataType::BFLOAT16 || !output_dtype.has_value(),
-        "Currently only BFLOAT16 is supported for the grid output dtype");
+        output_dtype == DataType::BFLOAT16 || output_dtype == DataType::UINT16 || !output_dtype.has_value(),
+        "Currently only BFLOAT16 and UINT16 are supported for the grid output dtype");
 
     // Determine output data type
     DataType out_dtype = output_dtype.value_or(DataType::BFLOAT16);
@@ -170,6 +182,7 @@ ttnn::Tensor prepare_grid_sample_grid(
     switch (out_dtype) {
         case DataType::BFLOAT16:
             return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, out_dtype);
+        case DataType::UINT16: return convert_grid_tensor<float, uint16_t>(grid, output_shape, input_shape, out_dtype);
         default: TT_THROW("Unsupported output data type for prepare_grid_sample_grid: {}", out_dtype);
     }
 }
