@@ -238,7 +238,8 @@ std::vector<Tensor> all_gather_async(
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    bool reverse_order = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,

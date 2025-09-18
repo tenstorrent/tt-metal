@@ -555,7 +555,8 @@ std::vector<Tensor> all_gather_async(
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    bool reverse_order) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -577,7 +578,8 @@ std::vector<Tensor> all_gather_async(
             barrier_semaphore.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphore.value()[i]) : std::nullopt,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel));
+            num_buffers_per_channel,
+            reverse_order));
     }
     return output_tensors;
 }
