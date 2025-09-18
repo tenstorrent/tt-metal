@@ -72,7 +72,12 @@ Tests:
         (optional) iterations: 2 # How many times to run the pattern.
       - type: all_to_all
       - type: one_to_all
-        (optional) iterations: 3 
+        (optional) iterations: 3
+        # NOTE: all_to_one is a special pattern. Normally, if no iterations are specified, the test is expanded into n iterations, where n refers to the number of chips in the test.
+        # In each iteration, the receiver will be located on a different chip.
+        # However, if iterations are specified, the test is only expanded into iterations number of tests, which may reduce test coverage. 
+      - type: all_to_one
+        (optional) iterations: 5
 
     # How iterations works:
     # expand_high_level_patterns in tt_fabric_test_config.hpp:
