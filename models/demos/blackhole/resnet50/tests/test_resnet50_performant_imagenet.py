@@ -5,10 +5,10 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet import (
     test_run_resnet50_trace_2cqs_inference as run_resnet50_trace_2cqs_inference,
 )
-from models.utility_functions import run_for_blackhole
 
 
 @run_for_blackhole()
