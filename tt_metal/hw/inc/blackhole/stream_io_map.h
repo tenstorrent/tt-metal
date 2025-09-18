@@ -29,8 +29,7 @@ inline __attribute__((always_inline)) uint32_t get_operand_stream_id(int operand
 // synchronization
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cb_tiles_received_ptr(int operand) {
-    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
-        get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_WR_PTR_REG_INDEX));
 }
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cb_tiles_acked_ptr(int operand) {
