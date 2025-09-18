@@ -141,18 +141,14 @@ operation::ProgramWithCallbacks Pad::create_program(
             }
         }
     } else if (input_tensor.layout() == Layout::TILE) {
-        if (this->use_multicore) {
-            // New implementation goes here
-            // Output tensor should already be allocated
-            // fill_pad input
-            //   -- make a copy of the input, not in place
-            // fill output pages with the aligned input pages or fill_value
-            log_warning(
-                tt::LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
+        if (this->use_multicore && input_tensor.dtype() == DataType::BFLOAT16) {
+            return detail::pad_tile_multicore(
+                input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
         }
-        // return detail::pad_tile(
-        // input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
-        return detail::pad_tile_multicore(
+        log_warning(
+            tt::LogType::LogOp,
+            "Only bfloat16 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 core.");
+        return detail::pad_tile(
             input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
     } else {
         TT_THROW("Unsupported layout for pad");
