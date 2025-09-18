@@ -58,7 +58,7 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -209,7 +209,7 @@ create_program(
 
 bool write_runtime_args_to_device(
     int in1_or_in0,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     int start_core_x,
     int start_core_y,
@@ -334,7 +334,8 @@ bool write_runtime_args_to_device(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram_inX_mcast(std::shared_ptr<distributed::MeshDevice> mesh_device, int in1_or_in0) {
+bool matmul_multi_core_multi_dram_inX_mcast(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, int in1_or_in0) {
     bool pass = true;
     int start_core_x = 0;
     int start_core_y = 0;

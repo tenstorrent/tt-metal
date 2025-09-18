@@ -265,7 +265,7 @@ struct WorkerToFabricEdmSenderImpl {
             return (this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr) <
                    this->num_buffers_per_channel;
         } else {
-            return *this->edm_buffer_local_free_slots_read_ptr != 0;
+            return get_ptr_val(worker_credits_stream_id) != 0;
         }
     }
 
@@ -568,7 +568,7 @@ private:
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
-            *edm_buffer_local_free_slots_update_ptr = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            increment_local_update_ptr_val(worker_credits_stream_id, -1);
         }
     }
 

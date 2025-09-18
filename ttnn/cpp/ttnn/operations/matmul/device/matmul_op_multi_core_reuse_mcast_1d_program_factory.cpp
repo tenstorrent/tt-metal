@@ -2677,7 +2677,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             global_cb,
             num_global_cb_receivers,
             sub_device_id,
-            restricted_cores,
+            std::move(restricted_cores),
             fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
@@ -2882,7 +2882,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        restricted_cores);
+        std::move(restricted_cores));
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(

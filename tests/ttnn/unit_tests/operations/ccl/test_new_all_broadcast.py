@@ -236,7 +236,7 @@ def run_all_broadcast_impl(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
         (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [3, 121, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),

@@ -181,5 +181,5 @@ static void build_and_enqueue(
 
 static void wait_for_worker_program_completion(const std::vector<std::shared_ptr<MeshDevice>>& devices) {
     std::ranges::for_each(
-        devices, [&](std::shared_ptr<MeshDevice> d) { tt_metal::distributed::Finish(d->mesh_command_queue()); });
+        devices, [&](const std::shared_ptr<MeshDevice>& d) { tt_metal::distributed::Finish(d->mesh_command_queue()); });
 }

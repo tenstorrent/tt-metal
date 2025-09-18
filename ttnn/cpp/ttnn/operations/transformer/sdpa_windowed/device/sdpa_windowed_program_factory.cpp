@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
         // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
         qk_out_subblock_w = qk_out_subblock_w / 2;
         qk_out_subblock_h = 2;

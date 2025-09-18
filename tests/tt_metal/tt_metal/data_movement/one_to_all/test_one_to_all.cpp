@@ -51,7 +51,7 @@ struct OneToAllConfig {
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToAllConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     /* ================ SETUP ================ */
 
@@ -192,7 +192,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
     /* ================ EXECUTION ================ */
 
     // Setup Input and Golden Output
-    size_t element_size_bytes = bfloat16::SIZEOF;
+    size_t element_size_bytes = sizeof(bfloat16);
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
@@ -237,7 +237,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
 /* TEST TYPES */
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -280,7 +280,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -336,7 +336,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -398,7 +398,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,

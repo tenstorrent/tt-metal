@@ -49,7 +49,7 @@ namespace unit_tests::basic::device {
 /// @param grid_size - grid size. will ping all cores from {0,0} to grid_size (non-inclusive)
 /// @return
 bool l1_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
@@ -84,7 +84,7 @@ bool l1_ping(
 /// @param num_channels - num_channels. will ping all channels from {0} to num_channels (non-inclusive)
 /// @return
 bool dram_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
@@ -223,15 +223,13 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::CreateKernel(
-            program_,
+            program,
             kernel_name,
             logical_target_core,
             tt_metal::DataMovementConfig{
@@ -239,6 +237,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> output;
@@ -337,40 +336,47 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 // 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
+    const auto& mesh_device = devices_.at(0);
+    const auto device = mesh_device->get_devices()[0];
 
-    uint32_t l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
-    tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, random_vec);
+    tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, random_vec);
 
     uint32_t value_to_write = 39;
     bool invalidate_cache =
         true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
-    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);
 
     tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
-        program, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+        program_, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
 
     tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
 
-    tt_metal::SetRuntimeArgs(program, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
+    tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
-    tt_metal::detail::LaunchProgram(device_, program);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
+    tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
 }
 

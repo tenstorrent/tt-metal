@@ -652,6 +652,7 @@ Result conv2d_L1(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
+        mm_conv && auto_shard,
         bias_tensor.has_value(),
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
@@ -779,7 +780,8 @@ Result conv2d_L1(
             conv_config.enable_weights_double_buffer,
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
-            conv_config.config_tensors_in_dram);
+            conv_config.config_tensors_in_dram,
+            conv_config.force_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

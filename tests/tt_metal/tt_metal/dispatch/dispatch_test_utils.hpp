@@ -9,7 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "hal_types.hpp"
-#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal {

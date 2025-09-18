@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
@@ -22,7 +23,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
-from models.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize(
@@ -110,11 +110,11 @@ def test_forward_pass(
     weight_config = DecoderBlockClass.convert_weights(
         hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, is_padding_layer)
     model_state = DecoderBlockClass.create_state(
         hf_config_short, paged_config, mesh_device, ccl, is_padding_layer, (paged_input_cache,) * mesh_device.shape[0]
     )
-    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device, is_padding_layer)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Set up ttnn inputs

@@ -158,8 +158,8 @@ int main(int argc, char** argv) {
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
-            const float expected = a_data[i].to_float() + val_to_add;
-            const float actual = result_vec[i].to_float();
+            const float expected = static_cast<float>(a_data[i]) + val_to_add;
+            const float actual = static_cast<float>(result_vec[i]);
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;

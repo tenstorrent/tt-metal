@@ -7,7 +7,7 @@ import ttnn
 
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 
 
 class TtConvNet(torch.nn.Module):

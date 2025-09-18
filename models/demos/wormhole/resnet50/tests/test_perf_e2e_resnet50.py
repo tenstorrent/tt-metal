@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

@@ -29,7 +29,7 @@ uint32_t get_bf16_pool_scalar(
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed() << 16;
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value)) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -41,7 +41,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed();
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value));
 }
 
 bool is_pool_op_one_scalar_per_core(

@@ -4,11 +4,13 @@
 
 import ttnn
 import json
+from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
 
 
 def convert_enum_values_to_strings(data):
-    """Convert enum integer values to human-readable strings for PostgreSQL storage."""
+    """Convert enum integer values to human-readable strings"""
     if not isinstance(data, dict):
         return data
 
@@ -80,7 +82,7 @@ def serialize_structured(object, warnings=[]):
     if "to_json" in dir(object):
         json_str = object.to_json()
         try:
-            # Parse the JSON string to make it queryable in PostgreSQL JSONB
+            # Parse the JSON string
             parsed_data = json.loads(json_str)
             # Convert enum integers to human-readable strings
             parsed_data = convert_enum_values_to_strings(parsed_data)
@@ -164,7 +166,7 @@ def convert_enum_strings_to_values(data):
 
 def deserialize_vector_structured(test_vector):
     """
-    Deserialize a test vector that was serialized for PostgreSQL storage.
+    Deserialize a test vector from a human-readable JSON to TTNN enums
     """
     param_names = test_vector.keys()
     test_vector = [deserialize_structured(test_vector[elem]) for elem in test_vector]

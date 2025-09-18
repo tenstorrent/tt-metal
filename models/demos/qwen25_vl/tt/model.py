@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
@@ -20,7 +21,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model import Transformer as TTTransformer
-from models.utility_functions import comp_pcc
 
 
 class VisionTransformer(LightweightModule):
@@ -116,9 +116,9 @@ class VisionTransformer(LightweightModule):
         self,
         x,
         unpadded_seq_len,
+        rot_mats,
         cu_seqlens,
         cu_window_seqlens,
-        rot_mats,
     ):
         """
         Forward pass through the Vision Transformer blocks.
@@ -240,10 +240,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
 
-            # Ensure cu_seqlens and cu_window_seqlens are tensors on the correct device
-            cu_seqlens = cu_seqlens.to(pixel_values.device)
-            cu_window_seqlens = cu_window_seqlens.to(pixel_values.device)
-
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
 
@@ -289,9 +285,16 @@ class DropInVisionTransformer(torch.nn.Module):
             tt_out = self.tt_model(
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
-                cu_seqlens=cu_seqlens,
-                cu_window_seqlens=cu_window_seqlens,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
+                cu_seqlens=ttnn.from_torch(
+                    cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
+                ),
+                cu_window_seqlens=ttnn.from_torch(
+                    cu_window_seqlens,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.model_args.mesh_device,
+                ),
             )
 
             # deallocate device tensors that are not needed by decode

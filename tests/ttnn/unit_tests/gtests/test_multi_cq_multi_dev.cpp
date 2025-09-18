@@ -37,15 +37,6 @@
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace ttnn {
-namespace operations {
-namespace unary {
-enum class UnaryOpType;
-struct UnaryWithParam;
-}  // namespace unary
-}  // namespace operations
-}  // namespace ttnn
-
 using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
@@ -95,7 +86,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -148,7 +139,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -198,7 +189,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }

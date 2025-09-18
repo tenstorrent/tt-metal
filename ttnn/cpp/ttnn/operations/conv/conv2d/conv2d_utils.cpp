@@ -1373,7 +1373,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    SlidingWindowConfig sliding_window_config,
+    const SlidingWindowConfig& sliding_window_config,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,

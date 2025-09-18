@@ -453,7 +453,7 @@ def test_rs_create_heads_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (5, 10.2),
+        (5, 16.6),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

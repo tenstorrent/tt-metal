@@ -86,9 +86,8 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    print(f"Loaded checkpoint for {tt_model_args.base_model_name} with {checkpoint.keys()} keys")
 
-    if "gemma-3" in tt_model_args.base_model_name:
+    if tt_model_args.is_gemma:
         model = TtGemmaModel(
             mesh_device=mesh_device,
             state_dict=checkpoint,
@@ -162,19 +161,29 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "test_type,max_seq_len",
-    (("normal", 2048),),
+    (("normal", 8 * 1024),),
     ids=["normal"],
 )
 @pytest.mark.parametrize(
-    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts, max_gen_len, num_layers",
+    "warmup_iters, enable_trace, max_batch_size, include_text_only_prompts, multi_image, max_gen_len, num_layers",
     [
-        (0, False, 1, False, 500, None),  # batch1-notrace
-        (0, True, 1, False, 500, None),  # batch1-trace
-        (0, True, 32, False, 500, None),  # batch32-trace
-        (0, True, 4, True, 500, None),  # batch4-trace-with-text-prompts
-        (0, True, 1, False, 5, 1),  # tracy
+        (0, False, 1, False, False, 500, None),  # batch1-notrace
+        (0, True, 1, False, False, 500, None),  # batch1-trace
+        (0, True, 32, False, False, 500, None),  # batch32-trace
+        (0, True, 4, True, False, 500, None),  # batch4-trace-with-text-prompts
+        (0, False, 1, True, True, 500, None),  # batch1-multi-image-notrace
+        (0, True, 1, True, True, 500, None),  # batch1-multi-image-trace
+        (0, True, 1, False, False, 5, 1),  # tracy
     ],
-    ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts", "tracy"],
+    ids=[
+        "batch1-notrace",
+        "batch1-trace",
+        "batch32-trace",
+        "batch4-trace-with-text-prompts",
+        "batch1-multi-image-notrace",
+        "batch1-multi-image-trace",
+        "tracy",
+    ],
 )
 @pytest.mark.parametrize(
     "data_parallel",
@@ -202,6 +211,7 @@ def test_multimodal_demo_text(
     enable_trace,
     max_batch_size,
     include_text_only_prompts,
+    multi_image,
     data_parallel,
     test_type,
     max_seq_len,
@@ -267,30 +277,43 @@ def test_multimodal_demo_text(
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    cats_image_1 = PIL_Image.open(
-        BytesIO(
-            requests.get(
-                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
-            ).content
+    if multi_image:
+        handwriting_dataset_base_url = (
+            "https://huggingface.co/datasets/tavishm/100-handwritten-medical-records/resolve/main/"
         )
-    ).convert("RGB")
-    cats_image_2 = PIL_Image.open(
-        BytesIO(
-            requests.get(
-                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.png"
-            ).content
-        )
-    ).convert("RGB")
-    logger.info(f"Cats images dimensions: {cats_image_1.size} and {cats_image_2.size} (width x height)")
+        handwriting_dataset_images_names = [
+            "1wMr9ofP.jpg",
+            "4J7Jyojz.jpg",
+            "68eycMkU.jpg",
+            "8RQQmApQ.jpg",
+            "A9Dx6iCN.jpg",
+            "ANQONi6m.jpg",
+            "BMfPWBSX.jpg",
+            "By829MQ1.jpg",
+        ]
+        handwriting_dataset_images = [
+            PIL_Image.open(BytesIO(requests.get(f"{handwriting_dataset_base_url}{image_name}").content))
+            for image_name in handwriting_dataset_images_names
+        ]
+        num_handwritten_images = len(handwriting_dataset_images)
+
+        # Trace capture dialogs with random images
+        multi_image_dialogs = [
+            [
+                UserMessage(
+                    content=[ImageMedia(image=handwriting_dataset_images[i]) for i in range(num_handwritten_images)]
+                    + ["Read the handwriting on all these images."]
+                )
+            ],
+        ]
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [
-            UserMessage(
-                content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
-            )
-        ],
+        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
     ]
+
+    if multi_image:
+        trace_dialogs = multi_image_dialogs
 
     if len(trace_dialogs) < max_batch_size:
         trace_dialogs *= max_batch_size // len(trace_dialogs)
@@ -302,14 +325,14 @@ def test_multimodal_demo_text(
             img = PIL_Image.open(f).convert("RGB")
         logger.info(f"Dog image dimensions: {img.size} (width x height)")
 
+        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
+            img2 = PIL_Image.open(f).convert("RGB")
+        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
+
         # Regular testing dialogs with original images
         dialogs = [
-            [
-                UserMessage(
-                    content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
-                )
-            ],
             [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
+            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
             [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
@@ -321,6 +344,10 @@ def test_multimodal_demo_text(
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
             [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
+
+    if multi_image:
+        dialogs = multi_image_dialogs + dialogs
+
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
 
@@ -342,6 +369,8 @@ def test_multimodal_demo_text(
             for dialog in batch_dialogs:
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
+
+            logger.info(f"Starting processor for batch {batch_idx}")
             batch_model_input = [
                 prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
                 for dialog in batch_dialogs

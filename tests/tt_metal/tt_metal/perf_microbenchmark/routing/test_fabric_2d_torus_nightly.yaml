@@ -21,9 +21,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -43,9 +42,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -69,9 +67,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 1
@@ -91,9 +88,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 2
@@ -117,9 +113,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -139,9 +134,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -161,9 +155,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -183,9 +176,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -205,9 +197,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -227,9 +218,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -253,9 +243,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -275,9 +264,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -297,9 +285,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -319,9 +306,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -341,9 +327,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -363,9 +348,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -389,9 +373,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -412,9 +395,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -435,9 +417,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -458,9 +439,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -481,9 +461,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -504,9 +483,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -527,9 +505,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -550,9 +527,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -573,9 +549,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -596,9 +571,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -623,9 +597,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -646,9 +619,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -669,9 +641,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -692,9 +663,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -715,9 +685,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -738,9 +707,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -761,9 +729,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -784,9 +751,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -807,9 +773,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -830,9 +795,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -857,9 +821,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -880,9 +843,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -903,9 +865,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -926,9 +887,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -949,9 +909,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -972,9 +931,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -995,9 +953,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -1018,9 +975,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -1041,9 +997,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -1064,9 +1019,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -1091,9 +1045,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -1114,9 +1067,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -1137,9 +1089,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -1160,9 +1111,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -1183,9 +1133,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -1206,9 +1155,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -1229,9 +1177,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -1252,9 +1199,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -1275,9 +1221,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -1298,9 +1243,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -1325,9 +1269,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1348,9 +1291,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1371,9 +1313,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1394,9 +1335,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1417,9 +1357,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1440,9 +1379,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -1463,9 +1401,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -1486,9 +1423,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -1509,9 +1445,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -1536,9 +1471,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -1559,9 +1493,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -1582,9 +1515,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -1609,9 +1541,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1637,9 +1568,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1661,9 +1591,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1685,9 +1614,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1709,9 +1637,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1733,9 +1660,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -1757,9 +1683,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1781,9 +1706,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1805,9 +1729,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -1829,9 +1752,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -1853,9 +1775,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1881,9 +1802,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1905,9 +1825,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1929,9 +1848,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -1953,9 +1871,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -1977,9 +1894,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2001,9 +1917,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2025,9 +1940,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2049,9 +1963,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -2073,9 +1986,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2097,9 +2009,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -2121,9 +2032,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2149,9 +2059,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -2173,9 +2082,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -2197,9 +2105,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -2221,9 +2128,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2245,9 +2151,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2269,9 +2174,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2293,9 +2197,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2317,9 +2220,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2341,9 +2243,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -2365,9 +2266,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -2389,9 +2289,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -2417,9 +2316,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -2441,9 +2339,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -2465,9 +2362,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -2489,9 +2385,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -2513,9 +2408,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -2537,9 +2431,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -2561,9 +2454,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -2585,9 +2477,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -2609,9 +2500,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -2633,9 +2523,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -2657,9 +2546,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -2685,9 +2573,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -2710,9 +2597,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2735,9 +2621,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2760,9 +2645,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2785,9 +2669,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -2810,9 +2693,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2835,9 +2717,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -2860,9 +2741,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -2885,9 +2765,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -2914,11 +2793,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -2936,11 +2814,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -2962,11 +2839,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 1
@@ -2984,11 +2860,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 2
@@ -3010,11 +2885,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3032,11 +2906,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -3054,11 +2927,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -3076,11 +2948,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -3098,11 +2969,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -3120,11 +2990,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -3146,11 +3015,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -3168,11 +3036,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -3190,11 +3057,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -3212,11 +3078,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -3234,11 +3099,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -3256,11 +3120,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -3282,11 +3145,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3305,11 +3167,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3328,11 +3189,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3351,11 +3211,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -3374,11 +3233,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -3397,11 +3255,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -3420,11 +3277,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -3443,11 +3299,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -3466,11 +3321,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -3489,11 +3343,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -3516,11 +3369,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3539,11 +3391,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3562,11 +3413,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -3585,11 +3435,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -3608,11 +3457,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -3631,11 +3479,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -3654,11 +3501,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -3677,11 +3523,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -3700,11 +3545,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -3723,11 +3567,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -3750,11 +3593,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -3773,11 +3615,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -3796,11 +3637,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -3819,11 +3659,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -3842,11 +3681,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -3865,11 +3703,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -3888,11 +3725,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -3911,11 +3747,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -3934,11 +3769,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -3957,11 +3791,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -3984,11 +3817,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -4007,11 +3839,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -4030,11 +3861,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -4053,11 +3883,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -4076,11 +3905,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -4099,11 +3927,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -4122,11 +3949,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -4145,11 +3971,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -4168,11 +3993,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -4191,11 +4015,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -4220,9 +4043,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4243,9 +4065,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4266,9 +4087,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4289,9 +4109,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4312,9 +4131,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4335,9 +4153,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4358,9 +4175,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4381,9 +4197,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -4404,9 +4219,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4431,9 +4245,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -4454,9 +4267,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -4477,9 +4289,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -4504,9 +4315,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4532,9 +4342,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4556,9 +4365,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4580,9 +4388,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4604,9 +4411,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4628,9 +4434,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4652,9 +4457,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4676,9 +4480,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4700,9 +4503,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4724,9 +4526,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -4748,9 +4549,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4776,9 +4576,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4800,9 +4599,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4824,9 +4622,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4848,9 +4645,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4872,9 +4668,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4896,9 +4691,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4920,9 +4714,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -4944,9 +4737,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -4968,9 +4760,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -4992,9 +4783,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -5016,9 +4806,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5044,9 +4833,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -5068,9 +4856,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -5092,9 +4879,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -5116,9 +4902,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5140,9 +4925,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5164,9 +4948,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -5188,9 +4971,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -5212,9 +4994,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -5236,9 +5017,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -5260,9 +5040,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -5284,9 +5063,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -5312,9 +5090,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -5336,9 +5113,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -5360,9 +5136,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -5384,9 +5159,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -5408,9 +5182,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -5432,9 +5205,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -5456,9 +5228,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -5480,9 +5251,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -5504,9 +5274,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -5528,9 +5297,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -5552,9 +5320,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -5580,9 +5347,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -5605,9 +5371,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5630,9 +5395,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -5655,9 +5419,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5680,9 +5443,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -5705,9 +5467,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -5730,9 +5491,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -5755,9 +5515,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -5780,9 +5539,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -5808,9 +5566,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -5830,9 +5587,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -5852,9 +5608,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 1
@@ -5874,9 +5629,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 2
@@ -5896,9 +5650,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -5919,9 +5672,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -5942,9 +5694,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -5969,9 +5720,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -5991,9 +5741,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -6013,9 +5762,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -6035,9 +5783,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -6057,9 +5804,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -6079,9 +5825,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -6101,9 +5846,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -6123,9 +5867,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -6145,9 +5888,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -6167,9 +5909,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -6189,9 +5930,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -6211,9 +5951,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -6233,9 +5972,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -6256,9 +5994,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -6279,9 +6016,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -6302,9 +6038,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -6325,9 +6060,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -6348,11 +6082,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -6370,11 +6103,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -6392,11 +6124,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 1
@@ -6414,11 +6145,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           W: 2
@@ -6436,11 +6166,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -6461,9 +6190,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 2
@@ -6484,9 +6212,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           E: 1
@@ -6508,11 +6235,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -6530,11 +6256,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -6552,11 +6277,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -6574,11 +6298,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -6596,11 +6319,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 5
@@ -6618,11 +6340,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 6
@@ -6640,11 +6361,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 1
@@ -6662,11 +6382,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 2
@@ -6684,11 +6403,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 3
@@ -6706,11 +6424,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 4
@@ -6728,11 +6445,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 5
@@ -6750,11 +6466,10 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           S: 6
@@ -6774,9 +6489,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 1
@@ -6797,9 +6511,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 2
@@ -6820,9 +6533,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -6843,9 +6555,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 4
@@ -6866,9 +6577,8 @@ Tests:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
     defaults:
       ftype: mcast
-      ntype: unicast_write
       size: 512
-      num_packets: 5000
+      num_packets: 2000
       destination:
         hops:
           N: 3

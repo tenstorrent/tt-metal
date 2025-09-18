@@ -9,10 +9,10 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

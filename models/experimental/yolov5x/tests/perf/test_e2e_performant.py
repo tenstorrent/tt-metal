@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from models.experimental.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.yolov5x.common import YOLOV5X_L1_SMALL_SIZE
 
 

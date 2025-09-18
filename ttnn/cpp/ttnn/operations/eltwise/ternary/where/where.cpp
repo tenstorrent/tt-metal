@@ -31,7 +31,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     std::optional<Tensor> output) {
-    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(

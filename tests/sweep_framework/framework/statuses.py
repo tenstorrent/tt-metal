@@ -16,8 +16,8 @@ class TestStatus(Enum):
 
 
 class VectorValidity(Enum):
-    VALID = 0
-    INVALID = 1
+    VALID = "VALID"
+    INVALID = "INVALID"
 
 
 class VectorStatus(Enum):

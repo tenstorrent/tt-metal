@@ -9,7 +9,7 @@ from loguru import logger
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_detect import TtYolov5Detect
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     comp_pcc,
 )

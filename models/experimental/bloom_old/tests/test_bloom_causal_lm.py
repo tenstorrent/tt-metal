@@ -5,7 +5,7 @@
 import torch
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
-from models.utility_functions import print_diff_argmax
+from models.common.utility_functions import print_diff_argmax
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,

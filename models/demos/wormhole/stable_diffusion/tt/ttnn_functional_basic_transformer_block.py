@@ -10,7 +10,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward impor
 
 
 def compare(tensor, name, permute=False):
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
     tensor = ttnn.from_device(tensor)

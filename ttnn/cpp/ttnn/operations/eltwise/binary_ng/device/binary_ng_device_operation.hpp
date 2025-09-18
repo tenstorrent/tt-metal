@@ -31,9 +31,9 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::UnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> post_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<float> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
@@ -96,9 +96,9 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations);
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -108,9 +108,9 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations);
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);
 };
 
 }  // namespace ttnn::operations::binary_ng

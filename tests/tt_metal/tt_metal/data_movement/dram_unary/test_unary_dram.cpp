@@ -34,7 +34,7 @@ struct DramConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // SETUP
 
@@ -110,7 +110,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 
     // Setup Input and Golden Output
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
@@ -154,7 +154,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0,
@@ -183,7 +183,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0) {

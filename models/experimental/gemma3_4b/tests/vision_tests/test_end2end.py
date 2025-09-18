@@ -16,7 +16,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 
 from models.experimental.gemma3_4b.tt.gemma_model import TtGemma3Model
 from models.tt_transformers.tt.generator import Generator
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor
@@ -147,7 +147,9 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
     logger.info("Running generation...")
 
     # Create Generator (exactly like test_end2end.py)
-    generator = Generator([model], [model_args], model.mesh_device, tokenizer=model_args.tokenizer)
+    generator = Generator(
+        [model], [model_args], model.mesh_device, processor=model_args.processor, tokenizer=model_args.tokenizer
+    )
 
     # Setup KV cache (exactly like test_end2end.py)
     tt_kv_cache = [[l.attention.layer_past for l in model.layers]] if paged_attention_config else None

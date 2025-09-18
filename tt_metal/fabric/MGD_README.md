@@ -11,6 +11,16 @@ A Mesh Graph Descriptor is the input to the Fabric Control Plane to specify a pa
 - Example textproto: [`tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto`](../../tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto)
 - C++ API: [`tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp`](../../tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp)
 
+## Usage
+
+To enable MGD 2.0 in your TT_METAL program, use the `TT_METAL_USE_MGD_2_0` environment variable to enable usage of MGD 2.0.
+
+```
+  TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+```
+
+Or if you're using a custom mesh graph descriptor, it will automatically use MGD 2.0 if the file name ends with `.textproto`
+
 ## Background
 
 A Mesh Graph Descriptor (MGD) specifies the logical topology that a user specifies for running their workload on an multi-host Exabox cluster.
@@ -121,3 +131,104 @@ top_level_instance { graph { graph_descriptor: "G1" id: 0 } }
 ```
 
 If in doubt, follow the `.proto` in code; it is the source of truth.
+
+---
+
+## Backward Compatibility with MGD 1.0
+
+MGD 2.0 includes certain fields that are maintained for backward compatibility with MGD 1.0. These fields are currently required in some scenarios but will be removed in future versions once the migration to MGD 2.0 is complete.
+
+### `routing_direction` Field
+
+The `routing_direction` field in `Connection` messages is a legacy field from MGD 1.0 that specifies the directional routing for connections between devices. This field is currently needed for backward compatibility but will be removed in future MGD 2.0 versions.
+
+**Usage:**
+```proto
+connections {
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+  channels { count: 2 policy: RELAXED }
+  routing_direction : [ E, W ]  # Legacy field - will be removed
+}
+```
+
+**Valid values:**
+- `N` - North
+- `E` - East
+- `S` - South
+- `W` - West
+- `C` - Center
+- `NONE` - No specific direction
+
+**Important notes:**
+- This field is only used in explicit `connections` within `GraphDescriptor` messages
+- The field is not used with `graph_topology` shorthand patterns (e.g., `ALL_TO_ALL`, `RING`)
+- When migrating from MGD 1.0, you may need to include this field temporarily
+- This field will be deprecated and removed in future MGD 2.0 versions
+
+**Example from existing descriptors:**
+```proto
+# From t3k_2x2_mesh_graph_descriptor.textproto
+connections {
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+  channels { count: 2 policy: RELAXED }
+  routing_direction : [ E, W ]
+}
+```
+
+For new MGD 2.0 descriptors, you can omit this field unless you're specifically maintaining compatibility with existing MGD 1.0 systems.
+
+### FABRIC Graph Requirement
+
+Every MGD 2.0 descriptor currently requires a `GraphDescriptor` with `type: "FABRIC"`. This is a temporary requirement for MGD 1.0 compatibility and will be removed in future versions. The FABRIC graph must be used as the `top_level_instance`.
+
+**Important:** Any higher-level graph structures (e.g., CLUSTER, SUPERPOD graphs that contain FABRIC graphs) will currently be ignored by the implementation. Only the FABRIC-level graph is processed.
+
+**Example:**
+```proto
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"  # Required for current MGD 2.0 implementation (temporary)
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  # ... connections ...
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+```
+
+**Note:** If you define higher-level graphs like this, they will be ignored:
+```proto
+graph_descriptors {
+  name: "CLUSTER"
+  type: "CLUSTER"
+  instances { graph { graph_descriptor: "FABRIC_GRAPH" graph_id: 0 } }
+  # This entire structure will be ignored - only FABRIC level is processed
+}
+```
+
+### Device-Level Connection Specification
+
+All connections in the FABRIC graph must be specified down to the device level using `device_id` in the `NodeRef`. You cannot use mesh-level connections (without `device_id`) in the current implementation.
+
+**Required format:**
+```proto
+connections {
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }  # device_id required
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }  # device_id required
+  channels { count: 2 policy: RELAXED }
+  routing_direction : [ E, W ]
+}
+```
+
+**Not supported (will cause errors):**
+```proto
+connections {
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }  # Missing device_id
+  nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }  # Missing device_id
+  channels { count: 2 policy: RELAXED }
+}
+```
+
+These requirements are expected to be relaxed in future versions of MGD 2.0 as the implementation matures.

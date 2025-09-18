@@ -15,7 +15,7 @@
 namespace tt::scaleout_tools {
 
 // Helper function to generate deployment descriptor textproto content
-std::string generate_deployment_descriptor(std::string node_type_string) {
+std::string generate_deployment_descriptor(const std::string& node_type_string) {
     std::ostringstream oss;
     oss << "hosts: {\n";
     oss << "  hall: \"0\"\n";
@@ -29,7 +29,7 @@ std::string generate_deployment_descriptor(std::string node_type_string) {
 }
 
 // Helper function to generate cluster config textproto content for a single node
-std::string generate_cluster_config(std::string node_type_string) {
+std::string generate_cluster_config(const std::string& node_type_string) {
     std::ostringstream oss;
     oss << "graph_templates {\n";
     oss << "  key: \"single_" << node_type_string << "\"\n";
@@ -89,6 +89,7 @@ TEST(Cluster, TestFactorySystemDescriptor16LB) {
         "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
 
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_16_n300_lb.textproto");
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_16_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
@@ -104,6 +105,7 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
 
     // Generate the FSD (textproto format)
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_5_n300_lb.textproto");
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_5_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
@@ -119,6 +121,8 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
 
     // Generate the FSD (textproto format)
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto");
+
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_5_wh_galaxy_y_torus.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     EXPECT_THROW(

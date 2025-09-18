@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -369,6 +370,36 @@ public:
 
         return results;
     }
+
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const {
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
+        auto device = mesh_device_->get_device(device_coord);
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            std::vector<uint32_t> core_data = cluster.read_core(device->id(), virtual_core, address, size_bytes);
+            results.emplace(logical_core, core_data);
+        }
+        return results;
+    }
+
+    void write_buffer_to_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        const std::vector<uint8_t>& data) const {
+        auto device = mesh_device_->get_device(device_coord);
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            cluster.write_core(data.data(), data.size(), tt_cxy_pair(device->id(), virtual_core), address);
+        }
+    }
+
 
     void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
@@ -1458,8 +1489,13 @@ private:
         }
 
         bool has_ns = false, has_ew = false;
-        bool opp_ns = (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0);
-        bool opp_ew = (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0);
+        bool opp_ns =
+            (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0 &&
+             hops.at(RoutingDirection::N) > 0 && hops.at(RoutingDirection::S) > 0);
+        bool opp_ew =
+            (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0 &&
+             hops.at(RoutingDirection::E) > 0 && hops.at(RoutingDirection::W) > 0);
+
         if (opp_ns || opp_ew) {
             TT_THROW("Unicast cannot have opposing directions in the same dimension");
         }

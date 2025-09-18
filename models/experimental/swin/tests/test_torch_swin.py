@@ -9,7 +9,7 @@ import pytest
 
 from models.experimental.swin.reference.swin import PytorchSwinForImageClassification
 
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.common.utility_functions import comp_pcc, comp_allclose_and_pcc
 from transformers import AutoFeatureExtractor
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
 

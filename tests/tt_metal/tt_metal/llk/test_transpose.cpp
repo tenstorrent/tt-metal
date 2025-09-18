@@ -99,7 +99,7 @@ void validate_transpose_wh(
 }
 
 void run_single_core_transpose(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const TransposeConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);

@@ -252,7 +252,7 @@ def test_softmax_sharded_stable_with_program_cache(
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, -3])
+@pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
@@ -460,7 +460,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
 
 
 @pytest.mark.parametrize(
-    "accuracy_config",
+    "fp32_acc_en, math_approx_mode, expected_ulp",
     [
         (True, False, 3),
         (False, True, 11),
@@ -469,7 +469,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     ],
 )
 @pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
-def test_softmax_accuracy(device, shape, accuracy_config):
+def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp):
     torch.manual_seed(0)
 
     # Reference output
@@ -477,8 +477,6 @@ def test_softmax_accuracy(device, shape, accuracy_config):
     torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
 
     # TTNN Softmax
-    fp32_acc_en, math_approx_mode, expected_ulp = accuracy_config
-
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=math_approx_mode,

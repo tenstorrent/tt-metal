@@ -46,7 +46,8 @@ Tensor optimized_conv_new(
     bool enable_weights_double_buffer,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -78,7 +79,8 @@ Tensor optimized_conv_new(
         enable_weights_double_buffer,
         full_inner_dim,
         enable_activation_reuse,
-        config_tensors_in_dram);
+        config_tensors_in_dram,
+        force_split_reader);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -257,7 +259,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             enable_weights_double_buffer,
             full_inner_dim,
             enable_activation_reuse,
-            config_tensors_in_dram);
+            config_tensors_in_dram,
+            force_split_reader);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -287,7 +290,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_activation_reuse = enable_activation_reuse},
+            .enable_activation_reuse = enable_activation_reuse,
+            .force_split_reader = force_split_reader},
         input_tensor_a.dtype(),
         this->dtype,
         output_image_width,

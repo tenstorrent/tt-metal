@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
                 vector<uint16_t> tiled_bcast_values;
                 vector<uint16_t> ref_bcast_values;
                 float bcast_1value = 10.0f;
-                uint16_t bcast_1value16 = bfloat16(bcast_1value).to_uint16();
+                uint16_t bcast_1value16 = std::bit_cast<uint16_t>(bfloat16(bcast_1value));
                 unsigned num_bcast_tiles = 0;
                 // build the constant tiles to be broadcast
                 if (bcast_dim == BcastDim::HW) {
@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
                     for (int j = 0; j < NC; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
                         ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
                     }
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
                     for (int j = 0; j < NC * W; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
                         ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
                     }
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
                     for (int j = 0; j < NC * H; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
                         ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
                     }

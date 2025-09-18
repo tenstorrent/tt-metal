@@ -125,9 +125,7 @@ void kernel_main() {
                             noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
                             noc_async_read_barrier();
 #endif
-#if !SRC_SHARDED_B
                             cb_push_back(cb_id_src_b, onetile);
-#endif
 #endif
                         }
                         if constexpr (!has_sharding) {

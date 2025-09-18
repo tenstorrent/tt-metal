@@ -68,7 +68,7 @@ little mouse learned that bravery and kindness can change the world.",
     "contains several newline characters",
     "and should be displayed over multiple lines."};
 
-void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     std::vector<CoreCoord> cores;
     cores.emplace_back(0, 0);
     cores.emplace_back(0, 1);
@@ -104,7 +104,7 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
 TEST_F(DPrintMeshFixture, TensixTestPrintBuffering) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device);
             },
             mesh_device);

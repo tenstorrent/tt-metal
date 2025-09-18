@@ -1,7 +1,8 @@
 [build-system]
 requires = [
   "setuptools==70.1.0",
-  "setuptools-scm==8.1.0"
+  "setuptools-scm==8.1.0",
+  "wheel",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -51,6 +52,18 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.setuptools_scm]
+# Supported tag formats:
+# v1.2.3, v1.2.3-rc1
+tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
+#Only look for release tags for calculating distance for wheel name
+git_describe_command = [
+  "git","describe","--dirty","--tags","--long",
+  "--match","v[0-9]*.[0-9]*.[0-9]*",
+  "--match","v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
+  "--exclude","*-dev*"
+]
+fallback_version = "0.0.0.dev0"
+
 
 [tool.cibuildwheel]
 skip = "*-musllinux_*"

@@ -12,7 +12,7 @@ from models.experimental.deit.tt.deit_embeddings import DeiTEmbeddings
 from models.experimental.deit.tt.deit_encoder import TtDeiTEncoder
 from models.experimental.deit.tt.deit_pooler import TtDeiTPooler
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
 class TtDeiTModel(nn.Module):

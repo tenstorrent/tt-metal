@@ -128,8 +128,13 @@ struct rta_offset_t {
 };
 
 // Maximums across all archs
+#ifndef CODEGEN
+// Do not expose in HAL interface.
+// Eventually they should be removed from this file.
+// And host code should get them from HAL.
 constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
 constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+#endif
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };

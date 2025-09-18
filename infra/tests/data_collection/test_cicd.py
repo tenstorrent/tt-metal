@@ -5,6 +5,8 @@ from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import JobStatus
+from infra.data_collection.pydantic_models import Step
+from loguru import logger
 
 INFRA_TESTS_DIR = pathlib.Path(__file__).parent.parent
 
@@ -247,7 +249,7 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
                         x
                         for x in job.tests
                         if x.full_test_name
-                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300DeviceFixture::EthValidatePhysicalCoreConversion"
+                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300MeshDeviceFixture::EthValidatePhysicalCoreConversion"
                     ]
                 )
                 == 1
@@ -339,3 +341,46 @@ def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment):
             assert job.job_success is False
             # check that there are failing cpp tests stored in the pydantic testcase list
             assert len([x for x in job.tests if not x.success]) == 2
+
+
+def test_pipeline_job_contains_valid_steps():
+    workflow_data_dir = (
+        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/"
+    ).resolve()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir=workflow_data_dir,
+        github_runner_environment={"github_event_name": "push"},
+        github_pipeline_json_filename=str(workflow_data_dir / "workflow.json"),
+        github_jobs_json_filename=str(workflow_data_dir / "workflow_jobs.json"),
+    )
+
+    assert len(pipeline.jobs) > 0, "Pipeline contains no jobs."
+
+    # Select a known job that includes steps
+    target_job_name = "ttnn-unit-tests (grayskull, E150) / ttnn group 2 grayskull E150"
+    target_job = next(job for job in pipeline.jobs if job.name == target_job_name)
+
+    step_names = [step.name for step in target_job.steps]
+    assert len(step_names) >= 1, f"Expected at least 1 step, got {len(step_names)}"
+
+    # Confirm the step names include general-purpose CI keywords
+    expected_keywords = {"set up", "run", "post", "test", "checkout", "build", "artifact"}
+    matching_steps = [name for name in step_names if any(keyword in name.lower() for keyword in expected_keywords)]
+    assert (
+        matching_steps
+    ), f"Expected at least one step containing a keyword from {expected_keywords}, got: {step_names}"
+
+    # Validate step schema fields
+    valid_statuses = {None, "queued", "in_progress", "completed"}
+    valid_conclusions = {None, "success", "skipped", "failure", "cancelled", "timed_out", "neutral", "stale"}
+
+    assert all(step.status in valid_statuses for step in target_job.steps)
+    assert all(step.conclusion in valid_conclusions for step in target_job.steps)
+
+    logger.debug(f"\n✅ Job `{target_job_name}` has {len(target_job.steps)} steps:")
+    for step in target_job.steps:
+        logger.debug(
+            f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
+            f"started_at={step.started_at}, completed_at={step.completed_at}"
+        )

@@ -238,7 +238,7 @@ If you are bringing up a new model that is similar to these but is not listed ab
 - `PAD_MLP_CORES` - models with a hidden_dim that is not a nice power of 2 may not have a valid layout or may run with lower performance. You can set this to a multiple of 8 between 8 and 64; `16` and `32` commonly work well if this is required.
 
 You should also watch out for:
-- RoPE encoding style. `llama3` and of course none are both supported. We have a [branch](https://github.com/tenstorrent/tt-metal/tree/llama-yarn) with `yarn` support in progress.
+- RoPE encoding style. `llama3`, `yarn` and of course `none` are supported. HuggingFace models encode the complex numbers in RoPE as r1, r2, ..., i1, i2, ... whereas Meta models encode the complex numbers as r1, i1, r2, i2, ... - TTT uses a Meta-style implementation of the RoPE op and when loading a HuggingFace it will reshuffle the weights of the pre-rope attention weights to interleave their outputs in this style (see `reverse_permute` in [load_checkpoints.py](tt/load_checkpoints.py)). When _using_ TTT this happens invisibly and should not affect you, but when bringing up a new model or modifying TTT being aware of this will make some otherwise confusing things clearer.
 - Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
 - We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 

@@ -34,7 +34,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 void UpdateGoldenOutput(
     std::vector<std::string>& golden_output,
-    const std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
@@ -52,7 +52,7 @@ void UpdateGoldenOutput(
 
 void RunTest(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const bool add_active_eth_kernel = false) {
     std::vector<std::string> golden_output;
 
@@ -114,7 +114,7 @@ TEST_F(DPrintMeshFixture, TensixTestPrintPrependDeviceCoreRisc) {
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device);
             },
             mesh_device);
@@ -135,7 +135,7 @@ TEST_F(DPrintMeshFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true);
             },
             mesh_device);

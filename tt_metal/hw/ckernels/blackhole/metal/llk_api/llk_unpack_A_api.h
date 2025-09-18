@@ -116,7 +116,7 @@ inline void llk_unpack_A_block(
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
-    std::uint32_t address = base_address;
+    std::uint32_t address = base_address + start_tile_index * offset_address;
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");

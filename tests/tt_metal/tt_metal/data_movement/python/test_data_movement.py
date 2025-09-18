@@ -15,7 +15,7 @@ import numpy as np
 from collections import defaultdict
 
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 from tests.tt_metal.tt_metal.data_movement.python.config import DataMovementConfig
 from tests.tt_metal.tt_metal.data_movement.python.test_metadata import TestMetadataLoader

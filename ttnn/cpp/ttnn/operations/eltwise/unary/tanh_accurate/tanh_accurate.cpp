@@ -40,7 +40,7 @@ inline Tensor invoke_accurate_common(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
 
-    const std::vector<UnaryWithParam>& op_chain = {UnaryWithParam{op_type}};
+    const std::vector<EltwiseUnaryWithParam>& op_chain = {EltwiseUnaryWithParam{op_type}};
     return prim::tanh_accurate(
         queue_id,
         input_tensor,

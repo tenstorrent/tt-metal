@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
 
 from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
@@ -36,17 +36,17 @@ def run_e2e_performant(
     inference_times = []
     torch_input_tensor = torch.randn(total_batch_size, channels, resolution[0], resolution[1])
     iterations_count = 10
-    for i in range(iterations_count):
-        t0 = time.time()
-        if i + 1 == iterations_count:
-            ttnn.synchronize_device(device)
-        _ = performant_runner.run()
-        t1 = time.time()
-        inference_times.append(t1 - t0)
+    ttnn.synchronize_device(device)
+
+    t0 = time.time()
+
+    for _ in range(iterations_count):
+        _ = performant_runner.run(torch_input_tensor)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
 
     performant_runner.release()
-
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    inference_time_avg = round((t1 - t0) / 10, 6)
 
     logger.info(
         f"ttnn_vovnet_batch_size: {total_batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(total_batch_size/inference_time_avg)}"

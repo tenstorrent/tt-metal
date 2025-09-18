@@ -106,7 +106,7 @@ struct TileIterator {
         tile_end_w(in_end_w - 1),
         first(true) {};
 
-    inline bool next() {
+    bool next() {
         if (first) {
             first = false;
             return true;
@@ -136,9 +136,9 @@ protected:
     const uint32_t tile_end_w;
     bool first;
 
-    inline uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() { return start_h + tile_idx_h; }
 
-    inline uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
