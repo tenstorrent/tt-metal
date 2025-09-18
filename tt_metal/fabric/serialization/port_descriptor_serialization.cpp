@@ -3,126 +3,86 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
+#include <stdexcept>
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
-#include "flatbuffers/port_descriptor_table_generated.h"
+#include "protobuf/port_descriptor_table.pb.h"
 
 namespace tt::tt_fabric {
 
 std::vector<uint8_t> serialize_to_bytes(const PortDescriptorTable& port_id_table) {
-    flatbuffers::FlatBufferBuilder builder;
-
-    // Create vector of MeshPortIdMap objects
-    std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::MeshPortDescriptorMap>> mesh_maps;
-    mesh_maps.reserve(port_id_table.size());
+    tt::fabric::proto::PortDescriptorTable proto_table;
 
     // Iterate through the outer map (source_mesh_id -> inner_map)
     for (const auto& [source_mesh_id, inner_map] : port_id_table) {
-        // Create MeshId for source
-        auto source_mesh = tt::tt_fabric::flatbuffer::CreateMeshId(builder, *source_mesh_id);
+        // Create MeshPortDescriptorMap for this source mesh
+        auto* mesh_map = proto_table.add_mesh_maps();
 
-        // Create vector of PortIdEntry objects for this source mesh
-        std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::PortDescriptorEntry>> entries;
-        entries.reserve(inner_map.size());
+        // Set source mesh ID
+        mesh_map->mutable_source_mesh_id()->set_value(*source_mesh_id);
 
         // Iterate through the inner map (dest_mesh_id -> vector<PortDescriptor>)
-        for (const auto& [dest_mesh_id, port_identifiers] : inner_map) {
-            // Create MeshId for destination
-            auto dest_mesh = tt::tt_fabric::flatbuffer::CreateMeshId(builder, *dest_mesh_id);
+        for (const auto& [dest_mesh_id, port_descriptors] : inner_map) {
+            // Create PortDescriptorEntry
+            auto* entry = mesh_map->add_entries();
 
-            // Create MeshIdPair
-            auto mesh_pair = tt::tt_fabric::flatbuffer::CreateMeshIdPair(builder, source_mesh, dest_mesh);
+            // Set destination mesh ID
+            entry->mutable_dest_mesh_id()->set_value(*dest_mesh_id);
 
-            // Create vector of PortDescriptor objects
-            std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::PortDescriptor>> port_ids;
-            port_ids.reserve(port_identifiers.size());
-
-            for (const auto& port_descriptor : port_identifiers) {
-                auto port_id = tt::tt_fabric::flatbuffer::CreatePortDescriptor(
-                    builder,
-                    static_cast<uint32_t>(port_descriptor.port_id.first),  // port_direction
-                    port_descriptor.port_id.second,                        // port_channel
-                    port_descriptor.connection_hash);
-                port_ids.push_back(port_id);
+            // Add port descriptors
+            for (const auto& port_desc : port_descriptors) {
+                auto* proto_port_desc = entry->add_port_descriptors();
+                proto_port_desc->set_port_direction(static_cast<uint32_t>(port_desc.port_id.first));
+                proto_port_desc->set_port_channel(port_desc.port_id.second);
+                proto_port_desc->set_connection_hash(port_desc.connection_hash);
             }
-
-            // Create vector of port identifiers
-            auto port_ids_vector = builder.CreateVector(port_ids);
-
-            // Create PortIdEntry with vector of port identifiers
-            auto entry = tt::tt_fabric::flatbuffer::CreatePortDescriptorEntry(builder, mesh_pair, port_ids_vector);
-            entries.push_back(entry);
         }
-
-        // Create vector of entries
-        auto entries_vector = builder.CreateVector(entries);
-
-        // Create MeshPortIdMap
-        auto mesh_map = tt::tt_fabric::flatbuffer::CreateMeshPortDescriptorMap(builder, source_mesh, entries_vector);
-        mesh_maps.push_back(mesh_map);
     }
 
-    // Create vector of mesh maps
-    auto mesh_maps_vector = builder.CreateVector(mesh_maps);
+    // Serialize to bytes
+    size_t size = proto_table.ByteSizeLong();
+    std::vector<uint8_t> result(size);
 
-    // Create the root PortDescriptorTable
-    auto serialized_port_id_table = tt::tt_fabric::flatbuffer::CreatePortDescriptorTable(builder, mesh_maps_vector);
+    if (!proto_table.SerializeToArray(result.data(), size)) {
+        throw std::runtime_error("Failed to serialize PortDescriptorTable to protobuf binary format");
+    }
 
-    // Finish the buffer
-    builder.Finish(serialized_port_id_table);
-
-    // Return the serialized data
-    return std::vector<uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
+    return result;
 }
 
 PortDescriptorTable deserialize_port_descriptors_from_bytes(const std::vector<uint8_t>& data) {
     PortDescriptorTable result;
 
-    // Verify the buffer
-    auto verifier = flatbuffers::Verifier(data.data(), data.size());
-    if (!tt::tt_fabric::flatbuffer::VerifyPortDescriptorTableBuffer(verifier)) {
-        throw std::runtime_error("Invalid FlatBuffer data for PortDescriptorTable");
+    // Parse the protobuf
+    tt::fabric::proto::PortDescriptorTable proto_table;
+    if (!proto_table.ParseFromArray(data.data(), data.size())) {
+        throw std::runtime_error("Failed to parse PortDescriptorTable from protobuf binary format");
     }
 
-    // Get the root PortDescriptorTable
-    auto port_id_table = tt::tt_fabric::flatbuffer::GetPortDescriptorTable(data.data());
-
     // Extract mesh maps
-    if (port_id_table->mesh_maps()) {
-        for (const auto* mesh_map : *port_id_table->mesh_maps()) {
-            if (!mesh_map->source_mesh_id()) {
-                continue;  // Skip if source mesh ID is missing
+    for (const auto& mesh_map : proto_table.mesh_maps()) {
+        MeshId source_mesh_id{mesh_map.source_mesh_id().value()};
+
+        // Create inner map for this source mesh
+        std::unordered_map<MeshId, std::vector<PortDescriptor>> inner_map;
+
+        // Extract entries
+        for (const auto& entry : mesh_map.entries()) {
+            MeshId dest_mesh_id{entry.dest_mesh_id().value()};
+
+            // Extract port descriptors
+            std::vector<PortDescriptor> port_descriptors;
+            for (const auto& proto_port_desc : entry.port_descriptors()) {
+                PortDescriptor port_desc;
+                port_desc.port_id = {
+                    static_cast<RoutingDirection>(proto_port_desc.port_direction()), proto_port_desc.port_channel()};
+                port_desc.connection_hash = proto_port_desc.connection_hash();
+                port_descriptors.push_back(port_desc);
             }
 
-            MeshId source_mesh_id{mesh_map->source_mesh_id()->value()};
-
-            // Create the inner map for this source mesh
-            std::unordered_map<MeshId, std::vector<PortDescriptor>> inner_map;
-
-            // Extract entries
-            if (mesh_map->entries()) {
-                for (const auto* entry : *mesh_map->entries()) {
-                    if (!entry->mesh_pair() || !entry->mesh_pair()->dest_mesh_id() || !entry->port_descriptors()) {
-                        continue;  // Skip incomplete entries
-                    }
-
-                    MeshId dest_mesh_id{entry->mesh_pair()->dest_mesh_id()->value()};
-
-                    // Extract vector of PortDescriptors
-                    std::vector<PortDescriptor> port_descriptors;
-                    for (const auto* port_id : *entry->port_descriptors()) {
-                        PortDescriptor port_descriptor;
-                        port_descriptor.port_id = {
-                            static_cast<RoutingDirection>(port_id->port_direction()), port_id->port_channel()};
-                        port_descriptor.connection_hash = port_id->connection_hash();
-                        port_descriptors.push_back(port_descriptor);
-                    }
-
-                    inner_map[dest_mesh_id] = port_descriptors;
-                }
-            }
-
-            result[source_mesh_id] = inner_map;
+            inner_map[dest_mesh_id] = std::move(port_descriptors);
         }
+
+        result[source_mesh_id] = std::move(inner_map);
     }
 
     return result;

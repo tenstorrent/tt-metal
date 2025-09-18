@@ -13,13 +13,13 @@
 namespace tt::tt_fabric {
 
 /**
- * Serializes AnnotatedIntermeshConnections to FlatBuffers
+ * Serializes AnnotatedIntermeshConnections to Protobuf
  * bytes
  */
 std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedIntermeshConnections& connections);
 
 /**
- * Deserializes FlatBuffers bytes to AnnotatedIntermeshConnections
+ * Deserializes Protobuf bytes to AnnotatedIntermeshConnections
  */
 AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const std::vector<uint8_t>& data);
 

@@ -55,8 +55,8 @@ enum class MeshScope {
 };
 
 struct PortDescriptor {
-    port_id_t port_id;
-    std::size_t connection_hash;
+    port_id_t port_id = {RoutingDirection::NONE, 0};
+    std::size_t connection_hash = 0;
 };
 
 using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
