@@ -212,4 +212,52 @@ ALWI void acos_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(acos, RC, t
  */
 ALWI void acos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
 
+/**
+* Please refer to documentation for any_init.
+*/
+ALWI void cosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(cosh, ckernel::sfpu::init_hyperbolic_trig, APPROX)); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of the trigonometric hyperbolic cosine operation on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void cosh_tile(uint32_t idst) {
+    MATH(
+        SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_cosh<, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void sinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sinh, ckernel::sfpu::init_hyperbolic_trig, APPROX)); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of the trigonometric hyperbolic sine operation on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sinh_tile(uint32_t idst) {
+    MATH(
+        SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_sinh<, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
+}
+
 }  // namespace ckernel
