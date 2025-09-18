@@ -12,4 +12,5 @@
 
 nb::ndarray<nb::numpy> make_numpy_tensor(
     const tt::tt_metal::Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type = std::nullopt);
-tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data);
+tt::tt_metal::Tensor make_metal_tensor(
+    nb::ndarray<> data, std::optional<tt::tt_metal::DataType> new_type = std::nullopt);

@@ -69,7 +69,9 @@ void py_module(nb::module_& m) {
         py_tensor.def("backward", &Tensor::backward);
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
         py_tensor.def_static(
-            "from_numpy", [](nb::ndarray<> numpy_tensor) { return create_tensor(make_metal_tensor(numpy_tensor)); });
+            "from_numpy", [](nb::ndarray<> numpy_tensor, std::optional<tt::tt_metal::DataType> new_type) {
+                return create_tensor(make_metal_tensor(numpy_tensor, new_type));
+            });
         py_tensor.def("to_numpy", [](const Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type) {
             return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL), new_type);
         });
@@ -99,7 +101,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
-        py_auto_context.def_static("get_instance", &AutoContext::get_instance);
+        py_auto_context.def_static("get_instance", &AutoContext::get_instance, nb::rv_policy::reference);
         py_auto_context.def("get_generator", &AutoContext::get_generator);
         py_auto_context.def("set_generator", &AutoContext::set_generator);
         py_auto_context.def("set_seed", &AutoContext::set_seed);
