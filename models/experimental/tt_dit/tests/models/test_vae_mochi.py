@@ -710,21 +710,14 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, 
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtDecoder forward")
     tt_output = tt_model(tt_input)
-    logger.info("End TtResBlock forward")
+    logger.info("End TtDecoder forward")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
     )
-
-    # Convert TT output to torch tensor
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
-    )
-    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
     # Get reference output
     logger.info("Run RefDecoder forward")
@@ -739,13 +732,14 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, 
     expected_W = ref_output.shape[4] // num_devices_W
     tt_output_torch = torch.reshape(
         tt_output_torch,
-        (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, ref_output[1]),
+        (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, ref_output.shape[1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
     tt_output_torch = torch.reshape(
         tt_output_torch,
         (N, expected_padded_T, num_devices_H * expected_H, num_devices_W * expected_W, ref_output.shape[1]),
     )
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
     logger.info("assert quality")
     for i in range(ref_output.shape[2]):
