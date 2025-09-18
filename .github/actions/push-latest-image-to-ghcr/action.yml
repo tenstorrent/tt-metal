@@ -36,6 +36,12 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.github-token }}
 
+    - name: "Download regctl"
+      shell: bash
+      run: |
+        sudo curl -L https://github.com/regclient/regclient/releases/download/v0.9.2/regctl-linux-amd64 -o /usr/local/bin/regctl
+        sudo chmod +x /usr/local/bin/regctl
+
     - name: Parse repository name
       id: parse-repo
       shell: bash
@@ -48,12 +54,6 @@ runs:
     - name: Pull, tag and push image
       shell: bash
       run: |
-        echo "Pulling image: ${{ inputs.docker-image-tag }}"
-        docker pull ${{ inputs.docker-image-tag }}
-
         LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:latest"
-        echo "Tagging as: ${LATEST_TAG}"
-        docker tag ${{ inputs.docker-image-tag }} ${LATEST_TAG}
-
-        echo "Pushing: ${LATEST_TAG}"
-        docker push ${LATEST_TAG}
+        echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
+        regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
