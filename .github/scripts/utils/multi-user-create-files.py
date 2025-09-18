@@ -50,9 +50,7 @@ args = parser.parse_args()
 
 services = multi_user_containers(args.num_containers, args.image)
 
-data = {
-    "services": services
-}
+data = {"services": services}
 
 with open("multi-user-dc.yaml", "w") as yaml_file:
     yaml.dump(data, yaml_file)
