@@ -38,6 +38,8 @@ void MAIN {
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {
             cb_wait_front(cb_grad_idx, block_size);
+            cb_wait_front(cb_momentum_in_idx, block_size);
+
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 copy_tile_init(cb_grad_idx);
@@ -58,6 +60,7 @@ void MAIN {
             pack_and_push_block(cb_momentum_out_idx, block_size);
 
             cb_pop_front(cb_grad_idx, block_size);
+            cb_pop_front(cb_momentum_in_idx, block_size);
 
             cb_wait_front(cb_param_in_idx, block_size);
             cb_wait_front(cb_momentum_out_idx, block_size);
