@@ -6,7 +6,7 @@
  * The telemetry provider creates a thread that collects and disseminates telemetry. Note that
  * subscribers here are internal components. They maintain their own complete state, therefore
  * the initial snapshot need only be sent once (the subscribers can never "disconnect") and any
- * metrics received from remote instances can be propagated via delta updates.
+ * metrics received from remote instances are propagated via delta updates.
  */
 
 #include <future>
