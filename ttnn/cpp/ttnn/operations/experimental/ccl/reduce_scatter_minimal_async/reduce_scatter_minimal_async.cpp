@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor input_tensor,
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -43,9 +43,20 @@ ttnn::Tensor composite_reduce_scatter(
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
                                          (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
 
+    auto input_memory_config = input_tensor.memory_config();
+    TT_FATAL(
+        !(input_memory_config.is_sharded() && !memory_config.has_value()),
+        "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
+        "config to the input sharded memory config will break the op as the input and output shapes are different.");
+    auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (input_memory_config.is_sharded()) {
+        input_tensor = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
     // Broadcast each tensor to all other devices in the mesh
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_tensor.memory_config(), ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor, num_links, std::nullopt, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
 
     // Reduce broadcasted tensors into a single reduced tensor
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
@@ -64,8 +75,8 @@ ttnn::Tensor composite_reduce_scatter(
     }
 
     // Partition the reduced tensor (scatter)
-    ttnn::Tensor reduce_scatter_output_tensor = ttnn::prim::mesh_partition(
-        all_reduced_tensor, scatter_dim, cluster_axis, memory_config.value_or(all_reduced_tensor.memory_config()));
+    ttnn::Tensor reduce_scatter_output_tensor =
+        ttnn::prim::mesh_partition(all_reduced_tensor, scatter_dim, cluster_axis, all_reduced_tensor.memory_config());
 
     // Convert back to tiled (if necessary)
     if (is_tiled_and_not_tile_aligned) {
@@ -74,6 +85,10 @@ ttnn::Tensor composite_reduce_scatter(
         if (input_tensor.dtype() == DataType::BFLOAT8_B) {
             reduce_scatter_output_tensor = ttnn::typecast(reduce_scatter_output_tensor, DataType::BFLOAT8_B);
         }
+    }
+
+    if (output_memory_config.is_sharded()) {
+        reduce_scatter_output_tensor = ttnn::to_memory_config(reduce_scatter_output_tensor, output_memory_config);
     }
 
     return reduce_scatter_output_tensor;

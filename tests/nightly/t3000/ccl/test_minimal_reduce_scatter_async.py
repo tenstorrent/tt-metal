@@ -462,7 +462,7 @@ def test_reduce_scatter_async_training_shapes(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout",
+    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type",
     [
         (
             [1, 1, 32, 3072],
@@ -476,6 +476,7 @@ def test_reduce_scatter_async_training_shapes(
             [32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [4, 1, 384, 1024],
@@ -489,6 +490,7 @@ def test_reduce_scatter_async_training_shapes(
             [256, 128],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [4, 1, 384, 3072],
@@ -502,6 +504,22 @@ def test_reduce_scatter_async_training_shapes(
             [1536, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite RS
+        (
+            [1, 1, 384, 240],
+            3,
+            [64, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [64, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [64, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -514,18 +532,10 @@ def test_reduce_scatter_async_training_shapes(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
-    "ones_tensor",
-    [
-        True,
-        False,
-    ],
-    ids=["ones", "random"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -546,6 +556,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
     output_shard_shape,
     output_shard_grid,
     output_mem_layout,
+    buffer_type,
     enable_trace,
     num_iters,
     ones_tensor,
@@ -571,13 +582,11 @@ def test_reduce_scatter_async_sharded_to_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
+    mem_config_input = ttnn.MemoryConfig(input_mem_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
     mem_config_intermediate = ttnn.MemoryConfig(
-        intermediate_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=intermediate_shard_spec
+        intermediate_mem_layout, buffer_type=buffer_type, shard_spec=intermediate_shard_spec
     )
-    mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
+    mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
 
     run_reduce_scatter_impl(
         mesh_device,
@@ -607,7 +616,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout",
+    "rs_input_shape, dim, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type",
     [
         (
             [4, 1, 256, 3072],
@@ -618,6 +627,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
             [1024, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [4, 1, 384, 1024],
@@ -628,6 +638,19 @@ def test_reduce_scatter_async_sharded_to_sharded(
             [256, 128],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite RS
+        (
+            [1, 1, 384, 240],
+            3,
+            [256, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [256, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -640,18 +663,10 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
-    "ones_tensor",
-    [
-        True,
-        False,
-    ],
-    ids=["ones", "random"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -669,9 +684,9 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     output_shard_shape,
     output_shard_grid,
     output_mem_layout,
+    buffer_type,
     enable_trace,
     num_iters,
-    ones_tensor,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -689,11 +704,11 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
     mem_config_intermediate = ttnn.MemoryConfig(
-        intermediate_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=intermediate_shard_spec
+        intermediate_mem_layout, buffer_type=buffer_type, shard_spec=intermediate_shard_spec
     )
-    mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
+    mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
 
     run_reduce_scatter_impl(
         mesh_device,
@@ -708,7 +723,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -723,7 +737,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout",
+    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type",
     [
         (
             [4, 1, 256, 3072],
@@ -731,6 +745,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             [1024, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [4, 1, 384, 1024],
@@ -738,6 +753,16 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             [256, 1024],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite RS
+        (
+            [1, 1, 384, 240],
+            3,
+            [64, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -750,18 +775,10 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
-    "ones_tensor",
-    [
-        True,
-        False,
-    ],
-    ids=["ones", "random"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 106496}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 106496}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -776,9 +793,9 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     input_shard_shape,
     input_shard_grid,
     input_mem_layout,
+    buffer_type,
     enable_trace,
     num_iters,
-    ones_tensor,
     rs_topology,
 ):
     input_shard_spec = ttnn.ShardSpec(
@@ -787,11 +804,9 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
-    mem_config_intermediate = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config_input = ttnn.MemoryConfig(input_mem_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
+    mem_config_intermediate = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
 
     run_reduce_scatter_impl(
         mesh_device,
@@ -806,6 +821,5 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
     )
