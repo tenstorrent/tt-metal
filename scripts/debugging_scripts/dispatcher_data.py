@@ -140,7 +140,7 @@ class DispatcherData:
             }
             self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
-        log_check(launch_msg_rd_ptr < self._launch_msg_buffer_num_entries, f"On core {location} Launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.")
+        log_check(launch_msg_rd_ptr < self._launch_msg_buffer_num_entries, f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.")
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1 + self._launch_msg_buffer_num_entries) % self._launch_msg_buffer_num_entries
 
