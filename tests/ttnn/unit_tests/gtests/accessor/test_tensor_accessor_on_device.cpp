@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "gmock/gmock.h"
 #include <fmt/format.h>
 #include <cstdint>
 #include <vector>
@@ -141,7 +140,10 @@ struct CopyParams {
 
 template <typename T>
 static void test_multi_core_copy(
-    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& kernel_path) {
+    const CopyParams& params,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::string& kernel_path,
+    const std::map<std::string, std::string>& defines = {}) {
     MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
 
@@ -174,6 +176,7 @@ static void test_multi_core_copy(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = compile_time_args,
+            .defines = defines,
         });
 
     for (size_t core_idx = 0; core_idx < num_cores; ++core_idx) {
@@ -203,14 +206,124 @@ static void test_multi_core_copy(
 }
 
 template <typename T>
-static void test_single_core_copy(const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
-    TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
+static void test_multi_core_interleaved_copy(
+    const CopyParams& params,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const CoreRangeSet& cores,
+    const std::map<std::string, std::string>& defines = {}) {
+    // Create interleaved memory config
+    MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
+    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
-    auto input_tensor = Tensor::from_vector(src, input_spec, mesh_device);
-    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), input_spec, mesh_device);
+    auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), tensor_spec, mesh_device);
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto aligned_page_size = input_buffer->aligned_page_size();
+    if (output_buffer->aligned_page_size() != aligned_page_size) {
+        GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
+    }
+
+    auto program = CreateProgram();
+    const auto data_format = datatype_to_dataformat_converter(params.dtype);
+
+    // Create circular buffer for each core
+    constexpr auto num_tiles = 2;
+    CBHandle cb_idx = tt::CBIndex::c_0;
+    auto cb_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_idx, data_format}})
+                         .set_page_size(cb_idx, aligned_page_size);
+    CreateCircularBuffer(program, cores, cb_config);
+
+    auto cores_vec = corerange_to_cores(cores, std::nullopt, true);
+    auto num_cores = cores_vec.size();
+    auto total_pages = input_buffer->num_pages();
+
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+
+    // Reader compile-time args: input accessor args + cb_id + page_size
+    std::vector<uint32_t> reader_compile_time_args = input_accessor_args.get_compile_time_args();
+    reader_compile_time_args.push_back(cb_idx);
+    reader_compile_time_args.push_back(aligned_page_size);
+
+    // Writer compile-time args: output accessor args + cb_id + page_size
+    std::vector<uint32_t> writer_compile_time_args = output_accessor_args.get_compile_time_args();
+    writer_compile_time_args.push_back(cb_idx);
+    writer_compile_time_args.push_back(aligned_page_size);
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/reader_interleaved_multi_core.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args,
+            .defines = defines,
+        });
+
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/writer_interleaved_multi_core.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args,
+            .defines = defines,
+        });
+
+    // Set runtime args for each core
+    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+        const auto& core = cores_vec[core_idx];
+
+        // Calculate page range for this core
+        uint32_t pages_per_core = total_pages / num_cores;
+        uint32_t extra_pages = total_pages % num_cores;
+        uint32_t start_page_id = core_idx * pages_per_core + std::min(core_idx, extra_pages);
+        uint32_t end_page_id = start_page_id + pages_per_core + (core_idx < extra_pages ? 1 : 0);
+
+        // Reader runtime args: input accessor common runtime args + input_base_address + start_page_id + end_page_id
+        std::vector<uint32_t> reader_runtime_args;
+        reader_runtime_args.push_back(input_buffer->address());
+        reader_runtime_args.push_back(start_page_id);
+        reader_runtime_args.push_back(end_page_id);
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+
+        // Writer runtime args: output accessor common runtime args + output_base_address + start_page_id + end_page_id
+        std::vector<uint32_t> writer_runtime_args;
+        writer_runtime_args.push_back(output_buffer->address());
+        writer_runtime_args.push_back(start_page_id);
+        writer_runtime_args.push_back(end_page_id);
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+    }
+
+    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+
+    auto output_tensor_cpu = output_tensor.cpu(true);
+    Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_device.to_vector<T>();
+
+    EXPECT_EQ(output_vec, src);
+}
+
+template <typename T>
+static void test_single_core_copy(
+    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved = false) {
+    // Create memory config based on whether it's interleaved or sharded
+    MemoryConfig mem_config = is_interleaved ? MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type)
+                                             : MemoryConfig(params.buffer_type, params.input_shard_spec);
+    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+
+    const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+
+    auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), tensor_spec, mesh_device);
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
@@ -236,10 +349,20 @@ static void test_single_core_copy(const CopyParams& params, tt::tt_metal::distri
     std::vector<uint32_t> input_compile_time_args = input_accessor_args.get_compile_time_args();
     input_compile_time_args.push_back(cb_in0_idx);
     input_compile_time_args.push_back(aligned_page_size);
+    input_compile_time_args.push_back(
+        input_buffer->num_pages());  // tensor volume (used for unified interface, ignored by sharded)
 
     std::vector<uint32_t> output_compile_time_args = output_accessor_args.get_compile_time_args();
     output_compile_time_args.push_back(cb_in0_idx);
     output_compile_time_args.push_back(aligned_page_size);
+    output_compile_time_args.push_back(
+        output_buffer->num_pages());  // tensor volume (used for unified interface, ignored by sharded)
+
+    // Set up kernel defines for interleaved layout if needed
+    std::map<std::string, std::string> kernel_defines;
+    if (is_interleaved) {
+        kernel_defines["INTERLEAVED_LAYOUT"] = "1";
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -249,6 +372,7 @@ static void test_single_core_copy(const CopyParams& params, tt::tt_metal::distri
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = input_compile_time_args,
+            .defines = kernel_defines,
         });
 
     KernelHandle writer_kernel_id = CreateKernel(
@@ -259,6 +383,7 @@ static void test_single_core_copy(const CopyParams& params, tt::tt_metal::distri
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = output_compile_time_args,
+            .defines = kernel_defines,
         });
 
     std::vector<uint32_t> input_runtime_args{input_buffer->address()};
@@ -274,8 +399,8 @@ static void test_single_core_copy(const CopyParams& params, tt::tt_metal::distri
     auto output_tensor_cpu = output_tensor.cpu(true);
 
     // Data should be only in the first shard
-    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
-    auto output_vec = output_tensor_shard0.to_vector<T>();
+    Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_device.to_vector<T>();
 
     EXPECT_EQ(output_vec, src);
 }
@@ -537,6 +662,24 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
     }
 }
 
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep) {
+    const auto& params = GetParam();
+
+    const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_multi_core_copy<uint8_t>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::UINT16:
+            test_multi_core_copy<uint16_t>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::BFLOAT16:
+            test_multi_core_copy<bfloat16>(params, mesh_device_.get(), kernel_path, {{"BIG_STEP", "2"}});
+            break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
 TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
     const auto& params = GetParam();
 
@@ -547,6 +690,187 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
         default: TT_THROW("Unsupported data type");
     }
 }
+
+class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
+                                             public ::testing::WithParamInterface<CopyParams> {};
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_single_core_copy<uint8_t>(params, mesh_device_.get(), true); break;
+        case DataType::UINT16: test_single_core_copy<uint16_t>(params, mesh_device_.get(), true); break;
+        case DataType::BFLOAT16: test_single_core_copy<bfloat16>(params, mesh_device_.get(), true); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
+    const auto& params = GetParam();
+
+    // Use all available cores for multi-core testing
+    auto device = mesh_device_->get_devices().at(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_multi_core_interleaved_copy<uint8_t>(params, mesh_device_.get(), cores); break;
+        case DataType::UINT16: test_multi_core_interleaved_copy<uint16_t>(params, mesh_device_.get(), cores); break;
+        case DataType::BFLOAT16: test_multi_core_interleaved_copy<bfloat16>(params, mesh_device_.get(), cores); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPagesBigStep) {
+    const auto& params = GetParam();
+
+    // Use all available cores for multi-core testing
+    auto device = mesh_device_->get_devices().at(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_multi_core_interleaved_copy<uint8_t>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::UINT16:
+            test_multi_core_interleaved_copy<uint16_t>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
+        case DataType::BFLOAT16:
+            test_multi_core_interleaved_copy<bfloat16>(params, mesh_device_.get(), cores, {{"BIG_STEP", "2"}});
+            break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InterleavedAccessorTests,
+    InterleavedAccessorTestsCopyOnDevice,
+    testing::ValuesIn({
+        // 2D cases - L1 buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{64, 128},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::L1,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{96, 64},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT16,
+            .buffer_type = BufferType::L1,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{128, 96},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::L1,
+        },
+
+        // 2D cases - DRAM buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{64, 128},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::DRAM,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{96, 64},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT16,
+            .buffer_type = BufferType::DRAM,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{128, 96},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::DRAM,
+        },
+
+        // 3D cases - L1 buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{8, 64, 64},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::L1,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{12, 96, 32},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::L1,
+        },
+
+        // 3D cases - DRAM buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{8, 64, 64},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::DRAM,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{12, 96, 32},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::DRAM,
+        },
+
+        // 4D cases - L1 buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{4, 6, 128},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::L1,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{256, 64},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::L1,
+        },
+
+        // 4D cases - DRAM buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{4, 6, 128},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::DRAM,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{256, 64},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::UINT8,
+            .buffer_type = BufferType::DRAM,
+        },
+
+        // Higher dimensional cases - L1 buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{6, 64, 128},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::L1,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::L1,
+        },
+
+        // Higher dimensional cases - DRAM buffer type
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{6, 64, 128},
+            .layout = Layout::TILE,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::DRAM,
+        },
+        CopyParams{
+            .tensor_shape = tt::tt_metal::Shape{3, 2, 2, 3, 4},
+            .layout = Layout::ROW_MAJOR,
+            .dtype = DataType::BFLOAT16,
+            .buffer_type = BufferType::DRAM,
+        },
+    }));
 
 INSTANTIATE_TEST_SUITE_P(
     ShardedAccessorTests,
@@ -604,6 +928,34 @@ INSTANTIATE_TEST_SUITE_P(
                                    .shard_shape = tt::tt_metal::Shape{1, 32, 64},
                                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                                    .orientation = ShardOrientation::ROW_MAJOR,
+                               },
+                       },
+                       CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{1, 2, 32, 32},
+                           .layout = Layout::TILE,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {0, 1})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+                               },
+                       },
+                       CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{2, 64, 128},
+                           .layout = Layout::ROW_MAJOR,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {7, 7})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
                                },
                        },
                        CopyParams{

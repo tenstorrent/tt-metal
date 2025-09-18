@@ -19,8 +19,8 @@ namespace loss_utils {
 
 using ttnn::operations::loss::LossFunction;
 using ttnn::operations::loss::LossReductionMode;
+using ttnn::operations::unary::EltwiseUnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
-using ttnn::operations::unary::UnaryWithParam;
 
 Tensor loss_function(
     QueueId queue_id,
@@ -30,10 +30,10 @@ Tensor loss_function(
     const LossReductionMode reduce_mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    std::vector<UnaryWithParam> fused_ops;
+    std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
-        case LossFunction::MAE: fused_ops.push_back(UnaryWithParam{UnaryOpType::ABS}); break;
-        case LossFunction::MSE: fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE}); break;
+        case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
+        case LossFunction::MSE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
     Tensor result =

@@ -220,9 +220,12 @@ static FORCE_INLINE void fabric_set_unicast_route(
     uint8_t i) {
 #if defined(FABRIC_2D)
     const auto& slot = connection_manager.get(i);
-    // 2D unicast
+#if defined(DYNAMIC_ROUTING_ENABLED)
     fabric_set_unicast_route(
         packet_header, connection_manager.my_chip_id, slot.dst_dev_id, slot.dst_mesh_id, connection_manager.ew_dim);
+#else
+    fabric_set_unicast_route(slot.dst_dev_id, packet_header);
+#endif
 #else
     // 1D unicast, nop
 #endif
