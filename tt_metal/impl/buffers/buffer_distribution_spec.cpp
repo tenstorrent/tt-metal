@@ -204,7 +204,9 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     auto core_grid = core_range_set.ranges()[0];
 
     uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages[-1], shard_shape_in_pages[-1]), 1u);
-    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages[-2], shard_shape_in_pages[-2]), 1u);
+    uint64_t tensor_volume = tensor_shape_in_pages.volume();
+    uint32_t tensor_height = tensor_volume == 0 ? 0 : tensor_volume / tensor_shape_in_pages[-1];
+    uint32_t num_shards_along_height = std::max(div_up(tensor_height, shard_shape_in_pages[-2]), 1u);
     if (shard_orientation != ShardOrientation::ROW_MAJOR) {
         std::swap(num_shards_along_width, num_shards_along_height);
     }
