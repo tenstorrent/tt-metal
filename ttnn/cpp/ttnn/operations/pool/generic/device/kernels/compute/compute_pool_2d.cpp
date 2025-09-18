@@ -102,7 +102,7 @@ void MAIN {
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     } else {
         unary_op_init_common(idx_tmp_cb_id, idx_tmp_cb_id);
-        tilize_init_no_pack(idx_tmp_cb_id, topk_output_tiles);
+        tilize_init(idx_tmp_cb_id, topk_output_tiles, idx_tmp_cb_id);
         if constexpr (!pack_untilize_reinit) {
             const uint32_t output_faces =
                 last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
@@ -129,7 +129,7 @@ void MAIN {
         cb_wait_front(idx_tmp_cb_id, 1);
     }
 
-    DPRINT << "nsticks_per_core_by_nblocks: " << nsticks_per_core_by_nblocks << ENDL();
+    // DPRINT << "nsticks_per_core_by_nblocks: " << nsticks_per_core_by_nblocks << ENDL();
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
@@ -212,7 +212,7 @@ void MAIN {
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
-                    dprint_tensix_dest_reg(index_dst_idx);
+                    // dprint_tensix_dest_reg(index_dst_idx);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -245,7 +245,7 @@ void MAIN {
                     tensix_sync();
                 }
 
-                DPRINT << "output_faces: " << output_faces << ENDL();
+                // DPRINT << "output_faces: " << output_faces << ENDL();
 
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
@@ -253,12 +253,13 @@ void MAIN {
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
-                PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
+                // PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
+                // PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
 
                 if (last_c_block) {
                     cb_reserve_back(idx_tmp_cb_id, 1);
                     PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(idx_tmp_cb_id)));
-                    pack_tile(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
+                    pack_tile_block(index_scratch_out_dst_idx, idx_tmp_cb_id, 1);
                     cb_push_back(idx_tmp_cb_id, 1);
                     cb_wait_front(idx_tmp_cb_id, 1);
                     cb_pop_front(idx_tmp_cb_id, 1);

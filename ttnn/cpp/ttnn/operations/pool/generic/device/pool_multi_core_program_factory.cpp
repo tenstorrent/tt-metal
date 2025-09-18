@@ -442,6 +442,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                         // block of c if its greater than 8 tiles)
     const uint32_t out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
 
+    printf("Output CB pagesize: %u, npages: %u\n", out_cb_pagesize, out_cb_npages);
+
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, outputs[0].buffer());
 

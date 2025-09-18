@@ -350,7 +350,7 @@ void kernel_main() {
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
 
-        DPRINT << "init_index: " << init_index << ENDL();
+        // DPRINT << "init_index: " << init_index << ENDL();
 
         // initialize the right inc tile
         cb_reserve_back(right_inc_tmp_cb_id, 1);
