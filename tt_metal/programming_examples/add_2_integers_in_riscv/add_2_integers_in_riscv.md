@@ -1,6 +1,6 @@
 # Add 2 Integers in RISC-V
 
-RISC-V Data Movement processors on a Tensix core are used for data movement, yet also have basic computing capabilities. In this example, we will build a TT-Metalium `MeshWorkload` to add two integers using these processors.
+RISC-V processors 1 and 5 of a Tensix core are used for data movement, yet also have basic computing capabilities. In this example, we will build a TT-Metalium program to add two integers using these processors.
 
 We'll go through this code section by section. Note that we have this exact, full example program in
 [add_2_integers_in_riscv.cpp](../../../tt_metal/programming_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.cpp),
@@ -23,7 +23,7 @@ Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-We create a `MeshDevice`, obtain its `MeshCommandQueue` to submit work, define a `MeshWorkload` and its device range, and create a `Program`. This example uses a single core at mesh coordinate `{0, 0}`.
+We create a 1x1 `MeshDevice` at mesh coordinate {0, 0}, obtain its `MeshCommandQueue` to submit work, define a `MeshWorkload` and its device range, create a `Program`, and indicate the `core` we intend to use at the coordinates `{0, 0}` for utilization in this example.
 
 ## Configure DRAM and L1 buffers
 
@@ -40,7 +40,7 @@ distributed::ReplicatedBufferConfig buffer_config{
 };
 ```
 
-We configure DRAM and L1 buffers using `DeviceLocalBufferConfig`, and size them with `ReplicatedBufferConfig` for use across the mesh.
+We configure DRAM and L1 buffers using `DeviceLocalBufferConfig`, and size them with `ReplicatedBufferConfig` for use across the mesh. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices.
 
 ## Create buffers
 
@@ -72,7 +72,7 @@ We prepare two single-element host vectors and upload them asynchronously to the
 ```cpp
 KernelHandle kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
+    "tt_metal/programming_examples/add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
     core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 ```

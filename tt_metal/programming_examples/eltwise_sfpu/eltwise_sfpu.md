@@ -80,7 +80,7 @@ std::vector<uint32_t> reader_compile_time_args;
 TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
 auto unary_reader_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
+    "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp",
     core,
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_1,
@@ -91,7 +91,7 @@ std::vector<uint32_t> writer_compile_time_args;
 TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
 auto unary_writer_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
+    "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp",
     core,
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
@@ -100,7 +100,7 @@ auto unary_writer_kernel_id = CreateKernel(
 
 auto eltwise_sfpu_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
+    "tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
     core,
     ComputeConfig{ .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false });
 

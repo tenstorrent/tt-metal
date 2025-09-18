@@ -150,12 +150,11 @@ void verify_tiles(
     fmt::print("=====================================================\n\n");
 }
 
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
     ////////// DEVICE SETUP //////////
-    //A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a single object,
-    // maintaining uniform memory and runtime state across all physical devices.
-    //A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
+    // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
+    // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
+    // MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
