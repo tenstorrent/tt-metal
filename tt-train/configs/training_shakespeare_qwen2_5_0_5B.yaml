@@ -12,7 +12,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   tokenizer_path: "data/qwen-tokenizer.json" 
-  tokenizer_type: "bbpe"
+  tokenizer_type: "bpe"
   transformer_config:
     num_heads: 14
     num_groups: 2
