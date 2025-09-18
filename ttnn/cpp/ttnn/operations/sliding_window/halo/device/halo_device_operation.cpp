@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -91,10 +92,13 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});
+    auto padded_output_shape = output_shape;
+    padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
+    padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
     return {TensorSpec(
         output_shape,
-        TensorLayout(
-            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, Alignment({shard_shape[0], shard_shape[1]})))};
+        TensorLayout::fromPaddedShape(
+            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
