@@ -19,9 +19,6 @@
 
 namespace tt::tt_metal::wormhole {
 
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"
-
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace tensix_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"

@@ -9,7 +9,6 @@
 #include <string>
 
 #include "blackhole/bh_hal.hpp"
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
@@ -18,6 +17,13 @@
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_1xx_common.hpp"
+
+namespace {
+
+// Wrap enum definitions in anonymouse namespace so as to not clash with other archs.
+#include "core_config.h"  // MaxProcessorsPerCoreType
+
+}  // namespace
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -53,13 +59,6 @@ static constexpr float INF_BH = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
-
-namespace blackhole {
-
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"  // ProgrammableCoreType
-
-}
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:

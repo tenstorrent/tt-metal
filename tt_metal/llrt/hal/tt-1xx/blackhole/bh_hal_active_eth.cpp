@@ -23,9 +23,6 @@
 
 namespace tt::tt_metal::blackhole {
 
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"
-
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"

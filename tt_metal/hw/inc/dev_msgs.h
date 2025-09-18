@@ -13,12 +13,14 @@
 // to update the generated files.
 //
 // Only a subset of the C++ language can be used:
-// - Only enum and struct definitions are allowed.
 // - Structs can only have scalars, structs, and 1-d array fields.
+// - Constants and enums will be copied to tt::tt_metal::dev_msgs namespace.
+//   - Do not define arch- or core-specific constants/enums here.  Use those in core_config.h.
 // - #includes are copied to the generated interface, so make sure
 //   those files are not arch- or core- specific.
 // - #if... always evaluates to the false branch, so you can use
 //   that to hide code from code generator.
+// - Other C++ constructs are not supported.
 
 #pragma once
 
@@ -27,6 +29,13 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+
+#ifdef HAL_BUILD
+// HAL will include this file for different arch/cores, resulting in conflicting definitions that
+// compiler will complain (ODR violation when compiling with LTO).
+// Wrap the definitions in an anonymous namespace to avoid that.
+namespace {
+#endif
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
@@ -422,3 +431,7 @@ struct routing_info_t {
     volatile uint32_t unused_arg0;
     eth_word_t fd_buffer_msgs[2];
 };
+
+#ifdef HAL_BUILD
+}  // namespace
+#endif
