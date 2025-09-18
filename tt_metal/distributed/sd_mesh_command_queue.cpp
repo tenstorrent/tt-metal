@@ -68,7 +68,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     auto lock = lock_api_function_();
     if (!blocking) {
-        log_warning(
+        log_debug(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
