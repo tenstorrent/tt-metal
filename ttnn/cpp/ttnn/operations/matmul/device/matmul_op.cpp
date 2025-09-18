@@ -1682,15 +1682,6 @@ void Matmul::validate(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
-        TT_FATAL(
-            (in0_tile_shape[1] == TILE_WIDTH && in0_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-        TT_FATAL(
-            (in1_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-    }
-
     const auto& optional_bias = optional_input_tensors.at(0);
     uint32_t bias_single_tile_size = 0;
     if (optional_bias.has_value()) {
