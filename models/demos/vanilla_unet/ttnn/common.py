@@ -96,11 +96,6 @@ class Conv:
             return_weights_and_bias=True,
             dtype=self.dtype,
         )
-
-        # output_tensor = ttnn.reshape(
-        #     output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        # )
-
         del _out_height, _out_width
 
         return output_tensor
@@ -184,10 +179,6 @@ class ConvTranspose:
             mirror_kernel=True,
             dtype=self.dtype,
         )
-
-        # output_tensor = ttnn.reshape(
-        #     output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        # )
 
         del _out_height, _out_width
 
