@@ -9,16 +9,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../)
 
-# Add executable with all required source files
-add_executable(test_deit_self_attention 
-    test_deit_self_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries - use the same torch libraries as parent
-target_link_libraries(test_deit_self_attention
+# Common variables
+set(COMMON_LIBRARIES
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
     ttnncpp
@@ -26,14 +18,7 @@ target_link_libraries(test_deit_self_attention
     pthread
 )
 
-# Set C++ standard
-set_target_properties(test_deit_self_attention PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_self_attention PRIVATE
+set(COMMON_COMPILE_OPTIONS
     -Wall
     -g
     -O0
@@ -42,358 +27,76 @@ target_compile_options(test_deit_self_attention PRIVATE
     -Wno-error
 )
 
-# Add executable for test_deit_self_output
-add_executable(test_deit_self_output 
-    test_deit_self_output.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../helper_funcs.cpp
+set(HELPER_FUNCS ../helper_funcs.cpp)
+
+# Function to create a test executable with common settings
+function(add_deit_test TARGET_NAME MAIN_SOURCE)
+    # Get additional source files from ARGN (remaining arguments)
+    set(ADDITIONAL_SOURCES ${ARGN})
+    
+    # Add executable
+    add_executable(${TARGET_NAME} 
+        ${MAIN_SOURCE}
+        ${ADDITIONAL_SOURCES}
+        ${HELPER_FUNCS}
+    )
+    
+    # Link libraries
+    target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES})
+    
+    # Set C++ standard
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
+    # Set compiler options
+    target_compile_options(${TARGET_NAME} PRIVATE ${COMMON_COMPILE_OPTIONS})
+endfunction()
+
+# Define source file paths
+set(TT_CPP_DIR ../tt_cpp)
+set(SELF_ATTENTION_SOURCES 
+    ${TT_CPP_DIR}/deit_self_attention.cpp
+    ${TT_CPP_DIR}/deit_self_output.cpp
+)
+set(ATTENTION_SOURCES 
+    ${TT_CPP_DIR}/deit_attention.cpp
+    ${SELF_ATTENTION_SOURCES}
+)
+set(LAYER_SOURCES 
+    ${TT_CPP_DIR}/deit_layer.cpp
+    ${ATTENTION_SOURCES}
+    ${TT_CPP_DIR}/deit_intermediate.cpp
+    ${TT_CPP_DIR}/deit_output.cpp
+)
+set(ENCODER_SOURCES 
+    ${TT_CPP_DIR}/deit_encoder.cpp
+    ${LAYER_SOURCES}
+)
+set(EMBEDDINGS_SOURCES 
+    ${TT_CPP_DIR}/deit_embeddings.cpp
+    ${TT_CPP_DIR}/deit_patch_embeddings.cpp
+)
+set(MODEL_SOURCES 
+    ${TT_CPP_DIR}/deit_model.cpp
+    ${TT_CPP_DIR}/deit_for_image_classification.cpp
+    ${ENCODER_SOURCES}
+    ${EMBEDDINGS_SOURCES}
+    ${TT_CPP_DIR}/deit_pooler.cpp
 )
 
-# Link libraries for test_deit_self_output
-target_link_libraries(test_deit_self_output
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_self_output
-set_target_properties(test_deit_self_output PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_self_output PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_attention
-add_executable(test_deit_attention 
-    test_deit_attention.cpp
-    ../tt_cpp/deit_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_attention
-target_link_libraries(test_deit_attention
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_attention
-set_target_properties(test_deit_attention PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_attention PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_patch_embeddings
-add_executable(test_deit_patch_embeddings 
-    test_deit_patch_embeddings.cpp
-    ../tt_cpp/deit_patch_embeddings.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_patch_embeddings
-target_link_libraries(test_deit_patch_embeddings
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_patch_embeddings
-set_target_properties(test_deit_patch_embeddings PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_patch_embeddings PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_embeddings
-add_executable(test_deit_embeddings 
-    test_deit_embeddings.cpp
-    ../tt_cpp/deit_embeddings.cpp
-    ../tt_cpp/deit_patch_embeddings.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_embeddings
-target_link_libraries(test_deit_embeddings
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_embeddings
-set_target_properties(test_deit_embeddings PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_embeddings PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_intermediate
-add_executable(test_deit_intermediate 
-    test_deit_intermediate.cpp
-    ../tt_cpp/deit_intermediate.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_intermediate
-target_link_libraries(test_deit_intermediate
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_intermediate
-set_target_properties(test_deit_intermediate PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_intermediate PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_output
-add_executable(test_deit_output 
-    test_deit_output.cpp
-    ../tt_cpp/deit_output.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_output
-target_link_libraries(test_deit_output
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_output
-set_target_properties(test_deit_output PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_output PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_layer
-add_executable(test_deit_layer 
-    test_deit_layer.cpp
-    ../tt_cpp/deit_layer.cpp
-    ../tt_cpp/deit_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../tt_cpp/deit_intermediate.cpp
-    ../tt_cpp/deit_output.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_layer
-target_link_libraries(test_deit_layer
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_layer
-set_target_properties(test_deit_layer PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_layer PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_encoder
-add_executable(test_deit_encoder 
-    test_deit_encoder.cpp
-    ../tt_cpp/deit_encoder.cpp
-    ../tt_cpp/deit_layer.cpp
-    ../tt_cpp/deit_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../tt_cpp/deit_intermediate.cpp
-    ../tt_cpp/deit_output.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_encoder
-target_link_libraries(test_deit_encoder
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_encoder
-set_target_properties(test_deit_encoder PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_encoder PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_model
-add_executable(test_deit_model 
-    test_deit_model.cpp
-    ../tt_cpp/deit_model.cpp
-    ../tt_cpp/deit_for_image_classification.cpp
-    ../tt_cpp/deit_encoder.cpp
-    ../tt_cpp/deit_layer.cpp
-    ../tt_cpp/deit_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../tt_cpp/deit_intermediate.cpp
-    ../tt_cpp/deit_output.cpp
-    ../tt_cpp/deit_embeddings.cpp
-    ../tt_cpp/deit_patch_embeddings.cpp
-    ../tt_cpp/deit_pooler.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_model
-target_link_libraries(test_deit_model
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_model
-set_target_properties(test_deit_model PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_model PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
-
-# Add executable for test_deit_for_image_classification
-add_executable(test_deit_for_image_classification 
-    test_deit_for_image_classification.cpp
-    ../tt_cpp/deit_for_image_classification.cpp
-    ../tt_cpp/deit_model.cpp
-    ../tt_cpp/deit_encoder.cpp
-    ../tt_cpp/deit_layer.cpp
-    ../tt_cpp/deit_attention.cpp
-    ../tt_cpp/deit_self_attention.cpp
-    ../tt_cpp/deit_self_output.cpp
-    ../tt_cpp/deit_intermediate.cpp
-    ../tt_cpp/deit_output.cpp
-    ../tt_cpp/deit_embeddings.cpp
-    ../tt_cpp/deit_patch_embeddings.cpp
-    ../tt_cpp/deit_pooler.cpp
-    ../helper_funcs.cpp
-)
-
-# Link libraries for test_deit_for_image_classification
-target_link_libraries(test_deit_for_image_classification
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    ttnncpp
-    tt_metal
-    pthread
-)
-
-# Set C++ standard for test_deit_for_image_classification
-set_target_properties(test_deit_for_image_classification PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Compiler options for debugging
-target_compile_options(test_deit_for_image_classification PRIVATE
-    -Wall
-    -g
-    -O0
-    -Wno-unused-parameter
-    -Wno-error=unused-parameter
-    -Wno-error
-)
+# Create all test executables
+add_deit_test(test_deit_self_attention test_deit_self_attention.cpp ${SELF_ATTENTION_SOURCES})
+add_deit_test(test_deit_self_output test_deit_self_output.cpp ${TT_CPP_DIR}/deit_self_output.cpp)
+add_deit_test(test_deit_attention test_deit_attention.cpp ${ATTENTION_SOURCES})
+add_deit_test(test_deit_patch_embeddings test_deit_patch_embeddings.cpp ${TT_CPP_DIR}/deit_patch_embeddings.cpp)
+add_deit_test(test_deit_embeddings test_deit_embeddings.cpp ${EMBEDDINGS_SOURCES})
+add_deit_test(test_deit_intermediate test_deit_intermediate.cpp ${TT_CPP_DIR}/deit_intermediate.cpp)
+add_deit_test(test_deit_output test_deit_output.cpp ${TT_CPP_DIR}/deit_output.cpp)
+add_deit_test(test_deit_layer test_deit_layer.cpp ${LAYER_SOURCES})
+add_deit_test(test_deit_encoder test_deit_encoder.cpp ${ENCODER_SOURCES})
+add_deit_test(test_deit_model test_deit_model.cpp ${MODEL_SOURCES})
+add_deit_test(test_deit_for_image_classification test_deit_for_image_classification.cpp ${MODEL_SOURCES})
+add_deit_test(test_deit_for_image_classification_with_teacher test_deit_for_image_classification_with_teacher.cpp 
+    ${TT_CPP_DIR}/deit_for_image_classification_with_teacher.cpp ${MODEL_SOURCES})

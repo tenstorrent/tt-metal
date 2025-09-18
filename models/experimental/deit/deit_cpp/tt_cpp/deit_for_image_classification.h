@@ -6,12 +6,15 @@
 #define DEIT_CPP_TT_CPP_DEIT_FOR_IMAGE_CLASSIFICATION_H
 
 #include "deit_config.h"
-#include "helper_funcs.h"
+#include "../helper_funcs.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <torch/torch.h>
 #include <optional>
+
+// Forward declaration
+class TtDeiTModel;
 
 /**
  * TtDeiTForImageClassification - C++ implementation of DeiT for image classification
@@ -38,6 +41,11 @@ public:
         const std::string& base_address,
         std::shared_ptr<ttnn::MeshDevice> device
     );
+
+    /**
+     * Destructor
+     */
+    ~TtDeiTForImageClassification();
 
     /**
      * Forward pass for image classification
@@ -74,7 +82,7 @@ private:
     
     // DeiT backbone components (we'll need to include the actual DeiT model class)
     // For now, we'll use forward declarations and implement in the cpp file
-    class TtDeiTModel* deit_model_;
+    std::unique_ptr<TtDeiTModel> deit_model_;
     
     // Classifier head weights
     ttnn::Tensor classifier_weight_;

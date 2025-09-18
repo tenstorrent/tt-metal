@@ -3,26 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deit_for_image_classification.h"
+#include "deit_model.h"
 #include <stdexcept>
 #include <iostream>
-
-// Forward declaration for TtDeiTModel
-class TtDeiTModel {
-public:
-    TtDeiTModel(const DeiTConfig& config, std::unordered_map<std::string, torch::Tensor>& state_dict, 
-                const std::string& base_address, std::shared_ptr<ttnn::MeshDevice> device) {}
-    
-    std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> forward(
-        const ttnn::Tensor& pixel_values,
-        const ttnn::Tensor* head_mask = nullptr,
-        bool output_attentions = false,
-        bool output_hidden_states = false,
-        bool return_dict = true
-    ) {
-        // Placeholder implementation
-        return std::make_tuple(pixel_values, std::nullopt, std::nullopt);
-    }
-};
 
 TtDeiTForImageClassification::TtDeiTForImageClassification(
     const DeiTConfig& config,
@@ -30,32 +13,53 @@ TtDeiTForImageClassification::TtDeiTForImageClassification(
     const std::string& base_address,
     std::shared_ptr<ttnn::MeshDevice> device
 ) : config_(config), device_(device), num_labels_(1000) { // Default to 1000 classes like ImageNet
-    
+
     try {
+
+        // Load model parameters to state_dict
+        std::vector<std::string> required_params = {
+            "classifier.weight", "classifier.bias"
+        };
+
+        // Split state_dict into two parts based on required_params
+        std::unordered_map<std::string, torch::Tensor> required_state_dict;
+        
+        for (const auto& param : required_params) {
+            std::string full_key = base_address + param;
+            auto it = state_dict.find(full_key);
+            if (it != state_dict.end()) {
+                required_state_dict[full_key] = it->second;
+                state_dict.erase(it);  // 直接从原始map中删除
+            }
+        }
+
+        
         // Initialize DeiT backbone model
-        std::string deit_base_address = base_address.empty() ? "deit" : base_address + "deit";
-        deit_model_ = new TtDeiTModel(
+        // std::string deit_base_address = base_address.empty() ? "deit" : base_address + "deit.";
+        deit_model_ = std::make_unique<TtDeiTModel>(
             config,
             state_dict,
-            deit_base_address,
-            device
+            base_address + "deit.",
+            device,
+            false,
+            false
         );
         
         // Load classifier weights
         std::string classifier_weight_key = base_address + "classifier.weight";
         std::string classifier_bias_key = base_address + "classifier.bias";
         
-        if (state_dict.find(classifier_weight_key) != state_dict.end()) {
+        if (required_state_dict.find(classifier_weight_key) != required_state_dict.end()) {
             classifier_weight_ = helper_funcs::torch_to_tt_tensor_tile(
-                state_dict[classifier_weight_key], device
+                required_state_dict[classifier_weight_key], device
             );
         } else {
-            throw std::runtime_error("Classifier weight not found in state_dict: " + classifier_weight_key);
+            throw std::runtime_error("Classifier weight not found in required_state_dict: " + classifier_weight_key);
         }
         
-        if (state_dict.find(classifier_bias_key) != state_dict.end()) {
+        if (required_state_dict.find(classifier_bias_key) != required_state_dict.end()) {
             classifier_bias_ = helper_funcs::torch_to_tt_tensor_tile(
-                state_dict[classifier_bias_key], device
+                required_state_dict[classifier_bias_key], device
             );
             
             // Update num_labels based on classifier bias size
@@ -75,6 +79,8 @@ TtDeiTForImageClassification::TtDeiTForImageClassification(
     }
 }
 
+TtDeiTForImageClassification::~TtDeiTForImageClassification() = default;
+
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> 
 TtDeiTForImageClassification::forward(
     const ttnn::Tensor& pixel_values,
@@ -85,8 +91,9 @@ TtDeiTForImageClassification::forward(
 ) {
     try {
         // Forward pass through DeiT backbone
-        auto [sequence_output, attentions, hidden_states] = deit_model_->forward(
+        auto [sequence_output, pooled_output, hidden_states, attentions] = deit_model_->forward(
             pixel_values,
+            std::nullopt,  // bool_masked_pos
             head_mask,
             output_attentions,
             output_hidden_states,
@@ -96,12 +103,27 @@ TtDeiTForImageClassification::forward(
         // Apply classifier to get logits
         ttnn::Tensor logits = apply_classifier(sequence_output);
         
-        // Return logits and optional outputs
-        return std::make_tuple(
-            logits,
-            output_attentions ? attentions : std::nullopt,
-            output_hidden_states ? hidden_states : std::nullopt
-        );
+        // Return logits and optional outputs (convert vector to single tensor if needed)
+        std::optional<ttnn::Tensor> hidden_states_output = std::nullopt;
+        std::optional<ttnn::Tensor> attentions_output = std::nullopt;
+        
+        if (output_hidden_states && hidden_states.has_value()) {
+            // For simplicity, return the last hidden state
+            const auto& hidden_states_vec = hidden_states.value();
+            if (!hidden_states_vec.empty()) {
+                hidden_states_output = hidden_states_vec.back();
+            }
+        }
+        
+        if (output_attentions && attentions.has_value()) {
+            // For simplicity, return the last attention
+            const auto& attentions_vec = attentions.value();
+            if (!attentions_vec.empty()) {
+                attentions_output = attentions_vec.back();
+            }
+        }
+        
+        return std::make_tuple(logits, hidden_states_output, attentions_output);
         
     } catch (const std::exception& e) {
         std::cerr << "Error in TtDeiTForImageClassification forward pass: " << e.what() << std::endl;
@@ -138,49 +160,6 @@ ttnn::Tensor TtDeiTForImageClassification::apply_classifier(const ttnn::Tensor& 
         
     } catch (const std::exception& e) {
         std::cerr << "Error applying classifier: " << e.what() << std::endl;
-        throw;
-    }
-}
-
-std::shared_ptr<TtDeiTForImageClassification> create_deit_for_image_classification(
-    std::shared_ptr<ttnn::MeshDevice> device,
-    const std::string& model_path
-) {
-    try {
-        // Default configuration for DeiT-base
-        DeiTConfig config;
-        config.hidden_size = 768;
-        config.num_hidden_layers = 12;
-        config.num_attention_heads = 12;
-        config.intermediate_size = 3072;
-        config.image_size = 224;
-        config.patch_size = 16;
-        config.num_channels = 3;
-        
-        // For now, create empty state_dict
-        // In practice, you'd load this from a pretrained model file
-        std::unordered_map<std::string, torch::Tensor> state_dict;
-        
-        // Create dummy weights for testing
-        // classifier.weight: [num_labels, hidden_size]
-        // classifier.bias: [num_labels]
-        int num_labels = 1000; // ImageNet classes
-        
-        state_dict["classifier.weight"] = torch::randn({num_labels, config.hidden_size});
-        state_dict["classifier.bias"] = torch::randn({num_labels});
-        
-        std::cout << "Creating TtDeiTForImageClassification with dummy weights" << std::endl;
-        std::cout << "Note: Load actual pretrained weights for real usage" << std::endl;
-        
-        return std::make_shared<TtDeiTForImageClassification>(
-            config,
-            state_dict,
-            "", // base_address
-            device
-        );
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Error creating TtDeiTForImageClassification: " << e.what() << std::endl;
         throw;
     }
 }
