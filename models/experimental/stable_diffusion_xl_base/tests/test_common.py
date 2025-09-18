@@ -535,7 +535,7 @@ def run_tt_image_gen(
                 unet_outputs.append(noise_pred)
 
             if use_cfg_parallel:
-                noise_pred_interleaved = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
+                noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
                 noise_pred_out = ttnn.experimental.all_gather_async(
