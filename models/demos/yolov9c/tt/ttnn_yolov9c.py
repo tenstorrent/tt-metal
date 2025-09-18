@@ -164,7 +164,7 @@ class TtYOLOv9cConv2D:
                 x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
                 x = x[:, :, :hw, :]
         else:
-            self.enable_autopad = True
+            self.enable_autopad = False
             padding = autopad(self.kernel_size, pad=None, dilation=1) if self.enable_autopad else self.padding
             x, [output_height, output_width], [self.weight, self.bias] = ttnn.conv_transpose2d(
                 input_tensor=x,
@@ -184,14 +184,11 @@ class TtYOLOv9cConv2D:
                 compute_config=self.compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=True,
-                output_padding=(1, 1),
+                output_padding=(0, 0),
                 dilation=(1, 1),
                 mirror_kernel=True,
                 dtype=self.activation_dtype,
             )
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.reshape(x, (x.shape[0], output_height, output_width, x.shape[3]))
-            x = ttnn.pad(x, ((0, 0), (0, 1), (0, 1), (0, 0)), value=0.0)
 
         if use_signpost:
             signpost(header="TtYOLOv9cConv2D End")
@@ -822,7 +819,7 @@ class TtnnProto:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            is_dfl=True,
+            is_detect=True,
             deallocate_activation=True,
         )
         self.cv3 = TtYOLOv9cConv2D(
