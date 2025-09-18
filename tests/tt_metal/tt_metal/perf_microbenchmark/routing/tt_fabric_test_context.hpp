@@ -604,13 +604,35 @@ private:
         }
 
         try {
-            // Use the cycle detection function from your header
-            bool has_cycles = tt::tt_fabric::fabric_tests::detect_and_handle_cycles(
-                pairs,
-                *fixture_,  // TestFixture implements IRouteManager
-                config.name,
-                false  // Set to true if you want deadlock prevention mode
-            );
+            // Check if this is likely inter-mesh traffic by comparing global vs local nodes
+            auto global_nodes = fixture_->get_global_node_ids();
+            auto local_nodes = fixture_->get_local_node_ids();
+            bool is_likely_inter_mesh = global_nodes.size() > local_nodes.size();
+
+            // Check if any pairs cross mesh boundaries
+            bool has_inter_mesh_pairs = false;
+            if (is_likely_inter_mesh) {
+                for (const auto& [src, dest] : pairs) {
+                    if (src.mesh_id != dest.mesh_id) {
+                        has_inter_mesh_pairs = true;
+                        break;
+                    }
+                }
+            }
+
+            bool has_cycles = false;
+
+            if (has_inter_mesh_pairs || is_likely_inter_mesh) {
+                // Use enhanced inter-mesh cycle detection for better accuracy
+                log_info(tt::LogTest, "Using inter-mesh cycle detection for test '{}'", config.name);
+                has_cycles = tt::tt_fabric::fabric_tests::detect_cycles_in_random_inter_mesh_traffic(
+                    pairs, *fixture_, config.name);
+            } else {
+                // Use regular cycle detection for intra-mesh traffic
+                log_info(tt::LogTest, "Using standard cycle detection for test '{}'", config.name);
+                has_cycles =
+                    tt::tt_fabric::fabric_tests::detect_and_handle_cycles(pairs, *fixture_, config.name, false);
+            }
 
             if (has_cycles) {
                 log_warning(tt::LogTest, "Cycles detected in test '{}' - check generated YAML files", config.name);

@@ -7,6 +7,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric.cpp
+    routing/test_cycle_detection.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
@@ -70,6 +71,14 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/tt_fabric_test_context.cpp
         )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
+    endif()
+    if(${TEST_SRC} STREQUAL "routing/test_cycle_detection.cpp")
+        target_link_libraries(
+            ${TEST_TARGET}
+            PRIVATE
+                yaml-cpp::yaml-cpp
+                gmock_main
+        )
     endif()
     target_include_directories(
         ${TEST_TARGET}

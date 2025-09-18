@@ -1214,7 +1214,9 @@ public:
                     log_info(LogTest, "Skipping part of test '{}' due to filter criteria.", p_config.name);
                     continue;
                 }
-                auto expanded_tests = this->expand_high_level_patterns(p_config);
+
+                // Apply universal cycle detection with retry logic for all test patterns
+                auto expanded_tests = this->expand_high_level_patterns_with_cycle_detection(p_config);
 
                 built_tests.insert(
                     built_tests.end(),
@@ -1338,6 +1340,92 @@ private:
         resolved_dest.atomic_inc_address = parsed_dest.atomic_inc_address;
 
         return resolved_dest;
+    }
+
+    std::vector<TestConfig> expand_high_level_patterns_with_cycle_detection(ParsedTestConfig& p_config) {
+        const uint32_t max_cycle_detection_attempts = 10;
+        uint32_t attempt = 0;
+        std::vector<TestConfig> final_tests;
+
+        // Determine if cycle detection should be enabled
+        bool should_check_cycles = p_config.check_for_cycles;
+        if (!should_check_cycles) {
+            // Auto-enable cycle detection for patterns that are likely to have inter-mesh traffic
+            auto global_nodes = device_info_provider_.get_global_node_ids();
+            auto local_nodes = device_info_provider_.get_local_node_ids();
+
+            // If we have more global nodes than local nodes, we likely have inter-mesh traffic
+            if (global_nodes.size() > local_nodes.size()) {
+                should_check_cycles = true;
+                log_info(
+                    tt::LogTest,
+                    "Auto-enabling cycle detection for potential inter-mesh traffic in test: {}",
+                    p_config.name);
+            }
+        }
+
+        // Keep generating test patterns until we find one without cycles
+        do {
+            attempt++;
+
+            // Generate the test patterns
+            auto candidate_tests = this->expand_high_level_patterns(p_config);
+
+            if (!should_check_cycles) {
+                // No cycle detection needed, return the first generated patterns
+                final_tests = std::move(candidate_tests);
+                break;
+            }
+
+            // Check each generated test for cycles
+            bool all_tests_cycle_free = true;
+            for (const auto& test : candidate_tests) {
+                // Extract src->dst pairs from the test configuration
+                std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+                for (const auto& sender : test.senders) {
+                    for (const auto& pattern : sender.patterns) {
+                        if (pattern.destination && pattern.destination->device) {
+                            pairs.emplace_back(sender.device, *pattern.destination->device);
+                        }
+                    }
+                }
+
+                if (!pairs.empty()) {
+                    bool cycles_found = tt::tt_fabric::fabric_tests::detect_cycles_in_random_inter_mesh_traffic(
+                        pairs, route_manager_, test.name);
+
+                    if (cycles_found) {
+                        all_tests_cycle_free = false;
+                        log_warning(
+                            tt::LogTest,
+                            "Cycles detected in test {} on attempt {}, regenerating...",
+                            test.name,
+                            attempt);
+                        break;
+                    }
+                }
+            }
+
+            if (all_tests_cycle_free) {
+                log_info(
+                    tt::LogTest, "Generated cycle-free test patterns for {} on attempt {}", p_config.name, attempt);
+                final_tests = std::move(candidate_tests);
+                break;
+            } else {
+                if (attempt >= max_cycle_detection_attempts) {
+                    log_warning(
+                        tt::LogTest,
+                        "Failed to generate cycle-free patterns after {} attempts for test {}. Proceeding with last "
+                        "generated patterns.",
+                        max_cycle_detection_attempts,
+                        p_config.name);
+                    final_tests = std::move(candidate_tests);
+                    break;
+                }
+            }
+        } while (attempt < max_cycle_detection_attempts);
+
+        return final_tests;
     }
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config) {

@@ -1308,6 +1308,59 @@ public:
         return (min_routing_planes == std::numeric_limits<uint32_t>::max()) ? 0 : min_routing_planes;
     }
 
+    std::vector<FabricNodeId> get_full_fabric_path(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
+        // Use the control plane API from within the cycle detector
+        auto fabric_path = tt::tt_fabric::fabric_tests::get_fabric_path_from_control_plane(
+            *control_plane_ptr_, src_node_id, dst_node_id);
+
+        if (!fabric_path.empty()) {
+            return fabric_path;
+        }
+
+        // Fallback to hop-based path building if control plane API fails
+        log_info(tt::LogTest, "Falling back to hop-based path tracing for {}->{}", src_node_id, dst_node_id);
+        auto hops = get_hops_to_chip(src_node_id, dst_node_id);
+        auto path_graph = tt::tt_fabric::fabric_tests::build_path_graph(src_node_id, dst_node_id, *this);
+
+        // Convert path graph to linear path
+        std::vector<FabricNodeId> path;
+        path.push_back(src_node_id);
+
+        FabricNodeId current_node = src_node_id;
+        std::unordered_set<FabricNodeId> visited;
+        visited.insert(current_node);
+
+        while (current_node != dst_node_id) {
+            auto it = path_graph.find(current_node);
+            if (it == path_graph.end() || it->second.empty()) {
+                break;
+            }
+
+            // Find next unvisited node
+            FabricNodeId next_node = dst_node_id;  // Default to destination
+            for (const auto& neighbor : it->second) {
+                if (visited.find(neighbor) == visited.end()) {
+                    next_node = neighbor;
+                    break;
+                }
+            }
+
+            if (visited.find(next_node) != visited.end()) {
+                // All neighbors visited, we're stuck
+                break;
+            }
+
+            path.push_back(next_node);
+            visited.insert(next_node);
+            current_node = next_node;
+        }
+
+        return path;
+    }
+
+    const void* get_control_plane() const override { return static_cast<const void*>(control_plane_ptr_); }
+
     // ======================================================================================
     // IDistributedContextManager methods
     // ======================================================================================
