@@ -6,7 +6,6 @@
 
 #include <set>
 
-#include "dev_msgs.h"
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
@@ -66,9 +65,9 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
 }
 
 inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
-    dprint_buf_msg_t* buf = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<dprint_buf_msg_t*>(
+    auto* buf = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<DebugPrintMemLayout*>(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
+    return reinterpret_cast<uint64_t>(&buf[risc_id]);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
