@@ -26,25 +26,49 @@ class TtnnV10Detect:
             parameters.one2one_cv2[0][0],
             self.conv_pt[f"{path}.one2one_cv2.0.0"],
             is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv2_0_1 = Conv(
             device,
             parameters.one2one_cv2[0][1],
             self.conv_pt[f"{path}.one2one_cv2.0.1"],
             is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv2_0_2 = TtYolov10Conv2D(
-            parameters.one2one_cv2[0][2], self.conv_pt[f"{path}.one2one_cv2.0.2"], device=device, is_detect=True
+            parameters.one2one_cv2[0][2],
+            self.conv_pt[f"{path}.one2one_cv2.0.2"],
+            device=device,
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         self.cv2_1_0 = Conv(
-            device, parameters.one2one_cv2[1][0], self.conv_pt[f"{path}.one2one_cv2.1.0"], is_detect=True
+            device,
+            parameters.one2one_cv2[1][0],
+            self.conv_pt[f"{path}.one2one_cv2.1.0"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv2_1_1 = Conv(
-            device, parameters.one2one_cv2[1][1], self.conv_pt[f"{path}.one2one_cv2.1.1"], is_detect=True
+            device,
+            parameters.one2one_cv2[1][1],
+            self.conv_pt[f"{path}.one2one_cv2.1.1"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv2_1_2 = TtYolov10Conv2D(
-            parameters.one2one_cv2[1][2], self.conv_pt[f"{path}.one2one_cv2.1.2"], device=device, is_detect=True
+            parameters.one2one_cv2[1][2],
+            self.conv_pt[f"{path}.one2one_cv2.1.2"],
+            device=device,
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         self.cv2_2_0 = Conv(
@@ -57,10 +81,20 @@ class TtnnV10Detect:
             enable_weights_double_buffer=True,
         )
         self.cv2_2_1 = Conv(
-            device, parameters.one2one_cv2[2][1], self.conv_pt[f"{path}.one2one_cv2.2.1"], is_detect=True
+            device,
+            parameters.one2one_cv2[2][1],
+            self.conv_pt[f"{path}.one2one_cv2.2.1"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv2_2_2 = TtYolov10Conv2D(
-            parameters.one2one_cv2[2][2], self.conv_pt[f"{path}.one2one_cv2.2.2"], device=device, is_detect=True
+            parameters.one2one_cv2[2][2],
+            self.conv_pt[f"{path}.one2one_cv2.2.2"],
+            device=device,
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         self.cv3_0_0_0 = Conv(
@@ -69,9 +103,16 @@ class TtnnV10Detect:
             self.conv_pt[f"{path}.one2one_cv3.0.0.0"],
             is_detect=True,
             core_count=64,
+            # enable_act_double_buffer=True,
+            # enable_weights_double_buffer=False,
         )
         self.cv3_0_0_1 = Conv(
-            device, parameters.one2one_cv3[0][0][1], self.conv_pt[f"{path}.one2one_cv3.0.0.1"], is_detect=True
+            device,
+            parameters.one2one_cv3[0][0][1],
+            self.conv_pt[f"{path}.one2one_cv3.0.0.1"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_0_1_0 = Conv(
             device,
@@ -79,15 +120,24 @@ class TtnnV10Detect:
             self.conv_pt[f"{path}.one2one_cv3.0.1.0"],
             is_detect=True,
             core_count=64,
+            # enable_act_double_buffer=True,
+            # enable_weights_double_buffer=False,
         )
         self.cv3_0_1_1 = Conv(
             device,
             parameters.one2one_cv3[0][1][1],
             self.conv_pt[f"{path}.one2one_cv3.0.1.1"],
             is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_0_2_0 = TtYolov10Conv2D(
-            parameters.one2one_cv3[0][2], self.conv_pt[f"{path}.one2one_cv3.0.2"], device=device, is_detect=True
+            parameters.one2one_cv3[0][2],
+            self.conv_pt[f"{path}.one2one_cv3.0.2"],
+            device=device,
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         self.cv3_1_0_0 = Conv(
@@ -96,40 +146,41 @@ class TtnnV10Detect:
             self.conv_pt[f"{path}.one2one_cv3.1.0.0"],
             is_detect=True,
             use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_1_0_1 = Conv(
             device,
             parameters.one2one_cv3[1][0][1],
             self.conv_pt[f"{path}.one2one_cv3.1.0.1"],
             is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_1_1_0 = Conv(
-            device, parameters.one2one_cv3[1][1][0], self.conv_pt[f"{path}.one2one_cv3.1.1.0"], is_detect=True
+            device,
+            parameters.one2one_cv3[1][1][0],
+            self.conv_pt[f"{path}.one2one_cv3.1.1.0"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_1_1_1 = Conv(
             device,
             parameters.one2one_cv3[1][1][1],
             self.conv_pt[f"{path}.one2one_cv3.1.1.1"],
             is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_1_2_0 = TtYolov10Conv2D(
-            parameters.one2one_cv3[1][2], self.conv_pt[f"{path}.one2one_cv3.1.2"], device=device, is_detect=True
+            parameters.one2one_cv3[1][2],
+            self.conv_pt[f"{path}.one2one_cv3.1.2"],
+            device=device,
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
-
-        # self.cv3_1_0_0 = Conv(
-        #     device,
-        #     parameters.one2one_cv3[1][0][0],
-        #     conv_pt.one2one_cv3[1][0][0],
-        #     is_detect=True,
-        #     use_1d_systolic_array=False,
-        # )
-
-        # self.cv3_1_0_1 = Conv(device, parameters.one2one_cv3[1][0][1], conv_pt.one2one_cv3[1][0][1], is_detect=True)
-        # self.cv3_1_1_0 = Conv(device, parameters.one2one_cv3[1][1][0], conv_pt.one2one_cv3[1][1][0], is_detect=True)
-        # self.cv3_1_1_1 = Conv(device, parameters.one2one_cv3[1][1][1], conv_pt.one2one_cv3[1][1][1], is_detect=True)
-        # self.cv3_1_2_0 = TtYolov10Conv2D(
-        #     parameters.one2one_cv3[1][2], conv_pt.one2one_cv3[1][2], device=device, is_detect=True
-        # )
 
         self.cv3_2_0_0 = Conv(
             device,
@@ -137,6 +188,8 @@ class TtnnV10Detect:
             self.conv_pt[f"{path}.one2one_cv3.2.0.0"],
             is_detect=True,
             use_1d_systolic_array=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
 
         self.cv3_2_0_1 = Conv(
@@ -149,7 +202,12 @@ class TtnnV10Detect:
             enable_weights_double_buffer=True,
         )
         self.cv3_2_1_0 = Conv(
-            device, parameters.one2one_cv3[2][1][0], self.conv_pt[f"{path}.one2one_cv3.2.1.0"], is_detect=True
+            device,
+            parameters.one2one_cv3[2][1][0],
+            self.conv_pt[f"{path}.one2one_cv3.2.1.0"],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
         self.cv3_2_1_1 = Conv(
             device,
@@ -167,9 +225,16 @@ class TtnnV10Detect:
             is_detect=True,
             use_1d_systolic_array=False,
             enable_act_double_buffer=True,
-            enable_weights_double_buffer=True,
+            enable_weights_double_buffer=False,
         )
-        self.dfl = Conv(device, parameters.dfl, self.conv_pt[f"{path}.dfl"], is_dfl=True)
+        self.dfl = Conv(
+            device,
+            parameters.dfl,
+            self.conv_pt[f"{path}.dfl"],
+            is_dfl=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
 
         self.anchors = conv_pt["anchors"]
         self.strides = conv_pt["strides"]

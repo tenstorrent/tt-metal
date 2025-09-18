@@ -222,14 +222,9 @@ def custom_preprocessor(device, model, name, mesh_mapper=None):
         "model.23.one2one_cv3.2.0.1",
         "model.23.one2one_cv3.2.1.0",
         "model.23.one2one_cv3.2.1.1",
-        "model.6.cv1",
-        "model.8.cv1",
         "model.9.cv1",
         "model.10.cv1",
-        "model.13.cv1",
-        "model.19.cv1",
         "model.20.cv1",
-        "model.22.cv1",
     ]
 
     parameters = {}
@@ -238,6 +233,11 @@ def custom_preprocessor(device, model, name, mesh_mapper=None):
         "model.2.cv1",
         "model.4.cv1",
         "model.16.cv1",
+        "model.6.cv1",
+        "model.8.cv1",
+        "model.13.cv1",
+        "model.19.cv1",
+        "model.22.cv1",
     ]
 
     for path in pairs:

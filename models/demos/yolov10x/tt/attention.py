@@ -93,8 +93,9 @@ class TtnnAttention:
             compute_kernel_config=compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=ttnn.bfloat8_b,
         )
-        attn = ttnn.multiply(attn, self.scale)
+        attn = ttnn.multiply(attn, self.scale, dtype=ttnn.bfloat8_b)
 
         attn = ttnn.softmax(attn, dim=-1)
 
@@ -105,6 +106,7 @@ class TtnnAttention:
             compute_kernel_config=compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=ttnn.bfloat8_b,
         )
 
         attn = ttnn.reshape(attn, (1, 320, 1, 400))
@@ -115,7 +117,7 @@ class TtnnAttention:
 
         v = self.pe(v)
 
-        x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         output = self.proj(x)
         deallocate_tensors(attn, v, x, q, k)
