@@ -45,8 +45,8 @@ def run_perf_deit(
 
     sample_image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
-    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
     input = image_processor(sample_image, return_tensors="pt")
 
     tt_input = torch_to_tt_tensor_tile(input["pixel_values"], device)
