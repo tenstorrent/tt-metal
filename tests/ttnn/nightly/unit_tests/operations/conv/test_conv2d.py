@@ -4606,12 +4606,14 @@ def test_conv_bs_grid_pre_sharded(
     input_channels,
     transpose_shard,
 ):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
+
     input_height = input_width = 32
     batch = 1
-    grid_size = device.compute_with_storage_grid_size()
     sharded_cfg = ttnn.create_sharded_memory_config(
         shape=(1, 1, batch * input_height * input_width, input_channels),
-        core_grid=ttnn.CoreGrid(x=grid_size.x, y=grid_size.y),
+        core_grid=ttnn.CoreGrid(x=8, y=8),
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_shard else ttnn.ShardOrientation.COL_MAJOR,
     )
@@ -4781,6 +4783,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
 
     # Get device grid size and create core range set based on num_cores
     grid_size = device.compute_with_storage_grid_size()
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
 
     # Use ttnn's built-in function to create core range set with row-wise allocation
     input_core_range_set = ttnn.num_cores_to_corerangeset(
