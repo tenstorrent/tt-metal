@@ -130,8 +130,9 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
 
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
+    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+        program.set_runtime_id(op_id);
     }
 }
 
