@@ -9,7 +9,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-// #include "debug/dprint.h"
+#include "debug/dprint.h"
 #include "compute_kernel_api/untilize.h"
 
 #ifdef FUSE_BIAS
@@ -330,8 +330,16 @@ void MAIN {
                         pack_reconfig_l1_acc(0);
 #endif
 
-                        tilize_in(in0_pretilize_cb_id, in0_block_w, reader_num_h_subblocks, tilized_in0_cb_id);
-
+                        DPRINT << "first tilize start tiles=" << in0_num_subblocks_read * in0_block_w << ENDL();
+                        tilize_in<true, !split_reader>(
+                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        DPRINT << "first tilize done" << ENDL();
+#ifdef SPLIT_READER
+                        DPRINT << "second tilize start tiles=" << in0_num_subblocks_read_last * in0_block_w << ENDL();
+                        tilize_in<false, true>(
+                            in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                        DPRINT << "second tilize done" << ENDL();
+#endif
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,
