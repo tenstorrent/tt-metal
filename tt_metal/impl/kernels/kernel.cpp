@@ -568,26 +568,6 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
-    // Skip if using pre-compiled binaries and they're already loaded
-    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
-        // For binary paths, we don't need the TT_ASSERT check
-        std::vector<const ll_api::memory*> binaries;
-        uint32_t tensix_core_type =
-            MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-        uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-        int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
-
-        std::string binary_path = this->kernel_src_.path_.string();
-        auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
-        const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
-        binaries.push_back(&binary_mem);
-        [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
-        log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
-        this->set_binaries(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
-        return;
-    }
-
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
 
