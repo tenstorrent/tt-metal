@@ -18,26 +18,26 @@ def multi_user_containers(num_containers, image):
 
         service_name = f"tray-{i}"
         services[service_name] = {
-            'image': image,
-            'stdin_open': True,
-            'tty': True,
-            'container_name': service_name,
-            'volumes': [
+            "image": image,
+            "stdin_open": True,
+            "tty": True,
+            "container_name": service_name,
+            "volumes": [
                 "/home/ubuntu/actions-runner/_work/tt-metal/tt-metal:/app/tt-metal:rw",
                 f"/home/ubuntu/.cache/tt-metal-cache-{i}:/app/.cache:rw",
                 "/dev/hugepages-1G:/dev/hugepages-1G",
             ],
-            'entrypoint': ["./.github/scripts/utils/multi-user-configure-container.sh"],
-            'user': f"{user_id}:{group_id}",
-            'working_dir': "/app/tt-metal",
-            'environment': {
+            "entrypoint": ["./.github/scripts/utils/multi-user-configure-container.sh"],
+            "user": f"{user_id}:{group_id}",
+            "working_dir": "/app/tt-metal",
+            "environment": {
                 "HOME": "/app",
                 "LD_LIBRARY_PATH": "/app/tt-metal/build/lib",
                 "PYTHONPATH": "/app/tt-metal",
                 "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml",
-                "TT_MULTI_USER_GALAXY": f"/app/tt-metal/.multi-user-galaxy-docker-files/tray-{i}.txt"
+                "TT_MULTI_USER_GALAXY": f"/app/tt-metal/.multi-user-galaxy-docker-files/tray-{i}.txt",
             },
-            'devices': devices
+            "devices": devices,
         }
 
         os.makedirs(f"/home/{username}/.cache/tt-metal-cache-{i}", exist_ok=True)
@@ -51,7 +51,7 @@ args = parser.parse_args()
 services = multi_user_containers(args.num_containers, args.image)
 
 data = {
-    'services': services
+    "services": services
 }
 
 with open("multi-user-dc.yaml", "w") as yaml_file:
