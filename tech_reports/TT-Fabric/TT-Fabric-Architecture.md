@@ -567,7 +567,7 @@ The following diagram shows how traffic gets rerouted when Eth A link becomes in
 
 ## 2.3 TT-transport (Layer 4) <a id="layer_4"></a>
 
-TT-Transport implements buffering and Fabric Virtual Channels (FVCs). Buffer sizes and number of FVCs depend on amount of available SRAM space on fabric workers for these functions. FVCs guarantee independent progress of traffic on unique channels. Traffic from multiple sources on the same FVC gets serialized. All traffic on the same FVC is guaranteed to be ordered. Both the number of FVCs and the size of underlaying RBs are configurable.
+TT-Transport implements virtual channels that are used to carry packets in the routing netowrk. A virtual channel is composed of multiple slots where each slot can hold one packet at a time. Virtual channel size and number of slots depend on amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
 
 ### 2.3.1 Fabric Virtual Channel <a id="fvc"></a>
 
@@ -577,129 +577,19 @@ TT-fabric clients can use non overlapping FVCs to avoid deadlocks when some down
 
 ### 2.3.2 Fabric Control Virtual Channel <a id="fvcc"></a>
 
-TT-Fabric will use a dedicated fabric virtual channel to route all control messages in the system. This will prevent control traffic from interfering and competing with data read/write traffic thereby affecting data bandwidth.
+TT-Fabric uses a dedicated fabric virtual channel to route all control messages in the system. This prevents control traffic from interfering and competing with data traffic.
 
-Control messages are small, fixed size packets and can be routed more efficiently using dedicated FVC that can be smaller in size than data FVCs.
+Control messages are small, fixed size packets and can be routed more efficiently by using a dedicated control virtual channel that is smaller than data virtual channel.
 
 ## 2.4 TT-session (Layer 5) <a id="layer_5"></a>
 
-TT-Session layer provides interface for higher level user programs/kernels to initiate read or write traffic over TT-Fabric. A session can be stateless or stateful.
+TT-Session layer provides the APIs for higher level user programs/kernels to connect and send data over TT-Fabric. Any data sent over fabric is encapsulated in independent, asynchronous packets. A packet specifies the complete destination memory address where the data must be written. Session layer does not natively support synchronous transfer of data where data sender and data receiver need some kind of flow control.
+Synchronous data transfer however is supported via sockets over fabric. We have implemented send/receive operations that use fabric send apis to exchange data as well as flow control messages.
 
-In a stateless session, clients use asynchronous read/write APIs to issue individual transactions. This can be viewed as a Remote Direct Memory Access (RDMA) operation. Barriers or Acknowledgements are used to ensure that the transactions have been completed. All transactions are independent TT-Fabric packets where a packet specifies the complete destination memory address where the data must be written to or read from. Asynchronous APIs that provide RDMA operations are described later in this document.
 
-A stateful session implies the creation of sockets where senders and receivers open sockets with the same ids. Socket ids are used to identify the appropriate TT-Session receiver when data for a socket is received. A Socket can be of two types:
+### 2.4.2 Sockets over TT-Fabric <a id="sockets"></a>
 
-* Connection oriented or Streaming Socket (SSocket)
-* Connectionless or Datagram Socket (DSocket)
-
-Due to the asynchronous nature of TT-Fabric nodes, a stateful session also needs a temporal epoch number to properly synchronize senders and receivers on the timeline. There can be multiple senders on fabric wanting to open a socket to the same receiver. The receiver, however, may be temporally ready to receive from only one of the senders. Epoch identifier allows the TT-session layer to connect sender/receiver that have the same socket id and epoch. Furthermore, epochs demarcate operation boundaries. This means that all producers and consumers of connected sockets have to be in the same epoch. This requirement does not preclude simultaneous activity of multiple unique but independent epochs in TT-fabric. Just that there are no socket transfers across epochs. By having a full handshake between sender and receiver TT-session layers and appropriately tagged Epochs we can guarantee that asynchronous devices will not create a deadlock while trying to open sockets to a common destination.
-
-### 2.4.1 Packet (RDMA) Mode <a id="packet_mode"></a>
-
-Packet or RDMA mode does not require any TT-Session receiver on the destination device. TT-Fabric packet contains all the information such as the target memory address where the data is supposed to be written to or read from. All packets are self-contained. There are no resources in TT-Fabric that are reserved exclusively for senders or receivers of packets. All packets on an FVC are interleaved (on a packet boundary) with other packets that are being transported in the fabric. On the destination device, RDMA packet payload is committed straight to the memory address specified in the packet header.
-
-### 2.4.2 Streaming Socket Mode <a id="ssocket"></a>
-
-In SSocket mode, TT-Transport binds an FVC to the streaming socket. FVCs are reserved in all the fabric routers from sender to receiver. Other devices in the fabric that share a route segment with the socket bound FVC are not allowed to send data until the SSocket transfer is complete. Devices are allowed to use a different FVC that is not bound to a socket. Devices on non-overlapping routes can use the same FVC. This is because the non-overlapping routes do not share routing buffers. A SSocket can be unicast or multicast. In multicast mode, sender data is received by all the receivers that have subscribed to a multicast SSocket.
-
-To open a socket, both the sender and receiver request a socket with same socket id, epoch and socket type from their respective TT-session layers.
-
-A socket session is active when:
-
-* Both the sender and receiver are ready for a socket\_id/epoch
-* All fabric nodes on socket route have reserved a FVC for the socket
-
-In a single epoch, there can be as many active socket sessions, in one direction, as the number of reservable FVC for sockets. After the reservable FVCs are exhausted, further calls to open sockets for an epoch will result in socket open error.
-
-### 2.4.3 Datagram Socket Mode <a id="dsocket"></a>
-
-In DSocket mode, TT-Transport does not bind the socket to an FVC. Socket data is packetized and then routed over TT-Fabric using the general routing FVCs which may be carrying other RDMA or Datagram traffic. When carrying datagrams TT-Fabric packet headers contain the socket id and destination device id. Destination memory address in the packet header is ignored. Packet payload processing is left to the discretion of the receiving DSocket owner.
-
-To open a datagram socket, both the sender and receiver request a socket with same socket id and socket type from their respective TT-session layers.
-
-A socket session is active when:
-
-* Both the sender and receiver are ready for a socket\_id/epoch
-
-Since DSockets do not require a dedicated FVC, there can be as many active datagram socket sessions as permitted by memory constraints of TT-Fabric workers.
-
-### 2.4.4 Endpoint Flow Control Handshake Considerations <a id="flow_control"></a>
-
-TT-Fabric endpoints can send and receive data in packet mode of socket mode. Regardless of the transport mode, the handshake mode between the producer/consumer pair and endpoint/TT-Fabric impacts locally produced as well as other traffic in the system.
-
-End-to-End handshake between producer and consumer guarantees that a producer will not issue traffic into fabric, if its associated consumer does not have enough buffer space. While this guarantees that consumer will never backpressure FVC, end-to-end handshake latency can be very high especially if the endpoints are far apart. The problem is further exacerbated if the consumer does not have enough buffer space to cover the round-trip handshake latency thereby negatively impacting overall bandwidth of the data transfer. End-to-End handshake however prevents slower or stalled endpoints from blocking other traffic on the same FVC.
-
-Local handshake on the other hand does not consider consumer buffer capacity when issuing traffic. The producer injects traffic into the network as fast as possible. Receiving endpoint drains traffic from fabric as fast as possible. If the processing rates are matched, there is no traffic backup from consumer into FVC buffers. However, if the consumer is slow or stalled, traffic starts backing up in FVC buffers along the network route. Since the producer is oblivious to consumer state, it keeps generating traffic, and the backup eventually reaches the local TT-Fabric router that is responsible for local handshake with the data producer. It is only at this point that the producer stalls. With local handshake we can achieve the highest possible bandwidth but at the cost of fully blocking an FVC all the way from consumer to producer. This can lead to deadlocks if there are data dependencies between different consumers that are sharing the same FVC. To avoid deadlocks, all such producer/consumer pairs require a dedicated FVC. Since FVCs are limited, there can always be a case where the number of dependencies is greater than the number of available FVCs. When employing local handshakes, one has to carefully analyze data dependencies and make sure that producers do not end up deadlocking.
-
-The following table summarizes the above discussion. We get 4 modes of operation when we combine Shared/Private FVC usage with End-to-End/Local Handshake.
-
-<table>
-  <tr>
-    <th></th>
-    <th colspan="2">Credit Handshake Method</th>
-  </tr>
-  <tr>
-    <th>FVC Usage</th>
-    <th>End-to-End Handshake</th>
-    <th>Local Handshake</th>
-  </tr>
-  <tr>
-    <td>Shared (Packet, DSocket)</td>
-    <td>
-      &bull; Data producer and consumer exchange credits<br>
-      &bull; Data does not back up into TT-Fabric FVC buffers<br>
-      &bull; Consumer has local DRAM spill buffer<br>
-    </td>
-    <td>
-      &bull; Producer only handshakes with local TT-Fabric router<br>
-      &bull; Slow consumer causes data to back up into TT-Fabric FVC buffers<br>
-      &bull; In worst case, if a consumer is stalled, the back pressure reaches all the way to the producer<br>
-      &bull; Can cause deadlocks if there is data dependency between consumers on same FVC<br>
-    </td>
-  </tr>
-  <tr>
-    <td>Private (SSocket)</td>
-    <td>
-      &bull; Data producer and consumer exchange credits<br>
-      &bull; Data can back up into TT-Fabric FVC buffers<br>
-      &bull; Consumer has local DRAM spill buffer<br>
-    </td>
-    <td>
-      &bull; Producer only handshakes with local TT-Fabric router<br>
-      &bull; Slow consumer causes data to back up into TT-Fabric FVC buffers.
-    </td>
-  </tr>
-</table>
-
-TT-Fabric must balance the following competing requirements:
-
-* Limited number of FVCs
-* Prevent endpoints from stalling TT-Fabric traffic (End-to-End Handshake)
-* Achieve max ethernet link bandwidth (Local Handshake)
-
-To support End-to-End handshake that can also operate at maximum bandwidth, a consumer needs local buffers that are large enough to mask round-trip credit handshake latency. With limited L1 storage this cannot be guaranteed as the round-trip latency depends on network distance.
-
-TT-Fabric solves this problem by providing local DRAM spill circular buffers or DSCB. Normally, for local handshake, an endpoint only has a SRAM/L1 circular buffer or L1CB. When end-to-end handshake requires large amount of buffering, it is provided through DSCB. For incoming traffic, the endpoint pulls data from fabric into L1CB if it has space. Otherwise, incoming data gets redirected to DSCB. Producer and Consumer exchange credits based on available space in DSCB and not L1CB. DSCB is sized to cover round-trip latency.
-
-Notwithstanding the deadlock hazards, a subtle drawback of local handshake is that when receiver stalls and L1CB is full, further data bound for the consumer is buffered over multiple NOC and ethernet hops on TT-Fabric route segment from producer. When the receiver un-stalls, its data is still spread over many network hops and incurs that latency to finally get to the local buffers.
-
-An added advantage of DSCB is that this data now gets buffered locally on device DRAM rather than being in distant network buffers.
-
-The following flowchart shows how a TT-Fabric consumer interface block manages L1CB and DSCB.
-
-Blue arrows show the normal idling path.
-
-Green arrows show the path when consumer is able to process incoming traffic as soon as it arrives. There is always space available in L1CB and we never spill to DSCB.
-
-Yellow arrows show the paths that handle cases where L1CB may be getting full, and we redirect incoming traffic to DSCB. To maintain proper data ordering, whenever DSCB is not empty, data from DSCB has to be processed before new data arriving from TT-Fabric is processed.
-
-![](images/image014.png)
-
-The following figure shows a high-level view of data path between L1CB and DSCB.
-
-![](images/image015.png)
-
-In general, the spill CB does not need to be in DRAM. We should be able to allocate storage buffers in Tensix SRAM. This mode will require some additional setup so that the consumer TT-Fabric interface module knows where to store incoming data stream and how to spread it across distributed SRAM storage on the device.
+Describe Socket send/receive op operation.
 
 # 3 Read/Write API Specification <a id="rw_api"></a>
 
