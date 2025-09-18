@@ -205,7 +205,11 @@ void py_module(py::module& module) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("tensor"),
+            py::arg("memory_config"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 
     bind_registered_operation(
         module,
