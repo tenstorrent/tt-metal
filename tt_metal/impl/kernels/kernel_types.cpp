@@ -14,29 +14,29 @@ namespace tt::tt_metal {
 ReaderDataMovementConfig::ReaderDataMovementConfig(
     std::vector<uint32_t> compile_args,
     std::map<std::string, std::string> defines,
-    KernelBuildOptLevel opt_level,
-    std::unordered_map<std::string, uint32_t> named_compile_args) :
+    std::unordered_map<std::string, uint32_t> named_compile_args,
+    KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = detail::GetPreferredNOCForDRAMRead(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),
-        .opt_level = opt_level,
-        .named_compile_args = std::move(named_compile_args)} {}
+        .named_compile_args = std::move(named_compile_args),
+        .opt_level = opt_level} {}
 
 WriterDataMovementConfig::WriterDataMovementConfig(
     std::vector<uint32_t> compile_args,
     std::map<std::string, std::string> defines,
-    KernelBuildOptLevel opt_level,
-    std::unordered_map<std::string, uint32_t> named_compile_args) :
+    std::unordered_map<std::string, uint32_t> named_compile_args,
+    KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),
-        .opt_level = opt_level,
-        .named_compile_args = std::move(named_compile_args)} {}
+        .named_compile_args = std::move(named_compile_args),
+        .opt_level = opt_level} {}
 
 }  // namespace tt::tt_metal
