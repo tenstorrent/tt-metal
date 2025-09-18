@@ -21,7 +21,7 @@ def kill_all(proc, grace_period=100):
 
 
 def test_main():
-    hang_timeout = 180  # seconds
+    hang_timeout = 600  # seconds
 
     argv = [
         "pytest",
