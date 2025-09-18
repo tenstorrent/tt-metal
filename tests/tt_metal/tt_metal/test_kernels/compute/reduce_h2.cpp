@@ -10,6 +10,8 @@
 #include "compute_kernel_api/reduce.h"
 #include "debug/dprint.h"
 
+#include "compute_kernel_api/fused_eltwise_binary_reduce.h"
+
 namespace NAMESPACE {
 void MAIN {
     // =============================================================================
@@ -100,6 +102,8 @@ void MAIN {
         // =========================================================================
         // STEP 5: REDUCE INIT (only on first tile)
         // =========================================================================
+
+        // fused_eltwise_binary_reuse_dest();
 
         // compute_kernel_hw_startup(cb_intermediate, cb_in2, cb_out0);
         reduce_init(cb_intermediate, cb_in2, cb_out0);  // cb_in2 is scaler

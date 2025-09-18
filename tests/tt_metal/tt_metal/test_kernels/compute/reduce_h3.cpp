@@ -72,12 +72,18 @@ void MAIN {
         fused_eltwise_binary_compute<ELTWISE_OP_TYPE, 0>(
             cb_inp0, cb_inp1, 0, 0);  // template argument for idst, since it has to be 0 for fused op to work
 
+        // dprint_tensix_dest_reg(0);
+
         tile_regs_commit();
         tile_regs_wait();
 
         // *** FUSED DESTINATION REUSE ***
         // This prepares the destination registers for the reduce operation
         fused_eltwise_binary_reuse_dest();
+
+        // DPRINT_MATH({ DPRINT << "Destination register 0 contents:" << ENDL(); });
+        // DPRINT_PACK({ DPRINT << "Destination register 0 contents:" << ENDL(); });
+        // DPRINT_UNPACK({ DPRINT << "Destination register 0 contents:" << ENDL(); });
 
         // DON'T release tile_regs here - we need them for the reduce operation!
 
@@ -91,7 +97,9 @@ void MAIN {
         // STEP 5: FUSED REDUCE INITIALIZATION
         // =========================================================================
         fused_reduce_init<REDUCE_OP, REDUCE_DIM>();
-
+        DPRINT_MATH({ DPRINT << "After reduce_init" << ENDL(); });
+        DPRINT_PACK({ DPRINT << "After reduce_init" << ENDL(); });
+        DPRINT_UNPACK({ DPRINT << "After reduce_init" << ENDL(); });
         // =========================================================================
         // STEP 6: FUSED REDUCE OPERATION
         // =========================================================================
@@ -103,6 +111,11 @@ void MAIN {
 
         // *** FUSED REDUCE OPERATION ***
         fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
+
+        dprint_tensix_dest_reg(0);
+        DPRINT_MATH({ DPRINT << "After reduce_compute" << ENDL(); });
+        DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); });
+        DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); });
 
         // Pack and output the reduced result
         cb_reserve_back(cb_out0, onetile);
@@ -129,9 +142,9 @@ void MAIN {
             }
         });
 
+        tile_regs_release();  // Finally release the tile registers
         cb_push_back(cb_out0, onetile);
 
-        tile_regs_release();  // Finally release the tile registers
     }
 
     // =============================================================================

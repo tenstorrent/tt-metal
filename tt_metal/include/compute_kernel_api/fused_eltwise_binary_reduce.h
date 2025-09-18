@@ -43,10 +43,13 @@ ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc
     MATH((llk_math_hw_configure_disaggregated(cb_inp0, cb_inp1)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
 
-    // Optional full initialization for UNPACK (conditional compilation)
-    if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1, 0 /*transpose*/, acc_to_dest)));
-    }
+    // // Optional full initialization for UNPACK (conditional compilation)
+    // if constexpr (full_init) {
+    //     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1, 0 /*transpose*/, acc_to_dest)));
+    // }
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16)));
+    PACK((llk_pack_init()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
 // =============================================================================
@@ -73,10 +76,6 @@ ALWI void fused_eltwise_binary_compute(uint32_t cb_inp0, uint32_t cb_inp1, uint3
 ALWI void fused_eltwise_binary_reuse_dest() {
     // 4. eltwise_binary_reuse_dest_as_src, moving the result to srcA
     MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>());
-
-    // 7. Set both SrcA and SrcB as data valid for the reduce operation
-    // Bit 0 = SrcA valid, Bit 1 = SrcB valid, so 0b11 = both valid
-    UNPACK(TTI_SETDVALID(0b11));
 
     // 5. populate dest with ones
     MATH(ckernel::sfpu::_populate_first_tile_with_ones_());

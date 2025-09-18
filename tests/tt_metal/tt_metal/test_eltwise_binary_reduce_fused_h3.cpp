@@ -243,10 +243,10 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Creating test data...");
 
         // Input tensor 0: filled with incrementing values (0, 1, 2, 3, ...)
-        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.0f);
+        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.5f);
 
         // Input tensor 1: filled with constant value (1.0f)
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.0f);
+        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 2.0f);
 
         // Write input data to device
         log_info(LogTest, "Writing input data to device...");
