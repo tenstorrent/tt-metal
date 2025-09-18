@@ -39,10 +39,25 @@ class TtnnDWConv:
         # The activation will be handled separately if enable_act is True
         activation = "silu" if enable_act else ""
         
-        # Pass the inner conv layer to Yolov11Conv2D, not the whole DWConv module
+        # Extract and reformat DWConv parameters to match Yolov11Conv2D expectations
+        # DWConv has nested structure: conv_pt.conv.weight, conv_pt.bn.bias
+        # We need to flatten it to: conv_pt_flat.weight, conv_pt_flat.bias
+        class FlattenedParams:
+            def __init__(self, dwconv_params):
+                self.weight = dwconv_params.conv.weight
+                # For DWConv, bias comes from BatchNorm if it exists
+                if hasattr(dwconv_params, 'bn') and hasattr(dwconv_params.bn, 'bias'):
+                    self.bias = dwconv_params.bn.bias
+                # If no bias in bn, check conv layer
+                elif hasattr(dwconv_params.conv, 'bias') and dwconv_params.conv.bias is not None:
+                    self.bias = dwconv_params.conv.bias
+        
+        conv_pt_flat = FlattenedParams(conv_pt)
+        
+        # Pass the inner conv layer and flattened parameters to Yolov11Conv2D
         self.conv = Yolov11Conv2D(
             parameter.conv, 
-            conv_pt,
+            conv_pt_flat,
             device=device,
             activation=activation,
             is_detect=is_detect
