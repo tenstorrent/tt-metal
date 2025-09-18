@@ -28,16 +28,8 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         // expm1(x) = x + (x^2/2) + (x^3/3^2)
         // In Horner form, on reducing further : y = (val * (val * (val * 0.166f + 0.5f )+ 1)
         y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(0.166f)));
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
-            // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
-            // rather than 81 (which would have been correct).
-            // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-            y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
-        }
     }
-    v_elseif(val > -88.0f) {
+    v_elseif(val > sfpi::vFloat(-88.0f)) {
         // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
         // z = (bias + x * factor * N_m; where:
         // factor = 0x00b8aa3b (computed through log(e))
@@ -56,16 +48,15 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
 
         y = sfpi::reinterpret<sfpi::vFloat>(zii) - sfpi::vConst1;
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
-            // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
-            // rather than 81 (which would have been correct).
-            // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-            y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
-        }
     }
     v_endif;
+    if constexpr (!is_fp32_dest_acc_en) {
+        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        // rather than 81 (which would have been correct).
+        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+    }
     return y;
 }
 
