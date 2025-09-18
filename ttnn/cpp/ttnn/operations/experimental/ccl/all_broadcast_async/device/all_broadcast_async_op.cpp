@@ -116,31 +116,38 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     std::vector<Tensor>& output_tensors,
     const GlobalSemaphore& init_barrier_semaphore,
     const GlobalSemaphore& final_barrier_semaphore) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", coord);
-    auto physical_coord = coord;
-    auto topological_coord = coord;  // make this tensor topology coord, coord is physical coord
+    log_info(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", coord);
 
     auto tensor_topology = input_tensors[0].tensor_topology();
     auto tensor_topology_shape = tensor_topology.distribution_shape();
     log_info(tt::LogOp, "DEBUG: tensor_topology_shape: {}", tensor_topology_shape);
+    auto topological_coord =
+        tensor_topology.get_tensor_coord(coord);  // make this tensor topology coord, coord is physical coord
+    if (topological_coord.has_value()) {
+        log_info(tt::LogOp, "DEBUG: topological_coord: {}", topological_coord.value());
+    } else {
+        log_info(tt::LogOp, "DEBUG: topological_coord is null");
+    }
+    TT_FATAL(topological_coord.has_value(), "DEBUG: topological_coord is null");
+
     uint32_t target_ring_size = get_tensor_topology_dimension(tensor_topology_shape, this->cluster_axis);
     log_info(tt::LogOp, "DEBUG: target_ring_size: {}", target_ring_size);
-    std::optional<MeshCoordinate> backward_tensor_coord =
-        get_tensor_topology_neighbor(tensor_topology_shape, topological_coord, -1, this->topology, this->cluster_axis);
+    std::optional<MeshCoordinate> backward_tensor_coord = get_tensor_topology_neighbor(
+        tensor_topology_shape, topological_coord.value(), -1, this->topology, this->cluster_axis);
     if (backward_tensor_coord.has_value()) {
         log_info(tt::LogOp, "DEBUG: backward_tensor_coord: {}", backward_tensor_coord.value());
     } else {
         log_info(tt::LogOp, "DEBUG: backward_tensor_coord is null");
     }
-    std::optional<MeshCoordinate> forward_tensor_coord =
-        get_tensor_topology_neighbor(tensor_topology_shape, topological_coord, 1, this->topology, this->cluster_axis);
+    std::optional<MeshCoordinate> forward_tensor_coord = get_tensor_topology_neighbor(
+        tensor_topology_shape, topological_coord.value(), 1, this->topology, this->cluster_axis);
     if (forward_tensor_coord.has_value()) {
         log_info(tt::LogOp, "DEBUG: forward_tensor_coord: {}", forward_tensor_coord.value());
     } else {
         log_info(tt::LogOp, "DEBUG: forward_tensor_coord is null");
     }
     uint32_t device_index =
-        get_tensor_topology_linearized_index(tensor_topology_shape, topological_coord, this->cluster_axis);
+        get_tensor_topology_linearized_index(tensor_topology_shape, topological_coord.value(), this->cluster_axis);
     log_info(tt::LogOp, "DEBUG: device_index: {}", device_index);
     std::optional<MeshCoordinate> forward_coord =
         forward_tensor_coord.has_value()
@@ -163,7 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
 
     return all_broadcast_async_multicore(
         input_tensors[0],
-        physical_coord,
+        coord,
         forward_coord,
         backward_coord,
         output_tensors,
