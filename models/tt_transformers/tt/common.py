@@ -452,12 +452,12 @@ def copy_host_to_device(
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
     """
-    logger.info(f"Copying host tensors to device tensors...")
+    # logger.info(f"Copying host tensors to device tensors...")
     if device_tensors is None:
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            logger.info(f"1) Copying host tensor {i} to device tensor {i}...")
+            # logger.info(f"1) Copying host tensor {i} to device tensor {i}...")
             if shard_specs and shard_specs[i] is not None:
                 on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
             elif isinstance(host_tensors[i], list):
@@ -466,16 +466,16 @@ def copy_host_to_device(
             else:
                 on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
-        logger.info(f"1) Done Copying host tensors to device tensors...")
+        # logger.info(f"1) Done Copying host tensors to device tensors...")
         return ret
     else:
         for i in range(len(host_tensors)):
-            logger.info(f"2) Copying host tensor {i} to device tensor {i}...")
+            # logger.info(f"2) Copying host tensor {i} to device tensor {i}...")
             if host_tensors[i] is None:
                 assert device_tensors[i] is None
                 continue
             ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
-        logger.info(f"2) Done Copying host tensors to device tensors...")
+        # logger.info(f"2) Done Copying host tensors to device tensors...")
         return device_tensors
 
 
@@ -856,7 +856,7 @@ def convert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
 
 
 def create_causal_mask(
-    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+    attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode", dtype=torch.bfloat16
 ):
     if PagedAttentionConfig is not None:
         if mode == "prefill":
@@ -869,7 +869,7 @@ def create_causal_mask(
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
-    dtype = input_embeds.dtype
+
     mask_factory_function = causal_mask_function
 
     causal_mask = sdpa_mask_recent_torch(
@@ -883,7 +883,7 @@ def create_causal_mask(
     )
     causal_mask = convert_attn_mask(causal_mask)
     if mode == "decode":
-        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+        causal_mask = causal_mask.repeat_interleave(args.n_heads // device.shape[1], 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,
@@ -891,7 +891,7 @@ def create_causal_mask(
         layout=ttnn.TILE_LAYOUT,
         device=None,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+        # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
         # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
     )
 
@@ -918,7 +918,7 @@ def sliding_window_causal_mask_function(sliding_window: int) -> Callable:
 
 
 def create_sliding_window_causal_mask(
-    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+    attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode", dtype=torch.bfloat16
 ):
     n_local_kv_heads = args.n_kv_heads // args.num_devices
     if PagedAttentionConfig is not None:
@@ -935,7 +935,6 @@ def create_sliding_window_causal_mask(
     )
     sliding_window = args.sliding_window
 
-    dtype = input_embeds.dtype
     mask_factory_function = sliding_window_causal_mask_function(sliding_window)
     mask_interface = sdpa_mask_recent_torch
 
@@ -956,7 +955,7 @@ def create_sliding_window_causal_mask(
     causal_mask = convert_attn_mask(causal_mask)
 
     if mode == "decode":
-        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+        causal_mask = causal_mask.repeat_interleave(args.n_heads // device.shape[1], 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,
@@ -964,7 +963,7 @@ def create_sliding_window_causal_mask(
         layout=ttnn.TILE_LAYOUT,
         device=None,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+        # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
         # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
     )
     return causal_mask
