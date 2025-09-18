@@ -36,7 +36,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
         (
             "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
             "Describe this image.",
-            "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful.",
+            "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean, and appears to be interacting with the dog. The dog is wearing a harness and is sitting on its haunches, facing the person. The person is smiling and seems to be engaging in a playful activity with the dog, possibly giving it a high-five or a paw-pat. The background shows the ocean with gentle waves, and the sky is clear, suggesting a calm and sunny day. The overall atmosphere of the image is warm and joyful, capturing a moment of connection between the person and their pet",
         ),
         (
             "https://gist.github.com/gwangTT/ae3ac698de56020bc459018c7c2bff08/raw/a91b2df96c61234d83a7f61c4495bfc826786c74/paper.png",

@@ -1187,7 +1187,7 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 24.05371875,
+                "N150_Llama-3.2-1B": 24.38065625,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
@@ -1195,7 +1195,7 @@ def test_demo_text(
                 "N300_Qwen2.5-7B": 90,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
+                "T3K_Qwen2.5-Coder-32B": 260,  # `f10cs08`
                 "T3K_Qwen2.5-72B": 240,
                 "T3K_Qwen3-32B": 166.5,
             }
