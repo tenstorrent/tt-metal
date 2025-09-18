@@ -205,9 +205,6 @@ class DispatcherData:
             pass
         try:
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
-        except:
-            pass
-        try:
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
         except:
             pass
