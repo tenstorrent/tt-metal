@@ -160,7 +160,7 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
     ParsedTestConfig test_config;
 
     test_config.name = parse_scalar<std::string>(test_yaml["name"]);
-    log_info(tt::LogTest, "name: {}", test_config.name);
+    log_info(tt::LogTest, "Parsing test: {}", test_config.name);
 
     TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
     test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
