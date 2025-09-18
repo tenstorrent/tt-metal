@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-logger/tt-logger.hpp>
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,10 +32,13 @@ struct DirectWriteConfig {
 };
 
 /// @brief Run direct write test comparing stateful vs non-stateful approaches
-/// @param device Device to run on
+/// @param mesh_device MeshDevice to run on
 /// @param test_config Test configuration
 /// @return Success status
-bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
+bool run_dm(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, const DirectWriteConfig& test_config) {
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
+
     // Program
     Program program = CreateProgram();
 
@@ -43,9 +48,9 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
 
     // Get L1 Address info
     L1AddressInfo sender_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.sender_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
     L1AddressInfo receiver_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.receiver_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.receiver_core_coord);
 
     // Validate L1 memory
     if (sender_l1_info.base_address != receiver_l1_info.base_address || sender_l1_info.size != receiver_l1_info.size) {
@@ -112,8 +117,15 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     tt_metal::detail::WriteToDeviceL1(device, test_config.receiver_core_coord, l1_base_address, init_data);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    // Launch the program
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use mesh workload approach
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto target_devices =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));  // Single device at (0,0)
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
 
     // Read back and validate results
     std::vector<uint32_t> output_data;
@@ -172,9 +184,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
 }
 
 void performance_comparison_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
     CoreCoord receiver_core = {1, 1}) {
@@ -194,18 +204,14 @@ void performance_comparison_test(
                     .same_destination = true,  // Same dest to show stateful advantage
                     .use_stateful_approach = stateful};
 
-                for (unsigned int id = 0; id < num_devices_; id++) {
-                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-                }
+                EXPECT_TRUE(run_dm(mesh_device, test_config));
             }
         }
     }
 }
 
 void address_pattern_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
     CoreCoord receiver_core = {1, 1}) {
@@ -227,9 +233,7 @@ void address_pattern_test(
                         .use_stateful_approach = stateful,
                         .same_value = same_value};
 
-                    for (unsigned int id = 0; id < num_devices_; id++) {
-                        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-                    }
+                    EXPECT_TRUE(run_dm(mesh_device, test_config));
                 }
             }
         }
@@ -238,16 +242,24 @@ void address_pattern_test(
 
 }  // namespace unit_tests::dm::direct_write
 
-TEST_F(DeviceFixture, TensixDirectWritePerformanceComparison) {
-    // GTEST_SKIP() << "Skipping test";
+TEST_F(GenericMeshDeviceFixture, TensixDirectWritePerformanceComparison) {
+    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    if (arch == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test for Blackhole architecture";
+    }
+
     uint32_t test_id = 500;
-    unit_tests::dm::direct_write::performance_comparison_test(arch_, devices_, num_devices_, test_id);
+    unit_tests::dm::direct_write::performance_comparison_test(get_mesh_device(), test_id);
 }
 
-TEST_F(DeviceFixture, TensixDirectWriteAddressPatterns) {
-    GTEST_SKIP() << "Skipping test";
+TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
+    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    if (arch == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test for Blackhole architecture";
+    }
+
     uint32_t test_id = 501;
-    unit_tests::dm::direct_write::address_pattern_test(arch_, devices_, num_devices_, test_id);
+    unit_tests::dm::direct_write::address_pattern_test(get_mesh_device(), test_id);
 }
 
 }  // namespace tt::tt_metal
