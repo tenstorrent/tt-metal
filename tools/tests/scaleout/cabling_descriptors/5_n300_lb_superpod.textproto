@@ -22,7 +22,7 @@ graph_templates {
       node_ref { node_descriptor: "N300_LB" }
     }
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections {
           port_a { path: ["node1"] tray_id: 4 port_id: 2 }
