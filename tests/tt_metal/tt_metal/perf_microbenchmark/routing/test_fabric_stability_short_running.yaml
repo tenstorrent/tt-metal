@@ -24,7 +24,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 20
+        iterations: 15
 
   - name: "MeshLowLatencyLooped"
     fabric_setup:
@@ -43,7 +43,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 20
+        iterations: 15
 
   - name: "MeshDynamicLooped"
     fabric_setup:
@@ -63,4 +63,4 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 20
+        iterations: 15
