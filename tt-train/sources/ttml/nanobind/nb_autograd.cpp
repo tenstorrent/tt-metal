@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "nanobind/nb_autograd.hpp"
+
 #include <nanobind/nanobind.h>
-// #include <nanobind/stl/function.h>
-// #include <nanobind/stl/shared_ptr.h>
-// #include <nanobind/stl/string.h>
-// #include <nanobind/stl/unordered_map.h>
-// #include <nanobind/stl/vector.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 
 #include <core/ttnn_all_includes.hpp>
 
@@ -15,7 +14,6 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
-#include "nanobind/nb_autograd.hpp"
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/shared_ptr.h>
 
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
