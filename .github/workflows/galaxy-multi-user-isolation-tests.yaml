@@ -85,8 +85,8 @@ jobs:
               echo ">>> Running $testname in $tray"
               (
                 docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
-                  status=${PIPESTATUS[0]}
-                  exit $status
+                status=${PIPESTATUS[0]}
+                exit $status
               ) &
               pids+=($!)
             done
