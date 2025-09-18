@@ -94,7 +94,7 @@ Qwen::Qwen(const QwenConfig& config) : m_config(config) {
             embedding_dim));
     }
     
-    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ true);
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
@@ -170,7 +170,7 @@ QwenConfig read_config(const YAML::Node& config) {
     }
     qwen_config.dropout_prob = config["dropout_prob"].as<float>(0.0F);
     qwen_config.num_blocks = config["num_blocks"].as<uint32_t>(32U);
-    qwen_config.vocab_size = config["vocab_size"].as<uint32_t>(151936U);
+    qwen_config.vocab_size = config["vocab_size"].as<uint32_t>(151665U);
     qwen_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>(2048U);
     qwen_config.theta = config["theta"].as<float>(1000000.0F);  // Qwen2 uses higher theta
     qwen_config.runner_type = common::transformer::read_runner_type(config);

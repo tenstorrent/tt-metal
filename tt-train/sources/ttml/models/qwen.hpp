@@ -25,7 +25,7 @@ struct QwenConfig {
     float dropout_prob = 0.0F;
     float theta = 10000.0F;
     uint32_t num_blocks = 32U;
-    uint32_t vocab_size = 151936U;  // Qwen2 vocab size
+    uint32_t vocab_size = 151665U;  // Qwen2 vocab size
     uint32_t max_sequence_length = 2048U;
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Disabled;
