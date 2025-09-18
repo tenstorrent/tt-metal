@@ -75,6 +75,71 @@ def is_server_running(port):
 
 
 class CORSRequestHandler(SimpleHTTPRequestHandler):
+    def do_DELETE(self):
+        traces_dir = PROFILER_WASM_TRACES_DIR
+        if self.path.startswith("/traces/"):
+            import urllib.parse
+            import shutil
+
+            filename = self.path[len("/traces/") :]
+            # Remove query string if present
+            filename = filename.split("?", 1)[0]
+            filename = urllib.parse.unquote(filename)
+            print(f"[DEBUG] DELETE /traces/ raw filename: {repr(filename)}")
+            file_path = os.path.join(traces_dir, filename)
+            print(f"[DEBUG] DELETE /traces/ resolved file_path: '{file_path}'")
+            # Only allow .tracy files, no path traversal
+            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+                print(f"[DEBUG] DELETE /traces/ rejected filename: '{filename}'")
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid filename")
+                return
+            if not os.path.isfile(file_path):
+                print(f"[DEBUG] DELETE /traces/ file not found: '{file_path}'")
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"File not found")
+                return
+            try:
+                os.remove(file_path)
+                print(f"[DEBUG] DELETE /traces/ deleted file: '{file_path}'")
+                # Check if embed.tracy is a symlink to the deleted file
+                embed_path = os.path.join(PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME)
+                if os.path.islink(embed_path):
+                    target = os.readlink(embed_path)
+                    abs_target = os.path.abspath(os.path.join(os.path.dirname(embed_path), target))
+                    abs_deleted = os.path.abspath(file_path)
+                    if abs_target == abs_deleted:
+                        os.unlink(embed_path)
+                        # Find first available .tracy file
+                        files = [
+                            f
+                            for f in os.listdir(traces_dir)
+                            if f.endswith(".tracy") and os.path.isfile(os.path.join(traces_dir, f))
+                        ]
+                        files.sort(reverse=True)
+                        if files:
+                            new_target = os.path.relpath(
+                                os.path.join(traces_dir, files[0]), os.path.dirname(embed_path)
+                            )
+                            os.symlink(new_target, embed_path)
+                            print(f"[DEBUG] embed.tracy now points to: {new_target}")
+                        else:
+                            print("[DEBUG] No .tracy files left to point embed.tracy to.")
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Deleted")
+            except Exception as e:
+                print(f"[DEBUG] DELETE /traces/ error deleting file: {e}")
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+        # If not /traces/, return 404
+        self.send_response(404)
+        self.end_headers()
+
     def end_headers(self):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
