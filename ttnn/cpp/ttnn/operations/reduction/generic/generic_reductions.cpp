@@ -201,6 +201,7 @@ static Tensor reduce_impl(
     if (!single_reduce_op) {
         auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
+            bool first = true;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
                 if (found) {
@@ -217,7 +218,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            first ? scalar : 1.0,
                             non_height_width_dims);
                     } else {
                         output_tensor = reduce_impl<ReduceType::Sum>(
@@ -226,9 +227,10 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            first ? scalar : 1.0,
                             non_height_width_dims);
                     }
+                    first = false;
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
                     }
