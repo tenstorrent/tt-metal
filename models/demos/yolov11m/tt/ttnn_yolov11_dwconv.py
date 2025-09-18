@@ -53,6 +53,10 @@ class TtnnDWConv:
                     self.bias = dwconv_params.conv.bias
                 else:
                     self.bias = None
+            
+            def __contains__(self, key):
+                """Support 'key in object' syntax like TTNN parameter containers"""
+                return hasattr(self, key)
         
         conv_pt_flat = FlattenedParams(conv_pt)
         
