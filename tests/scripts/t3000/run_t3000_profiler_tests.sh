@@ -41,28 +41,30 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        ./tools/tracy/profile_this.py -c "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
             echo "No verification as test was skipped"
         else
             echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports")
             echo $runDate
             LINE_COUNT=2700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
 
             # Testing device only report on the same artifacts
-            rm -rf $PROFILER_OUTPUT_DIR/
+            rm -rf $PROFILER_OUTPUT_DIR/$runDate
             ./tools/tracy/process_ops_logs.py --device-only --date
             echo "Verifying device-only results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports")
             echo $runDate
             LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
 
             LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
@@ -75,17 +77,18 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tools/tracy/profile_this.py -c "'pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-check-mem_config_input0-mem_config_ag0-sd35_prompt-1link-mesh_device0]'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    python -m tracy -v -r -p --cpp-post-process -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-check-mem_config_input0-mem_config_ag0-sd35_prompt-1link-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
         echo "No verification as test was skipped"
     else
         echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/)
+        runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports")
         LINE_COUNT=8 #8 devices
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherDeviceOperation")
         echo $res
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
     fi
 }
 
