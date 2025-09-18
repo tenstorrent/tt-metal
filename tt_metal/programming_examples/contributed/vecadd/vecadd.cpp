@@ -184,15 +184,15 @@ int main(int argc, char** argv) {
     SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
     SetRuntimeArgs(program, compute, core, {n_tiles});
 
-    // We have setup the program. Now we can queue the kernel for execution.
-    // The last argument to EnqueueProgram is a boolean that specifies whether
+    // We have setup the program. Now we can add it to the workload and queue it for execution.
+    // The last argument to EnqueueMeshWorkload is a boolean that specifies whether
     // we wait for the program to finish execution before returning. I've set
     // it to true. But alternatively, you can set it to false and call
     // `Finish(cq)` to wait for all programs to finish.
     // But it shouldn't matter in this case since we block on reading the output
     // buffer.
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
     // Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;
 
