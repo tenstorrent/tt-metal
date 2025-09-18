@@ -19,54 +19,86 @@
 namespace ttnn {
 namespace ccl {
 
-std::vector<IDevice*> get_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis) {
+std::vector<IDevice*> get_devices(
+    const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis) {
     const auto& mesh_view = mesh_device.get_view();
     if (cluster_axis.has_value()) {
         TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
-        return cluster_axis.value() == 0 ? mesh_view.get_devices_on_row(0) : mesh_view.get_devices_on_column(0);
+        return cluster_axis.value() == 0 ? mesh_view.get_devices_on_row(coord[0])
+                                         : mesh_view.get_devices_on_column(coord[1]);
     }
     return mesh_view.get_devices();
 }
 
-uint32_t get_num_devices(const MeshDevice& mesh_device, const std::optional<uint32_t>& cluster_axis) {
-    const auto& mesh_view = mesh_device.get_view();
-    if (cluster_axis.has_value()) {
-        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
-        return cluster_axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
-    }
-    return mesh_view.num_devices();
-}
-
-std::optional<MeshCoordinate> get_neighbor(
-    const MeshDevice& mesh_device,
+std::optional<MeshCoordinate> get_topological_neighbor(
+    const tt::tt_metal::distributed::MeshShape& shape,
     const MeshCoordinate& coord,
     int offset,
-    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode mode,
+    ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis) {
-    auto mesh_view = mesh_device.get_view();
-    auto shape = mesh_view.shape();
+    auto boundary_mode = topology == ttnn::ccl::Topology::Ring
+                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
+                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     if (cluster_axis.has_value()) {
         TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
-        return coord.get_neighbor(shape, offset, cluster_axis.value(), mode);
-    } else if (shape[1] > 1) {
-        return coord.get_neighbor(shape, offset, 1, mode);
-    } else if (shape[0] > 1) {
-        return coord.get_neighbor(shape, offset, 0, mode);
+        return coord.get_neighbor(shape, offset, cluster_axis.value(), boundary_mode);
     } else {
-        TT_THROW("All gather without cluster axis is only supported when shape[1-cluster_axis] == 1");
+        for (int i = shape.dims() - 1; i >= 0; i--) {
+            if (shape[i] > 1) {
+                return coord.get_neighbor(shape, offset, i, boundary_mode);
+            }
+        }
         return std::nullopt;
     }
 }
 
-uint32_t get_linearized_index(
-    const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis) {
-    auto mesh_view = mesh_device.get_view();
-    auto shape = mesh_view.shape();
+uint32_t get_topological_linearized_index(
+    const tt::tt_metal::distributed::MeshShape& shape,
+    const MeshCoordinate& coord,
+    const std::optional<uint32_t>& cluster_axis) {
     if (cluster_axis.has_value()) {
         return coord[cluster_axis.value()];
     } else {
-        return coord[0] * shape[1] + coord[1];
+        return coord.to_linear_index(shape);
     }
+}
+
+uint32_t get_topological_dimension(
+    const tt::tt_metal::TensorTopology& tensor_topology, const std::optional<uint32_t>& cluster_axis) {
+    const auto& shape = tensor_topology.distribution_shape();
+    if (cluster_axis.has_value()) {
+        return shape[cluster_axis.value()];
+    } else {
+        return shape.mesh_size();
+    }
+}
+
+uint32_t get_physical_linearized_index(
+    const tt::tt_metal::TensorTopology& tensor_topology,
+    const MeshCoordinate& physical_coord,
+    const std::optional<uint32_t>& cluster_axis) {
+    const auto& shape = tensor_topology.distribution_shape();
+    const auto& topological_coord = tensor_topology.get_tensor_coord(physical_coord);
+    TT_FATAL(topological_coord.has_value(), "DEBUG: topological_coord is null");
+    return get_topological_linearized_index(shape, topological_coord.value(), cluster_axis);
+}
+
+std::optional<MeshCoordinate> get_physical_neighbor(
+    const tt::tt_metal::TensorTopology& tensor_topology,
+    const MeshCoordinate& physical_coord,
+    int offset,
+    ttnn::ccl::Topology topology,
+    const std::optional<uint32_t>& cluster_axis) {
+    const auto& shape = tensor_topology.distribution_shape();
+    const auto& topological_coord = tensor_topology.get_tensor_coord(physical_coord);
+    TT_FATAL(topological_coord.has_value(), "DEBUG: topological_coord is null");
+
+    auto topological_neighbor =
+        get_topological_neighbor(shape, topological_coord.value(), offset, topology, cluster_axis);
+
+    return topological_neighbor.has_value()
+               ? std::optional<MeshCoordinate>(tensor_topology.get_device_coord(topological_neighbor.value()))
+               : std::nullopt;
 }
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {

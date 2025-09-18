@@ -104,13 +104,13 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
-        ttnn::ccl::get_devices(*mesh_device, this->reduce_scatter_minimal_async_struct.cluster_axis),
+        ttnn::ccl::get_devices(*mesh_device, mesh_coord, this->reduce_scatter_minimal_async_struct.cluster_axis),
         this->reduce_scatter_minimal_async_struct.topology);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
     auto target_device_coord = mesh_coord;
 
     std::vector<IDevice*> devices_to_use =
-        ttnn::ccl::get_devices(*mesh_device, this->reduce_scatter_minimal_async_struct.cluster_axis);
+        ttnn::ccl::get_devices(*mesh_device, mesh_coord, this->reduce_scatter_minimal_async_struct.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = std::nullopt;
     std::optional<MeshCoordinate> forward_coord = std::nullopt;
