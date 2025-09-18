@@ -201,6 +201,8 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the op. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>negative_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB’s used in the sharded version of the kernel by overlapping the CB’s used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).</p></li>
+<li><p><strong>use_welford</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>False</cite>. If <cite>True</cite>, the Welford’s algorithm is used to compute the mean and variance.</p></li>
+<li><p><strong>reciprocals</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. FP32 tensor containing pre-computed reciprocal values. Only valid when use_welford is True. Must be sharded to L1 memory in each core.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
