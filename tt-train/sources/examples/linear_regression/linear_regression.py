@@ -102,8 +102,8 @@ def train_ttml_linear_regression(
             x_batch = x_train[batch_idx].reshape(bsz, 1, 1, n_features)
             y_batch = y_train[batch_idx].reshape(bsz, 1, 1, 1)
 
-            tt_x = _ttml.autograd.Tensor.from_numpy(x_batch)
-            tt_y = _ttml.autograd.Tensor.from_numpy(y_batch)
+            tt_x = _ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
+            tt_y = _ttml.autograd.Tensor.from_numpy(y_batch.astype(np.float32))
             opt.zero_grad()
             tt_pred = model(tt_x)
             tt_loss = loss_fn(tt_pred, tt_y, _ttml.ops.ReduceType.MEAN)
@@ -111,7 +111,7 @@ def train_ttml_linear_regression(
             opt.step()
 
             if verbose:
-                loss_val = float(tt_loss.to_numpy())
+                loss_val = float(tt_loss.to_numpy(_ttml.autograd.DataType.FLOAT32))
                 print(f"[epoch {epoch+1}/{cfg.epochs}] step_loss={loss_val:.6f}")
 
             pos = end_pos
@@ -131,8 +131,8 @@ def predict_ttml(model, x: np.ndarray, n_features: int, batch_size: int = 256) -
         end_pos = min(num_samples, pos + batch_size)
         bsz = end_pos - pos
         x_batch = x[pos:end_pos].reshape(bsz, 1, 1, n_features)
-        tt_x = _ttml.autograd.Tensor.from_numpy(x_batch)
-        tt_y = model(tt_x).to_numpy().reshape(bsz)
+        tt_x = _ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
+        tt_y = model(tt_x).to_numpy(_ttml.autograd.DataType.FLOAT32).reshape(bsz)
         preds.append(tt_y)
         pos = end_pos
     return np.concatenate(preds, axis=0)

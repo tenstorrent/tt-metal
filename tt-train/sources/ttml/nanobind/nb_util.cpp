@@ -8,8 +8,9 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
-nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& t) {
-    const auto impl = []<typename T>(const tt::tt_metal::Tensor& tensor) {
+nb::ndarray<nb::numpy> make_numpy_tensor(
+    const tt::tt_metal::Tensor& t, std::optional<tt::tt_metal::DataType> new_type) {
+    const auto impl = []<typename T, typename U>(const tt::tt_metal::Tensor& tensor) {
         if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
             if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
                 tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
@@ -33,17 +34,17 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& t) {
 
                 const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<T>(row_major_tensor);
 
-                T* numpy_data = new T[row_major_tensor_data.size()];
+                U* numpy_data = new U[row_major_tensor_data.size()];
                 std::copy(row_major_tensor_data.begin(), row_major_tensor_data.end(), numpy_data);
 
-                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<U*>(p); });
                 return nb::ndarray<nb::numpy>(
                     numpy_data,
                     row_major_tensor_shape_rank,
                     numpy_shape.data(),
                     owner,
                     numpy_strides.data(),
-                    nb::dtype<T>());
+                    nb::dtype<U>());
             } else {
                 const auto& row_major_tensor = tensor;
                 const tt::tt_metal::Shape& row_major_tensor_shape = row_major_tensor.tensor_spec().logical_shape();
@@ -57,10 +58,10 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& t) {
                 std::copy(row_major_tensor_strides.cbegin(), row_major_tensor_strides.cend(), numpy_strides.begin());
                 const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<T>(row_major_tensor);
 
-                T* numpy_data = new T[row_major_tensor_data.size()];
+                U* numpy_data = new U[row_major_tensor_data.size()];
                 std::copy(row_major_tensor_data.begin(), row_major_tensor_data.end(), numpy_data);
 
-                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<U*>(p); });
                 return nb::ndarray<nb::numpy>(
                     numpy_data,
                     row_major_tensor_shape_rank,
@@ -88,28 +89,86 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& t) {
         const auto return_data_copy_with_capsule = [&](const auto& src) {};
 
         if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor_spec)) {
-            T* numpy_data = new T[cpu_tensor_data.size()];
+            U* numpy_data = new U[cpu_tensor_data.size()];
             std::copy(cpu_tensor_data.begin(), cpu_tensor_data.end(), numpy_data);
 
-            const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+            const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<U*>(p); });
             return nb::ndarray<nb::numpy>(
-                numpy_data, cpu_tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+                numpy_data, cpu_tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<U>());
         }
 
         const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
-        T* numpy_data = new T[cpu_tensor_data.size()];
+        U* numpy_data = new U[cpu_tensor_data.size()];
         std::copy(cpu_tensor_data.begin(), cpu_tensor_data.end(), numpy_data);
 
-        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<U*>(p); });
         return nb::ndarray<nb::numpy>(
-            numpy_data, cpu_tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
+            numpy_data, cpu_tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<U>());
     };
 
-    switch (t.tensor_spec().data_type()) {
-        case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t>(t);
-        case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t>(t);
-        case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float>(t);
-        case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16>(t);
+    auto const tensor_type = t.tensor_spec().data_type();
+    if (!new_type) {
+        switch (tensor_type) {
+            case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
+            case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
+            case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
+            case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(t);
+            case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+            case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+            case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+            case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+            case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+        }
+    }
+    switch (tensor_type) {
+        case tt::tt_metal::DataType::INT32:
+            switch (*new_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(t);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<int32_t, float>(t);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<int32_t, bfloat16>(t);
+                case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+                case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+                case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+                case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+                case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+            }
+        case tt::tt_metal::DataType::UINT32:
+            switch (*new_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<uint32_t, int32_t>(t);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<uint32_t, float>(t);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<uint32_t, bfloat16>(t);
+                case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+                case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+                case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+                case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+                case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+            }
+        case tt::tt_metal::DataType::FLOAT32:
+            switch (*new_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<float, int32_t>(t);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<float, uint32_t>(t);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<float, bfloat16>(t);
+                case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+                case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+                case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+                case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+                case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+            }
+        case tt::tt_metal::DataType::BFLOAT16:
+            switch (*new_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<bfloat16, int32_t>(t);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(t);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<bfloat16, float>(t);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(t);
+                case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
+                case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
+                case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
+                case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
+                case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
+            }
         case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
         case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
         case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
@@ -156,10 +215,9 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
 
         tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
         tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        return ttnn::tilize_with_zero_padding(
-                   ttnn::DefaultQueueId,
-                   tt::tt_metal::Tensor::from_span(
-                       ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device))
+        const auto tilized_tensor = tt::tt_metal::Tensor::from_span(
+            ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
+        return ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tilized_tensor)
             .to_device(device, tensor_memory_config);
     };
 

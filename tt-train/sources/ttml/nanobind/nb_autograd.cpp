@@ -5,6 +5,7 @@
 #include "nanobind/nb_autograd.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 
@@ -69,8 +70,8 @@ void py_module(nb::module_& m) {
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
         py_tensor.def_static(
             "from_numpy", [](nb::ndarray<> numpy_tensor) { return Tensor(make_metal_tensor(numpy_tensor)); });
-        py_tensor.def("to_numpy", [](const Tensor& tensor) {
-            return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL));
+        py_tensor.def("to_numpy", [](const Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type) {
+            return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL), new_type);
         });
         py_tensor.def("to_string", [](const Tensor& tensor) {
             return tensor.get_value(PreferredPrecision::FULL).write_to_string();
