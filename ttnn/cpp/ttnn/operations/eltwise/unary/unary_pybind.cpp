@@ -1232,24 +1232,23 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        ttnn::unary_chain,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const EltwiseFusedActivations& ops_chain,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const QueueId queue_id) {
-                return self(queue_id, input_tensor, ops_chain, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::arg("ops_chain"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt);
+                                bind_registered_operation(
+                                    module,
+                                    ttnn::unary_chain,
+                                    doc,
+                                    ttnn::pybind_overload_t{
+                                        [](const unary_operation_t& self,
+                                           const Tensor& input_tensor,
+                                           const EltwiseFusedActivations& ops_chain,
+                                           const std::optional<MemoryConfig>& memory_config,
+                                           const std::optional<Tensor>& output_tensor) {
+                                            return self(input_tensor, ops_chain, memory_config, output_tensor);
+                                        },
+                                        py::arg("input_tensor"),
+                                        py::arg("ops_chain"),
+                                        py::kw_only(),
+                                        py::arg("memory_config") = std::nullopt,
+                                        py::arg("output_tensor") = std::nullopt});
 }
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {

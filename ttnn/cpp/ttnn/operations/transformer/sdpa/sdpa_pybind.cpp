@@ -514,7 +514,6 @@ void py_bind_sdpa(py::module& module) {
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -534,7 +533,6 @@ void py_bind_sdpa(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 }
 }  // namespace ttnn::operations::transformer
