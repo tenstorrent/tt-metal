@@ -252,7 +252,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
         expected_b[i] = i;
     }
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
-    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, 0.0F);
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, 0.0F, 42);
     auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
     EXPECT_EQ(vector_b, expected_b);
 }
@@ -263,7 +263,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
     xt::xarray<float> a = xt::random::rand<float>(shape);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
     float temperature = 1.0F;
-    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature);
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42);
     auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
     // The output should have shape {1, 1, 32} (one sample per row)
     EXPECT_EQ(vector_b.size(), 32);
