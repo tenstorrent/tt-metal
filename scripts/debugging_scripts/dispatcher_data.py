@@ -110,11 +110,13 @@ class DispatcherData:
             pass
 
     def find_kernel(self, watcher_kernel_id):
-        try:
-            if self.use_rpc_kernel_find:
+        # Try to get kernel from RPC inspector data first, then fallback to cached kernels
+        # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
+        if self.use_rpc_kernel_find:
+            try:
                 return self.inspector_data.getKernel(watcher_kernel_id).kernel
-        except:
-            pass
+            except:
+                pass
         if watcher_kernel_id in self.kernels:
             self.use_rpc_kernel_find = False
             return self.kernels[watcher_kernel_id]
