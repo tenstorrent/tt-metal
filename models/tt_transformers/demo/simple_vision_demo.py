@@ -180,8 +180,13 @@ def test_multimodal_demo_text(
     """
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
 
-    if num_devices == 2 and max_batch_size not in (1, 4, 16):
-        pytest.skip(f"Batch size={max_batch_size} is not tested for N300 mesh")
+    if num_devices == 2:
+        if max_batch_size == 1:
+            pytest.skip(
+                "Batch size=1 on N300 mesh experiences ND hangs: https://github.com/tenstorrent/tt-metal/issues/28247"
+            )
+        if max_batch_size not in (4, 16):
+            pytest.skip(f"Batch size={max_batch_size} is not tested for N300 mesh")
     if num_devices == 8 and max_batch_size not in (1, 4, 32):
         pytest.skip(f"Batch size={max_batch_size} is not tested for T3K mesh")
 
@@ -209,11 +214,8 @@ def test_multimodal_demo_text(
 
     # Create random images for trace capture with specific dimensions
     trace_img_560x560 = create_random_image(560, 560)
-
     trace_img_1120x560 = create_random_image(1120, 560)
-
     trace_img_560x1120 = create_random_image(560, 1120)
-
     trace_img_1120x1120 = create_random_image(1120, 1120)
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
