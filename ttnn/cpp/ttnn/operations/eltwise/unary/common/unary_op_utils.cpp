@@ -52,6 +52,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ACOSH:
         case UnaryOpType::COS:
         case UnaryOpType::COSH:
+        case UnaryOpType::SINH:
         case UnaryOpType::SIN:
         case UnaryOpType::ASINH:
         case UnaryOpType::TAN:
@@ -529,6 +530,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::COSH: op_init_and_name = {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)}; break;
+        case UnaryOpType::SINH: op_init_and_name = {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
             op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
             break;
@@ -791,6 +793,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::COS);
     } else if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
+    } else if (name == "sinh") {
+        return UnaryWithParam(UnaryOpType::SINH);
     } else if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
     } else if (name == "abs_int32") {
