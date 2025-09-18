@@ -307,13 +307,13 @@ class Generator:
                 tt_current_pos_i,
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
-                tt_attention_mask_i,
+                # tt_attention_mask_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
-            tt_attention_mask.append(tt_attention_mask_i)
+            # tt_attention_mask.append(tt_attention_mask_i)
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -324,7 +324,7 @@ class Generator:
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
-                attn_mask=tt_attention_mask[i],
+                # attn_mask=tt_attention_mask[i],
             )
             tt_logits.append(tt_logits_i)
 
@@ -352,6 +352,7 @@ class Generator:
         device_inputs = []
         tt_out_trace = []
         trace_ids = {}
+        logger.info(f"Begin preparing inputs for trace run...")
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             host_inputs = self.model[i].prepare_decode_inputs_host(
@@ -361,10 +362,14 @@ class Generator:
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
+        logger.info(f"Begin capturing trace for models...")
         for i in range(self.data_parallel):
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+            logger.info(f"Trace id acquired: {trace_id}")
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            logger.info(f"User kv cache: {user_kv_cache}")
+            logger.info(f"Running ttnn_decode_forward with device_inputs: {device_inputs[i]}")
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
                     *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
