@@ -220,7 +220,7 @@ TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         /*num_programs=*/2, mesh_device_->compute_with_storage_grid_size(), /*seed=*/0);
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
 
     MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
     MeshCoordinateRange devices_range = MeshCoordinateRange(zero_coord, zero_coord);
@@ -459,7 +459,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
         MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
     MeshCoordinateRange devices_1(
@@ -635,7 +635,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(*program, cr_set, cb_config_vector);
     initialize_dummy_kernels(*program, cr_set);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), devices);
@@ -665,7 +665,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
         CreateSemaphore(program, full_grid, sem);
         expected_semaphore_values.push_back(sem);
     }
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
     AddProgramToMeshWorkload(mesh_workload, std::move(program), devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
@@ -695,7 +695,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         expected_semaphore_values_1.push_back(sem + 1);
     }
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0({0, 0}, {mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
     MeshCoordinateRange devices_1(
         {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});

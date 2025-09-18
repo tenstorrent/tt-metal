@@ -136,7 +136,7 @@ int main() {
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
