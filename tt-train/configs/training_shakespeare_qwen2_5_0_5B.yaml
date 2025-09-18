@@ -36,4 +36,4 @@ eval_config:
 
 device_config:
     enable_ddp: true
-    mesh_shape: [1,1]
+    mesh_shape: [4,2]
