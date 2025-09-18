@@ -9,10 +9,10 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
-#include <utility>
 #include <vector>
 #include <deque>
+
+#include <tt-metalium/pinned_memory.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -63,7 +63,7 @@ public:
     uint64_t get_device_addr(chip_id_t device_id) const;
 
     // NOC address access method
-    std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
+    std::optional<PinnedMemory::NocAddr> get_noc_addr(chip_id_t device_id) const;
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }
