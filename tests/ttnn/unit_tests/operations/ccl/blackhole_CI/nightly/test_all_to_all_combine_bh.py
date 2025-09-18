@@ -321,7 +321,7 @@ def trace_all_to_all_combine(
 
     # compile run:
     logger.info("Compiling model")
-    tt_out_tensor_list = run_op(1)
+    run_op(1)
 
     logger.info("Capturing Warmup")
 

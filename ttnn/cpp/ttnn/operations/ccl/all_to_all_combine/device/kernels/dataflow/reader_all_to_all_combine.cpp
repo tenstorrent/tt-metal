@@ -36,8 +36,7 @@ void get_device_expert_indices(
 
         invalidate_l1_cache();
         if (mapping_ptr[DeviceIdx] == 1u) {
-            *(output_ptr++)=expert_idx;
-            invalidate_l1_cache();
+            *(output_ptr++) = expert_idx;
         }
     }
 }
@@ -46,7 +45,6 @@ void get_device_expert_indices(
 using ttnn::operations::ccl::common::find_if;
 
 void kernel_main() {
-    invalidate_l1_cache();
     constexpr uint32_t mapping_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(2);
