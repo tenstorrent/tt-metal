@@ -750,6 +750,15 @@ async function run() {
             // Get commits between boundary success and first failing run (inclusive of failing run)
             item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
           }
+          // Also capture the latest failing run in the window
+          const latestFailRun = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
+          if (latestFailRun) {
+            item.latest_failed_run_id = latestFailRun.id;
+            item.latest_failed_run_url = latestFailRun.html_url;
+            item.latest_failed_created_at = latestFailRun.created_at;
+            item.latest_failed_head_sha = latestFailRun.head_sha;
+            item.latest_failed_head_short = latestFailRun.head_sha ? latestFailRun.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+          }
           // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
           if (item.first_failed_head_sha) {
             const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
@@ -779,6 +788,11 @@ async function run() {
               commits_between: item.commits_between || [],
               error_snippets: item.error_snippets || [],
               repeated_errors: item.repeated_errors || [],
+              latest_failed_run_id: item.latest_failed_run_id,
+              latest_failed_run_url: item.latest_failed_run_url,
+              latest_failed_created_at: item.latest_failed_created_at,
+              latest_failed_head_sha: item.latest_failed_head_sha,
+              latest_failed_head_short: item.latest_failed_head_short,
             });
           }
         }
@@ -802,6 +816,15 @@ async function run() {
           // Do not fetch commits/authors for stayed_failing if no success in-window
           if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
             item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+          }
+          // Also capture latest failing run in window
+          const latestFailRun2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
+          if (latestFailRun2) {
+            item.latest_failed_run_id = latestFailRun2.id;
+            item.latest_failed_run_url = latestFailRun2.html_url;
+            item.latest_failed_created_at = latestFailRun2.created_at;
+            item.latest_failed_head_sha = latestFailRun2.head_sha;
+            item.latest_failed_head_short = latestFailRun2.head_sha ? latestFailRun2.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
           }
           // Commit author of the first failed in-window (optional)
           if (item.first_failed_head_sha) {
@@ -832,6 +855,11 @@ async function run() {
             commits_between: item.commits_between || [],
             error_snippets: item.error_snippets || [],
             repeated_errors: item.repeated_errors || [],
+            latest_failed_run_id: item.latest_failed_run_id,
+            latest_failed_run_url: item.latest_failed_run_url,
+            latest_failed_created_at: item.latest_failed_created_at,
+            latest_failed_head_sha: item.latest_failed_head_sha,
+            latest_failed_head_short: item.latest_failed_head_short,
           });
         }
       }
@@ -867,13 +895,19 @@ async function run() {
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
+              const latestLink = it.latest_failed_run_url ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[\\\`${it.latest_failed_head_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink}`, errorsList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
             const commitsHtml = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}`, errorsList, commitsList].filter(Boolean).join('\n');
+            const latestLink2 = it.latest_failed_run_url ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[
+\\
+`${it.latest_failed_head_short}
+\\
+`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLink2}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
@@ -893,13 +927,23 @@ async function run() {
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
             if (it.no_success_in_window) {
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList].filter(Boolean).join('\n');
+              const latestLink3 = it.latest_failed_run_url ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[
+\\
+`${it.latest_failed_head_short}
+\\
+`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink3}`, errorsList].filter(Boolean).join('\n');
             }
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsHtml2 = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}`, errorsList, commitsList].filter(Boolean).join('\n');
+            const latestLink4 = it.latest_failed_run_url ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[
+\\
+`${it.latest_failed_head_short}
+\\
+`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink4}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
