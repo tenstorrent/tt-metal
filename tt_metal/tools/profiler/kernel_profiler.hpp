@@ -70,30 +70,13 @@ constexpr int WALL_CLOCK_LOW_INDEX = 0;
 volatile tt_l1_ptr uint32_t* profiler_control_buffer =
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
 
-volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1_VECTOR_SIZE] =
-    reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(
-        GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
+volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
+    reinterpret_cast<volatile tt_l1_ptr profiler_msg_buffer_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC)
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
 constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1
-constexpr uint32_t myRiscID = 1;
-#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0
-constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
-constexpr uint32_t myRiscID = 1;
-#elif defined(COMPILE_FOR_ERISC)
-constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t myRiscID = 1;
-#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
-constexpr uint32_t myRiscID = 2;
-#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
-constexpr uint32_t myRiscID = 3;
-#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 2
-constexpr uint32_t myRiscID = 4;
+#else
+constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 #endif
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
@@ -125,7 +108,7 @@ __attribute__((noinline)) void init_profiler(
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
-                profiler_data_buffer[riscID][i] = 0;
+                profiler_data_buffer[riscID].data[i] = 0;
             }
         }
 
@@ -136,7 +119,7 @@ __attribute__((noinline)) void init_profiler(
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
-            profiler_data_buffer[riscID][i] = 0x80000000;
+            profiler_data_buffer[riscID].data[i] = 0x80000000;
         }
     }
 #endif
@@ -164,15 +147,15 @@ inline __attribute__((always_inline)) bool bufferHasRoom() {
 
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID][index] =
+    profiler_data_buffer[myRiscID].data[index] =
         0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
-    profiler_data_buffer[myRiscID][index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
+    profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
 inline __attribute__((always_inline)) void mark_padding() {
     if (wIndex < PROFILER_L1_VECTOR_SIZE) {
-        profiler_data_buffer[myRiscID][wIndex] = 0x80000000;
-        profiler_data_buffer[myRiscID][wIndex + 1] = 0;
+        profiler_data_buffer[myRiscID].data[wIndex] = 0x80000000;
+        profiler_data_buffer[myRiscID].data[wIndex + 1] = 0;
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
 }
@@ -184,7 +167,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-        profiler_data_buffer[riscID][ID_LL] = counterValue;
+        profiler_data_buffer[riscID].data[ID_LL] = counterValue;
     }
 }
 
@@ -196,8 +179,9 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             if (wIndex < PROFILER_L1_VECTOR_SIZE) {
-                profiler_data_buffer[myRiscID][wIndex] = 0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
-                profiler_data_buffer[myRiscID][wIndex + 1] = sums[i];
+                profiler_data_buffer[myRiscID].data[wIndex] =
+                    0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
+                profiler_data_buffer[myRiscID].data[wIndex + 1] = sums[i];
                 wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             }
         }
@@ -278,11 +262,12 @@ __attribute__((noinline)) void finish_profiler() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-    uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
+    uint32_t pageSize =
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-        profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
+        profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
@@ -291,7 +276,7 @@ __attribute__((noinline)) void finish_profiler() {
             uint32_t dram_offset = 0;
             uint32_t send_size = 0;
             if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
+                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               profiler_control_buffer[hostIndex] * sizeof(uint32_t);
@@ -300,7 +285,7 @@ __attribute__((noinline)) void finish_profiler() {
 
                 profiler_control_buffer[hostIndex] = currEndIndex;
             } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
+                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
 
@@ -322,7 +307,9 @@ __attribute__((noinline)) void finish_profiler() {
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
                 profiler_noc_async_write_posted(
-                    reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
+                    reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
+                    dram_bank_dst_noc_addr,
+                    send_size);
             }
         }
     }
@@ -359,17 +346,17 @@ __attribute__((noinline)) void quick_push() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-    profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
+    profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
 
-    uint32_t dram_offset =
-        (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
+    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
     const auto s = TensorAccessor(
         tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
         profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram);
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
 
     uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
@@ -381,7 +368,7 @@ __attribute__((noinline)) void quick_push() {
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
         NocDestinationStateSaver noc_state;
         profiler_noc_async_write_posted(
-            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
+            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
 
@@ -486,7 +473,7 @@ struct profileScopeGuaranteed {
                 mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
 #if defined(COMPILE_FOR_BRISC)
                 // Validate profiler_data_buffer in L1
-                profiler_data_buffer[myRiscID][ID_HH] = 0x0;
+                profiler_data_buffer[myRiscID].data[ID_HH] = 0x0;
 #endif
             } else if (
                 profiler_control_buffer[CURRENT_TRACE_ID] == 0 &&
@@ -532,8 +519,8 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
     if (bufferHasRoom<dispatch>()) {
         mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        profiler_data_buffer[myRiscID][wIndex++] = data >> 32;
-        profiler_data_buffer[myRiscID][wIndex++] = (data << 32) >> 32;
+        profiler_data_buffer[myRiscID].data[wIndex++] = data >> 32;
+        profiler_data_buffer[myRiscID].data[wIndex++] = (data << 32) >> 32;
     }
 }
 
@@ -556,7 +543,7 @@ __attribute__((noinline)) void trace_init() {
         // Invalidate profiler_data_buffer in L1
         // As the start of profiler buffer ID_HH = 0x0
         // indicates valid profiler data
-        profiler_data_buffer[myRiscID][ID_HH] = 0x80000000;
+        profiler_data_buffer[myRiscID].data[ID_HH] = 0x80000000;
     }
 }
 
