@@ -109,10 +109,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-<<<<<<< HEAD
-=======
 
->>>>>>> 05733c4fa8 (Refactor tests to configure Program before adding to MeshWorkload)
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",

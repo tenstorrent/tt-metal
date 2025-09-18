@@ -213,13 +213,6 @@ void run_single_core_broadcast(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-<<<<<<< HEAD
-    auto& cq = mesh_device->mesh_command_queue();
-
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
-=======
->>>>>>> 05733c4fa8 (Refactor tests to configure Program before adding to MeshWorkload)
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
