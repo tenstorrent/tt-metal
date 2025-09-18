@@ -687,49 +687,6 @@ void EnqueueReadSubBuffer(
 
 // clang-format off
 /**
- * Writes a buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The vector we are writing to the device                                           | vector<DType> &                     |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    std::vector<DType>& src,
-    bool blocking) {
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
-}
-
-// clang-format off
-/**
- * Writes a buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    bool blocking);
-
-// clang-format off
-/**
  * Writes a specified region of the buffer to the device
  *
  * Return value: void
