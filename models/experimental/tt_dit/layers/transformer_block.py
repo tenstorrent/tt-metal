@@ -29,6 +29,7 @@ class TransformerBlock(Module):
         self,
         *,
         dim: int,
+        modulation_dim: int | None = None,
         num_heads: int,
         head_dim: int,
         context_pre_only: bool,
@@ -42,6 +43,9 @@ class TransformerBlock(Module):
     ) -> None:
         super().__init__()
 
+        if modulation_dim is None:
+            modulation_dim = dim
+
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -53,13 +57,14 @@ class TransformerBlock(Module):
         self.parallel_config = parallel_config
 
         self.norm1_linear = ColParallelLinear(
-            dim,
+            modulation_dim,
             6 * dim,
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
         )
+
         self.norm1_norm = DistributedLayerNorm(
             dim,
             norm_eps=1e-6,
@@ -73,7 +78,7 @@ class TransformerBlock(Module):
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
         self.norm1_context_linear = ColParallelLinear(
-            dim,
+            modulation_dim,
             context_norm_dim,
             bias=True,
             mesh_device=mesh_device,
