@@ -16,6 +16,8 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
+using ttnn::TileReshapeMapMode;
+
 template <typename data_movement_operation_t>
 void bind_reshape_view(pybind11::module& module, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
@@ -28,13 +30,17 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const ttnn::Shape& shape,
                const std::optional<MemoryConfig>& memory_config,
                const QueueId queue_id,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+            },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
-            py::arg("pad_value") = std::nullopt},
+            py::arg("pad_value") = std::nullopt,
+            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -42,8 +48,10 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const ttnn::Shape& padded_shape,
                const std::optional<MemoryConfig>& memory_config,
                const QueueId queue_id,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor {
-                return self(input_tensor, logical_shape, padded_shape);
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(
+                    queue_id, input_tensor, logical_shape, padded_shape, memory_config, pad_value, reshape_tile_mode);
             },
             py::arg("input_tensor"),
             py::arg("logical_shape"),
@@ -51,23 +59,34 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
-            py::arg("pad_value") = std::nullopt},
+            py::arg("pad_value") = std::nullopt,
+            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape,
                const std::optional<MemoryConfig>& memory_config,
                const QueueId queue_id,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+            },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
-            py::arg("pad_value") = std::nullopt});
+            py::arg("pad_value") = std::nullopt,
+            py::arg("recreate_mapping_tensor") = ttnn::TileReshapeMapMode::CACHE});
 }
 
 }  // namespace detail
+
+void py_bind_reshape_enum(pybind11::module& module) {
+    py::enum_<ttnn::TileReshapeMapMode>(module, "TileReshapeMapMode")
+        .value("CACHE", ttnn::TileReshapeMapMode::CACHE)
+        .value("RECREATE", ttnn::TileReshapeMapMode::RECREATE);
+}
 
 void py_bind_reshape_view(pybind11::module& module) {
     detail::bind_reshape_view(
@@ -88,6 +107,7 @@ void py_bind_reshape_view(pybind11::module& module) {
             * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
             * :attr:`queue_id`: command queue id. Default is 0.
             * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
+            * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
 
         Returns:
             ttnn.Tensor: the output tensor with the new shape.

@@ -9,6 +9,13 @@
 
 
 namespace ttnn {
+
+enum class TileReshapeMapMode {
+    CACHE,
+    RECREATE,
+
+};
+
 namespace operations::data_movement {
 
 std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
@@ -28,20 +35,23 @@ struct ReshapeViewOperation {
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt);
+        const std::optional<PadValue>& pad_value = std::nullopt,
+        const TileReshapeMapMode = TileReshapeMapMode::CACHE);
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt);
+        const std::optional<PadValue>& pad_value = std::nullopt,
+        const TileReshapeMapMode = TileReshapeMapMode::CACHE);
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const int32_t> shape_vector,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt);
+        const std::optional<PadValue>& pad_value = std::nullopt,
+        const TileReshapeMapMode = TileReshapeMapMode::CACHE);
 };
 
 }  // namespace operations::data_movement
