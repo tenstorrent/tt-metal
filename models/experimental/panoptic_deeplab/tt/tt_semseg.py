@@ -209,6 +209,13 @@ class TtDeepLabV3PlusHead(nn.Module):
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
 
+            # Ensure both tensors have the same dtype before concatenation
+            target_dtype = ttnn.bfloat8_b
+            if proj_x.dtype != target_dtype:
+                proj_x = ttnn.typecast(proj_x, target_dtype)
+            if y_upsampled.dtype != target_dtype:
+                y_upsampled = ttnn.typecast(y_upsampled, target_dtype)
+
             y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             ttnn.deallocate(previous_y)

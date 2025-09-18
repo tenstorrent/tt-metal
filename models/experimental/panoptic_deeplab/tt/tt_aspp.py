@@ -239,6 +239,12 @@ class TtASPP(nn.Module):
 
         res.append(pooled)
 
+        # Ensure all tensors have the same dtype before concatenation
+        target_dtype = ttnn.bfloat8_b
+        for i in range(len(res)):
+            if res[i].dtype != target_dtype:
+                res[i] = ttnn.typecast(res[i], target_dtype)
+
         res = ttnn.concat(res, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtASPP concatenated branches, shape: {res.shape}")
 

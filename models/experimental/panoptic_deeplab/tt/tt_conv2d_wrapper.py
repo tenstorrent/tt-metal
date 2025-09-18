@@ -192,7 +192,7 @@ class TtConv2d:
     def _get_conv_config(self) -> ttnn.Conv2dConfig:
         """Create default conv2d configuration"""
         return ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
             shard_layout=None,
             deallocate_activation=False,
             enable_act_double_buffer=False,
@@ -205,6 +205,15 @@ class TtConv2d:
             enable_kernel_stride_folding=False,
             full_inner_dim=False,
             act_block_h_override=32,
+        )
+
+    def _get_compute_kernel_config(self) -> ttnn.WormholeComputeKernelConfig:
+        """Create LoFi compute kernel configuration for optimal performance"""
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
 
     def _create_spatial_slice_config(self) -> Optional[ttnn.Conv2dSliceConfig]:
@@ -304,7 +313,8 @@ class TtConv2d:
                 return_weights_and_bias=True,
                 conv_config=conv_config,
                 memory_config=memory_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
+                compute_config=self._get_compute_kernel_config(),
             )
             output_slice = ttnn.move(output_slice)
             if i == 0:
@@ -317,7 +327,11 @@ class TtConv2d:
 
         # Add bias if present
         if self._bias is not None:
-            accumulated_output = ttnn.add(accumulated_output, self._bias, output_tensor=accumulated_output)
+            # Ensure bias has the same layout and dtype as accumulated_output
+            bias_tensor = self._bias
+            if bias_tensor.layout != ttnn.TILE_LAYOUT or bias_tensor.dtype != accumulated_output.dtype:
+                bias_tensor = ttnn.to_layout(bias_tensor, ttnn.TILE_LAYOUT, dtype=accumulated_output.dtype)
+            accumulated_output = ttnn.add(accumulated_output, bias_tensor, output_tensor=accumulated_output)
 
         final_shape = [batch_size, output_height, output_width, self._out_channels]
         logger.trace(
@@ -358,7 +372,8 @@ class TtConv2d:
             conv_config=conv_config,
             memory_config=memory_config,
             slice_config=spatial_slice_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
+            compute_config=self._get_compute_kernel_config(),
         )
 
         # Update prepared weights and bias
