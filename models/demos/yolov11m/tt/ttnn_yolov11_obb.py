@@ -206,16 +206,14 @@ class TtnnOBB:
         z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)
         
-        # Process class predictions
-        yb = ttnn.permute(yb, (0, 2, 1))
+        # Process class predictions - keep shape [batch, 15, N] for concat
         yb = ttnn.sigmoid(yb)
         
-        # Process angle predictions
+        # Process angle predictions - reshape and concat to get [batch, 1, N]
         x7 = ttnn.reshape(x7, (x7.shape[0], x7.shape[1], x7.shape[2] * x7.shape[3]))
         x8 = ttnn.reshape(x8, (x8.shape[0], x8.shape[1], x8.shape[2] * x8.shape[3]))
         x9 = ttnn.reshape(x9, (x9.shape[0], x9.shape[1], x9.shape[2] * x9.shape[3]))
         angle_pred = ttnn.concat((x7, x8, x9), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        angle_pred = ttnn.permute(angle_pred, (0, 2, 1))
         
         # Clean up intermediate tensors
         deallocate_tensors(c, z1, z2, c1, c2, anchor, strides, x7, x8, x9)
@@ -227,6 +225,11 @@ class TtnnOBB:
         z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         angle_pred = ttnn.to_layout(angle_pred, layout=ttnn.ROW_MAJOR_LAYOUT)
+        
+        # Debug tensor shapes before concatenation
+        print(f"Debug - z shape: {z.shape}")
+        print(f"Debug - yb shape: {yb.shape}")  
+        print(f"Debug - angle_pred shape: {angle_pred.shape}")
         
         # Final output: [box_coords(4), class_preds(15), angle_pred(1)] = 20 channels total
         out = ttnn.concat((z, yb, angle_pred), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
