@@ -11,6 +11,7 @@
 
 constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
+constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -35,6 +36,7 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t param_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t momentum_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -43,9 +45,11 @@ void kernel_main() {
 
     constexpr auto param_in_args = TensorAccessorArgs<2U>();
     constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
+    constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
 
     const auto param_in_addr_gen = TensorAccessor(param_in_args, param_in_addr, tile_size_bytes);
     const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, tile_size_bytes);
+    const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
@@ -54,9 +58,11 @@ void kernel_main() {
 
             read_tiles(cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
             read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+            read_tiles(cb_momentum_in_idx, momentum_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
             noc_async_read_barrier();
             cb_push_back(cb_param_in_idx, block_size);
             cb_push_back(cb_grad_idx, block_size);
+            cb_push_back(cb_momentum_in_idx, block_size);
         }
     }
 }

@@ -109,15 +109,24 @@ ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invoke(
-    const ttnn::Tensor& param_in, const ttnn::Tensor& grad, float lr, const std::optional<ttnn::Tensor>& param_out) {
+    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& grad,
+    float lr,
+    float momentum,
+    const std::optional<ttnn::Tensor>& param_out,
+    const std::optional<ttnn::Tensor>& momentum_in,
+    const std::optional<ttnn::Tensor>& momentum_out) {
     return {
         operation_attributes_t{
             .lr = lr,
+            .momentum = momentum,
         },
         tensor_args_t{
             .param_in = param_in,
             .grad = grad,
             .param_out = param_out,
+            .momentum_in = momentum_in,
+            .momentum_out = momentum_out,
         }};
 }
 
