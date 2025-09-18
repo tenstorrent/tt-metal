@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
     std::cout << "Starting DeiT Embeddings test..." << std::endl;
     
     // Default model path (relative path)
-    std::string model_path = "../deit_model/deit_traced_model.pt";
+    std::string model_path = "../deit_model/deit_encoder_model.pt";
     
     // Check if model path is provided as command line argument
     if (argc > 1) {
