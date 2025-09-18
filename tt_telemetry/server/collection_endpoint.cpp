@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -67,7 +66,7 @@ private:
                 ws_server_.send(*it, message, websocketpp::frame::opcode::text);
                 ++it;
             } catch (const websocketpp::exception& e) {
-                std::cout << "Failed to send message to client, removing: " << e.what() << std::endl;
+                log_error(tt::LogAlways, "Failed to send message to client, removing: {}", e.what());
                 it = connections_.erase(it);
             }
         }
@@ -98,7 +97,7 @@ private:
         std::lock_guard<std::mutex> lock(connections_mutex_);
         connections_.insert(hdl);
 
-        std::cout << "WebSocket client connected (total clients: " << connections_.size() << ")" << std::endl;
+        log_info(tt::LogAlways, "WebSocket client connected (total clients: {})", connections_.size());
 
         // Send full snapshot to the new client
         try {
@@ -107,7 +106,7 @@ private:
             std::string message = j.dump();
             ws_server_.send(hdl, message, websocketpp::frame::opcode::text);
         } catch (const websocketpp::exception& e) {
-            std::cout << "Failed to send full snapshot to new client: " << e.what() << std::endl;
+            log_error(tt::LogAlways, "Failed to send full snapshot to new client: {}", e.what());
         }
     }
 
@@ -115,7 +114,7 @@ private:
         std::lock_guard<std::mutex> lock(connections_mutex_);
         connections_.erase(hdl);
 
-        std::cout << "WebSocket client disconnected (total clients: " << connections_.size() << ")" << std::endl;
+        log_info(tt::LogAlways, "WebSocket client disconnected (total clients: {})", connections_.size());
     }
 
     void on_message(connection_hdl hdl, message_ptr msg) {
@@ -123,7 +122,7 @@ private:
         try {
             ws_server_.send(hdl, msg->get_payload(), msg->get_opcode());
         } catch (const websocketpp::exception& e) {
-            std::cout << "Failed to echo message: " << e.what() << std::endl;
+            log_error(tt::LogAlways, "Failed to echo message: {}", e.what());
         }
     }
 
@@ -147,7 +146,7 @@ public:
     }
 
     void start() {
-        std::cout << "Starting WebSocket telemetry server on port " << port_ << "..." << std::endl;
+        log_info(tt::LogAlways, "Starting WebSocket telemetry server on port {}...", port_);
 
         // Start telemetry processing thread
         running_ = true;
@@ -163,20 +162,20 @@ public:
             // Start the server accept loop
             ws_server_.start_accept();
 
-            std::cout << "WebSocket server listening on port " << port_ << std::endl;
+            log_info(tt::LogAlways, "WebSocket server listening on port {}", port_);
 
             // Start the ASIO io_service run loop
             ws_server_.run();
 
         } catch (const websocketpp::exception& e) {
-            std::cout << "WebSocket server error: " << e.what() << std::endl;
+            log_error(tt::LogAlways, "WebSocket server error: {}", e.what());
             running_ = false;
         } catch (const std::exception& e) {
-            std::cout << "Server error: " << e.what() << std::endl;
+            log_error(tt::LogAlways, "Server error: {}", e.what());
             running_ = false;
         }
 
-        std::cout << "WebSocket server finished" << std::endl;
+        log_info(tt::LogAlways, "WebSocket server finished");
     }
 
     void stop() {
@@ -186,7 +185,7 @@ public:
         try {
             ws_server_.stop();
         } catch (const std::exception& e) {
-            std::cout << "Error stopping WebSocket server: " << e.what() << std::endl;
+            log_error(tt::LogAlways, "Error stopping WebSocket server: {}", e.what());
         }
 
         // Wait for telemetry thread to finish

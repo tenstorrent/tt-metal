@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -263,7 +262,7 @@ public:
                             new_sse_clients_.end());
                     }
 
-                    std::cout << "Connection finished" << std::endl;
+                    log_info(tt::LogAlways, "Connection finished");
 
                     return true;
                 }
@@ -283,13 +282,12 @@ public:
         running_ = true;
         telemetry_thread_ = std::thread(&WebServer::broadcast_telemetry, this);
 
-        std::cout << "Starting telemetry server on port " << port << "..." << std::endl;
-        std::cout << "API endpoints:" << std::endl;
-        std::cout << "  GET  /                - Web UI (serves static/index.html)" << std::endl;
-        std::cout << "  GET  /<path>          - Static assets (serves static/<path>)" << std::endl;
-        std::cout << "  GET  /api/status      - Server status" << std::endl;
-        std::cout << "  GET  /api/telemetry   - Current telemetry" << std::endl;
-        std::cout << "  GET  /api/stream      - Real-time stream (SSE)" << std::endl;
+        log_info(tt::LogAlways, "Starting telemetry server on port {}...", port);
+        log_info(tt::LogAlways, "API endpoints:");
+        log_info(tt::LogAlways, "  GET  /                - Web UI (serves static/index.html)");
+        log_info(tt::LogAlways, "  GET  /<path>          - Static assets (serves static/<path>)");
+        log_info(tt::LogAlways, "  GET  /api/status      - Server status");
+        log_info(tt::LogAlways, "  GET  /api/stream      - Real-time stream (SSE)");
 
         server_.listen("0.0.0.0", port);
     }

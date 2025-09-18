@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
-
 #include <nlohmann/json.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <server/collection_clients.hpp>
 
@@ -18,7 +17,7 @@ void CollectionClients::on_open(connection_hdl hdl) {
         if (info->handle.lock() == hdl.lock()) {
             info->connected = true;
             info->retry_count = 0;  // Reset retry count on successful connection
-            std::cout << "✅ [CollectionClients] Connected to " << endpoint << std::endl;
+            log_info(tt::LogAlways, "✅ [CollectionClients] Connected to {}", endpoint);
             break;
         }
     }
@@ -31,7 +30,7 @@ void CollectionClients::on_close(connection_hdl hdl) {
     for (auto& [endpoint, info] : connections_) {
         if (info->handle.lock() == hdl.lock()) {
             info->connected = false;
-            std::cout << "❌ [CollectionClients] Disconnected from " << endpoint << std::endl;
+            log_info(tt::LogAlways, "❌ [CollectionClients] Disconnected from {}", endpoint);
             break;
         }
     }
@@ -52,7 +51,7 @@ void CollectionClients::on_message(connection_hdl hdl, message_ptr msg) {
     }
 
     if (endpoint.empty()) {
-        std::cout << "⚠️  [CollectionClients] Received message from unknown endpoint" << std::endl;
+        log_warning(tt::LogAlways, "⚠️  [CollectionClients] Received message from unknown endpoint");
         return;
     }
 
@@ -66,10 +65,9 @@ void CollectionClients::on_message(connection_hdl hdl, message_ptr msg) {
         callback_(endpoint, snapshot);
 
     } catch (const json::exception& e) {
-        std::cout << "❌ [CollectionClients] JSON parse error from " << endpoint << ": " << e.what() << std::endl;
+        log_error(tt::LogAlways, "❌ [CollectionClients] JSON parse error from {}: {}", endpoint, e.what());
     } catch (const std::exception& e) {
-        std::cout << "❌ [CollectionClients] Error processing message from " << endpoint << ": " << e.what()
-                  << std::endl;
+        log_error(tt::LogAlways, "❌ [CollectionClients] Error processing message from {}: {}", endpoint, e.what());
     }
 }
 
@@ -80,7 +78,7 @@ void CollectionClients::on_fail(connection_hdl hdl) {
     for (auto& [endpoint, info] : connections_) {
         if (info->handle.lock() == hdl.lock()) {
             info->connected = false;
-            std::cout << "❌ [CollectionClients] Connection failed to " << endpoint << std::endl;
+            log_error(tt::LogAlways, "❌ [CollectionClients] Connection failed to {}", endpoint);
             break;
         }
     }
@@ -92,8 +90,8 @@ void CollectionClients::attempt_connection(const std::string& endpoint) {
         client::connection_ptr con = ws_client_.get_connection(endpoint, ec);
 
         if (ec) {
-            std::cout << "❌ [CollectionClients] Could not create connection to " << endpoint << ": " << ec.message()
-                      << std::endl;
+            log_error(
+                tt::LogAlways, "❌ [CollectionClients] Could not create connection to {}: {}", endpoint, ec.message());
             return;
         }
 
@@ -109,10 +107,10 @@ void CollectionClients::attempt_connection(const std::string& endpoint) {
         }
 
         ws_client_.connect(con);
-        std::cout << "🔄 [CollectionClients] Attempting to connect to " << endpoint << std::endl;
+        log_info(tt::LogAlways, "🔄 [CollectionClients] Attempting to connect to {}", endpoint);
 
     } catch (const std::exception& e) {
-        std::cout << "❌ [CollectionClients] Exception connecting to " << endpoint << ": " << e.what() << std::endl;
+        log_error(tt::LogAlways, "❌ [CollectionClients] Exception connecting to {}: {}", endpoint, e.what());
     }
 }
 
@@ -128,8 +126,11 @@ void CollectionClients::retry_loop() {
                 info->last_retry = now;
                 info->retry_count++;
 
-                std::cout << "🔄 [CollectionClients] Retrying connection to " << endpoint << " (attempt "
-                          << info->retry_count << ")" << std::endl;
+                log_info(
+                    tt::LogAlways,
+                    "🔄 [CollectionClients] Retrying connection to {} (attempt {})",
+                    endpoint,
+                    info->retry_count);
 
                 // Unlock mutex before attempting connection to avoid deadlock
                 connections_mutex_.unlock();
@@ -142,11 +143,11 @@ void CollectionClients::retry_loop() {
 
 void CollectionClients::event_loop() {
     try {
-        std::cout << "🚀 [CollectionClients] Starting event loop..." << std::endl;
+        log_info(tt::LogAlways, "🚀 [CollectionClients] Starting event loop...");
         ws_client_.run();
-        std::cout << "🏁 [CollectionClients] Event loop finished" << std::endl;
+        log_info(tt::LogAlways, "🏁 [CollectionClients] Event loop finished");
     } catch (const std::exception& e) {
-        std::cout << "❌ [CollectionClients] Event loop exception: " << e.what() << std::endl;
+        log_error(tt::LogAlways, "❌ [CollectionClients] Event loop exception: {}", e.what());
     }
 }
 
@@ -155,7 +156,7 @@ CollectionClients::CollectionClients(const std::vector<std::string>& endpoints, 
     // Exit early if no endpoints provided
     if (endpoints_.empty()) {
         running_ = false;
-        std::cout << "🔌 [CollectionClients] No endpoints provided, skipping initialization" << std::endl;
+        log_info(tt::LogAlways, "🔌 [CollectionClients] No endpoints provided, skipping initialization");
         return;
     }
 
@@ -186,15 +187,15 @@ CollectionClients::CollectionClients(const std::vector<std::string>& endpoints, 
     // Start retry thread
     retry_thread_ = std::thread(&CollectionClients::retry_loop, this);
 
-    std::cout << "🔌 [CollectionClients] Started with " << endpoints_.size() << " endpoints" << std::endl;
+    log_info(tt::LogAlways, "🔌 [CollectionClients] Started with {} endpoints", endpoints_.size());
 }
 
 CollectionClients::~CollectionClients() {
-    std::cout << "🛑 [CollectionClients] Shutting down..." << std::endl;
+    log_info(tt::LogAlways, "🛑 [CollectionClients] Shutting down...");
 
     // If we exited early in constructor (no endpoints), skip cleanup
     if (endpoints_.empty()) {
-        std::cout << "✅ [CollectionClients] No cleanup needed - was not initialized" << std::endl;
+        log_info(tt::LogAlways, "✅ [CollectionClients] No cleanup needed - was not initialized");
         return;
     }
 
@@ -204,7 +205,7 @@ CollectionClients::~CollectionClients() {
     try {
         ws_client_.stop();
     } catch (const std::exception& e) {
-        std::cout << "⚠️  [CollectionClients] Error stopping client: " << e.what() << std::endl;
+        log_warning(tt::LogAlways, "⚠️  [CollectionClients] Error stopping client: {}", e.what());
     }
 
     // Wait for threads to finish
@@ -215,5 +216,5 @@ CollectionClients::~CollectionClients() {
         retry_thread_.join();
     }
 
-    std::cout << "✅ [CollectionClients] Shutdown complete" << std::endl;
+    log_info(tt::LogAlways, "✅ [CollectionClients] Shutdown complete");
 }
