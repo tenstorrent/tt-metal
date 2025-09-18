@@ -73,6 +73,22 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 
 *Figure 3: T3000 Chip Layout dumped from tt-topology*
 
+#### 2.1.1 SystemMesh Visualization
+
+```py
+ttnn.visualize_system_mesh()
+>
+SystemMesh Global Shape: MeshShape([1, 2])
+
+SystemMesh Local Shape: MeshShape([1, 2])
+
+   SystemMesh Global Shape: (1, 2) | Local Shape: (1, 2)
+┌──────────────────────────────┬──────────────────────────────┐
+│          Dev. ID: 0          │          Dev. ID: 1          │
+│            (0, 0)            │            (0, 1)            │
+└──────────────────────────────┴──────────────────────────────┘
+```
+
 
 ### 2.2 MeshDevice Management
 
