@@ -39,12 +39,6 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1U;
 
-    // const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
-    //     .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
-
-    // const InterleavedAddrGenFast</* is dram */ true> intermediates_addr_generator = {
-    //     .bank_base_address = intermediates_addr, .page_size = tile_bytes, .data_format = data_format};
-
     const uint32_t tiles_per_head = qWt;
     const uint32_t outWt = tiles_per_head * q_heads;  // fused width in tiles: (qNH * d) / TILE_W
 

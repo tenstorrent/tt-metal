@@ -81,18 +81,6 @@ void kernel_main() {
     const auto mask_address_generator = TensorAccessor(mask_args, mask_address, tile_bytes);
 #endif
 
-    // const InterleavedAddrGenFast</* is_dram */ true> query_address_generator = {
-    //     .bank_base_address = query_address, .page_size = tile_bytes, .data_format = data_format};
-
-    // const InterleavedAddrGenFast</* is_dram */ true> key_address_generator = {
-    //     .bank_base_address = key_address, .page_size = tile_bytes, .data_format = data_format};
-
-    // const InterleavedAddrGenFast</* is_dram */ true> value_address_generator = {
-    //     .bank_base_address = value_address, .page_size = tile_bytes, .data_format = data_format};
-
-    // const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
-    //     .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
-
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
 

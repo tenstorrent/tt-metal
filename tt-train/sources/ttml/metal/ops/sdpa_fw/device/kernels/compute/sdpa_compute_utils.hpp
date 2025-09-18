@@ -127,9 +127,9 @@ void matmul_qk_by_v(uint32_t cb_qk_result, uint32_t cb_value, uint32_t cb_cur_mm
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    // TODO[check]: check whether I can use mm_init_short here instead of full init
-    // mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
-    mm_init(cb_qk_result, cb_value, cb_cur_mm_out, /* transpose */ 0);
+    mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
+    pack_reconfig_data_format(cb_cur_mm_out);
+    reconfig_data_format(cb_qk_result, cb_value);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -251,6 +251,7 @@ void update_cur_mm_out(
 
     cb_reserve_back(cb_mm_result_holder, Wt);
     reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
+    pack_reconfig_data_format(cb_mm_result_holder);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
         tile_regs_acquire();
         mul_bcast_cols_init_short(cb_prev_mm_out, cb_exp_max_diff);
@@ -264,7 +265,6 @@ void update_cur_mm_out(
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_reconfig_data_format(cb_mm_result_holder);
         pack_tile(0, cb_mm_result_holder);
         tile_regs_release();
     }
@@ -273,6 +273,7 @@ void update_cur_mm_out(
     cb_wait_front(cb_mm_result_holder, Wt);
     cb_pop_front(cb_cur_mm_out, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
+    pack_reconfig_data_format(cb_cur_mm_out);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
         tile_regs_acquire();
         copy_tile_init(cb_mm_result_holder);
@@ -280,7 +281,6 @@ void update_cur_mm_out(
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_reconfig_data_format(cb_cur_mm_out);
         pack_tile(0, cb_cur_mm_out);
         tile_regs_release();
     }
@@ -302,10 +302,8 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     tile_regs_acquire();
 
     mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
-    // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx, 0);
 
-    // [Debug]: pack exp sum to cb_intermediates
     recip_tile_init();
     recip_tile(reduce_dst_idx);
     tile_regs_commit();

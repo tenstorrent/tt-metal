@@ -68,9 +68,7 @@ const uint32_t onetile = 1U;
 void MAIN {
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-
-    // [Debug]
-    // mm_init(cb_query, cb_key, cb_qk_result);
+    mm_init(cb_query, cb_key, cb_qk_result);
 
     cb_wait_front(cb_reduction_scaler, onetile);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -89,8 +87,6 @@ void MAIN {
         for (uint32_t h = 0; h < Ht; ++h) {  // read all
             cb_wait_front(cb_key, qWt);
 
-            // mm_init(cb_query, cb_key, cb_qk_result, /* transpose */ 1);
-            // TODO[check]: check whether I can use mm_init_short here instead of full init
             reconfig_data_format(cb_query, cb_key);
             mm_init_short(cb_query, cb_key, /* transpose */ 1);
             tile_regs_acquire();
@@ -182,7 +178,7 @@ void MAIN {
 
 #ifdef RETURN_INTERMEDIATES
         // pack recip exp sum into intermediates buffer
-        // [Improve]:i need to pack exp sum pack max value per head to intermediates also
+        // [Improve]:i need to pack max value per head to intermediates also
         pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
 #endif
 
