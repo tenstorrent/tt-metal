@@ -141,13 +141,13 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
 }
 
 tt::tt_metal::Tensor make_metal_tensor(
-    nb::ndarray<> data, std::optional<tt::tt_metal::DataType> new_type, bool row_major) {
+    nb::ndarray<> data, tt::tt_metal::Layout layout, std::optional<tt::tt_metal::DataType> new_type) {
     const auto data_type = data.dtype();
     TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
 
     const auto rank = data.ndim();
 
-    const auto impl = [&data_type, rank, &data, row_major]<typename T>(tt::tt_metal::DataType tensor_data_type) {
+    const auto impl = [&data_type, rank, &data, layout]<typename T>(tt::tt_metal::DataType tensor_data_type) {
         using U = std::remove_cvref_t<T>;
         const auto types_match = [](tt::tt_metal::DataType dt) {
             switch (dt) {
@@ -198,7 +198,7 @@ tt::tt_metal::Tensor make_metal_tensor(
         if (types_match(tensor_data_type)) {
             auto tensor = tt::tt_metal::Tensor::from_span(
                 ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
-            if (row_major) {
+            if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
                 return tensor.to_device(device, tensor_memory_config);
             }
             auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);
@@ -210,7 +210,7 @@ tt::tt_metal::Tensor make_metal_tensor(
             std::vector<Type> new_data;
             new_data.assign(data_span.begin(), data_span.end());
             auto tensor = tt::tt_metal::Tensor::from_vector(new_data, tensor_spec, device);
-            if (row_major) {
+            if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
                 return tensor.to_device(device, tensor_memory_config);
             }
             auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);

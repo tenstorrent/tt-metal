@@ -70,12 +70,14 @@ void py_module(nb::module_& m) {
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
         py_tensor.def_static(
             "from_numpy",
-            [](nb::ndarray<> numpy_tensor, std::optional<tt::tt_metal::DataType> new_type, bool row_major) {
-                return create_tensor(make_metal_tensor(numpy_tensor, new_type, row_major));
+            [](nb::ndarray<> numpy_tensor,
+               tt::tt_metal::Layout layout,
+               std::optional<tt::tt_metal::DataType> new_type) {
+                return create_tensor(make_metal_tensor(numpy_tensor, layout, new_type));
             },
             nb::arg("numpy_tensor"),
-            nb::arg("new_type") = std::nullopt,
-            nb::arg("row_major") = false);
+            nb::arg("layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("new_type") = std::nullopt);
         py_tensor.def(
             "to_numpy",
             [](const Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type) {
