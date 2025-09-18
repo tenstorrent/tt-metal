@@ -269,7 +269,8 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
         if constexpr (target_as_dev) {
             tt_l1_ptr tensix_routing_l1_info_t* routing_table =
                 reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
