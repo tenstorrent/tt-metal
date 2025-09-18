@@ -15,7 +15,6 @@
 #include "hal_types.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
@@ -944,7 +943,7 @@ void MetalContext::initialize_firmware(
         std::copy(
             launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
     }
-    auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(
         init_launch_msg_data.data(),
         init_launch_msg_data.size(),
@@ -1153,8 +1152,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                     core_info.data(),
                     core_info.size(),
                     {device_id, worker_core},
-                    hal_->get_dev_addr(
-                        get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
+                    hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
                 initialize_firmware(
                     device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
                 not_done_cores.insert(worker_core);
@@ -1194,7 +1192,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_->get_eth_fw_is_cooperative()) {
@@ -1217,7 +1215,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
