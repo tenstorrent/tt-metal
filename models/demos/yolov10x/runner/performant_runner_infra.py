@@ -78,9 +78,7 @@ class YOLOv10PerformanceRunnerInfra:
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
         self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
-        self.parameters = create_yolov10x_model_parameters(
-            self.torch_model, self.torch_input_params, device=self.device
-        )
+        self.parameters = create_yolov10x_model_parameters(self.torch_model, device=self.device)
 
         self.ttnn_yolov10x_model = TtnnYolov10(self.device, self.parameters, self.parameters)
 

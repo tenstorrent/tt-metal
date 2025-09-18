@@ -13,7 +13,6 @@ from models.demos.yolov10x.tt.bottleneck import TtnnBottleNeck
 from models.demos.yolov10x.tt.c2f import TtnnC2f
 from models.demos.yolov10x.tt.cib import TtnnCIB
 from models.demos.yolov10x.tt.model_preprocessing import (
-    create_yolov10_model_parameters_detect,
     create_yolov10x_input_tensors,
     create_yolov10x_input_tensors_submodules,
     create_yolov10x_model_parameters,
@@ -64,15 +63,12 @@ def test_yolov10x_bottleneck(
     state_dict = None
     if use_pretrained_weights:
         torch_model = load_torch_model(model_location_generator)
+        state_dict = torch_model.state_dict()
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[index].m[0]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -82,11 +78,18 @@ def test_yolov10x_bottleneck(
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
+    parameters = create_yolov10x_model_parameters(torch_model, device)
+
+    torch_model = torch_model.get_submodule(f"model.{index}.m.0")
     torch_model_output = torch_model(torch_input)[0]
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
-
-    ttnn_module = TtnnBottleNeck(shortcut=shortcut, device=device, parameters=parameters.conv_args, conv_pt=parameters)
+    ttnn_module = TtnnBottleNeck(
+        shortcut=shortcut,
+        device=device,
+        parameters=parameters.conv_args[f"{index}"][0],
+        conv_pt=parameters,
+        path=f"model.{index}.m.0",
+    )
 
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -125,10 +128,6 @@ def test_yolov10x_scdown(device, reset_seeds, index, fwd_input_shape, use_pretra
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[index]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -138,14 +137,16 @@ def test_yolov10x_scdown(device, reset_seeds, index, fwd_input_shape, use_pretra
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    torch_model_output = torch_model(torch_input)[0]
+    parameters = create_yolov10x_model_parameters(torch_model, device)
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
+    torch_model = torch_model.get_submodule(f"model.{index}")
+    torch_model_output = torch_model(torch_input)[0]
 
     ttnn_module = TtnnSCDown(
         device=device,
-        parameters=parameters.conv_args,
+        parameters=parameters.conv_args[f"{index}"],
         conv_pt=parameters,
+        path=f"model.{index}",
     )
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output).squeeze(0)
@@ -178,10 +179,6 @@ def test_yolov10x_sppf(device, reset_seeds, use_pretrained_weights, model_locati
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[9]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -191,15 +188,12 @@ def test_yolov10x_sppf(device, reset_seeds, use_pretrained_weights, model_locati
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
+    parameters = create_yolov10x_model_parameters(torch_model, device)
+
+    torch_model = torch_model.get_submodule("model.9")
     torch_model_output = torch_model(torch_input)[0]
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
-
-    ttnn_module = TtnnSPPF(
-        device=device,
-        parameters=parameters.conv_args,
-        conv_pt=parameters,
-    )
+    ttnn_module = TtnnSPPF(device=device, parameters=parameters.conv_args[9], conv_pt=parameters, path="model.9")
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -217,10 +211,10 @@ def test_yolov10x_sppf(device, reset_seeds, use_pretrained_weights, model_locati
     "index, fwd_input_shape",
     [
         (6, (1, 320, 40, 40)),
-        (8, (1, 320, 40, 40)),
-        (13, (1, 320, 20, 20)),
+        (8, (1, 320, 20, 20)),
+        (13, (1, 320, 40, 40)),
         (19, (1, 320, 40, 40)),
-        (22, (1, 320, 40, 40)),
+        (22, (1, 320, 20, 20)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV10_L1_SMALL_SIZE}], indirect=True)
@@ -241,10 +235,6 @@ def test_yolov10x_cib(device, reset_seeds, index, fwd_input_shape, use_pretraine
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[index].m[0]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -254,14 +244,13 @@ def test_yolov10x_cib(device, reset_seeds, index, fwd_input_shape, use_pretraine
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
+    parameters = create_yolov10x_model_parameters(torch_model, device)
+
+    torch_model = torch_model.get_submodule(f"model.{index}.m.0")
     torch_model_output = torch_model(torch_input)[0]
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
-
     ttnn_module = TtnnCIB(
-        device=device,
-        parameters=parameters.conv_args,
-        conv_pt=parameters,
+        device=device, parameters=parameters.conv_args[f"{index}"][2], conv_pt=parameters, path=f"model.{index}.m.0"
     )
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -295,10 +284,6 @@ def test_yolov10x_attention(device, reset_seeds, use_pretrained_weights, model_l
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[10].attn
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -308,17 +293,19 @@ def test_yolov10x_attention(device, reset_seeds, use_pretrained_weights, model_l
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    torch_model_output = torch_model(torch_input)[0]
+    parameters = create_yolov10x_model_parameters(torch_model, device)
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
+    torch_model = torch_model.get_submodule("model.10.attn")
+    torch_model_output = torch_model(torch_input)[0]
 
     ttnn_module = TtnnAttention(
         dim=320,
         num_heads=5,
         attn_ratio=0.5,
         device=device,
-        parameters=parameters.conv_args,
+        parameters=parameters.conv_args[10].attn,
         conv_pt=parameters,
+        path="model.10.attn",
     )
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -353,10 +340,6 @@ def test_yolov10x_psa(device, reset_seeds, use_pretrained_weights, model_locatio
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[10]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -366,14 +349,16 @@ def test_yolov10x_psa(device, reset_seeds, use_pretrained_weights, model_locatio
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    torch_model_output = torch_model(torch_input)[0]
+    parameters = create_yolov10x_model_parameters(torch_model, device)
 
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
+    torch_model = torch_model.get_submodule("model.10")
+    torch_model_output = torch_model(torch_input)[0]
 
     ttnn_module = TtnnPSA(
         device=device,
-        parameters=parameters.conv_args,
+        parameters=parameters.conv_args[10],
         conv_pt=parameters,
+        path="model.10",
     )
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output).squeeze(0)
@@ -419,10 +404,6 @@ def test_yolov10x_c2f(
         torch_model = load_torch_model(model_location_generator)
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[index]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
@@ -432,14 +413,18 @@ def test_yolov10x_c2f(
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
+    parameters = create_yolov10x_model_parameters(torch_model, device)
+
+    torch_model = torch_model.get_submodule(f"model.{index}")
     torch_model_output = torch_model(torch_input)[0]
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
+
     ttnn_module = TtnnC2f(
         shortcut=shortcut,
         n=num_layers,
         device=device,
-        parameters=parameters.conv_args,
+        parameters=parameters.conv_args[f"{index}"],
         conv_pt=parameters,
+        path=f"model.{index}",
     )
     ttnn_output = ttnn_module(ttnn_input, memory_config=memory_config)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -493,12 +478,7 @@ def test_yolov10x_v10detect(
     torch_input = [torch_input_1, torch_input_2, torch_input_3]
 
     torch_model = YOLOv10()
-    torch_model = torch_model.model[23]
-    state_dict = torch_model.state_dict()
-    torch_model.eval()
-
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
-
     ds_state_dict = {k: v for k, v in state_dict.items()}
     new_state_dict = {}
     for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
@@ -506,17 +486,18 @@ def test_yolov10x_v10detect(
             new_state_dict[name1] = parameter2
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
-    parameters = create_yolov10_model_parameters_detect(
-        torch_model, torch_input[0], torch_input[1], torch_input[2], device=device
-    )
 
+    parameters = create_yolov10x_model_parameters(torch_model, device)
+
+    torch_model = torch_model.get_submodule("model.23")
     torch_model_output = torch_model(torch_input)[0]
     ttnn_input = [ttnn.from_torch(torch_input_1), ttnn.from_torch(torch_input_2), ttnn.from_torch(torch_input_3)]
 
     ttnn_module = TtnnV10Detect(
         device=device,
-        parameters=parameters.model_args,
+        parameters=parameters.model_args.model[23],
         conv_pt=parameters,
+        path="model.23",
     )
     ttnn_output = ttnn_module(ttnn_input_1, ttnn_input_2, ttnn_input_3)
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
@@ -547,7 +528,7 @@ def test_yolov10x(use_pretrained_weights, device, reset_seeds, model_location_ge
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     torch_output = torch_model(torch_input)
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device)
+    parameters = create_yolov10x_model_parameters(torch_model, device)
 
     torch_model_output = torch_model(torch_input)[0]
     ttnn_module = TtnnYolov10(
