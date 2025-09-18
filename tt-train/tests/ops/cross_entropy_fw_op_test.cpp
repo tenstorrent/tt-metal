@@ -260,7 +260,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
+TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;

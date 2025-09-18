@@ -439,7 +439,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
         } else {
-            setup_2d_unicast_route<LowLatencyMeshPacketHeader>(packet_header_address, unicast_fields);
+            fabric_set_unicast_route(unicast_fields.dst_device_id, (LowLatencyMeshPacketHeader*)packet_header_address);
         }
     }
 };

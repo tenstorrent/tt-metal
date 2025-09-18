@@ -299,7 +299,8 @@ def test_rs_row_vertical_nightly(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
     ids=[
