@@ -41,7 +41,6 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - "in-service"
       - arch-blackhole
       - "${{ inputs.runner-label }}"
       - "${{ inputs.extra-tag }}"
@@ -57,7 +56,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data:ro
+        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -102,7 +101,6 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - "in-service"
       - arch-blackhole
       - "${{ inputs.runner-label }}"
       - "${{ inputs.extra-tag }}"
@@ -118,7 +116,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data:ro
+        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data
       options: "--device /dev/tenstorrent"
     defaults:
       run:
