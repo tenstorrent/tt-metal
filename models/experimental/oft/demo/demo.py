@@ -60,7 +60,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     ],
     # fmt: on
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
+@pytest.mark.parametrize("checkpoints_path", [r"/proj_sw/user_dev/zfang/data/checkpoint-0600.pth"])
 @torch.no_grad()
 def test_demo_inference(
     device,

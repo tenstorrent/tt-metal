@@ -188,6 +188,7 @@ class TTResNetFeatures:
 
         cv1 = conv1[:, :, :, :32]  # Assuming conv1 has shape [N, H, W, C] and we want to keep the first 32 channels
         cv2 = conv1[:, :, :, 32:]  # The rest of the channels
+
         ttnn.deallocate(conv1)
         conv1 = ttnn.max_pool2d(
             input_tensor=cv1,

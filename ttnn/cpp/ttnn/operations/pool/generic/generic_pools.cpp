@@ -6,6 +6,7 @@
 
 #include "tt-metalium/constants.hpp"
 #include <cmath>
+#include <iostream>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -48,6 +49,51 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     bool deallocate_input = false,
     bool reallocate_halo_output = true,
     bool return_indices = false) {
+    // DEBUG: Print all max_pool2d input parameters
+    std::cout << "=== MAX_POOL2D DEBUG INFO ===" << std::endl;
+    auto logical_shape = input_tensor.logical_shape();
+    auto padded_shape = input_tensor.padded_shape();
+    std::cout << "Input tensor logical_shape: [" << logical_shape[0] << ", " << logical_shape[1] << ", "
+              << logical_shape[2] << ", " << logical_shape[3] << "]" << std::endl;
+    std::cout << "Input tensor padded_shape: [" << padded_shape[0] << ", " << padded_shape[1] << ", " << padded_shape[2]
+              << ", " << padded_shape[3] << "]" << std::endl;
+    std::cout << "Parameters passed to max_pool2d:" << std::endl;
+    std::cout << "  batch_size: " << batch_size << std::endl;
+    std::cout << "  input_h: " << input_h << std::endl;
+    std::cout << "  input_w: " << input_w << std::endl;
+    std::cout << "  channels: " << channels << std::endl;
+    std::cout << "  kernel_size: [" << kernel_size[0] << ", " << kernel_size[1] << "]" << std::endl;
+    std::cout << "  stride: [" << stride[0] << ", " << stride[1] << "]" << std::endl;
+    std::cout << "  ceil_mode: " << (ceil_mode ? "true" : "false") << std::endl;
+    if (dilation.has_value()) {
+        std::cout << "  dilation: [" << dilation.value()[0] << ", " << dilation.value()[1] << "]" << std::endl;
+    } else {
+        std::cout << "  dilation: [1, 1] (default)" << std::endl;
+    }
+    std::cout << "  return_indices: " << (return_indices ? "true" : "false") << std::endl;
+    std::cout << "  in_place_halo: " << (in_place_halo ? "true" : "false") << std::endl;
+    std::cout << "  deallocate_input: " << (deallocate_input ? "true" : "false") << std::endl;
+    std::cout << "  reallocate_halo_output: " << (reallocate_halo_output ? "true" : "false") << std::endl;
+
+    std::cout << "Memory configuration:" << std::endl;
+    std::cout << "  layout: " << (input_tensor.layout() == ttnn::TILE_LAYOUT ? "TILE" : "ROW_MAJOR") << std::endl;
+    std::cout << "  memory_config.is_dram(): " << (input_tensor.memory_config().is_dram() ? "true" : "false")
+              << std::endl;
+    std::cout << "  is_sharded: " << (input_tensor.memory_config().shard_spec().has_value() ? "true" : "false")
+              << std::endl;
+    if (input_tensor.memory_config().shard_spec().has_value()) {
+        auto shard_spec = input_tensor.memory_config().shard_spec().value();
+        std::cout << "  shard_shape: [" << shard_spec.shape[0] << ", " << shard_spec.shape[1] << "]" << std::endl;
+    } else {
+        std::cout << "  shard_shape: not sharded" << std::endl;
+    }
+    if (applied_shard_scheme.has_value()) {
+        std::cout << "  applied_shard_scheme: provided" << std::endl;
+    } else {
+        std::cout << "  applied_shard_scheme: none" << std::endl;
+    }
+    std::cout << "============================" << std::endl;
+
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
