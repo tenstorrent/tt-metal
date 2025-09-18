@@ -104,16 +104,9 @@ def validate_fabric_compatibility(request):
     """
     import ttnn
 
-    use_cfg_parallel = None
-    mesh_device_param = None
-    for param_name, param_values in getattr(request.node, "callspec", {}).params.items():
-        if param_name == "use_cfg_parallel":
-            use_cfg_parallel = param_values
-        elif param_name == "mesh_device":
-            mesh_device_param = param_values
-
-        if use_cfg_parallel is not None and mesh_device_param is not None:
-            break
+    params = getattr(request.node, "callspec", {}).params
+    use_cfg_parallel = params.get("use_cfg_parallel", None)
+    mesh_device_param = params.get("mesh_device", None)
 
     if not use_cfg_parallel:
         return

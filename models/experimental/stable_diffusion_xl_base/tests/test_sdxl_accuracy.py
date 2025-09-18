@@ -11,7 +11,11 @@ import urllib
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import (
+    SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
+    SDXL_FABRIC_CONFIG,
+)
 import json
 from models.common.utility_functions import profiler
 from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
@@ -22,7 +26,26 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+    "device_params, use_cfg_parallel",
+    [
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "fabric_config": SDXL_FABRIC_CONFIG,
+            },
+            True,
+        ),
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            },
+            False,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -60,17 +83,10 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("device_encoders", "host_encoders"),
 )
-@pytest.mark.parametrize(
-    "use_cfg_parallel",
-    [
-        (True),
-        (False),
-    ],
-    ids=("use_cfg_parallel", "no_cfg_parallel"),
-)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
+    validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
     num_inference_steps,
@@ -95,6 +111,7 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
+        validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
         prompts,
