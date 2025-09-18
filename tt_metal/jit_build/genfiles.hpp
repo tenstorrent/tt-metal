@@ -5,7 +5,6 @@
 #pragma once
 
 #include <core_coord.hpp>
-#include <kernel.hpp>
 #include <string>
 #include <vector>
 

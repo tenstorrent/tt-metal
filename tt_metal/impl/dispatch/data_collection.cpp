@@ -18,11 +18,12 @@
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
 #include <kernel.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/tt_core_coordinates.h>
 
 #include "assert.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 

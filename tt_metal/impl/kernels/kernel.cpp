@@ -6,7 +6,6 @@
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <kernel.hpp>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
 #include <utils.hpp>
@@ -469,6 +468,31 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
+
+detail::KernelMeta Kernel::meta(IDevice* device) const {
+    detail::KernelMeta result {
+        .name = this->kernel_full_name_,
+        .source = this->kernel_src_.source_,
+        .processor_class = get_kernel_processor_class(),
+        .programmable_core_type = get_kernel_programmable_core_type(),
+    };
+
+    if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        result.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+    }
+
+    if (device != nullptr) {
+        result.binary_meta.reserve(this->expected_num_binaries());
+        for (int i = 0; i < this->expected_num_binaries(); i++) {
+            result.binary_meta.push_back({
+                .processor_type = this->get_kernel_processor_type(i),
+                .packed_size = this->get_binary_packed_size(device, i),
+            });
+        }
+    }
+
+    return result;
+}
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
