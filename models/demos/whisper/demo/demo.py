@@ -56,7 +56,7 @@ def load_conditional_generation_ref_model(model_repo):
     Args:
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
-    allowed_models = ["distil-whisper/distil-large-v3", "openai/whisper-large-v3"]
+    allowed_models = ["distil-whisper/distil-large-v3", "distil-whisper/distil-large-v3.5", "openai/whisper-large-v3"]
     if model_repo not in allowed_models:
         raise ValueError(f"Unknown model_repo: {model_repo}. Valid options are {allowed_models}")
 
@@ -484,7 +484,7 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, is_ci_env):
 )
 @pytest.mark.parametrize(
     "model_repo",
-    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3", "distil-whisper/distil-large-v3.5"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, model_repo, is_ci_env):
@@ -510,7 +510,7 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
 )
 @pytest.mark.parametrize(
     "model_repo",
-    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3", "distil-whisper/distil-large-v3.5"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation_dataset(ttnn_model, device, model_repo, is_ci_env):
