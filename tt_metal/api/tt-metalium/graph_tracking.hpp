@@ -142,7 +142,7 @@ public:
     }
 
     template <class ReturnType>
-    void track_function_end(const ReturnType& output_tensors) {
+    void track_function_end(ReturnType& output_tensors) {
         if (processors.empty()) {
             return;
         }
