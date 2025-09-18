@@ -20,6 +20,7 @@ add_executable(test_deit_self_attention
 # Link libraries - use the same torch libraries as parent
 target_link_libraries(test_deit_self_attention
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -51,6 +52,7 @@ add_executable(test_deit_self_output
 # Link libraries for test_deit_self_output
 target_link_libraries(test_deit_self_output
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -84,6 +86,7 @@ add_executable(test_deit_attention
 # Link libraries for test_deit_attention
 target_link_libraries(test_deit_attention
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -115,6 +118,7 @@ add_executable(test_deit_patch_embeddings
 # Link libraries for test_deit_patch_embeddings
 target_link_libraries(test_deit_patch_embeddings
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -147,6 +151,7 @@ add_executable(test_deit_embeddings
 # Link libraries for test_deit_embeddings
 target_link_libraries(test_deit_embeddings
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -178,6 +183,7 @@ add_executable(test_deit_intermediate
 # Link libraries for test_deit_intermediate
 target_link_libraries(test_deit_intermediate
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -209,6 +215,7 @@ add_executable(test_deit_output
 # Link libraries for test_deit_output
 target_link_libraries(test_deit_output
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -245,6 +252,7 @@ add_executable(test_deit_layer
 # Link libraries for test_deit_layer
 target_link_libraries(test_deit_layer
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -282,6 +290,7 @@ add_executable(test_deit_encoder
 # Link libraries for test_deit_encoder
 target_link_libraries(test_deit_encoder
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -324,6 +333,7 @@ add_executable(test_deit_model
 # Link libraries for test_deit_model
 target_link_libraries(test_deit_model
     ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
     ttnncpp
     tt_metal
     pthread
@@ -337,6 +347,49 @@ set_target_properties(test_deit_model PROPERTIES
 
 # Compiler options for debugging
 target_compile_options(test_deit_model PRIVATE
+    -Wall
+    -g
+    -O0
+    -Wno-unused-parameter
+    -Wno-error=unused-parameter
+    -Wno-error
+)
+
+# Add executable for test_deit_for_image_classification
+add_executable(test_deit_for_image_classification 
+    test_deit_for_image_classification.cpp
+    ../tt_cpp/deit_for_image_classification.cpp
+    ../tt_cpp/deit_model.cpp
+    ../tt_cpp/deit_encoder.cpp
+    ../tt_cpp/deit_layer.cpp
+    ../tt_cpp/deit_attention.cpp
+    ../tt_cpp/deit_self_attention.cpp
+    ../tt_cpp/deit_self_output.cpp
+    ../tt_cpp/deit_intermediate.cpp
+    ../tt_cpp/deit_output.cpp
+    ../tt_cpp/deit_embeddings.cpp
+    ../tt_cpp/deit_patch_embeddings.cpp
+    ../tt_cpp/deit_pooler.cpp
+    ../helper_funcs.cpp
+)
+
+# Link libraries for test_deit_for_image_classification
+target_link_libraries(test_deit_for_image_classification
+    ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
+    ttnncpp
+    tt_metal
+    pthread
+)
+
+# Set C++ standard for test_deit_for_image_classification
+set_target_properties(test_deit_for_image_classification PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+
+# Compiler options for debugging
+target_compile_options(test_deit_for_image_classification PRIVATE
     -Wall
     -g
     -O0
