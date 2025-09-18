@@ -131,6 +131,8 @@ inline void _llk_pack_untilize_mop_config_(
     tmp.program();
 }
 
+static uint32_t tile_dst_offset_state = 0;
+
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
@@ -153,6 +155,7 @@ inline void _llk_pack_untilize_init_(
     _llk_pack_untilize_configure_addrmod_<diagonal>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums, 0);
+    tile_dst_offset_state = 0;
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     uint x_stride       = (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float32 ? 4 : (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float16 ? 2 : 1;
@@ -204,11 +207,13 @@ inline void _llk_pack_untilize_(
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 zw counters
     TT_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 xy counters
 
+    const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
     // Needs to be revisited for perf impact with https://github.com/tenstorrent/tt-llk/issues/632
     // If starting_tile_dst_offset is non-zero, reconfigure the template with the correct offset
-    if constexpr (tile_dst_ct_offset != 0)
+    if (tile_dst_offset != tile_dst_offset_state)
     {
-        _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums, tile_dst_ct_offset);
+        _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal>(face_r_dim, num_faces, narrow_row, row_num_datums, tile_dst_offset);
+        tile_dst_offset_state = tile_dst_offset;
     }
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
@@ -220,6 +225,6 @@ inline void _llk_pack_untilize_(
         TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters
     }
 
-    TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);                                // reset z counters
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_ct_offset); // reset w counter
+    TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);                             // reset z counters
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset); // reset w counter
 }
