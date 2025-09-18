@@ -1646,19 +1646,18 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #endif
 }
 
-void runAnalysesForDeviceMarkers(
+void generateAnalysesForDeviceMarkers(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::filesystem::path& report_path,
     ThreadPool& thread_pool) {
 #if defined(TRACY_ENABLE)
-    log_info(tt::LogMetal, "Running analyses for device markers");
     std::vector<AnalysisConfig> analysis_configs = {
         AnalysisConfig{
             .type = AnalysisType::OP_FIRST_TO_LAST_MARKER,
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE FIRMWARE TRACE DURATION",
+                    .analysis_name = "DEVICE TRACE FIRMWARE DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1676,7 +1675,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE KERNEL TRACE DURATION",
+                    .analysis_name = "DEVICE TRACE KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1694,7 +1693,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE KERNEL FIRST TO LAST START DURATION",
+                    .analysis_name = "DEVICE KERNEL FIRST TO LAST START [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1712,7 +1711,10 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE FIRMWARE DURATION",
+                    .analysis_name = "DEVICE FIRMWARE DURATION [ns]",
+                    .display_start_and_end_timestamps = true,
+                    .start_timestamp_header = "DEVICE FW START CYCLE",
+                    .end_timestamp_header = "DEVICE FW END CYCLE",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1730,7 +1732,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE KERNEL DURATION",
+                    .analysis_name = "DEVICE KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1748,7 +1750,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE KERNEL DURATION DM START",
+                    .analysis_name = "DEVICE KERNEL DURATION DM START [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1769,7 +1771,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE BRISC KERNEL DURATION",
+                    .analysis_name = "DEVICE BRISC KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1787,7 +1789,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE NCRISC KERNEL DURATION",
+                    .analysis_name = "DEVICE NCRISC KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1805,7 +1807,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE TRISC_0 KERNEL DURATION",
+                    .analysis_name = "DEVICE TRISC0 KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1823,7 +1825,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE TRISC_1 KERNEL DURATION",
+                    .analysis_name = "DEVICE TRISC1 KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1841,7 +1843,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE TRISC_2 KERNEL DURATION",
+                    .analysis_name = "DEVICE TRISC2 KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1859,7 +1861,7 @@ void runAnalysesForDeviceMarkers(
             .dimension = AnalysisDimension::OP,
             .results_config =
                 AnalysisResultsConfig{
-                    .analysis_name = "DEVICE ERISC KERNEL DURATION",
+                    .analysis_name = "DEVICE ERISC KERNEL DURATION [ns]",
                 },
             .start_config =
                 AnalysisStartEndConfig{
@@ -1918,10 +1920,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
-    runAnalysesForDeviceMarkers(
-        device_markers_vec,
-        this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME,
-        *this->thread_pool);
+    if (!is_mid_run_dump && tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
+        generateAnalysesForDeviceMarkers(
+            device_markers_vec,
+            this->ops_perf_report_output_dir / PROFILER_OPS_PERF_RESULTS_REPORT_NAME,
+            *this->thread_pool);
+    }
 
     // for (auto& [runtime_id, durations] :
     // dynamic_cast<DurationAnalysisResults&>(*analysis_results).results_per_runtime_id) {

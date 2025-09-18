@@ -49,13 +49,6 @@ DurationAnalysisResults parse_duration(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
-    // log_info(tt::LogMetal, "config name: {}", analysis_config.results_config.analysis_name);
-    // log_info(tt::LogMetal, "markers size: {}", markers.size());
-
-    // if (markers.empty()) {
-    //     return {};
-    // }
-
     std::unordered_map<uint64_t, DurationAnalysisResults::SingleResult> results_per_runtime_id;
     std::unordered_map<uint64_t, std::unordered_set<CoreCoord>> fw_cores_per_runtime_id;
 
