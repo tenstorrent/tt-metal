@@ -90,8 +90,10 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on:
-      - tt-ubuntu-2204-n150-viommu-stable
+    runs-on: >-
+      ${{
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-ubuntu-2204-{0}-stable', inputs.runner))
+      }}
       # ${{
       #   ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
       # }}
