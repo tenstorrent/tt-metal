@@ -167,6 +167,12 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
       if (ent.isDirectory()) {
         stack.push(p);
       } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
+        // Only consider logs whose filenames indicate test content
+        const fileBaseName = path.basename(p);
+        if (!/tests?/i.test(fileBaseName)) {
+          core.info(`Skipping non-test log file: ${fileBaseName}`);
+          continue;
+        }
         try {
           const text = fs.readFileSync(p, 'utf8');
           const rawLines = text.split(/\r?\n/);
