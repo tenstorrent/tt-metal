@@ -640,6 +640,11 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         }
     }
     
+    // Handle final classifier bias parameter
+    if (parameters.find("qwen/fc/bias") != parameters.end()) {
+        used_parameters.insert("qwen/fc/bias");
+    }
+    
     // Check if all parameters were used
     std::vector<std::string> unused_parameters;
     for (const auto &[name, tensor] : parameters) {
