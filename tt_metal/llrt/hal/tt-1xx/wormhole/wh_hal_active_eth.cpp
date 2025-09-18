@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define HAL_BUILD
+#define HAL_BUILD tt::tt_metal::wormhole::active_eth
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
+using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"

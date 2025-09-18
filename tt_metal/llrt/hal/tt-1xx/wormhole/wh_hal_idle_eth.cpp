@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define HAL_BUILD
+#define HAL_BUILD tt::tt_metal::wormhole::idle_eth
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
+using namespace tt::tt_metal::wormhole::idle_eth;
+
 #include <cstdint>
 
 #include "dev_mem_map.h"

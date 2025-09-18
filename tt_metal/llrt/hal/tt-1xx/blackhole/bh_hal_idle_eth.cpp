@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define HAL_BUILD
+#define HAL_BUILD tt::tt_metal::blackhole::idle_eth
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+using namespace tt::tt_metal::blackhole::idle_eth;
+
 #include <cstdint>
 
 #include "assert.hpp"

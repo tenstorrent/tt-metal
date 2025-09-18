@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define HAL_BUILD
+#define HAL_BUILD tt::tt_metal::wormhole::tensix
 #include "dev_msgs.h"
+using namespace tt::tt_metal::wormhole::tensix;
+
 #include <cstdint>
 
 #include "assert.hpp"
