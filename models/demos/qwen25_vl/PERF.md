@@ -15,7 +15,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models.
 
 ## Vision Performance
 
-Note: Vision performance is still going under optimization.
+Note: Vision performance is still undergoing optimization.
 
 | Model             | Device      | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|---------------|-----------|
