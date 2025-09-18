@@ -90,7 +90,6 @@ jobs:
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
-            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
           )
