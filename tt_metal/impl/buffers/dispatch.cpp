@@ -896,7 +896,7 @@ void issue_read_buffer_dispatch_command_sequence(
     } else {
         bool flush_prefetch = false;
         //fmt::println(stderr, "Reading unpinned");
-        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false);
+        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false, 0);
     }
 
     // Unified relay from device memory
