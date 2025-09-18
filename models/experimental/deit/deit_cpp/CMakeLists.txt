@@ -24,5 +24,18 @@ link_directories(
     ${libtorch_SOURCE_DIR}/lib
 )
 
+###################################################################################################################
+# OpenCV : Use system installed OpenCV
+###################################################################################################################
+find_package(OpenCV REQUIRED)
+if(OpenCV_FOUND)
+    message(STATUS "Found OpenCV: ${OpenCV_VERSION}")
+    include_directories(${OpenCV_INCLUDE_DIRS})
+else()
+    message(FATAL_ERROR "OpenCV not found. Please install OpenCV using: sudo apt install libopencv-dev")
+endif()
+
+###################################################################################################################
 # Add test_cpp subdirectory
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_cpp)
+###################################################################################################################
+add_subdirectory(test_cpp)
