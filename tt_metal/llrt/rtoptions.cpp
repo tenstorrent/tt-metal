@@ -13,7 +13,7 @@
 #include <string>
 
 #include "assert.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
 
@@ -251,6 +251,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
+    }
+
+    if (getenv("TT_METAL_USE_MGD_2_0")) {
+        this->use_mesh_graph_descriptor_2_0 = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");

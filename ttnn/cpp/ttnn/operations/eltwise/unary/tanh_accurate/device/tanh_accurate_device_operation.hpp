@@ -42,7 +42,7 @@ struct TanhAccurateDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const std::vector<UnaryWithParam>& op_chain,
+        const std::vector<EltwiseUnaryWithParam>& op_chain,
         DataType output_dtype,
         const MemoryConfig& output_memory_config,
         bool fp32_dest_acc_en,

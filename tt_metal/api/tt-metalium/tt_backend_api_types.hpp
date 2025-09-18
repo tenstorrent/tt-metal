@@ -12,7 +12,7 @@
 #include <string>
 
 #include <fmt/base.h>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 
@@ -83,7 +83,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
 }
 
 // Size of datum in bytes
-inline constexpr static uint32_t datum_size(const DataFormat& format) {
+constexpr static uint32_t datum_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
@@ -110,7 +110,7 @@ inline constexpr static uint32_t datum_size(const DataFormat& format) {
 }
 
 // Size of tile in bytes
-inline constexpr static uint32_t tile_size(const DataFormat& format) {
+constexpr static uint32_t tile_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b: return (64 * 4) + (16 * 4);

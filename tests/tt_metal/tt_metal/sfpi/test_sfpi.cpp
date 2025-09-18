@@ -29,7 +29,7 @@ constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfp
 using namespace tt::tt_metal;
 
 bool runTest(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& coord,
     const std::string& path,
     unsigned baseLen) {
@@ -39,7 +39,7 @@ bool runTest(
 
     auto program(tt::tt_metal::CreateProgram());
     distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
-    auto kernel = CreateKernel(
+    CreateKernel(
         program,
         path,
         coord,
@@ -85,7 +85,7 @@ bool runTest(
 }
 
 bool runTests(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::CoreCoord coord,
     std::string& path,
     unsigned baseLen) {
@@ -120,7 +120,7 @@ bool runTests(
     return pass;
 }
 
-bool runTestsuite(std::shared_ptr<distributed::MeshDevice> mesh_device, const tt::tt_metal::CoreCoord coord) {
+bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const tt::tt_metal::CoreCoord coord) {
     std::string path;
     if (auto* var = std::getenv("TT_METAL_HOME")) {
         path.append(var);
@@ -132,11 +132,11 @@ bool runTestsuite(std::shared_ptr<distributed::MeshDevice> mesh_device, const tt
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
 
-using tt::tt_metal::CommandQueueSingleCardProgramFixture;
+using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(runTestsuite(mesh_device, core));
     }
 }

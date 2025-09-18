@@ -543,8 +543,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
  * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -629,7 +628,8 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst
     EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
 }
 template <typename DType>
-void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::vector<DType>& dst, bool blocking) {
+void EnqueueReadBuffer(
+    CommandQueue& cq, const std::shared_ptr<Buffer>& buffer, std::vector<DType>& dst, bool blocking) {
     EnqueueReadBuffer(cq, *buffer, dst, blocking);
 }
 
@@ -650,7 +650,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::ve
 // clang-format on
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     const BufferRegion& region,
     bool blocking);
@@ -679,7 +679,7 @@ void EnqueueReadSubBuffer(
 template <typename DType>
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    std::shared_ptr<Buffer> buffer,
+    const std::shared_ptr<Buffer>& buffer,
     std::vector<DType>& dst,
     const BufferRegion& region,
     bool blocking) {

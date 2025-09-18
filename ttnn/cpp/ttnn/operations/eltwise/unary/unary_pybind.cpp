@@ -876,7 +876,7 @@ void bind_unary_rdiv(
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
-    const std::string parameter_b_value,
+    const std::string& parameter_b_value,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -936,7 +936,7 @@ void bind_unary_rdiv(
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) {
@@ -1211,7 +1211,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            ops_chain (list[ttnn.UnaryWithParam]): list of unary ops to be chained.
+            ops_chain (list[ttnn.EltwiseUnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1237,7 +1237,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.randn([32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> ops_chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
+            >>> ops_chain = [ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
             >>> output = {1}(tensor, ops_chain)
         )doc",
         ttnn::unary_chain.base_name(),
@@ -1250,7 +1250,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const FusedActivations& ops_chain,
+               const EltwiseFusedActivations& ops_chain,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
                const QueueId queue_id) {

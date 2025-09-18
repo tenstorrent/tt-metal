@@ -1,15 +1,29 @@
 name: Package and release
 on:
+  workflow_call:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
   schedule:
-    # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
-    # releases for beginning of work week
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
     - cron: "0 0 * * *"
 
 permissions:
   contents: write
   packages: write
-
+  actions: write
+  id-token: write
 
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
@@ -18,143 +32,74 @@ permissions:
 # if we are promoting a release candidate, don't rerun the tests
 
 jobs:
-  get-params:
+  release-precheck:
     runs-on: ubuntu-latest
     outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+      is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
+      tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
+      - name: Get is-release-candidate and tag-type
+        id: get-is-release-candidate-and-tag-type
         run: |
           # A workflow dispatch on a tag is considered a release run for us.
           isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+
+          # Set tag-type
+          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
+            if [[ "$isReleaseCandidate" == "true" ]]; then
+              echo "tag-type=rc" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag-type=" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "tag-type=dev" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get should-create-release
         id: get-should-create-release
         run: |
           # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
           if [ "$shouldCreateRelease" != "true" ]; then
             echo "should-create-release is false, no release needed. Exiting workflow."
             exit 1
           fi
           echo "should-create-release is true, proceeding with release workflow."
-  build-artifact:
-    needs: create-tag
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-      fetch-depth: 0
-  build-artifact-profiler:
-    needs: create-tag
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      tracy: true
-      build-wheel: true
-      fetch-depth: 0
-  single-card-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      arch: wormhole_b0
-  t3000-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  t3000-model-perf:
-    needs: [build-artifact, build-artifact-profiler, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  galaxy-6u-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
-  blackhole-single-card-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [ "P100", "P150" ]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-multi-card-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
-            num_devices: 4
-          - name: DeskBox Demo tests
-            runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
-            num_devices: 2
-          # - name: RackBox Demo tests
-          #   runner-label: BH-RackBox
-          #   extra-tag: pipeline-functional
-          #   num_devices: 8
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
+
   create-tag:
-    needs: get-params
+    needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    secrets: inherit
     with:
       fetch_depth: 0
       bump_each_commit: false
-      release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
+      # tag-type is now set in release-precheck and passed as output
+      tag-type: ${{ needs.release-precheck.outputs.tag-type }}
+      dry-run: ${{ inputs.dry-run || false }}
+
+
+  build-test-publish:
+    needs: [create-tag, release-precheck]
+    uses: ./.github/workflows/release-build-test-publish.yaml
+    secrets: inherit
+    strategy:
+      matrix:
+        version: [22.04, 24.04]
+    with:
+      version: ${{ matrix.version }}
+      dry-run: ${{ inputs.dry-run || false }}
+      tag-version: ${{ needs.create-tag.outputs.version }}
+      is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+
+
   create-changelog:
-    needs: create-tag
+    needs: [create-tag, build-test-publish]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -174,6 +119,7 @@ jobs:
         with:
           name: changelog
           path: CHANGELOG.txt
+
   create-release-notes:
     needs: create-changelog
     permissions: read-all
@@ -203,13 +149,14 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
+
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-artifact]
+    needs: [create-tag, create-release-notes, build-test-publish]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -229,9 +176,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: changelog
-      - name: Release
-        # A major release has not been tagged yet, so we need to do this to avoid
-        # Node 16 deprecation warning message
+      - name: Release (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
@@ -247,50 +193,3 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
-  create-docker-release-image:
-    needs: [
-      build-artifact,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: github.ref != 'refs/heads/main'
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      tag-latest:  ${{ needs.get-params.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  release-docs:
-    needs: [
-      build-artifact,
-      get-params,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.get-params.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    secrets: inherit
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [build-artifact]
-    runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1

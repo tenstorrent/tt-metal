@@ -45,7 +45,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
@@ -101,7 +101,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<ThreadPool>& reader_thread_pool,
     std::shared_ptr<CQSharedState>& cq_shared_state,
     std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, lock_api_function),
+    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
     reader_thread_pool_(reader_thread_pool),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -718,7 +718,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    while (thread_exception_state_.load() == false) {
+    while (!thread_exception_state_.load()) {
         try {
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
@@ -1107,7 +1107,7 @@ void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
 #if defined(TRACY_ENABLE)
     for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
-        launch_msg->kernel_config.host_assigned_id =
+        launch_msg.kernel_config().host_assigned_id() =
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }
 #endif

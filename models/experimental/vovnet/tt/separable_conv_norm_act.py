@@ -6,6 +6,13 @@
 import ttnn
 from models.experimental.vovnet.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSeparableConvNormAct:
     def __init__(
@@ -41,6 +48,9 @@ class TtSeparableConvNormAct:
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="seperable_conv_norm")
+
         x = self.conv_dw(x)
         x = self.conv_pw(x[0])
 
