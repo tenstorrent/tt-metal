@@ -1200,7 +1200,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            ops_chain (list[ttnn.UnaryWithParam]): list of unary ops to be chained.
+            ops_chain (list[ttnn.EltwiseUnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1226,29 +1226,30 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.randn([32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> ops_chain = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
+            >>> ops_chain = [ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.EltwiseUnaryWithParam(ttnn.UnaryOpType.POWER, 2)]
             >>> output = {1}(tensor, ops_chain)
         )doc",
-                                    ttnn::unary_chain.base_name(),
-                                    ttnn::unary_chain.python_fully_qualified_name());
+        ttnn::unary_chain.base_name(),
+        ttnn::unary_chain.python_fully_qualified_name());
 
-                                bind_registered_operation(
-                                    module,
-                                    ttnn::unary_chain,
-                                    doc,
-                                    ttnn::pybind_overload_t{
-                                        [](const unary_operation_t& self,
-                                           const Tensor& input_tensor,
-                                           const FusedActivations& ops_chain,
-                                           const std::optional<MemoryConfig>& memory_config,
-                                           const std::optional<Tensor>& output_tensor) {
-                                            return self(input_tensor, ops_chain, memory_config, output_tensor);
-                                        },
-                                        py::arg("input_tensor"),
-                                        py::arg("ops_chain"),
-                                        py::kw_only(),
-                                        py::arg("memory_config") = std::nullopt,
-                                        py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::unary_chain,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const EltwiseFusedActivations& ops_chain,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               const QueueId queue_id) {
+                return self(queue_id, input_tensor, ops_chain, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("ops_chain"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt);
 }
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {

@@ -335,6 +335,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         "failure_signature": failure_signature,
         "failure_description": failure_description,
         "job_label": ",".join(labels),
+        "steps": github_job.get("steps", []),
     }
 
 
