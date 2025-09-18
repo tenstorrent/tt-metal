@@ -14,6 +14,7 @@
 
 #include "tt_fabric_test_interfaces.hpp"  // For IRouteManager, etc.
 #include <tt-metalium/mesh_graph.hpp>     // For InterMeshConnectivity
+#include <tt-metalium/control_plane.hpp>  // For ControlPlane access
 #include "assert.hpp"
 #include "tt-logger/tt-logger.hpp"
 
@@ -22,6 +23,42 @@ namespace tt::tt_fabric::fabric_tests {
 // Type aliases for clarity
 using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;  // Directed graph: node -> neighbors
 using CyclePath = std::vector<FabricNodeId>;  // A single cycle as a path (e.g., A -> B -> C -> A)
+
+// Function to get complete fabric path using control plane API
+// This is kept within the test infrastructure to avoid modifying core control plane
+std::vector<FabricNodeId> get_fabric_path_from_control_plane(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    FabricNodeId src_fabric_node_id,
+    FabricNodeId dst_fabric_node_id) {
+    try {
+        // Get the complete route using the first available channel (channel 0)
+        // For cycle detection, we only care about the node sequence, not the specific channels
+        auto full_route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, 0);
+
+        // Extract just the FabricNodeId from each hop
+        std::vector<FabricNodeId> path;
+        path.reserve(full_route.size());
+
+        for (const auto& [node_id, channel_id] : full_route) {
+            path.push_back(node_id);
+        }
+
+        // Ensure the path includes the destination node if it's not already there
+        if (!path.empty() && path.back() != dst_fabric_node_id) {
+            path.push_back(dst_fabric_node_id);
+        }
+
+        return path;
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogTest,
+            "Failed to get fabric route from control plane for {}->{}: {}",
+            src_fabric_node_id,
+            dst_fabric_node_id,
+            e.what());
+        return {};
+    }
+}
 
 // DFS state for cycle detection
 enum class DFSState { UNVISITED, VISITING, VISITED };
@@ -83,8 +120,43 @@ std::vector<CyclePath> detect_cycles(const NodeGraph& graph) {
     return cycles;
 }
 
-// Build a routing path graph by actually tracing the path hop-by-hop
+// Build a routing path graph using full fabric path from control plane
+NodeGraph build_path_graph_from_full_path(const std::vector<FabricNodeId>& full_path) {
+    NodeGraph path_graph;
+
+    if (full_path.size() < 2) {
+        return path_graph;
+    }
+
+    // Convert the linear path into a directed graph
+    for (size_t i = 0; i < full_path.size() - 1; ++i) {
+        FabricNodeId current_node = full_path[i];
+        FabricNodeId next_node = full_path[i + 1];
+
+        // Initialize nodes if not present
+        if (path_graph.find(current_node) == path_graph.end()) {
+            path_graph[current_node] = {};
+        }
+        if (path_graph.find(next_node) == path_graph.end()) {
+            path_graph[next_node] = {};
+        }
+
+        // Add edge from current to next node
+        path_graph[current_node].push_back(next_node);
+    }
+
+    return path_graph;
+}
+
+// Build a routing path graph by actually tracing the path hop-by-hop (with optional full path support)
 NodeGraph build_path_graph(FabricNodeId src, FabricNodeId dest, const IRouteManager& route_manager) {
+    // Try to use the full fabric path API if available
+    auto full_path = route_manager.get_full_fabric_path(src, dest);
+    if (!full_path.empty()) {
+        return build_path_graph_from_full_path(full_path);
+    }
+
+    // Fallback to hop-based path building
     NodeGraph path_graph;
 
     try {
@@ -291,6 +363,88 @@ void dump_cycles_to_yaml(
 
     fout.close();
     log_info(tt::LogTest, "Cycle detection results written to: {}", file_path);
+}
+
+// Enhanced cycle detection specifically for random inter-mesh traffic
+bool detect_cycles_in_random_inter_mesh_traffic(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
+    const IRouteManager& route_manager,
+    const std::string& test_name,
+    uint32_t max_retry_attempts = 3) {
+    log_info(tt::LogTest, "Checking for cycles in random inter-mesh traffic for test {}", test_name);
+
+    // Build comprehensive graph using full fabric paths for better accuracy
+    NodeGraph comprehensive_graph;
+    std::vector<std::vector<FabricNodeId>> all_paths;
+
+    // Collect all fabric paths
+    const tt::tt_fabric::ControlPlane* control_plane =
+        static_cast<const tt::tt_fabric::ControlPlane*>(route_manager.get_control_plane());
+
+    for (const auto& [src, dest] : pairs) {
+        std::vector<FabricNodeId> full_path;
+
+        // Try to use control plane directly for more accurate paths
+        if (control_plane != nullptr) {
+            full_path = get_fabric_path_from_control_plane(*control_plane, src, dest);
+        }
+
+        // Fallback to route manager's implementation if control plane is not available or fails
+        if (full_path.empty()) {
+            full_path = route_manager.get_full_fabric_path(src, dest);
+        }
+
+        if (!full_path.empty()) {
+            all_paths.push_back(full_path);
+
+            // Build path graph from this full path
+            auto path_graph = build_path_graph_from_full_path(full_path);
+
+            // Merge into comprehensive graph
+            for (const auto& [node, neighbors] : path_graph) {
+                auto& combined_neighbors = comprehensive_graph[node];
+                for (const auto& neighbor : neighbors) {
+                    if (std::find(combined_neighbors.begin(), combined_neighbors.end(), neighbor) ==
+                        combined_neighbors.end()) {
+                        combined_neighbors.push_back(neighbor);
+                    }
+                }
+            }
+        } else {
+            // Last resort: fallback to hop-based path building
+            auto path_graph = build_path_graph(src, dest, route_manager);
+            for (const auto& [node, neighbors] : path_graph) {
+                auto& combined_neighbors = comprehensive_graph[node];
+                for (const auto& neighbor : neighbors) {
+                    if (std::find(combined_neighbors.begin(), combined_neighbors.end(), neighbor) ==
+                        combined_neighbors.end()) {
+                        combined_neighbors.push_back(neighbor);
+                    }
+                }
+            }
+        }
+    }
+
+    // Detect cycles in the comprehensive graph
+    auto cycles = detect_cycles(comprehensive_graph);
+
+    if (!cycles.empty()) {
+        log_warning(tt::LogTest, "Found {} cycles in inter-mesh traffic pattern for test {}", cycles.size(), test_name);
+        dump_cycles_to_yaml(cycles, test_name, 0, "generated/fabric/inter_mesh_cycles");
+
+        // Log detailed cycle information for debugging
+        for (size_t i = 0; i < cycles.size(); ++i) {
+            log_warning(tt::LogTest, "Cycle {}: ", i);
+            for (const auto& node : cycles[i]) {
+                log_warning(tt::LogTest, "  -> {}", node);
+            }
+        }
+
+        return true;  // Cycles found - caller should regenerate random pairing
+    }
+
+    log_info(tt::LogTest, "No cycles detected in inter-mesh traffic pattern for test {}", test_name);
+    return false;  // No cycles
 }
 
 bool detect_and_handle_cycles(

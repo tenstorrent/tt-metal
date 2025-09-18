@@ -112,6 +112,14 @@ public:
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+
+    // Full fabric path routing API for cycle detection
+    virtual std::vector<FabricNodeId> get_full_fabric_path(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const = 0;
+
+    // Access to control plane for advanced routing operations
+    // Note: Returns nullptr in most implementations since control plane access is limited
+    virtual const void* get_control_plane() const = 0;
 };
 
 class IDistributedContextManager {
