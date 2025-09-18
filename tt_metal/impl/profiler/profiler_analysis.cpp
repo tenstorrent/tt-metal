@@ -8,6 +8,7 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
+#include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
 
@@ -137,18 +138,6 @@ void writeAnalysisResultsToCSV(
     }
 
     std::map<uint64_t, std::string> results_string_per_runtime_id;
-    // for (const auto& analysis_result : analysis_results) {
-    //     const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
-    //     for (const uint64_t runtime_id : analysis_result_runtime_ids) {
-    //         auto [it, inserted] = results_string_per_runtime_id.emplace(runtime_id, "");
-    //         if (inserted) {
-    //             const AnalysisResults::RuntimeIdMetaData meta_data =
-    //                 analysis_result->getMetaDataForRuntimeId(runtime_id);
-    //             it->second = std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," +
-    //                          arch_to_str(meta_data.device_arch) + "," + meta_data.op_name;
-    //         }
-    //     }
-    // }
 
     for (const auto& analysis_result : analysis_results) {
         for (const uint64_t runtime_id : analysis_result->getRuntimeIds()) {
@@ -162,21 +151,6 @@ void writeAnalysisResultsToCSV(
             }
         }
     }
-
-    // for (const auto& analysis_result : analysis_results) {
-    //     const std::unordered_set<uint64_t> analysis_result_runtime_ids = analysis_result->getRuntimeIds();
-    //     for (const uint64_t runtime_id : analysis_result_runtime_ids) {
-    //         results_string_per_runtime_id[runtime_id] +=
-    //             "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
-    //     }
-
-    //     for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
-    //         if (analysis_result_runtime_ids.find(runtime_id) == analysis_result_runtime_ids.end()) {
-    //             results_string_per_runtime_id[runtime_id] +=
-    //                 "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
-    //         }
-    //     }
-    // }
 
     for (const auto& analysis_result : analysis_results) {
         for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
