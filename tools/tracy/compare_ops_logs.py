@@ -1,4 +1,4 @@
-##! /usr/bin/env python3
+#! /usr/bin/env python3
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 

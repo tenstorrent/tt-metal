@@ -27,7 +27,6 @@ run_async_test() {
             echo "No verification as test was skipped"
         else
             echo "Verifying test results"
-            echo $PROFILER_OUTPUT_DIR
             runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
             LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
