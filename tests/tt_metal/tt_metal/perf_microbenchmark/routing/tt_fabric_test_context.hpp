@@ -681,19 +681,6 @@ private:
                 }
             }
         }
-
-        // Log the results for debugging (automatically sorted)
-        for (const auto& [node_id, device_traffic] : outgoing_traffic_) {
-            if (!device_traffic.empty()) {
-                for (const auto& [direction, count] : device_traffic) {
-                    if (count > 0) {
-                        log_debug(
-                            tt::LogTest, "Device {} Direction {} Traffic Count: {}", node_id.chip_id, direction, count);
-                    }
-                }
-            }
-        }
-
         return outgoing_traffic_;
     }
 
@@ -821,15 +808,6 @@ private:
                 uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
 
                 device_core_cycles_[device_node_id][core] = total_cycles;
-            }
-        }
-
-        // Print results for checking
-        log_debug(tt::LogTest, "Performance profiling results:");
-        // Results are automatically sorted by device ID and core coordinates
-        for (const auto& [device_id, core_cycles] : device_core_cycles_) {
-            for ([[maybe_unused]] const auto& [core, cycles] : core_cycles) {
-                log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
             }
         }
     }
@@ -994,21 +972,6 @@ private:
 
                     // save all possible num devices
                     num_devices_set.insert(num_devices);
-
-                    log_info(
-                        tt::LogTest,
-                        "Device {} Direction {} Link {} Bandwidth: {:.6f} GB/s (Total Packets: {}, Packet Size: {}, "
-                        "Total Bytes: "
-                        "{}, "
-                        "Cycles: {})",
-                        device_id.chip_id,
-                        direction,
-                        link_id,
-                        bandwidth_gb_s,
-                        total_packets,
-                        packet_size,
-                        total_bytes,
-                        cycles);
 
                     auto bw_result = BandwidthResult{
                         .num_devices = num_devices,
