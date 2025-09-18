@@ -329,12 +329,17 @@ def generate_build_header(
     validate_tile_dimensions(input_A_dimensions[1], num_cols)
     validate_tile_dimensions(input_B_dimensions[0], num_rows)
     validate_tile_dimensions(input_B_dimensions[1], num_cols)
-    block_rt_dim = input_A_dimensions[0] // num_rows
-    block_ct_dim = input_B_dimensions[1] // num_cols
+    full_rt_dim = input_A_dimensions[0] // num_rows
+    full_ct_dim = input_B_dimensions[1] // num_cols
+
+    block_rt_dim = test_config.get("block_rt_dim", full_rt_dim)
+    block_ct_dim = test_config.get("block_ct_dim", full_ct_dim)
 
     header_content.extend(
         [
             "#if defined(TEST_KERNEL)",
+            f"constexpr uint32_t FULL_RT_DIM = {full_rt_dim};",
+            f"constexpr uint32_t FULL_CT_DIM = {full_ct_dim};",
             f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim};",
             f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim};",
             "#endif",

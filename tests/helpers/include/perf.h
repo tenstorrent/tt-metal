@@ -8,6 +8,18 @@
 
 #include "ckernel.h"
 
+// FIXME: this shouldn't be statically allocated
+constexpr uint32_t PERF_INPUT_A = 0x1A000;
+constexpr uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
+constexpr uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
+constexpr uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
+
+constexpr uint32_t PERF_ADDRESS(uint32_t buffer, uint32_t tile)
+{
+    uint32_t address = buffer + (tile % 16) * 4096; // Loop every 16 tiles, to prevent escaping memory
+    return address / 16 - 1;                        // Correct the L1 Address for Tensix
+}
+
 enum class PerfRunType
 {
     L1_TO_L1,

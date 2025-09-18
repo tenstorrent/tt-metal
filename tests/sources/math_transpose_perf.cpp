@@ -60,6 +60,7 @@ void run_kernel()
 
 void run_kernel()
 {
+    // FIXME: Properly handle expB -> FP16
     constexpr bool is32 = is_32bit_format(static_cast<DataFormat>(formats.math));
 
     {
