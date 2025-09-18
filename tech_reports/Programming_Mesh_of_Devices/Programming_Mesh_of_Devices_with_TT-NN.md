@@ -218,7 +218,7 @@ We can also visualize this tensor distributed across our MeshDevice. The visuali
 ttnn.visualize_tensor(mesh_tensor)
 ```
 
-<img src="image7_device_tensor_vis.png" style="width:500px;"/>
+<img src="images/image7_device_tensor_vis.png" style="width:500px;"/>
 
 ## 4. Single-Program Multiple Device
 
