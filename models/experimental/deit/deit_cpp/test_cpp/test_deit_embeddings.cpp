@@ -42,13 +42,13 @@ double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
 
 /**
  * Test DeiT Embeddings inference
+ * @param model_path Path to the DeiT model file
  */
-void test_deit_embeddings_inference() {
+void test_deit_embeddings_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
     
-    // Setup base address and model path
+    // Setup base address
     std::string base_address = "model.embeddings.";
-    std::string model_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/model/deit_traced_model.pt";
     bool use_mask_token = false;
     
     // Load state dict and model
@@ -150,8 +150,18 @@ void test_deit_embeddings_inference() {
 int main(int argc, char** argv) {
     std::cout << "Starting DeiT Embeddings test..." << std::endl;
     
+    // Default model path (relative path)
+    std::string model_path = "../deit_model/deit_traced_model.pt";
+    
+    // Check if model path is provided as command line argument
+    if (argc > 1) {
+        model_path = argv[1];
+    }
+    
+    std::cout << "Using model path: " << model_path << std::endl;
+    
     try {
-        test_deit_embeddings_inference();
+        test_deit_embeddings_inference(model_path);
     } catch (const std::exception& e) {
         std::cerr << "Error during test execution: " << e.what() << std::endl;
         return 1;
