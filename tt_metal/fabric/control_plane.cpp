@@ -1709,7 +1709,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, true>(MeshId mesh_id) cons
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<1, false> routing_path;
+        intra_mesh_routing_path_t<1, false> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         // Calculate routing fields within the same mesh only
@@ -1743,17 +1743,35 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         mesh_shape[1]);
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<2, true> routing_path;
+        intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-
         write_to_all_tensix_cores(
             &routing_path,
             sizeof(routing_path),
             tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
             physical_chip_id);
+
+        // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
+        tt::tt_fabric::exit_node_table_t exit_table{};
+        for (std::size_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; ++i) {
+            exit_table.nodes[i] =
+                static_cast<std::uint8_t>(tt::tt_fabric::eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        }
+        const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
+        for (const auto& dst_mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            auto direction = inter_mesh_table[*mesh_id][src_chip_id][*dst_mesh_id];
+            if (direction == RoutingDirection::NONE) {
+                continue;
+            }
+            auto exit_node =
+                this->routing_table_generator_->get_exit_node_from_mesh_to_mesh(mesh_id, src_chip_id, dst_mesh_id);
+            exit_table.nodes[*dst_mesh_id] = static_cast<std::uint8_t>(exit_node.chip_id);
+        }
+        write_to_all_tensix_cores(
+            &exit_table, sizeof(exit_table), tt::tt_metal::HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE, physical_chip_id);
     }
 }
 

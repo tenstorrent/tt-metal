@@ -51,6 +51,8 @@ public:
     // Return a list of all exit nodes, across all meshes that are connected to the requested
     // MeshID.
     const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
+    // Return the single exit node (chip in src_mesh_id) for a given src chip and dst mesh
+    FabricNodeId get_exit_node_from_mesh_to_mesh(MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const;
 
     std::unique_ptr<MeshGraph> mesh_graph;
 
