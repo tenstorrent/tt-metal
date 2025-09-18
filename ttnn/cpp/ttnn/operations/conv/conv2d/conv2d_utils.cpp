@@ -578,11 +578,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     const ttnn::MemoryConfig& input_memory_config = input_tensor_.memory_config();
     const tt::tt_metal::TensorMemoryLayout input_shard_scheme = input_memory_config.memory_layout();
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        input_shard_scheme,
-        input_tensor_.layout(),
-        input_tensor_.memory_config().buffer_type(),
-        is_mm_conv,
-        input_memory_config);
+        input_shard_scheme, input_tensor_.layout(), BufferType::L1, is_mm_conv, input_memory_config);
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
@@ -686,7 +682,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
             is_mm_conv,
             device->compute_with_storage_grid_size(),
             input_tensor.layout(),
-            input_tensor.memory_config().buffer_type(),
+            BufferType::L1,
             parallel_config,
             conv_config.act_block_h_override);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
@@ -856,6 +852,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const DeviceComputeKernelConfig& compute_config) {
     // If the input tensor is already sharded, or the conv_config has a specified shard layout, we don't need to do
     // anything.
+
+    log_info(
+        tt::LogOp, "Auto sharding Input={}x{}, Output={}x{}, ", input_height, input_width, output_height, output_width);
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
         conv_config.shard_layout.has_value()) {
         return conv_config;
@@ -891,7 +890,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         }
 
         const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_layout, BufferType::DRAM, is_mm_conv, std::nullopt);
+            get_input_channels_alignment(shard_layout, input_layout, BufferType::L1, is_mm_conv, std::nullopt);
         const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
         const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
@@ -969,8 +968,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             is_mm_conv,
             compute_grid_size,
             input_layout,
-            input_memory_config.has_value() ? input_memory_config.value().buffer_type()
-                                            : BufferType::L1,  // Overestimate L1 memory usage for auto shard.
+            BufferType::L1,
             input_parallel_config,
             conv_config.act_block_h_override));
 

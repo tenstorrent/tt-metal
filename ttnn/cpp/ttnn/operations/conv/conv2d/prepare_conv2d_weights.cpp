@@ -1127,6 +1127,13 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     if (dram_slice_config_.has_value()) {
         Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
+        uint32_t slice_rounding_value = 1;
+        if (conv_config.output_layout == tt_metal::Layout::TILE &&
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+            slice_rounding_value = tt::constants::TILE_HEIGHT;
+        }
+
         const uint32_t output_sliced_dim =
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
         TT_FATAL(
@@ -1135,16 +1142,16 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             dram_slice_config.num_slices < output_sliced_dim,
             " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
 
-        const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-        const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
-        const uint32_t max_output_slice_size = min_output_slice_size + (output_slice_rem > 0);
+        const uint32_t min_output_slice_size =
+            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
+            slice_rounding_value;
 
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
-            output_height = max_output_slice_size;
+            output_height = min_output_slice_size;
             input_height =
                 ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
         } else {
-            output_width = max_output_slice_size;
+            output_width = min_output_slice_size;
             input_width =
                 ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
         }
