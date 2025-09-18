@@ -354,12 +354,12 @@ void matmul_multicore_reuse_mcast(
             CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
             CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = mesh_device->worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = mesh_device->worker_core_from_logical_core(right_core);
+            auto top_core_physical = mesh_device->worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = mesh_device->worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)src0_dram_buffer->address(),   // in0_buffer_addr
