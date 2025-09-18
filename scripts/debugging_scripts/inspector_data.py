@@ -54,7 +54,11 @@ class MeshDeviceData:
         linear_index = 0
         for dim in range(len(coordinate.coordinates)):
             linear_index = linear_index + coordinate.coordinates[dim] * (1 if dim == 0 else self.shape[dim - 1])
-        return self.devices[linear_index]
+        try:
+            return self.devices[linear_index]
+        except:
+            print("devices", self.devices, "index", linear_index, "Coordinate", coordinate, "shape", self.shape)
+            return None
 
 
 @dataclass
