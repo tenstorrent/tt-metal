@@ -53,17 +53,6 @@ void TestContext::read_telemetry() {
                 double bw_GB_s = bytes_per_cycle * double(freq_ghz);
                 double time_s = static_cast<double>(cycles) / (freq_mhz * 1e6);
                 double pps = static_cast<double>(tel.num_packets_sent) / time_s;
-                log_info(
-                    tt::LogTest,
-                    "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
-                    "packets_sent={:d}",
-                    coord,
-                    eth_core.str(),
-                    bw_GB_s,
-                    pps,
-                    cycles,
-                    tel.num_words_sent,
-                    tel.num_packets_sent);
                 auto [connected_physical_id, connected_eth_core] =
                     cluster.get_connected_ethernet_core({physical_chip_id, eth_core});
                 auto connected_device_id =

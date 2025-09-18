@@ -1101,11 +1101,6 @@ public:
                     if (current_coord[NS_DIM] == 0) {
                         current_direction = RoutingDirection::S;
                     } else {
-                        log_info(
-                            tt::LogTest,
-                            "current_coord {} current_direction {} next direction RoutingDirection::N",
-                            get_fabric_node_id(current_coord),
-                            current_direction);
                         current_direction = RoutingDirection::N;
                     }
                 } else if (current_direction == RoutingDirection::S) {
