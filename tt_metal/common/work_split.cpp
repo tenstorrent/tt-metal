@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -23,11 +23,9 @@ namespace tt_metal {
 uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) {
     uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
     uint32_t new_num_sticks_to_read = num_sticks_to_read;
-    uint32_t new_stick_size_bytes = stick_size_bytes;
 
     for (uint32_t current_size = stick_size_bytes; current_size <= max_read_size; current_size += stick_size_bytes) {
         if (total_bytes % current_size == 0) {
-            new_stick_size_bytes = current_size;
             new_num_sticks_to_read = total_bytes / current_size;
         }
     }
@@ -265,6 +263,31 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     TT_FATAL(remaining_cores == 0, "Failed to split target number of cores into CoreRangeSet");
 
     return CoreRangeSet(std::move(result_coreranges));
+}
+
+std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
+    const CoreCoord& core_grid, const uint32_t units_to_divide, const uint32_t multiple, const bool row_wise) {
+    ZoneScoped;
+
+    const uint32_t batches_to_divide = std::ceil(units_to_divide / multiple), max_num_cores = core_grid.x * core_grid.y;
+    const uint32_t target_num_cores = (batches_to_divide >= max_num_cores) ? max_num_cores : batches_to_divide;
+
+    std::vector<uint32_t> increments(target_num_cores, 0ul);
+    auto it = increments.begin();
+    for (uint32_t units = 0; units < units_to_divide; units += multiple) {
+        *(it++) += multiple;
+        if (it == increments.end()) {
+            it = increments.begin();
+        }
+    }
+
+    auto rem = units_to_divide % multiple;
+    if (rem != 0) {
+        *it += rem;
+    }
+    const auto utilized_cores = num_cores_to_corerangeset({0, 0}, target_num_cores, core_grid, row_wise);
+
+    return std::make_tuple(increments, utilized_cores);
 }
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(

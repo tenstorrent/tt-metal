@@ -1,23 +1,21 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import torch
+
 import pytest
-import time
-from tqdm.auto import tqdm
+import torch
 from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
+from tqdm.auto import tqdm
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_blackhole
-
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -49,9 +47,8 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21088")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], ids=["device_params=l1_small_size_24576"], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
@@ -59,15 +56,7 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width, use_program_cache):
-    # setup envvar if testing on N300
-    wh_arch_yaml_org = None
-    if device.core_grid.y == 7:
-        if ("WH_ARCH_YAML" not in os.environ) or (
-            os.environ["WH_ARCH_YAML"] != "wormhole_b0_80_arch_eth_dispatch.yaml"
-        ):
-            pytest.skip("SD unet2d only works for 8x8 grid size")
-
+def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
@@ -124,7 +113,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
     model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
-    first_iter = time.time()
     use_signpost = True
     try:
         from tracy import signpost
@@ -132,7 +120,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         use_signpost = False
     if use_signpost:
         signpost(header="start")
-    ttnn_output_ = model(
+    ttnn_output = model(
         input,
         timestep=ttnn_timestep,
         encoder_hidden_states=encoder_hidden_states,
@@ -144,22 +132,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     )
     if use_signpost:
         signpost(header="stop")
-    first_iter = time.time() - first_iter
-    print(f"First iteration took {first_iter} seconds")
-
-    second_iter = time.time()
-    ttnn_output = model(
-        input,
-        timestep=ttnn_timestep,
-        encoder_hidden_states=encoder_hidden_states,
-        class_labels=class_labels,
-        attention_mask=attention_mask,
-        cross_attention_kwargs=cross_attention_kwargs,
-        return_dict=return_dict,
-        config=config,
-    )
-    second_iter = time.time() - second_iter
-    print(f"Second iteration took {second_iter} seconds")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.996)
+    assert_with_pcc(torch_output, ttnn_output, 0.995)

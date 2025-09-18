@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-enum class CoreType;
 
 namespace tt {
 class Cluster;
@@ -26,17 +23,17 @@ namespace tt::tt_metal {
 class DispatchSettings {
 public:
     // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings worker_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings eth_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings
-    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
     // before command queue kernels are created.
-    static DispatchSettings& get(const CoreType& core_type, const uint32_t num_hw_cqs);
+    static DispatchSettings& get(const CoreType& core_type, uint32_t num_hw_cqs);
 
     // Reset the settings
     static void initialize(const tt::Cluster& cluster);
@@ -62,6 +59,9 @@ public:
     // Trivial setter for prefetch_scratch_db_size
     DispatchSettings& prefetch_scratch_db_size(uint32_t val);
 
+    // Trivial setter for prefetch_ringbuffer_size
+    DispatchSettings& prefetch_ringbuffer_size(uint32_t val);
+
     // Setter for prefetch_q_entries and update prefetch_q_size
     DispatchSettings& prefetch_q_entries(uint32_t val);
 
@@ -73,9 +73,6 @@ public:
 
     // Setter for dispatch_s_buffer_size and update dispatch_s_buffer_pages
     DispatchSettings& dispatch_s_buffer_size(uint32_t val);
-
-    // Setter for tunneling_buffer_size and update tunneling_buffer_pages
-    DispatchSettings& tunneling_buffer_size(uint32_t val);
 
     // Sets pointer values based on L1 alignment
     DispatchSettings& with_alignment(uint32_t l1_alignment);
@@ -111,7 +108,7 @@ public:
 
     static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
 
-    // dispatch_s CB page size is 256 bytes. This should currently be enough to accomodate all commands that
+    // dispatch_s CB page size is 256 bytes. This should currently be enough to accommodate all commands that
     // are sent to it. Change as needed.
     static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 8;
 
@@ -139,6 +136,9 @@ public:
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                      // 256 MB;
     static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE;  // 256 MB;
 
+    // Number of entries in the fabric header ring buffer
+    static constexpr uint32_t FABRIC_HEADER_RB_ENTRIES = 1;
+
     //
     // Configurable Settings
     //
@@ -148,30 +148,27 @@ public:
 
     // Rd/Wr/Msg pointer sizes
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
-    uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
-    uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t other_ptrs_size;               // configured with alignment
+    uint32_t prefetch_q_pcie_rd_ptr_size_{};  // configured with alignment
+    uint32_t dispatch_s_sync_sem_{};          // configured with alignment
+    uint32_t other_ptrs_size{};               // configured with alignment
 
     // cq_prefetch
     uint32_t prefetch_q_entries_{0};
-    uint32_t prefetch_q_size_;
-    uint32_t prefetch_max_cmd_size_;
-    uint32_t prefetch_cmddat_q_size_;
-    uint32_t prefetch_scratch_db_size_;
-    uint32_t prefetch_d_buffer_size_;
-    uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
+    uint32_t prefetch_q_size_{};
+    uint32_t prefetch_max_cmd_size_{};
+    uint32_t prefetch_cmddat_q_size_{};
+    uint32_t prefetch_scratch_db_size_{};
+    uint32_t prefetch_ringbuffer_size_{};
+    uint32_t prefetch_d_buffer_size_{};
+    uint32_t prefetch_d_pages_{};  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     // cq_dispatch
-    uint32_t dispatch_size_;   // total buffer size
-    uint32_t dispatch_pages_;  // total buffer size / page size
-    uint32_t dispatch_s_buffer_size_;
-    uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
+    uint32_t dispatch_size_{};   // total buffer size
+    uint32_t dispatch_pages_{};  // total buffer size / page size
+    uint32_t dispatch_s_buffer_size_{};
+    uint32_t dispatch_s_buffer_pages_{};  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
-    // packet_mux, packet_demux, vc_eth_tunneler, vc_packet_router
-    uint32_t tunneling_buffer_size_;
-    uint32_t tunneling_buffer_pages_;  // tunneling_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
-
-    CoreType core_type_;  // Which core this settings is for
+    CoreType core_type_{0};  // Which core this settings is for
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.

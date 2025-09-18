@@ -9,17 +9,18 @@
 #include <memory>
 #include <thread>
 
-#include <tt-metalium/worker_config_buffer.hpp>
-#include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 
 #include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 
-class Event;
+struct Event;
 class Program;
 class Kernel;
+class SystemMemoryManager;
+class WorkerConfigBufferMgr;
+struct TraceDescriptor;
 
 class CommandQueue {
 public:
@@ -27,11 +28,14 @@ public:
 
     virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
 
-    virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
+    virtual void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
 
     virtual void reset_worker_state(
-        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) = 0;
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
 
     virtual void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
@@ -47,8 +51,6 @@ public:
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
-
-    virtual void enqueue_trace(const uint32_t trace_id, bool blocking) = 0;
 
     virtual void enqueue_program(Program& program, bool blocking) = 0;
 
@@ -76,8 +78,8 @@ public:
 
 struct ReadBufferDescriptor;
 struct ReadEventDescriptor;
-struct ReadL1DataDescriptor;
+struct ReadCoreDataDescriptor;
 using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadL1DataDescriptor>;
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 }  // namespace tt::tt_metal

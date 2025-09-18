@@ -12,14 +12,14 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/coordinate_manager.h"
-#include "umd/device/types/arch.h"
+#include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 using namespace tt;
@@ -33,8 +33,8 @@ std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
     std::unordered_set<int> harvested_rows;
     int row_coordinate = 0;
     int tmp = harvested_rows_mask;
-    string delim = "";
-    string harvested_row_str;
+    std::string delim = "";
+    std::string harvested_row_str;
     while (tmp) {
         if (tmp & 1) {
             harvested_rows.insert(row_coordinate);
@@ -62,8 +62,13 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
+    std::vector<int> devices_to_open;
+    for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        devices_to_open.push_back(device_id);
+    }
+    auto devices = detail::CreateDevices(devices_to_open);
     for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = devices[device_id];
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc =
@@ -84,9 +89,9 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
                             : physical_core_coord.x) == harvested_rows.end());
             }
         }
-
-        tt_metal::CloseDevice(device);
     }
+
+    tt::tt_metal::detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal

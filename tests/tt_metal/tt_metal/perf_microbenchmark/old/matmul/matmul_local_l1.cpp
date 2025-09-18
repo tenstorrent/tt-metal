@@ -30,15 +30,18 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #define LAUNCH
 
@@ -125,19 +128,6 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -152,7 +142,6 @@ int main(int argc, char** argv) {
         uint32_t dprint;
         uint32_t print_tensor;
         uint32_t debug;
-        uint32_t cb;
         uint32_t Mt;
         uint32_t Nt;
         uint32_t Kt;
@@ -183,7 +172,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Inputs Setup
@@ -246,8 +235,8 @@ int main(int argc, char** argv) {
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);  // bflaot16 identity
 
         if (print_tensor) {
-            print_vec(tensor.get_values(), 2, Kt * 32, std::string("Activation first row"));
-            print_vec(identity, 2, Nt * 32, std::string("Weights first row"));
+            print_vec_of_bfloat16(tensor.get_values(), 1, "Activation first row");
+            print_vec_of_bfloat16(identity, 1, "Weights first row");
         }
 
         log_info(LogTest, "Slicing input tensors and copying them to L1");
@@ -260,17 +249,19 @@ int main(int argc, char** argv) {
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
                 auto activations_tilized = tilize_swizzled(activation_slice, per_core_Mt * 32, Kt * 32);
                 auto activations_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-                pass &= tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, activations);
+                pass &=
+                    tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
                 auto identity_tilized = tilize_swizzled(weights_slice, Kt * 32, per_core_Nt * 32);
                 auto weights_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
-                pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
+                pass &= tt_metal::detail::WriteToDeviceL1(
+                    device->get_devices()[0], core, weights_addr, weights_tile_transposed);
                 TT_FATAL(pass, "Error");
             }
         }
@@ -293,26 +284,26 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(
                 cb_activations_tiles * single_tile_size, {{cb_activations_index, data_format}})
                 .set_page_size(cb_activations_index, single_tile_size);
-        auto cb_activations = tt_metal::CreateCircularBuffer(program, all_cores, cb_activations_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_activations_config);
 
         uint32_t cb_weights_index = 1;
         uint32_t cb_weights_tiles = per_core_weights_tiles;
         tt_metal::CircularBufferConfig cb_weights_config =
             tt_metal::CircularBufferConfig(cb_weights_tiles * single_tile_size, {{cb_weights_index, data_format}})
                 .set_page_size(cb_weights_index, single_tile_size);
-        auto cb_weights = tt_metal::CreateCircularBuffer(program, all_cores, cb_weights_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_weights_config);
 
         uint32_t cb_output_index = 16;
         uint32_t cb_output_tiles = per_core_output_tiles;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(cb_output_tiles * single_tile_size, {{cb_output_index, data_format}})
                 .set_page_size(cb_output_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
         // compute kernel setup
         vector<uint32_t> compute_kernel_args = {uint(per_core_Mt), uint(Kt), uint(per_core_Nt)};
 
-        auto mm_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
             "compute_local_l1.cpp",
@@ -323,14 +314,18 @@ int main(int argc, char** argv) {
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});
 
-        std::chrono::duration<double, std::nano> duration;
+        std::chrono::duration<double, std::nano> duration{};
         // took from run_operation.cpp
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
         auto start = std::chrono::high_resolution_clock::now();
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
@@ -356,18 +351,15 @@ int main(int argc, char** argv) {
 
                     std::vector<uint32_t> result_vec;
                     tt_metal::detail::ReadFromDeviceL1(
-                        device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
+                        device->get_devices()[0], core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto result_flat_layout =
-                        convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+                        convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
                     auto result_untilized = untilize_swizzled(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
 
                     if (print_tensor) {
-                        print_vec(
-                            result_untilized,
-                            2,
-                            Nt * 32,
-                            std::string("result_untilized" + std::to_string(r) + " " + std::to_string(c)));
+                        print_vec_of_bfloat16(
+                            result_untilized, 1, "result_untilized" + std::to_string(r) + " " + std::to_string(c));
                     }
 
                     if (!(per_core_golden == result_untilized)) {
@@ -381,7 +373,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
 
     } catch (const std::exception& e) {
         pass = false;

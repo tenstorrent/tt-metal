@@ -18,7 +18,7 @@ ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
     const uint32_t seq_len_end,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];
     auto dim1 = input_tensor_shape[1];
     auto head_dim = input_tensor_shape[3];
@@ -52,18 +52,4 @@ ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
-    const Tensor& input_tensor,
-    const uint32_t seq_len_start,
-    const uint32_t seq_len_end,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor,
-        seq_len_start,
-        seq_len_end,
-        memory_config,
-        std::move(optional_output_tensor));
-}
-};  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer

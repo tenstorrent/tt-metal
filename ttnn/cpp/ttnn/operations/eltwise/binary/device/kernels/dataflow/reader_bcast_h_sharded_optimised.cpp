@@ -19,8 +19,8 @@ void kernel_main() {
     uint32_t batch_b = get_arg_val<uint32_t>(6);
 
     // constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr auto src1_args = TensorAccessorArgs<1>();
 
     // constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -28,10 +28,8 @@ void kernel_main() {
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat data_format = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;

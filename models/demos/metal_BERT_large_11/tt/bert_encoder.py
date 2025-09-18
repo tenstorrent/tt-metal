@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
 from typing import Optional
 
-import ttnn
-from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
-from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
-from models.demos.metal_BERT_large_11.tt import custom_matmuls
-from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
+import torch
 from tt_lib.utils import pad_weight
+
+import ttnn
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 class TtBertEncoder:
@@ -35,27 +36,27 @@ class TtBertEncoder:
         if tt_cache_path is not None:
             attention_output_weight_path = str(
                 f"{tt_cache_path}/"
-                f"{attn_layer_name}.dense.weight_{self.model_config['OP7_SELFOUT_WEIGHTS_DTYPE'].name}.bin"
+                f"{attn_layer_name}.dense.weight_{self.model_config['OP7_SELFOUT_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             attention_output_bias_path = str(
                 f"{tt_cache_path}/"
-                f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.bin"
+                f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.tensorbin"
             )
             mha_gamma_path = str(
                 f"{tt_cache_path}/"
-                f"{attn_layer_name}.LayerNorm.weight_{self.model_config['OP8_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+                f"{attn_layer_name}.LayerNorm.weight_{self.model_config['OP8_LAYERNORM_GAMMA_DTYPE'].name}.tensorbin"
             )
             mha_beta_path = str(
                 f"{tt_cache_path}/"
-                f"{attn_layer_name}.LayerNorm.bias_{self.model_config['OP8_LAYERNORM_BETA_DTYPE'].name}.bin"
+                f"{attn_layer_name}.LayerNorm.bias_{self.model_config['OP8_LAYERNORM_BETA_DTYPE'].name}.tensorbin"
             )
             ffn_gamma_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.LayerNorm.weight_{self.model_config['OP11_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+                f"{layer_name}.LayerNorm.weight_{self.model_config['OP11_LAYERNORM_GAMMA_DTYPE'].name}.tensorbin"
             )
             ffn_beta_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.bin"
+                f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.tensorbin"
             )
 
         def compute_attention_output_weight():

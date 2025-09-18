@@ -3,14 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/tt_cluster_descriptor.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -34,8 +33,9 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
-        ttml::autograd::ctx().open_device();
+
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 
     void TearDown() override {
@@ -83,14 +83,12 @@ TEST_F(LinearRegressionDDPTest, Full) {
                 std::move(target.begin(), target.end(), std::back_inserter(targets));
             }
 
-            xt::xarray<float> data_xtensor = xt::adapt(data, std::vector<size_t>{batch_size, 1, 1, num_features});
-            xt::xarray<float> targets_xtensor = xt::adapt(targets, std::vector<size_t>{batch_size, 1, 1, num_targets});
-
-            auto mesh_shape = device->shape();
-            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(data_xtensor, device, composer));
+            const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+                data, ttnn::Shape({batch_size, 1, 1, num_features}), device, ttnn::Layout::TILE, mapper.get()));
             auto targets_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_xtensor(targets_xtensor, device, composer));
+                ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+                    targets, ttnn::Shape({batch_size, 1, 1, num_targets}), device, ttnn::Layout::TILE, mapper.get()));
 
             return std::make_pair(data_tensor, targets_tensor);
         };
@@ -104,7 +102,6 @@ TEST_F(LinearRegressionDDPTest, Full) {
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
-    int training_step = 0;
     const int num_epochs = 1;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
@@ -112,9 +109,7 @@ TEST_F(LinearRegressionDDPTest, Full) {
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
             auto mesh_shape = device->shape();
-            ttml::core::MeshToXTensorVariant<float> identity_composer =
-                ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), identity_composer);
+            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
             float loss_float_0 = loss_xtensors[0](0);
             float loss_float_1 = loss_xtensors[1](0);
             EXPECT_EQ(loss_float_0, loss_float_1);

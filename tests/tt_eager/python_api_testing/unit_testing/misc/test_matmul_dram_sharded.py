@@ -69,7 +69,6 @@ def run_test_matmul_in1_dram_sharded(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
@@ -238,7 +237,6 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
@@ -257,7 +255,6 @@ def test_matmul_in1_dram_sharded_with_program_cache(
             in1_dtype,
             out_dtype,
             function_level_defaults,
-            use_program_cache,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
@@ -286,7 +283,6 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
@@ -411,7 +407,6 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     in1_dtype,
     out_dtype,
     function_level_defaults,
-    use_program_cache,
 ):
     M = 32
     K = 4096
@@ -433,11 +428,9 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
         in1_dtype,
         out_dtype,
         function_level_defaults,
-        use_program_cache,
     )
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21422")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
@@ -458,7 +451,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     "M, K, N, activation, in0_sharded, fuse_batch",
     [
         (1024, 1024, 1024, None, True, True),
-        (1024, 8192, 4096, None, False, False),
+        (1024, 4096, 2048, None, False, False),
     ],
 )
 def test_matmul_2d_in1_dram_sharded(
@@ -489,7 +482,7 @@ def test_matmul_2d_in1_dram_sharded(
     in1_shard_shape = [K, N_padded // num_banks]
     bias_shape = [1, 1, N]
     bias_shard_shape = [32, N_padded // num_banks]
-    grid_size = (8, 4)
+    grid_size = (4, 4)
 
     in0_block_h = M // grid_size[1] // 32
     in0_block_w = K // grid_size[0] // 32

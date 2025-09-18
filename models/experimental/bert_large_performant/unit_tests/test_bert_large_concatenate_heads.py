@@ -6,7 +6,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 import torch
@@ -86,7 +86,7 @@ def test_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config,
     run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, out_mem_config)
 
 
-def test_bert_large_concatenate_heads_with_program_cache(device, use_program_cache):
+def test_bert_large_concatenate_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

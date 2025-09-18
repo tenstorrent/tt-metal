@@ -70,7 +70,7 @@ def test_add_2D_tensors(device, hw):
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
-def test_add_2D_tensors_with_program_cache(device, hw, use_program_cache):
+def test_add_2D_tensors_with_program_cache(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(hw, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)

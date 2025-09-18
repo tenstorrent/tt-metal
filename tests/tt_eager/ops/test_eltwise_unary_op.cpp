@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -13,7 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
@@ -24,7 +23,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -56,18 +54,18 @@ template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
     auto input_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor);
 
-    auto output_buffer = std::vector<bfloat16>(input_tensor.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = UnaryFunction(input_buffer[index].to_float());
+        auto value = UnaryFunction(static_cast<float>(input_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
 
     return Tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
-        input_tensor.get_logical_shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout());
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
+        input_tensor.logical_shape(),
+        input_tensor.dtype(),
+        input_tensor.layout());
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
@@ -116,7 +114,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
 
 void test_operation_infrastructure() {
     using namespace tt::constants;
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
@@ -130,11 +128,7 @@ void test_operation_infrastructure() {
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     ttnn::operations::unary::operation_attributes_t op_args{
-        {UnaryWithParam{UnaryOpType::SQRT}},
-        DataType::BFLOAT16,
-        tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        false,
-        false};
+        {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
     ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
@@ -142,7 +136,7 @@ void test_operation_infrastructure() {
 
 void test_shape_padding() {
     using namespace tt::constants;
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
@@ -163,8 +157,8 @@ void test_shape_padding() {
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
-    TT_FATAL(output_tensor.get_padded_shape() == padded_input_shape, "Error");
-    TT_FATAL(output_tensor.get_logical_shape() == input_shape, "Error");
+    TT_FATAL(output_tensor.padded_shape() == padded_input_shape, "Error");
+    TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
 namespace tt {
@@ -179,7 +173,7 @@ struct exp_with_param {
 }  // namespace tt
 
 void test_numerically() {
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    log_info(tt::LogTest, "Running {}", __func__);
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
@@ -235,7 +229,7 @@ void test_numerically() {
 }
 
 void test_program_cache() {
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    log_info(tt::LogTest, "Running {}", __func__);
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
@@ -283,7 +277,6 @@ void test_program_cache() {
         run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
-    device->enable_program_cache();
     run_tests();
 
     TT_FATAL(device->num_program_cache_entries() == 4, "There are {} entries", device->num_program_cache_entries());

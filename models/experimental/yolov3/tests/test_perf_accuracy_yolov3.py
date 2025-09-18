@@ -16,7 +16,7 @@ from models.perf.perf_utils import prep_perf_report
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
 from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     Profiler,
     disable_persistent_kernel_cache,
@@ -228,7 +228,6 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     model_location_generator,
@@ -251,7 +250,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     model_location_generator,

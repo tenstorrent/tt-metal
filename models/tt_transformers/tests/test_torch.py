@@ -2,18 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+from loguru import logger
 
 # import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from loguru import logger
 
 
 @torch.no_grad()
 def test_torch_inference(ensure_gc):
     iterations = 20
 
-    model_args = ModelArgs(mesh_device=None)
+    model_args = ModelArgs(mesh_device=None, cache_hf=True)
     state_dict = model_args.load_state_dict()
     tokenizer = model_args.tokenizer
 

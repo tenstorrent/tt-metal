@@ -2,24 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
+import torch
 from diffusers import StableDiffusionPipeline
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
+import ttnn
+from models.common.utility_functions import skip_for_grayskull
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
@@ -28,7 +26,7 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANS
     TRANSFORMER_PARAMETERIZATIONS,
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_transformer_2d_model_512x512(
     device,
     model_name,
@@ -41,7 +39,6 @@ def test_transformer_2d_model_512x512(
     block_index,
     attention_index,
     reset_seeds,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]

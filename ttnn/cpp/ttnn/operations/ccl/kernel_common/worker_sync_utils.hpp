@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
 // Called by the master worker to synchronize with the slave workers
@@ -26,10 +26,12 @@ FORCE_INLINE void master_sync_slaves(
 
     uint32_t fused_op_core_idx) {
     // Wait for all the slaves to finish their work
-    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-    noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
-    // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
+    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr;
+    if (num_workers_to_sync > 1) {
+        master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+        noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
+        // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
+    }
 
     // Send signal to op
     if (mcast_signal_op_cores) {
@@ -47,16 +49,18 @@ FORCE_INLINE void master_sync_slaves(
     }
     // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
 
-    // Clear the master semaphore, so that it can be used again
-    noc_semaphore_set(master_l1_semaphore_addr, 0);
+    if (num_workers_to_sync > 1) {
+        // Clear the master semaphore, so that it can be used again
+        noc_semaphore_set(master_l1_semaphore_addr, 0);
 
-    // Clear the slave semaphores, so that they can continue processing
-    for (uint32_t i = 1; i < num_workers_to_sync;
-         i++) {  // Skip the first set of coords because they are for master worker
-        uint64_t remote_slave_l1_sem_addr =
-            get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
-        noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
-        // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
+        // Clear the slave semaphores, so that they can continue processing
+        for (uint32_t i = 1; i < num_workers_to_sync;
+             i++) {  // Skip the first set of coords because they are for master worker
+            uint64_t remote_slave_l1_sem_addr =
+                get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
+            noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
+            // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
+        }
     }
 }
 
@@ -130,7 +134,6 @@ struct OpSignaler {
 
     void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
         ASSERT(this->initialized);
-
         if (this->curr_worker_is_master) {
             master_sync_slaves(
                 this->num_workers_to_sync,
@@ -253,9 +256,7 @@ struct MatmulOpReceiver {
     void update_current_block_start_tile_id(
         const uint32_t& block_idx, uint32_t& curr_block_start_tile_id, const uint32_t& tensor_start_tile_id) {
         ASSERT(this->initialized);
-
         if (block_idx % this->num_blocks_per_slice == 0) {  // Aligned to the start of a tensor slice
-
             if (this->curr_transfer_idx != 0) {  // Skip update for local slice
 
                 // Update the start page idx of the tensor slice in curr_direction
@@ -321,5 +322,26 @@ struct MatmulOpReceiver {
         }
 
         return block_id;
+    }
+};
+
+struct ReduceScatterOpReceiver {
+    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr;
+
+    bool initialized = false;
+
+    ReduceScatterOpReceiver() {}
+
+    ReduceScatterOpReceiver(uint32_t& rt_args_idx) {
+        // Runtime args
+        this->signal_op_semaphore_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+
+        this->initialized = true;
+    }
+
+    void wait_for_matmul_batch(const uint32_t& batch_idx) {
+        ASSERT(this->initialized);
+        noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptr, batch_idx + 1);
     }
 };

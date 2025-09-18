@@ -5,7 +5,8 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "utils/bfloat16.h"
+
+#include "argmax_common.hpp"
 
 void kernel_main() {
     // Runtime args
@@ -17,41 +18,42 @@ void kernel_main() {
     // -----------------
     constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(3);
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
     // This is the number of elements in the output, excluding the last two dimensions.
     // i.e. for an input tensor of shape (.., N, C, H, W), this is (.. * N * C)
     // It also depends on the `keepdim`
-    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(6);
+    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(4);
 
     // This is the number of elements in the last dimension of the output
     // i.e. for an input tensor of shape (.., N, C, H, W), this is H.
     // This dictates the page size in the output cb
-    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(7);
+    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(5);
 
     // This is the number of elements in the input tensor along the reduction dim (W)
-    constexpr uint32_t red_dim_units = get_compile_time_arg_val(8);
+    constexpr uint32_t red_dim_units = get_compile_time_arg_val(6);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(9);
+    constexpr bool reduce_all = (bool)get_compile_time_arg_val(7);
+
+    constexpr auto s_src_args = TensorAccessorArgs<8>();
+    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
-    const auto s_src = get_interleaved_addr_gen<src_is_dram, src_page_size>(src_base_addr);
-    const auto s_dst = get_interleaved_addr_gen<dst_is_dram, dst_page_size>(dst_base_addr);
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
-    volatile tt_l1_ptr uint16_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_cb_addr);
+    constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
 
     // CB in L1 memory for storing output
     const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     uint32_t max_idx = 0;
-    uint16_t max_val = NEG_INF_BFLOAT16;
+    auto max_val = get_default_value<src_cb_addr_data_format>();
 
     //-------------------------------------------------------------------------
     // Main loop - run by all cores
@@ -64,15 +66,12 @@ void kernel_main() {
             // Reset max_val for each new output
             if constexpr (not reduce_all) {
                 max_idx = 0;
-                max_val = NEG_INF_BFLOAT16;
+                max_val = get_default_value<src_cb_addr_data_format>();
             }
 
             for (uint32_t i = 0; i < red_dim_units; ++i) {
-                uint16_t val = in_vals[i];
-                if (bfloat16_greater(val, max_val)) {
-                    max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
-                    max_val = val;
-                }
+                compare_values<src_cb_addr_data_format>(
+                    src_cb_addr, max_val, max_idx, i, j, k, red_dim_units, reduce_all, inner_dim_units);
             }
             if constexpr (not reduce_all) {
                 out_idxs[j] = max_idx;

@@ -1,9 +1,7 @@
 name: "Issue Notification"
-
 on:
   issues:
     types: [opened]
-
 jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
@@ -35,8 +33,9 @@ jobs:
         id: is_organization_member
         env:
           GITHUB_ORG: tenstorrent
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
-          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
+          http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
           if [ "$http_status" -eq 204 ]; then
             echo "Detected org member"
             echo "is_member=true" >> $GITHUB_OUTPUT

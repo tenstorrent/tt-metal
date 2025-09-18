@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
@@ -66,7 +66,7 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             [](const OperationType& self,
                const Tensor& grad_output_tensor,
                const Tensor& input_tensor,
-               const string& approximate,
+               const std::string& approximate,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor>& input_grad_tensor,
                QueueId queue_id) -> ttnn::Tensor {

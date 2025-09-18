@@ -63,7 +63,7 @@ struct MorehClipGradNormStep3Operation {
         const std::vector<Tensor>& inputs,
         const Tensor& clip_coef_clamped,
         const std::optional<MemoryConfig>& memory_config,
-        const DeviceComputeKernelConfig compute_kernel_config);
+        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3

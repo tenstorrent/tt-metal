@@ -5,14 +5,15 @@
 #include <math.h>
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 
 #include <tt-metalium/hal.hpp>
@@ -67,20 +68,20 @@ std::vector<CoreRange> get_multicast_regions(
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    bool tilized = input.get_layout() == Layout::TILE;
+    bool tilized = input.layout() == Layout::TILE;
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
+    uint32_t num_pages =
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
     tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
@@ -92,22 +93,19 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, aligned_page_size);
-    auto cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
-    uint32_t log2_page_size = 0;
-    std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
+    std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
-        bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
-        compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
+        compile_time_args.push_back(page_size);
     }
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,
@@ -127,7 +125,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         CoreRange noc_cr(
             device->worker_core_from_logical_core(logical_cr.start_coord),
             device->worker_core_from_logical_core(logical_cr.end_coord));
-        noc_multicast_regions.push_back(std::move(noc_cr));
+        noc_multicast_regions.push_back(noc_cr);
     }
 
     CoreRange range_0_noc = noc_multicast_regions[0];
@@ -135,7 +133,6 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     // if third multicast is not needed range_2_noc will be ignored
     bool do_third_multicast = (noc_multicast_regions.size() == 3);
 
-    uint32_t total_num_pages = 0;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -175,9 +172,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
             (uint32_t)logical_multicast_regions.back().size(),
             (uint32_t)do_third_multicast};
         if (!tilized) {
-            runtime_args.push_back(page_size);
             runtime_args.push_back(aligned_page_size);
-            runtime_args.push_back(log2_page_size);
         }
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
         pages_handled_per_core += num_pages_per_core;
@@ -209,16 +204,16 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_logical_shape();
-    auto input_dtype = input.get_dtype();
-    auto input_layout = input.get_layout();
+    const auto& input_shape = input.logical_shape();
+    auto input_dtype = input.dtype();
+    auto input_layout = input.layout();
     TT_FATAL(
-        input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-            shard_shape == output.shard_spec().value().shape && input_shape == output.get_logical_shape(),
+        input_layout == output.layout() && input_dtype == output.dtype() &&
+            shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;

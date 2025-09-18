@@ -19,9 +19,6 @@ target_link_libraries(
     mem_bench
     PRIVATE
         Metalium::Metal
-        TT::Metalium::Common
-        Metalium::Metal::Impl
-        Metalium::Metal::LLRT
         numa
         benchmark::benchmark
 )
@@ -40,3 +37,5 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+
+target_precompile_headers(mem_bench REUSE_FROM TT::CommonPCH)

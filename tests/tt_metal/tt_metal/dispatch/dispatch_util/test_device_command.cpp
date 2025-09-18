@@ -129,10 +129,11 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
 
 TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_write_offsets();
+    calculator.add_dispatch_set_write_offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS);
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_set_write_offsets(0, 0, 0);
+    std::vector<uint32_t> offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS, 0);
+    command.add_dispatch_set_write_offsets(offsets);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -261,6 +262,7 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
 
         uint32_t data[2001] = {};
         std::vector<std::pair<const void*, uint32_t>> data_collection;
+        data_collection.reserve(num_sub_cmds);
         for (size_t j = 0; j < num_sub_cmds; j++) {
             data_collection.push_back({data, sub_cmd_sizeB});
         }

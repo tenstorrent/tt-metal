@@ -18,7 +18,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 namespace tt_metal {

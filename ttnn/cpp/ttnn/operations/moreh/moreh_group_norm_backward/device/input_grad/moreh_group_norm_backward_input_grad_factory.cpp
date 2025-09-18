@@ -6,6 +6,7 @@
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
@@ -22,7 +23,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto input_grad = outputs;
+    const auto& input_grad = outputs;
     auto gamma = tensor_args.gamma;
     auto num_groups = operation_attributes.num_groups;
     ////////////////////////////////////////////////////////////////////////////
@@ -34,14 +35,14 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
 
     const auto n = output_grad_shape[0];
     const auto c = output_grad_shape[1];
     const auto h = output_grad_shape[2];
     const auto w = output_grad_shape[3];
 
-    const auto origin_output_grad_shape = output_grad.get_logical_shape();
+    const auto origin_output_grad_shape = output_grad.logical_shape();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
@@ -102,7 +103,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const uint32_t im6_t{1};
     uint32_t im7_t{1};
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +
@@ -158,8 +159,18 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
         "writer_moreh_group_norm_backward_input_grad.cpp");
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
+    std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(gamma_has_value)};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -230,16 +241,10 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         // reader
         const std::vector<uint32_t> reader_runtime_args{
             output_grad_addr,
-            static_cast<uint32_t>(is_dram(output_grad)),
             input_addr,
-            static_cast<uint32_t>(is_dram(input)),
             mean_addr,
-            static_cast<uint32_t>(is_dram(mean)),
             rstd_addr,
-            static_cast<uint32_t>(is_dram(rstd)),
             gamma_addr,
-            static_cast<uint32_t>(gamma_has_value ? is_dram(gamma) : 1),
-            static_cast<uint32_t>(gamma_has_value),
             tile_offset,
             num_rows_per_core,
             num_inner_tiles,
@@ -253,7 +258,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         // writer
         const std::vector<uint32_t> writer_runtime_args{
             input_grad_addr,
-            static_cast<uint32_t>(is_dram(input_grad)),
             tile_offset,
             num_rows_per_core,
             num_inner_tiles,
@@ -289,11 +293,11 @@ void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFa
         {
             auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = output_grad_buffer->address();
-            runtime_args[2] = input_buffer->address();
-            runtime_args[4] = mean_buffer->address();
-            runtime_args[6] = rstd_buffer->address();
+            runtime_args[1] = input_buffer->address();
+            runtime_args[2] = mean_buffer->address();
+            runtime_args[3] = rstd_buffer->address();
             if (gamma_buffer != nullptr) {
-                runtime_args[8] = gamma_buffer->address();
+                runtime_args[4] = gamma_buffer->address();
             }
         }
 

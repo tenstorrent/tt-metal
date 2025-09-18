@@ -25,13 +25,9 @@ void kernel_main() {
     const uint32_t cb_pages_per_dst_row = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-
-    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
-
-    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
-        dst_addr, dst_page_size, log_base_2_of_page_size);
+    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
+    const auto s = TensorAccessor(dst_args, dst_addr, aligned_page_size);
 
     auto dst_noc_addr = NOC_XY_ADDR(NOC_X(my_x[0]), NOC_Y(my_y[0]), scratch_addr);
 

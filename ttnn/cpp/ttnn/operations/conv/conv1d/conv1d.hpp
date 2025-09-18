@@ -11,6 +11,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn {
@@ -27,12 +28,11 @@ using Result = std::variant<
 
 using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
-template <typename T>
 Result conv1d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -42,6 +42,7 @@ Result conv1d(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
     uint32_t dilation = 1,
     uint32_t groups = 1,
+    const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
     const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
@@ -57,27 +58,6 @@ struct Conv1dOperation {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        IDevice* device,
-        uint32_t in_channels,
-        uint32_t out_channels,
-        uint32_t batch_size,
-        uint32_t input_length,
-        uint32_t kernel_size,
-        uint32_t stride = 1,
-        std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
-        uint32_t dilation = 1,
-        uint32_t groups = 1,
-        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-        const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        bool return_output_dim = true,
-        bool return_weights_and_bias = true);
-
-    static Result invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
         MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
@@ -88,6 +68,7 @@ struct Conv1dOperation {
         std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
         uint32_t dilation = 1,
         uint32_t groups = 1,
+        const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
         const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,

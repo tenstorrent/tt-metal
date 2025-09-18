@@ -5,7 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "expand.hpp"
 #include "expand_pybind.hpp"
@@ -23,7 +23,7 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t> output_shape,
+               const ttnn::SmallVector<int32_t>& output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const QueueId queue_id) { return self(input_tensor, output_shape, memory_config, queue_id); },
             py::arg("input_tensor"),

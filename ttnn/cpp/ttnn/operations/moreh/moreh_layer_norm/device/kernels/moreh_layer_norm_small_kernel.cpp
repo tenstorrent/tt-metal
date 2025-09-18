@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -169,9 +169,9 @@ void MAIN {
         cb_wait_front(cb_xsum, onetile);
         cb_reserve_back(cb_ex, onetile);
 
-        reduce_init_delta_with_dt<false>(cb_ex, cb_xsum, cb_scaler);
+        reduce_init_delta_with_dt(cb_ex, cb_xsum, cb_scaler);
         reduce_tile(cb_xsum, cb_scaler, first_tile, first_tile, dst0);
-        reduce_revert_delta(cb_ex);
+        reduce_uninit();
         tile_regs_commit();
 
         tile_regs_wait();
@@ -306,9 +306,9 @@ void MAIN {
         cb_wait_front(cb_xmm2sum, onetile);
         cb_reserve_back(cb_var, onetile);
 
-        reduce_init_delta_with_dt<false>(cb_var, cb_xmm2sum, cb_scaler);
+        reduce_init_delta_with_dt(cb_var, cb_xmm2sum, cb_scaler);
         reduce_tile(cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
-        reduce_revert_delta(cb_var);
+        reduce_uninit();
         tile_regs_commit();
 
         tile_regs_wait();

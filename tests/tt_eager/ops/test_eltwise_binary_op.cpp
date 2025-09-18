@@ -14,7 +14,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -31,17 +30,18 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
     auto input_b_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = std::vector<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
+        auto value =
+            BinaryFunction{}(static_cast<float>(input_a_buffer[index]), static_cast<float>(input_b_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
-        input_tensor_a.get_logical_shape(),
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout());
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
+        input_tensor_a.logical_shape(),
+        input_tensor_a.dtype(),
+        input_tensor_a.layout());
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
@@ -117,8 +117,6 @@ int main() {
             TT_FATAL(allclose, "Error");
         }
     };
-
-    device->enable_program_cache();
 
     run_binary_ops();
     run_binary_ops();

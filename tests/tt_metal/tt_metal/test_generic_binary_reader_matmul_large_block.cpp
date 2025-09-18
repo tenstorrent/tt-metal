@@ -30,12 +30,12 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -75,22 +75,8 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << ", ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
-    int index = 0;
 
     int tile_index = 0;
     int face_index = 0;
@@ -104,7 +90,7 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }
@@ -175,14 +161,14 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         uint32_t cb1_tiles = N * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t interm0_cb_index = 24;
@@ -194,7 +180,7 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size)
                 .set_page_size(interm0_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // create source addresses
         uint32_t face_width = 16;
@@ -208,12 +194,12 @@ int main(int argc, char** argv) {
         // Activation is already in tilized layout in DRAM
         // Same source and destination address
         std::vector<uint32_t> source_addresses;
+        source_addresses.reserve(num_addresses);
         for (uint32_t i = 0; i < num_addresses; i++) {
             source_addresses.push_back(i * dram_read_size_bytes);
         }
         int num_blocks = K / in0_block_w;
         uint32_t src0_num_reads_per_block = src0_num_tiles_per_block * num_addresses_per_tile;
-        uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
@@ -291,7 +277,7 @@ int main(int argc, char** argv) {
             uint(out_subblock_w),
             uint(out_subblock_num_tiles)};
 
-        auto mm_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
             core,
@@ -313,7 +299,7 @@ int main(int argc, char** argv) {
             std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout =
-            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
@@ -321,7 +307,7 @@ int main(int argc, char** argv) {
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
         auto weights_tile_layout =
-            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
         tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
@@ -339,16 +325,16 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
 
-        // print_vec(result_bfp16, 128, 128, "Result bfp16");
+        // print_vec_of_bfloat16(result_bfp16, 16, "Result bfp16");
         // print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
         // print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
         // print_faces(result_bfp16, "Result bfp16");
         // print_vec_of_uint32_as_packed_bfloat16(weights, 16, "weights tile transposed");
-        // print_vec(result_untilized, M*32, N*32, "Result");
-        // print_vec(tensor.get_values(), 128, 128, "Golden");
+        // print_vec_of_bfloat16(result_untilized, M*N, "Result");
+        // print_vec_of_bfloat16(tensor.get_values(), 16, "Golden");
 
         pass &= (tensor.get_values() == result_untilized);
         pass &= tt_metal::CloseDevice(device);

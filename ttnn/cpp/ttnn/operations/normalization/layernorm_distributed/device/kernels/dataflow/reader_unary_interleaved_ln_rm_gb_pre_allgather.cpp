@@ -8,8 +8,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "debug/assert.h"
 
 void kernel_main() {
@@ -23,13 +23,11 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
-    const DataFormat src0_data_format = get_dataformat(cb_inp);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(4);

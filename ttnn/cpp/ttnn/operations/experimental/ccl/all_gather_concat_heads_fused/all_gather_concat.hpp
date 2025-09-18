@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -16,14 +16,15 @@ struct ExecuteAllGatherConcat {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
-        const int32_t dim,
-        const uint32_t cluster_axis,
+        int32_t dim,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const GlobalSemaphore& global_semaphore,
-        const uint32_t num_heads,
+        uint32_t num_heads,
         const ttnn::MemoryConfig& memory_config,
-        const std::optional<uint32_t> num_links = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+        bool use_noc1_only = false,
+        std::optional<uint32_t> num_links = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 };
 

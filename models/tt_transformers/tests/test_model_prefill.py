@@ -1,22 +1,18 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import bz2
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    create_tt_model,
-)
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.common.utility_functions import comp_pcc, skip_for_grayskull
+from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
-from models.utility_functions import (
-    comp_pcc,
-)
-from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
 
 
 @torch.no_grad()
@@ -73,6 +69,7 @@ from models.utility_functions import skip_for_grayskull
     (1, None),
     ids=["1layer", "all_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,
@@ -81,7 +78,6 @@ def test_model_inference(
     max_seq_len,
     num_layers,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
@@ -99,23 +95,8 @@ def test_model_inference(
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = True  # Flag to measure KV cache PCC for all layers
-
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
-
-    # This sets the minimum PCC for each iteration based on optimization mode
-    if num_layers == 1:
-        expec_out_pcc = 0.97
-        expec_kv_cache_pcc = 0.99
-    else:
-        if "accuracy" in test_id:
-            expec_out_pcc = 0.91  # TODO Look on improving PCC
-        else:  # performance mode
-            assert "performance" in test_id
-            expec_out_pcc = 0.869  # TODO Look on improving PCC
-
-        expec_kv_cache_pcc = 0.88
 
     # Use instruct weights instead of general weights
     instruct = True
@@ -141,8 +122,45 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
     )
+
+    if (
+        model_args.base_model_name.startswith("Mistral-")
+        or model_args.base_model_name.startswith("Qwen3-")
+        or model_args.base_model_name.startswith("Phi-3-mini-")
+    ):
+        # TODO: Per layer KV cache fetching is not implemented for all models
+        # See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+        cache_pcc = False
+    else:
+        cache_pcc = True
+
+    # This sets the minimum PCC for each iteration based on optimization mode
+    # TODO: See issue https://github.com/tenstorrent/tt-metal/issues/19806
+    perf_out_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.73}
+    acc_out_pcc_map = {
+        "Mistral-7B-Instruct-v0.3": 0.75,
+        "Phi-3-mini-128k-instruct": 0.89,
+    }
+    kv_cache_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
+
+    if num_layers == 1:
+        expec_out_pcc = 0.97
+        expec_kv_cache_pcc = 0.99
+    else:
+        if "accuracy" in test_id:
+            default_expec_out_pcc = 0.91  # TODO Look on improving PCC
+            expec_out_pcc = acc_out_pcc_map.get(model_args.model_name, default_expec_out_pcc)
+        else:  # performance mode
+            assert "performance" in test_id
+            default_expec_out_pcc = 0.869  # TODO Look on improving PCC
+            expec_out_pcc = perf_out_pcc_map.get(model_args.model_name, default_expec_out_pcc)
+
+        default_expec_kv_cache_pcc = 0.88
+        expec_kv_cache_pcc = kv_cache_pcc_map.get(model_args.model_name, default_expec_kv_cache_pcc)
+
+    processor = model_args.processor
     tokenizer = model_args.tokenizer
-    generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
+    generator = Generator([tt_model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
     logger.info("Finished loading TT model.")
 
     # Create page table if paged attention is enabled
@@ -227,14 +245,26 @@ def test_model_inference(
         # Compare KV caches
         if cache_pcc:
             for i in range(model_args.n_layers):
-                pytorch_layer_present = [
-                    reference_model.layers[i]
-                    .attention.cache_k.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    reference_model.layers[i]
-                    .attention.cache_v.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                ]
+                if model_args.checkpoint_type == CheckpointType.Meta:
+                    pytorch_layer_present = [
+                        reference_model.layers[i]
+                        .attention.cache_k.clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                        reference_model.layers[i]
+                        .attention.cache_v.clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    ]
+                elif model_args.checkpoint_type == CheckpointType.HuggingFace:
+                    pytorch_layer_present = [
+                        reference_model.cache_k[i]
+                        .clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v[i]
+                        .clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    ]
+                else:
+                    raise ValueError(f"Unknown checkpoint type: {model_args.checkpoint_type}")
 
                 tt_layer_present = []
                 if paged_attention:

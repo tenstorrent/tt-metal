@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,19 +15,18 @@ namespace ttnn::operations::experimental {
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
-    const auto output_padded_shape = output_tensor.get_padded_shape();
+    const auto output_padded_shape = output_tensor.padded_shape();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(
-        input_tensor_a.get_padded_shape().rank() == this->slice_start.rank() &&
+        input_tensor_a.padded_shape().rank() == this->slice_start.rank() &&
             output_padded_shape.rank() == this->slice_start.rank() &&
             this->slice_start.rank() == this->slice_end.rank(),
         "Ranks of input tensor, output_tensor, slice start and slice end should be equal. Got {} {} {} {}",
-        input_tensor_a.get_padded_shape().rank(),
+        input_tensor_a.padded_shape().rank(),
         output_padded_shape.rank(),
         this->slice_start.rank(),
         this->slice_end.rank());
@@ -50,13 +49,11 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
             this->slice_start[i],
             this->slice_end[i]);
     }
+    // If the input tensor is sharded, then rank should be 4
     TT_FATAL(
-        this->slice_start[-1] == 0,
-        "Slice write doesn't support slicing along the last dimension. Slice start [-1] should be 0");
-    TT_FATAL(
-        this->slice_end[-1] == output_padded_shape[-1],
-        "Slice write doesn't support slicing along the last dimension. Slice end [-1] should be equal to output shape "
-        "[-1]");
+        !input_tensor_a.is_sharded() || input_tensor_a.padded_shape().rank() == 4,
+        "Sharded input tensor should be of rank 4. Got {}",
+        input_tensor_a.padded_shape().rank());
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(
@@ -67,7 +64,7 @@ std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(
 
 std::vector<ttnn::TensorSpec> SliceWriteDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors[0].get_tensor_spec()};
+    return {input_tensors[0].tensor_spec()};
 }
 
 operation::ProgramWithCallbacks SliceWriteDeviceOperation::create_program(

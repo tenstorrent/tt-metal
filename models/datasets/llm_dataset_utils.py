@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import re
+
 import datasets
-from sklearn.metrics import top_k_accuracy_score
 import numpy as np
+import torch
 from loguru import logger
+from sklearn.metrics import top_k_accuracy_score
 
 
 def wikitext_detokenizer(string):

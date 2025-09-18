@@ -9,7 +9,7 @@ from loguru import logger
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     Profiler,
@@ -81,7 +81,7 @@ def test_perf(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(device, use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_bare_metal(device, expected_inference_time, expected_compile_time):
     test_perf(expected_inference_time, expected_compile_time, device)
 
 
@@ -95,5 +95,5 @@ def test_perf_bare_metal(device, use_program_cache, expected_inference_time, exp
         ),
     ),
 )
-def test_perf_virtual_machine(device, use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_virtual_machine(device, expected_inference_time, expected_compile_time):
     test_perf(expected_inference_time, expected_compile_time, device)

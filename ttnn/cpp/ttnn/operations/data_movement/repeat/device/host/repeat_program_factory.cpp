@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
@@ -30,7 +31,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
@@ -39,12 +40,12 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-    ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
+    ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
     TT_FATAL(
@@ -54,11 +55,10 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the begining of a read and
+    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_pages = input_log_shape[-2];
     uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
-    uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
                              : (source_page_size_bytes & 0x7) == 0                    ? source_page_size_bytes * 2
                              : (source_page_size_bytes & 0x3) == 0                    ? source_page_size_bytes * 4
@@ -69,25 +69,15 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_size_bytes);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size_bytes);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    bool source_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(source_page_size_bytes);
-    uint32_t source_page_pow_2 = source_page_is_pow_2 ? (std::uint32_t)std::log2(source_page_size_bytes) : 0;
-    bool dest_page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(dest_page_size_bytes);
-    uint32_t dest_page_pow_2 = dest_page_is_pow_2 ? (std::uint32_t)std::log2(dest_page_size_bytes) : 0;
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)source_page_size_bytes,
-        (std::uint32_t)num_repeats,
-        src0_cb_index,
-        src1_cb_index,
-        source_page_is_pow_2,
-        source_page_pow_2,
-        dest_page_is_pow_2,
-        dest_page_pow_2};
+        (std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index, src1_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -125,8 +115,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
@@ -145,7 +135,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
@@ -155,12 +145,12 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-    ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
+    ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t page_size_bytes = input_log_shape[3] * data_size;
     TT_ASSERT(
         page_size_bytes == output_log_shape[3] * data_size,
@@ -169,12 +159,11 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the begining of a read and
+    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_higher_pages = input_log_shape[0];
     uint32_t number_of_lower_pages = input_log_shape[2];
     uint32_t number_of_rep_dim_pages = input_log_shape[1];
-    uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + page_size_bytes;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
@@ -182,24 +171,17 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_size_bytes);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size_bytes);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    bool page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(page_size_bytes);
-    uint32_t page_pow_2 = page_is_pow_2 ? (std::uint32_t)std::log2(page_size_bytes) : 0;
     std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)page_size_bytes,
-        src0_cb_index,
-        src1_cb_index,
-        page_is_pow_2,
-        page_pow_2,
-        number_of_lower_pages,
-        number_of_rep_dim_pages};
+        (std::uint32_t)page_size_bytes, src0_cb_index, src1_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -269,8 +251,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];

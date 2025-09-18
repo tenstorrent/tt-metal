@@ -38,8 +38,7 @@ bool balanced_physical_device_numa() {
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
-        for (uint32_t device_id = 0; device_id < MetalContext::instance().get_cluster().number_of_devices();
-             device_id++) {
+        for (auto device_id : MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             auto numa_node_for_device = MetalContext::instance().get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }
@@ -327,9 +326,9 @@ private:
 // allowing an even distribution of work.
 class DistributedBoostThreadPool : public ThreadPool {
 public:
-    DistributedBoostThreadPool(uint32_t thread_count) {
+    DistributedBoostThreadPool(uint32_t thread_count) : num_workers_(thread_count) {
         workers_.reserve(thread_count);
-        num_workers_ = thread_count;
+
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<BoostThreadPool>(1));
         }
@@ -379,8 +378,8 @@ class DeviceBoundThreadPool : public ThreadPool {
 public:
     // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
-    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
-        num_workers_ = physical_devices.size();
+    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
+        num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id()));
@@ -389,9 +388,9 @@ public:
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
-    DeviceBoundThreadPool(uint32_t thread_count) {
+    DeviceBoundThreadPool(uint32_t thread_count) : num_workers_(thread_count) {
         workers_.reserve(thread_count);
-        num_workers_ = thread_count;
+
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i));
             phys_device_to_thread_id_[i] = i;

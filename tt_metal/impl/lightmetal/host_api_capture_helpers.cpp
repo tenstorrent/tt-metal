@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/overloaded.hpp>
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
+#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -15,6 +16,8 @@
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -98,8 +101,7 @@ void CaptureBufferCreate(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     auto& ctx = LightMetalCaptureContext::get();
@@ -114,7 +116,7 @@ void CaptureBufferCreate(
         size,
         page_size,
         buffer_type,
-        buffer_layout,
+        sharding_args.buffer_layout(),
         buffer_global_id);
 
     // Convert the optional fields to flatbuffer offsets.
@@ -123,7 +125,8 @@ void CaptureBufferCreate(
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
     auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
-    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+    auto shard_parameters_offset = to_flatbuffer(sharding_args.shard_spec(), fbb);
+    auto dist_spec_offset = to_flatbuffer(sharding_args.buffer_distribution_spec(), fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
         fbb,
@@ -133,10 +136,11 @@ void CaptureBufferCreate(
         size,
         page_size,
         to_flatbuffer(buffer_type),
-        to_flatbuffer(buffer_layout),
+        to_flatbuffer(sharding_args.buffer_layout()),
         shard_parameters_offset,
         bottom_up_offset,
-        sub_device_id_offset);
+        sub_device_id_offset,
+        dist_spec_offset);
 
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand, cmd.Union());
 }
@@ -308,7 +312,7 @@ void CaptureCreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t kernel_global_id = ctx.add_to_map(kernel.get());
     uint32_t program_global_id = ctx.get_global_id(&program);
     log_debug(
@@ -344,7 +348,7 @@ void CaptureSetRuntimeArgsUint32(
     tt::stl::Span<const uint32_t> runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(
@@ -371,7 +375,7 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(
@@ -390,27 +394,6 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
         fbb, program_global_id, kernel_global_id, core_spec_offset, runtime_args_offset);
 
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
-}
-void CaptureSetRuntimeArgs(
-    IDevice* /*device*/,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args) {
-    auto& ctx = LightMetalCaptureContext::get();
-    auto& fbb = ctx.get_builder();
-    uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
-    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
-    auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
-    log_debug(
-        tt::LogMetalTrace,
-        "{}: kernel_global_id: {} rt_args_size: {}",
-        __FUNCTION__,
-        kernel_global_id,
-        runtime_args->size());
-
-    auto cmd = tt::tt_metal::flatbuffer::CreateSetRuntimeArgsCommand(
-        fbb, kernel_global_id, core_spec_type, core_spec_offset, rt_args_offset);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsCommand, cmd.Union());
 }
 
 void CaptureCreateCircularBuffer(

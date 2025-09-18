@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 import torch.nn.functional as F
 from torch import nn
+
+import ttnn
 
 
 def convnet_mnist(
@@ -17,12 +18,8 @@ def convnet_mnist(
     torch_maxpool = True
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        input_channels_alignment=32,
-        transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
@@ -61,11 +58,27 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
+    if not ttnn.is_tensor_storage_on_device(tt_bias):
+        tt_bias = ttnn.prepare_conv_bias(
+            bias_tensor=tt_bias,
+            weights_format="OIHW",
+            input_memory_config=x.memory_config(),
+            input_layout=x.get_layout(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
+        )
+        tt_bias = ttnn.to_device(tt_bias, device)
 
     x = ttnn.conv2d(
-        input_tensor=x, weight_tensor=tt_weight, bias_tensor=tt_bias, **conv_kwargs, compute_config=compute_config
+        input_tensor=x,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        **conv_kwargs,
+        compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
     x = ttnn.relu(x)
 
@@ -117,6 +130,7 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
 
@@ -127,6 +141,7 @@ def convnet_mnist(
         **conv_kwargs,
         return_output_dim=True,
         return_weights_and_bias=False,
+        dtype=ttnn.bfloat16,
     )
 
     x = ttnn.relu(x)

@@ -17,10 +17,13 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         Tracy::TracyClient
-        Taskflow::Taskflow
         TT::Metalium::HostDevCommon
 )
 
 if(DEFINED VERSION_HASH)
     target_compile_definitions(jit_build PRIVATE "-DGIT_COMMIT_HASH=\"${VERSION_HASH}\"")
+endif()
+
+if(ENABLE_FAKE_KERNELS_TARGET)
+    add_subdirectory(fake_kernels_target)
 endif()

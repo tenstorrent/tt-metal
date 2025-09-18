@@ -36,22 +36,17 @@ def run_conv_transpose2d(
     out_pad_w,
     config_override=None,
     dilation=1,
-    use_shallow_conv_variant=False,
-    transpose_mcast=True,
-    enable_auto_formatting=False,
-    padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
-    debug=False,
     groups=1,
     has_bias=True,
     shard_layout=None,
     auto_shard=False,
     mirror_kernel=True,
-    enable_split_reader=False,
     enable_act_double_buffer=False,
+    preprocess_weights_bias=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -95,16 +90,10 @@ def run_conv_transpose2d(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        input_channels_alignment=(
-            16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
-        ),
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
-        enable_subblock_padding=False,
         output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -118,7 +107,55 @@ def run_conv_transpose2d(
 
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
+    if preprocess_weights_bias:
+        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
+        tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
+            weight_tensor=tt_weight_tensor,
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="IOHW",
+            in_channels=input_channels,
+            out_channels=output_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=(filter_height, filter_width),
+            stride=(stride_h, stride_w),
+            padding=(pad_h, pad_w),
+            dilation=(dilation, dilation),
+            has_bias=has_bias,
+            groups=groups,
+            device=device,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            mirror_kernel=mirror_kernel,
+            input_dtype=activations_dtype,
+        )
 
+        tt_bias_tensor = (
+            ttnn.prepare_conv_transpose2d_bias(
+                bias_tensor=tt_bias_tensor,
+                input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                in_channels=input_channels,
+                out_channels=output_channels,
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=input_width,
+                device=device,
+                kernel_size=(filter_height, filter_width),
+                stride=(stride_h, stride_w),
+                padding=(pad_h, pad_w),
+                # output_padding=(out_pad_h, out_pad_w),
+                dilation=(dilation, dilation),
+                groups=groups,
+                conv_config=conv_config,
+                compute_config=compute_config,
+                input_dtype=activations_dtype,
+            )
+            if has_bias
+            else None
+        )
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -140,6 +177,7 @@ def run_conv_transpose2d(
         mirror_kernel=mirror_kernel,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=activations_dtype,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
 
@@ -199,10 +237,10 @@ def run_conv_transpose2d(
         ttnn.bfloat8_b,
     ],
 )
+@pytest.mark.parametrize("preprocess_weights", [True, False])
 @pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
-    use_program_cache,
     activations_dtype,
     weights_dtype,
     batch_size,
@@ -221,6 +259,7 @@ def test_simple_conv_t2d(
     config,
     shard_layout,
     mirror_kernel,
+    preprocess_weights,
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
@@ -246,6 +285,7 @@ def test_simple_conv_t2d(
         shard_layout=shard_layout,
         auto_shard=True,
         mirror_kernel=mirror_kernel,
+        preprocess_weights_bias=preprocess_weights,
     )
 
 
@@ -253,12 +293,12 @@ def test_simple_conv_t2d(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(
-    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_split_reader, enable_act_double_buffer, shard_layout",
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_act_double_buffer, shard_layout",
     (
-        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ),
 )
 # fmt: on
@@ -276,7 +316,6 @@ def test_simple_conv_t2d(
 )
 def test_conv_transpose2d_model_fruit(
     device,
-    use_program_cache,
     activations_dtype,
     weights_dtype,
     batch_size,
@@ -293,7 +332,6 @@ def test_conv_transpose2d_model_fruit(
     out_pad_h,
     out_pad_w,
     config,
-    enable_split_reader,
     enable_act_double_buffer,
     shard_layout,
     mirror_kernel=False,
@@ -321,7 +359,6 @@ def test_conv_transpose2d_model_fruit(
         config_override=config,
         shard_layout=shard_layout,
         auto_shard=True,
-        enable_split_reader=enable_split_reader,
         enable_act_double_buffer=enable_act_double_buffer,
         mirror_kernel=mirror_kernel,
     )

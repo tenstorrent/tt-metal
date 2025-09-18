@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <stdint.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <array>
 #include <functional>
 #include <memory>
@@ -13,7 +13,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"
 
 namespace tt::tt_metal {
@@ -27,7 +27,7 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
         if (core_type == CoreType::ETH && MetalContext::instance().hal().get_programmable_core_type_index(
                                               tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
             // This device does not have the eth core
-            tt::log_info(tt::LogTest, "IDLE_ETH core type is not on this device");
+            log_info(tt::LogTest, "IDLE_ETH core type is not on this device");
             continue;
         }
         for (const auto& num_hw_cqs : num_hw_cqs_to_test) {
@@ -103,29 +103,16 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchSBuffer) {
     EXPECT_EQ(settings.dispatch_s_buffer_pages_, expected_page_count);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetTunnelerBuffer) {
-    const uint32_t hw_cqs = 2;
-    const uint32_t expected_buffer_bytes = 0x2000;
-    const uint32_t expected_page_count =
-        expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::tt_metal::MetalContext::instance().get_cluster());
-    auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
-    settings.tunneling_buffer_size(expected_buffer_bytes);
-    EXPECT_EQ(settings.tunneling_buffer_size_, expected_buffer_bytes);
-    EXPECT_EQ(settings.tunneling_buffer_pages_, expected_page_count);
-}
-
 TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     if (MetalContext::instance().hal().get_programmable_core_type_index(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
         // This device does not have the eth core
-        tt::log_info(tt::LogTest, "Test not supported on this device");
+        log_info(tt::LogTest, "Test not supported on this device");
         return;
     }
     const auto core_type = CoreType::WORKER;
     const uint32_t hw_cqs = 1;
     const uint32_t prefetch_d_size = 0x1000;
-    const uint32_t mux_size = 0x2000;
     const uint32_t cmddat_size = 0x2000;
     const uint32_t dispatch_s_size = 32;
     const uint32_t dispatch_size = 4096;
@@ -142,7 +129,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     // Modify settings
     settings.prefetch_q_entries(prefetch_q_entries);
     settings.prefetch_d_buffer_size(prefetch_d_size);
-    settings.tunneling_buffer_size(mux_size);
     settings.prefetch_cmddat_q_size(cmddat_size);
     settings.dispatch_s_buffer_size(dispatch_s_size);
     settings.prefetch_max_cmd_size(max_cmd_size);
@@ -154,7 +140,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     auto& settings_2 = DispatchSettings::get(CoreType::ETH, hw_cqs);
     EXPECT_NE(settings_2.prefetch_q_entries_, prefetch_q_entries);
     EXPECT_NE(settings_2.prefetch_d_buffer_size_, prefetch_d_size);
-    EXPECT_NE(settings_2.tunneling_buffer_size_, mux_size);
     EXPECT_NE(settings_2.prefetch_cmddat_q_size_, cmddat_size);
     EXPECT_NE(settings_2.dispatch_s_buffer_size_, dispatch_s_size);
     EXPECT_NE(settings_2.prefetch_max_cmd_size_, max_cmd_size);
@@ -165,7 +150,6 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     auto& settings_3 = DispatchSettings::get(core_type, hw_cqs);
     EXPECT_EQ(settings_3.prefetch_q_entries_, prefetch_q_entries);
     EXPECT_EQ(settings_3.prefetch_d_buffer_size_, prefetch_d_size);
-    EXPECT_EQ(settings_3.tunneling_buffer_size_, mux_size);
     EXPECT_EQ(settings_3.prefetch_cmddat_q_size_, cmddat_size);
     EXPECT_EQ(settings_3.dispatch_s_buffer_size_, dispatch_s_size);
     EXPECT_EQ(settings_3.prefetch_max_cmd_size_, max_cmd_size);

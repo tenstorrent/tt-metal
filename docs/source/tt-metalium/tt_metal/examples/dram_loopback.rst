@@ -3,108 +3,86 @@
 DRAM Loopback
 =============
 
-We will build a program in TT-Metal that will simply copy data from one DRAM
-buffer to another, using the compute engine and an intermediate L1 buffer to do
-so. We call this concept "loopback".
+This is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data from DRAM into its L1(SRAM) buffer and back out to DRAM. Hence "loopback".
 
-We'll go through this code section by section. Note that we have this exact,
-full example program in
-``tt_metal/programming_examples/loopback/loopback.cpp``, so you can follow
-along.
 
-To build and execute, you may use the following commands. Note that we include
-the necessary environment variables here, but you may possibly need more
-depending on the most up-to-date installation methods.
+We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/loopback`` directory.
 
-::
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``loopback`` executable in the ``build/programming_examples`` directory. For example:
 
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+.. code-block:: bash
+
+    export TT_METAL_HOME=</path/to/tt-metal>
+    ./build_metal.sh --build-programming-examples
+    # To run the example
     ./build/programming_examples/loopback
 
-Silicon accelerator setup
--------------------------
+Device initialization
+---------------------
 
 .. code-block:: cpp
 
    constexpr int device_id = 0;
    auto device = CreateDevice(device_id);
 
-We instantiate a device to control our ``GRAYSKULL`` type
-accelerator.
+First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N-1). Thus device 0 is the first device and always available if one is installed.
 
-Program pre-compilation setup
------------------------------
+Program setup
+-------------
 
 .. code-block:: cpp
 
-   CommandQueue& cq = detail::GetCommandQueue(device);
+   CommandQueue& cq = device->command_queue();
    Program program = CreateProgram();
 
-We first obtain the global ``CommandQueue`` in order to use the fast dispatch
-capabilities of the software. This will be used when issuing commands for
-asynchronous reads/writes/program management.
+Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. And commands are operations that are run on the device, including but not limited to upload/download of data and program execution.
 
-Next, we create a ``Program`` to be run on our Grayskull accelerator. This is how
-we'll be keeping track of things in our session with the device.
+Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.
 
-Building a data movement kernel
--------------------------------
+Create buffers in DRAM and L1 (SRAM)
+------------------------------------
 
-Declare a kernel for data movement. We'll use a pre-written kernel that copies
-data from one place to another.
+Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,
 
-We will be using the accelerator core with coordinates ``{0, 0}``.
+There's in total 3 buffers to be created:
 
-.. code-block:: cpp
-
-    constexpr CoreCoord core = {0, 0};
-
-    KernelHandle dram_copy_kernel_id = CreateKernel(
-        program,
-        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
-
-Create buffers in DRAM and L1
------------------------------
-
-Next, we need to declare buffers that we will use during execution. We will
-need
-
-* An L1 buffer within the core itself that will be used to store the compute
-  engine's work
+* An L1 (SRAM) buffer within the core itself that will act as temporary storage
 * A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data
 
+There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
+
+Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.
+
+Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
+
+The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
+
 .. code-block:: cpp
 
-  constexpr uint32_t single_tile_size = 2 * (32 * 32);
   constexpr uint32_t num_tiles = 50;
+  constexpr uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
+  constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   tt_metal::InterleavedBufferConfig l1_config{
-                                        .device=device,
-                                        .size = dram_buffer_size,
-                                        .page_size = dram_buffer_size,
-                                        .buffer_type = tt_metal::BufferType::L1
-                                        };
+      .device=device,
+      .size = single_tile_size,
+      .page_size = single_tile_size,
+      .buffer_type = tt_metal::BufferType::L1
+  };
 
   Buffer l1_buffer = CreateBuffer(l1_config);
 
-For simplicity, let's make the size of all our buffers 50 tiles.
-
-Let's make the input and output DRAM buffers.
+The DRAM buffers differ from the L1 buffer in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
 
 .. code-block:: cpp
 
   tt_metal::InterleavedBufferConfig dram_config{
-                                        .device=device,
-                                        .size = dram_buffer_size,
-                                        .page_size = dram_buffer_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+      .device=device,
+      .size = dram_buffer_size,
+      .page_size = single_tile_size,
+      .buffer_type = tt_metal::BufferType::DRAM
+  };
 
   Buffer input_dram_buffer = CreateBuffer(dram_config);
   const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
@@ -112,22 +90,104 @@ Let's make the input and output DRAM buffers.
   Buffer output_dram_buffer = CreateBuffer(dram_config);
   const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
-  const uint32_t input_bank_id = 0;
-  const uint32_t output_bank_id = 0;
-
 Sending real data into DRAM
 ---------------------------
 
 .. code-block:: cpp
 
-  std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-      dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+  std::vector<bfloat16> input_vec(num_tiles * tile_size);
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
+  for (auto& val : input_vec) {
+      val = bfloat16(distribution(rng));
+  }
   EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
 
-Send in a randomly-generated FP16 vector that will act as our input data
-tensor.
+Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.
 
-We use a non-blocking call so we can continue setting up our program.
+Note the final ``false`` argument. This indicates to tt-Metalium that the upload is non-blocking. The function may return as soon as possible while data transfer is still in progress. This is useful for performance, but the program is responsible for ensuring that the the source buffer is not freed before the transfer is complete. In this case, there are future blocking calls/calls to ``Finish`` that will ensure commands are completed before the program exits, which is also when the source buffer is freed.
+
+Creating a data movement kernel
+-------------------------------
+
+Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, ``{0, 0}`` is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.
+
+.. code-block:: cpp
+
+    constexpr CoreCoord core = {0, 0};
+    std::vector<uint32_t> compile_args;
+    TensorAccessorArgs(*input_dram_buffer).append_to(compile_args);
+    TensorAccessorArgs(*output_dram_buffer).append_to(compile_args);
+
+    KernelHandle dram_copy_kernel_id = CreateKernel(
+        program,
+        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args}
+    );
+
+.. note::
+
+    The path to the kernel source file can either be
+
+    * Relative to the ``TT_METAL_KERNEL_PATH`` environment variable (or ``TT_METAL_HOME`` if the former is not set), or
+    * Absolute path to the file, or
+    * Relative to the current working directory
+
+    Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.
+
+The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
+
+The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
+
+.. code-block:: cpp
+
+    // tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp
+    void kernel_main() {
+        std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
+        std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
+        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(2);
+        std::uint32_t num_tiles             = get_arg_val<uint32_t>(3);
+
+        const uint32_t tile_size_bytes = 32 * 32 * 2; // same tile size as in the host code
+
+        constexpr auto in0_args = TensorAccessorArgs<0>();
+        const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr, tile_size_bytes);
+
+        constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+        const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
+
+        for(uint32_t i=0;i<num_tiles;i++) {
+            noc_async_read_tile(i, in0, l1_buffer_addr);
+            noc_async_read_barrier();
+
+            noc_async_write_tile(i, out0, l1_buffer_addr);
+            noc_async_write_barrier();
+        }
+    }
+
+.. note::
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically, including the complexity of bank interleaving. Without the helper, the kernel implementation would need to manually calculate NoC addresses for each tile, taking into account how data is distributed across DRAM banks. The ``TensorAccessor`` abstraction greatly simplifies this by handling all the bank addressing and page size calculations internally. Here's what the manual implementation would look like:
+
+  .. code-block:: cpp
+
+    constexpr std::uint32_t num_dram_banks = 6; // Number of DRAM banks on Wormhole
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // Round-robin bank selection
+        uint32_t bank_id = i % num_dram_banks;
+        // Offset within the bank for the current tile
+        uint32_t offset_within_bank = i / num_dram_banks * tile_size_bytes;
+        std::uint64_t dram_buffer_src_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_src_addr + offset_within_bank);
+        std::uint64_t dram_buffer_dst_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(bank_id, dram_buffer_dst_addr + offset_within_bank);
+
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, tile_size_bytes);
+        noc_async_read_barrier();
+        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, tile_size_bytes);
+        noc_async_write_barrier();
+    }
+
 
 Setting runtime arguments for the data movement kernel
 ------------------------------------------------------
@@ -137,10 +197,8 @@ Setting runtime arguments for the data movement kernel
   const std::vector<uint32_t> runtime_args = {
       l1_buffer.address(),
       input_dram_buffer.address(),
-      input_bank_id,
       output_dram_buffer.address(),
-      output_bank_id,
-      l1_buffer.size()
+      num_tiles
   };
 
   SetRuntimeArgs(
@@ -150,15 +208,12 @@ Setting runtime arguments for the data movement kernel
       runtime_args
   );
 
-We now set runtime arguments for our data movement kernel. For this
-particular kernel, we have to provide:
+We now set runtime arguments for our data movement kernel. The kernel can then access these arguments at runtime. For this specific kernel, we need to pass in the following arguments:
 
 * Where the L1 buffer starts (memory address)
 * Where the input DRAM buffer starts (memory address)
-* The location of the input DRAM buffer's channel on the NOC
 * Where the output DRAM buffer starts (memory address)
-* The location of the output DRAM buffer's channel on the NOC
-* The size of the buffers
+* How many tiles we are copying (this is used to determine how many times to copy data)
 
 Running the program
 -------------------
@@ -167,26 +222,29 @@ Running the program
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
+    // Equivalently, we could have done:
+    // EnqueueProgram(cq, program, true);
 
 
-Now we finally launch our program. The ``Finish`` call waits for the program
-to return a finished status.
+Finally, we launch our program. The ``Finish`` call waits for the the host program only continues execution after everything in the command queue has been completed. The final argument in ``EnqueueProgram`` indicates that the program is non-blocking. Setting it to ``true`` would cause the program to block until the program is finished. Efficiently, this is the same as calling ``Finish`` after the program is enqueued.
 
-Launch and verify output
-------------------------
+Download the result and verify output
+-------------------------------------
 
 Then we can finally read back the data from the output buffer and assert that
-it matches what we sent!
+it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.
 
 .. code-block:: cpp
 
-  std::vector<uint32_t> result_vec;
+  std::vector<bfloat16> result_vec;
   EnqueueReadBuffer(cq,output_dram_buffer, result_vec, true);
 
-  pass &= input_vec == result_vec;
-
-We use a blocking call this time because we want to get all the data before
-doing a comparison.
+  for (int i = 0; i < input_vec.size(); i++) {
+    if (input_vec[i] != result_vec[i]) {
+        pass = false;
+        break;
+    }
+  }
 
 Validation and teardown
 -----------------------
@@ -195,8 +253,6 @@ Validation and teardown
 
    pass &= CloseDevice(device);
 
-We now use ``CloseDevice`` to teardown our connection to the Tenstorrent
-device.
+We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
 
-Now we can start adding some compute to our program. Please refer to the
-:ref:`Eltwise sfpu example<Eltwise sfpu example>`.
+Now we can start adding some compute to our program. Please refer to the :ref:`Eltwise binary example<Eltwise binary example>`.

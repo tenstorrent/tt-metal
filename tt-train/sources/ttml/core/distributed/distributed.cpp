@@ -4,6 +4,10 @@
 
 #include "core/distributed/distributed.hpp"
 
+#include <core/ttnn_all_includes.hpp>
+#include <ttnn/operations/creation.hpp>
+#include <ttnn/operations/eltwise/binary/binary.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"

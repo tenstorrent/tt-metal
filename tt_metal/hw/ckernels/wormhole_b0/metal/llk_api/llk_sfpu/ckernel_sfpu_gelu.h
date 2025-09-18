@@ -6,7 +6,6 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
-#include "ckernel_sfpu_cdf.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -21,31 +20,14 @@ void gelu_derivative_init() {
     _init_gelu_derivative_<APPROXIMATION_MODE>();
 }
 
-template <int ITERATIONS>
-inline void calculate_gelu_appx() {
-    constexpr bool approximation_mode = true;
-    _calculate_gelu_<approximation_mode, ITERATIONS>(ITERATIONS);
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    if constexpr (APPROXIMATION_MODE) {
-        calculate_gelu_appx<ITERATIONS>();
-    } else {
-        constexpr bool scaled = true;
-        // SFPU microcode
-        for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
-            vFloat result = calculate_cdf_appx(val, scaled);
-            dst_reg[0] = result;
-            dst_reg++;
-        }
-    }
+    _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
+    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 }  // namespace sfpu

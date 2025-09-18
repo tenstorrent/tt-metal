@@ -2,25 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-from loguru import logger
+import torch
 import transformers
-import ttnn
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import (
-    get_model_config,
-    get_tt_cache_path,
-)
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
+from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-from models.demos.ttnn_falcon7b.tt.common import (
-    create_custom_preprocessor,
-    create_kv_cache,
-)
 
 
 @pytest.mark.parametrize(
@@ -52,7 +44,6 @@ from models.demos.ttnn_falcon7b.tt.common import (
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_falcon_causal_lm(
     device,
-    use_program_cache,
     model_version,
     llm_mode,
     batch,

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/tt_cluster_descriptor.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
+#include <umd/device/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -27,8 +27,8 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
-        ttml::autograd::ctx().open_device();
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 
     void TearDown() override {
@@ -44,24 +44,23 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({size, 1, 1, 1});
+    auto shape = ttnn::Shape({size, 1, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 0);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 0);
 
-    auto mesh_shape = device->shape();
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-
-    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, ttml::core::IdentityComposer{});
 
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[0], size / 2);
     EXPECT_EQ(tensor_1.shape()[0], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(i, 0, 0, 0), i);
-        EXPECT_EQ(tensor_1(i, 0, 0, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(i, 0, 0, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(i, 0, 0, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -71,24 +70,23 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, size, 1, 1});
+    auto shape = ttnn::Shape({1, size, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 1);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 1);
 
-    auto mesh_shape = device->shape();
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-
-    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, ttml::core::IdentityComposer{});
 
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[1], size / 2);
     EXPECT_EQ(tensor_1.shape()[1], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, i, 0, 0), i);
-        EXPECT_EQ(tensor_1(0, i, 0, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(0, i, 0, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(0, i, 0, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -98,24 +96,23 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, 1, size, 1});
+    auto shape = ttnn::Shape({1, 1, size, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 2);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 2);
 
-    auto mesh_shape = device->shape();
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-
-    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, ttml::core::IdentityComposer{});
 
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[2], size / 2);
     EXPECT_EQ(tensor_1.shape()[2], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, i, 0), i);
-        EXPECT_EQ(tensor_1(0, 0, i, 0), i + size / 2);
+        EXPECT_EQ(tensor_0(0, 0, i, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(0, 0, i, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -125,23 +122,22 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, 1, 1, size});
+    auto shape = ttnn::Shape({1, 1, 1, size});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 3);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 3);
 
-    auto mesh_shape = device->shape();
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-
-    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, ttml::core::IdentityComposer{});
 
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[3], size / 2);
     EXPECT_EQ(tensor_1.shape()[3], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, 0, i), i);
-        EXPECT_EQ(tensor_1(0, 0, 0, i), i + size / 2);
+        EXPECT_EQ(tensor_0(0, 0, 0, i), num_devices * i);
+        EXPECT_EQ(tensor_1(0, 0, 0, i), num_devices * (i + size / 2));
     }
 }

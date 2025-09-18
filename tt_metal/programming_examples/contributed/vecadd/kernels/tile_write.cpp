@@ -13,11 +13,8 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address generator for the output buffer. This is faster than doing plain DRAM writes.
-    const InterleavedAddrGenFast<true> c = {
-        .bank_base_address = c_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b,
-    };
+    constexpr auto c_args = TensorAccessorArgs<0>();
+    const auto c = TensorAccessor(c_args, c_addr, tile_size_bytes);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {

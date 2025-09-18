@@ -16,10 +16,11 @@ struct PagedUpdateCacheOperation {
         const Tensor& input_tensor,
         const std::vector<uint32_t>& update_idxs,
         const std::optional<const Tensor>& update_idxs_tensor,
-        const std::optional<bool> share_cache,
+        std::optional<bool> share_cache,
         const std::optional<const Tensor>& page_table,
-        const uint32_t batch_offset,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        uint32_t batch_offset,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
 struct PagedFusedUpdateCacheOperation {
@@ -30,10 +31,11 @@ struct PagedFusedUpdateCacheOperation {
         const Tensor& input_tensor2,
         const std::vector<uint32_t>& update_idxs,
         const std::optional<const Tensor>& update_idxs_tensor,
-        const std::optional<bool> share_cache,
+        std::optional<bool> share_cache,
         const std::optional<const Tensor>& page_table,
-        const uint32_t batch_offset,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        uint32_t batch_offset,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
 struct PagedFillCacheOperation {
@@ -41,8 +43,10 @@ struct PagedFillCacheOperation {
         const Tensor& cache_tensor,
         const Tensor& input_tensor,
         const Tensor& page_table,
-        const uint32_t batch_idx,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        const std::optional<const Tensor>& batch_idx_tensor,
+        uint32_t batch_idx_fallback,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
 }  // namespace operations::experimental::paged_cache

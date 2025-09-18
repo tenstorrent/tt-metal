@@ -20,24 +20,31 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 
     cb_reserve_back(cb_out, BATCH_SIZE);
     tile_regs_wait();
-    pack_untilize_dst<1>(cb_out, BATCH_SIZE);
+    pack_untilize_dest<1>(cb_out, BATCH_SIZE);
     tile_regs_release();
 
     cb_push_back(cb_out, BATCH_SIZE);
 }
 namespace NAMESPACE {
 void MAIN {
+#ifdef ARCH_BLACKHOLE
+    // Until #28611 is closed - pack_untilize_dest on BH can't work with block_rt_dim > 1 (BATCH_SIZE = 1 ->
+    // block_rt_dim = 1)
+    constexpr int BATCH_SIZE = 1;
+#else
     constexpr int BATCH_SIZE = 8;
+#endif
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_batches = total_tiles / BATCH_SIZE;
     const uint32_t leftover = total_tiles % BATCH_SIZE;
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(1);
 
+    compute_kernel_hw_startup(cb_in, cb_transpose_in);
     pack_untilize_init(cb_in, cb_transpose_in);
     transpose_wh_init(cb_in, cb_transpose_in);
 
-    pack_untilize_dst_init_short<1>(cb_transpose_in);
+    pack_untilize_dest_init<1>(cb_transpose_in);
 
     for (uint32_t i = 0; i < num_batches; i++) {
         transpose<BATCH_SIZE>(cb_in, cb_transpose_in);

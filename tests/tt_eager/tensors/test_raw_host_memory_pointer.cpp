@@ -15,12 +15,13 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 
 namespace tt {
 namespace tt_metal {
@@ -67,7 +68,6 @@ struct NDArray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::DataType;
     using tt::tt_metal::HostBuffer;
-    using tt::tt_metal::HostStorage;
     using tt::tt_metal::Layout;
     using tt::tt_metal::Tensor;
 
@@ -78,10 +78,7 @@ void test_raw_host_memory_pointer() {
 
     // Host tensor to print the output
     Tensor tensor_for_printing = Tensor(
-        HostStorage{tt::tt_metal::host_buffer::create<bfloat16>(std::vector<bfloat16>(shape.volume()))},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(shape.volume())), shape, DataType::BFLOAT16, Layout::TILE);
 
     /* Borrow Data from Numpy Start */
     // Create some
@@ -90,7 +87,7 @@ void test_raw_host_memory_pointer() {
     HostBuffer a_cpu_buffer(
         tt::stl::Span<bfloat16>(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
-    Tensor a_cpu = Tensor(HostStorage{std::move(a_cpu_buffer)}, shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor a_cpu = Tensor(std::move(a_cpu_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     /* Borrow Data from Numpy End */
 
     /* Sanity Check Start */
@@ -138,7 +135,7 @@ void test_raw_host_memory_pointer() {
         tt::tt_metal::MemoryPin([]() {}, []() {}));
 
     Tensor alternative_tensor_for_printing =
-        Tensor(HostStorage{std::move(alternative_tensor_for_printing_buffer)}, shape, DataType::BFLOAT16, Layout::TILE);
+        Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     alternative_tensor_for_printing.print();
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
@@ -153,7 +150,7 @@ void test_raw_host_memory_pointer() {
     HostBuffer d_data_buffer(
         tt::stl::Span<bfloat16>(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
-    Tensor d_cpu = Tensor(HostStorage{std::move(d_data_buffer)}, shape, DataType::BFLOAT16, Layout::TILE);
+    Tensor d_cpu = Tensor(std::move(d_data_buffer), shape, DataType::BFLOAT16, Layout::TILE);
 
     bfloat16 d_value = 8.0f;
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(d_cpu)) {
@@ -178,3 +175,5 @@ int main() {
     }
     return 0;
 }
+
+// NOLINTEND(cppcoreguidelines-no-malloc)

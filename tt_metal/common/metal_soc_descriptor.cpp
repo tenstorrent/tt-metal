@@ -8,26 +8,26 @@
 #include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
-enum BoardType : uint32_t;
-
-CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
+CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_worker_cores.size(),
         "dram_view={} must be within range of dram_view_worker_cores.size={}",
         dram_view,
         this->dram_view_worker_cores.size());
-    return this->dram_view_worker_cores.at(dram_view);
+    TT_ASSERT(noc < 2, "Only 2 NOCs supported, noc={} is out of range", noc);
+    return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
-CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view) const {
+CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_eth_cores.size(),
         "dram_view={} must be within range of dram_view_eth_cores.size={}",
         dram_view,
         this->dram_view_eth_cores.size());
-    return this->dram_view_eth_cores.at(dram_view);
+    TT_ASSERT(noc < 2, "Only 2 NOCs supported, noc={} is out of range", noc);
+    return this->dram_view_eth_cores.at(dram_view).at(noc);
 };
 
 CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
@@ -72,24 +72,27 @@ int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& log
 
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::ETH, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+        translate_coord_to({logical_coord, CoreType::ETH, CoordSystem::LOGICAL}, CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const {
     tt::umd::CoreCoord logical_coord =
-        translate_coord_to({physical_coord, CoreType::ETH, CoordSystem::PHYSICAL}, CoordSystem::LOGICAL);
+        translate_coord_to({physical_coord, CoreType::ETH, CoordSystem::NOC0}, CoordSystem::LOGICAL);
     return {logical_coord.x, logical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
+// Kernels are not exposed to physical DRAM coordinates. Use case of this function is for host to get access to a DRAM
+// core, host will likely not be bombarding DRAM with different nocs so SYS-1419 isn't a concern here and its safe to
+// use noc 0
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
-    return this->get_preferred_worker_core_for_dram_view(this->get_dram_channel_from_logical_core(logical_coord));
+    return this->get_preferred_worker_core_for_dram_view(this->get_dram_channel_from_logical_core(logical_coord), 0);
 }
 
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
@@ -115,47 +118,59 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         size_t channel = dram_view["channel"].as<size_t>();
-        int eth_endpoint = dram_view["eth_endpoint"].as<int>();
-        int worker_endpoint = dram_view["worker_endpoint"].as<int>();
-        size_t address_offset = dram_view["address_offset"].as<size_t>();
-
         if (channel >= get_grid_size(CoreType::DRAM).x) {
             // DRAM can be harvested and we don't create unique soc desc for diff harvesting
             break;
         }
-        if (eth_endpoint >= get_grid_size(CoreType::DRAM).y) {
-            TT_THROW(
-                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                "dram_view.eth_endpoint",
-                eth_endpoint);
+        size_t address_offset = dram_view["address_offset"].as<size_t>();
+
+        std::vector<CoreCoord> eth_dram_cores;
+        std::vector<size_t> eth_endpoints;
+        for (int eth_endpoint : dram_view["eth_endpoint"].as<std::vector<int>>()) {
+            if (eth_endpoint >= get_grid_size(CoreType::DRAM).y) {
+                TT_THROW(
+                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                    "dram_view.eth_endpoint",
+                    eth_endpoint);
+            }
+            tt::umd::CoreCoord eth_dram_endpoint_coord =
+                get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::TRANSLATED);
+            eth_dram_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
+            eth_endpoints.push_back(eth_endpoint);
         }
-        if (worker_endpoint >= get_grid_size(CoreType::DRAM).y) {
-            TT_THROW(
-                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                "dram_view.worker_endpoint",
-                worker_endpoint);
+
+        std::vector<CoreCoord> worker_dram_cores;
+        std::vector<size_t> worker_endpoints;
+        for (int worker_endpoint : dram_view["worker_endpoint"].as<std::vector<int>>()) {
+            if (worker_endpoint >= get_grid_size(CoreType::DRAM).y) {
+                TT_THROW(
+                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                    "dram_view.worker_endpoint",
+                    worker_endpoint);
+            }
+            tt::umd::CoreCoord worker_endpoint_coord =
+                get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::TRANSLATED);
+
+            worker_dram_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
+            worker_endpoints.push_back(worker_endpoint);
         }
 
         this->dram_view_channels.push_back(channel);
-        tt::umd::CoreCoord eth_dram_endpoint_coord =
-            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::TRANSLATED);
-        this->dram_view_eth_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
-        tt::umd::CoreCoord worker_endpoint_coord =
-            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::TRANSLATED);
-        this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
+        this->dram_view_eth_cores.push_back(eth_dram_cores);
+        this->dram_view_worker_cores.push_back(worker_dram_cores);
     }
 }
 
 // UMD expects virtual NOC coordinates for worker cores
 tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
     tt::umd::CoreCoord virtual_coord =
-        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, get_umd_coord_system());
+        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::NOC0, get_umd_coord_system());
     return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
 }
 
 CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
-    return (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+    return CoordSystem::VIRTUAL;
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
@@ -166,11 +181,11 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #if defined(TRACY_ENABLE)
-    for (auto& core : get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL)) {
+    for (auto& core : get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 
-    for (auto& core : this->get_cores(CoreType::ETH, CoordSystem::PHYSICAL)) {
+    for (auto& core : this->get_cores(CoreType::ETH, CoordSystem::NOC0)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 

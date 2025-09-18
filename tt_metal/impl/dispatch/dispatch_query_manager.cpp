@@ -13,8 +13,8 @@
 #include "assert.hpp"
 #include "core_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace {
 
@@ -25,8 +25,7 @@ tt::tt_metal::DispatchCoreConfig dispatch_core_config() {
 tt_cxy_pair dispatch_core(uint8_t cq_id) {
     tt_cxy_pair dispatch_core = tt_cxy_pair(0, 0, 0);
     std::optional<tt_cxy_pair> first_dispatch_core = std::nullopt;
-    for (chip_id_t device_id = 0; device_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
-         device_id++) {
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id) {
@@ -70,8 +69,11 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     std::vector<CoreCoord> first_core_set;
     std::vector<CoreCoord> current_cores;
 
+    // Forward the callable once to preserve its value category.
+    auto&& callable = std::forward<F>(func);
+
     for (auto chip : user_chips) {
-        current_cores = std::forward<F>(func)(chip, num_hw_cqs, dispatch_core_config);
+        current_cores = callable(chip, num_hw_cqs, dispatch_core_config);
         if (!first_core_set.empty()) {
             TT_FATAL(first_core_set == current_cores, "Expected logical cores to match across user exposed devices");
         } else {
@@ -90,8 +92,6 @@ std::vector<CoreCoord> populate_all_logical_dispatch_cores(
     uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_dispatch_cores);
 }
-
-tt::tt_metal::DispatchQueryManager* inst = nullptr;
 
 }  // namespace
 

@@ -5,7 +5,6 @@
 #include <cstdint>
 
 void kernel_main() {
-    DeviceZoneScopedMainN("SYNC-MAIN");
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     volatile tt_l1_ptr uint32_t* profiler_control_buffer =
@@ -20,6 +19,7 @@ void kernel_main() {
     constexpr int FIRST_READ_COUNT = 2;
 
     while (syncTimeBufferIndex < FIRST_READ_COUNT) {
+        invalidate_l1_cache();
         uint32_t deviceTime = p_reg[kernel_profiler::WALL_CLOCK_LOW_INDEX];
 
         uint32_t hostTime = profiler_control_buffer[kernel_profiler::FW_RESET_L];
@@ -33,8 +33,8 @@ void kernel_main() {
     }
 
     {
-        DeviceZoneScopedMainChildN("SYNC-LOOP");
         while (syncTimeBufferIndex < ((SAMPLE_COUNT + 1) * 2)) {
+            invalidate_l1_cache();
             uint32_t deviceTime = p_reg[kernel_profiler::WALL_CLOCK_LOW_INDEX];
 
             uint32_t hostTime = profiler_control_buffer[kernel_profiler::FW_RESET_L];

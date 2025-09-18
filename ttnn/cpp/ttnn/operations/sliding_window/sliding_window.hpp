@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -10,13 +9,14 @@
 #include <fmt/core.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "tt-metalium/hal.hpp"
 
 namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
     CoreRangeSet grid = {};
-    tt::tt_metal::TensorMemoryLayout shard_scheme;
-    tt::tt_metal::ShardOrientation shard_orientation;
+    tt::tt_metal::TensorMemoryLayout shard_scheme{0};
+    tt::tt_metal::ShardOrientation shard_orientation{0};
 
     bool operator==(const ParallelConfig& other) {
         return (
@@ -37,6 +37,7 @@ std::array<uint32_t, 4> get_pair_n4_padding(
 struct SlidingWindowConfig {
     // input tensor shape
     uint32_t batch_size = 0;
+    uint32_t channels = 0;
     uint32_pair_t input_hw = {0, 0};
 
     // windowing parameters
@@ -55,6 +56,7 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
+    bool is_avg_pool = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -74,6 +76,10 @@ struct SlidingWindowConfig {
      */
     ttnn::Shape get_output_shape() const;
 
+    uint32_t get_pad_top() const;
+    uint32_t get_pad_bottom() const;
+    uint32_t get_pad_left() const;
+    uint32_t get_pad_right() const;
     uint32_t get_pad_h() const;
     uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
@@ -124,12 +130,15 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool remote_read,
     bool is_in_tiled,
     tt::tt_metal::IDevice* device,
+    uint32_t num_cores_x,
     uint32_t max_out_nsticks_per_core = INT_MAX,
     uint32_t in_nsticks_per_core = 0,
-    bool in_place = false);
+    bool in_place = false,
+    uint32_t in_out_shard_size_delta = 0);
 
 struct HaloGatherKernelConfig {
-    std::vector<std::vector<uint16_t>> pad_config;
+    std::vector<std::vector<uint16_t>> pad_config0;
+    std::vector<std::vector<uint16_t>> pad_config1;
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
@@ -142,14 +151,19 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     tt::tt_metal::IDevice* device,
+    uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
-    bool pad_tile = false,
-    bool pad_cores = false);
+    uint32_t stride_w,
+    bool is_conv =
+        false,  // In convs, we have the concept of dividing the act block (act_block_h_override and split reader)
+    uint32_t reader0_datums = 0,
+    uint32_t reader1_datums = 0,
+    bool pad_cores = true);
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
@@ -161,12 +175,16 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const std::vector<uint16_t>& config, const ParallelConfig& parallel_config);
 
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config,
-    const SlidingWindowConfig& sw_config,
-    const ParallelConfig& p_config);
+    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram = false);
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);
+    const Tensor& config_tensor,
+    const ParallelConfig& p_config,
+    bool is_block_sharded,
+    tt::tt_metal::distributed::MeshDevice* device,
+    bool store_in_dram = false);
+
+uint32_t align_buffer(uint32_t size);
 
 }  // namespace ttnn::operations::sliding_window
 

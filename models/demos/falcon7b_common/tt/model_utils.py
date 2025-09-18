@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh
 
-from models.utility_functions import is_wormhole_b0
+import ttnn
+from models.common.utility_functions import is_wormhole_b0
 
 
 def get_weights_cached(
@@ -50,7 +49,6 @@ def get_weights_cached(
             layout=tt_layout,
             device=mesh_device,
             memory_config=model_config[f"{weight_config_str}_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(mesh_device) if type(mesh_device) == ttnn.MeshDevice else None,
             cache_file_name=str(path),
             preprocess=preprocess_weights,
         )

@@ -5,11 +5,11 @@
 #pragma once
 
 #include <tt-metalium/hal.hpp>
-#include "cpp/ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <limits>
+#include <string>
 
 namespace ttnn {
 namespace ccl {
@@ -56,7 +56,7 @@ public:
     bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
-    std::map<string, string> emit_worker_defines() const;
+    std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
     uint32_t page_size;
@@ -95,7 +95,7 @@ private:
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
-        uint32_t num_buffers;
+        uint32_t num_buffers{};
         bool is_sender;
     };
 
@@ -250,7 +250,8 @@ public:
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> get_compile_time_args() const {
+    std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const {
+        // TODO: use risc_id accordingly
         return std::vector<uint32_t>{
             static_cast<uint32_t>(this->enable_sender ? 1 : 0),
             static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
@@ -304,7 +305,7 @@ public:
     void dump_to_log() const {
         auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
-        for (auto const& arg : rt_args) {
+        for ([[maybe_unused]] const auto& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
     };

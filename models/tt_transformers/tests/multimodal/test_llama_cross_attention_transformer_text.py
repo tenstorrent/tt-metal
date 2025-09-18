@@ -1,27 +1,22 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import get_single_rot_mat
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    get_single_rot_mat,
-)
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-    nearest_32,
-)
-from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -45,12 +40,12 @@ from models.utility_functions import skip_for_grayskull
         "batch_1",
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @torch.no_grad()
 def test_cross_attention_transformer_text_inference(
     text_seq_len,
     batch,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     is_ci_env,
 ):
@@ -107,8 +102,10 @@ def test_cross_attention_transformer_text_inference(
 
     all_tests_pass = True
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttentionTransformerText(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -245,13 +242,12 @@ def test_cross_attention_transformer_text_inference(
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                 )
 
-                rot_mats = get_prefill_rot_mat(
-                    model_args.head_dim,
-                    mesh_device,
-                    seq_len,
-                    model_args.rope_theta,
-                    model_args.rope_scaling_factor,
-                    model_args.orig_context_len,
+                rot_mats = get_rot_mats(
+                    head_dim=model_args.head_dim,
+                    device=mesh_device,
+                    seq_len=seq_len,
+                    theta=model_args.rope_theta,
+                    rope_scaling=model_args.rope_scaling,
                 )
                 tt_out = tt_model(
                     tt_h,
@@ -260,7 +256,7 @@ def test_cross_attention_transformer_text_inference(
                     full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
-                    rot_mats=rot_mats,
+                    rot_mats_global=rot_mats,
                     user_id=b,
                     mode=mode,
                     text_only_inference=TEXT_ONLY,
@@ -295,8 +291,10 @@ def test_cross_attention_transformer_text_inference(
                 model_args.num_devices,
                 start_pos=cur_pos - 1,
                 theta=model_args.rope_theta,
-                scale_factor=model_args.rope_scaling_factor,
-                orig_context_len=model_args.orig_context_len,
+                scale_factor=model_args.rope_scaling.factor if model_args.rope_scaling else None,
+                orig_context_len=model_args.rope_scaling.original_max_position_embeddings
+                if model_args.rope_scaling
+                else None,
             )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
             rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
@@ -353,7 +351,7 @@ def test_cross_attention_transformer_text_inference(
                 full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
-                rot_mats=rot_mats,
+                rot_mats_global=rot_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,
             )

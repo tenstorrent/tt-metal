@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/tensor/tensor_impl.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <string>
+
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 using namespace tt::tt_metal;
 
@@ -54,17 +56,18 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
     return buffer_size;
 }
 
+// TODO: #24600
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
     input_tensors(&input_tensors),
     output_tensors(&output_tensors),
     input_sharded(input_tensors.at(0).is_sharded()),
     output_sharded(output_tensors.at(0).is_sharded()),
-    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype())),
+    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype())),
     shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
     topology(topology),
-    is_row_major(input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
-    if (input_tensors.at(0).get_layout() == Layout::TILE) {
+    is_row_major(input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+    if (input_tensors.at(0).layout() == Layout::TILE) {
         this->tile = input_tensors.at(0).tensor_spec().tile();
         this->page_size = this->tile.get_tile_size(this->df);
         // this->page_size = input_tensors.at(0).buffer()->page_size();
@@ -87,8 +90,8 @@ Tensor const& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_
 
 Tensor const& CCLOpConfig::get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
 
-std::map<string, string> CCLOpConfig::emit_worker_defines() const {
-    std::map<string, string> worker_defines;
+std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
+    std::map<std::string, std::string> worker_defines;
     if (this->is_row_major) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {

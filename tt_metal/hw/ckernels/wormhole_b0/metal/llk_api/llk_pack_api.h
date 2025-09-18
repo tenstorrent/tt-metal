@@ -35,7 +35,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -45,7 +45,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -57,8 +57,8 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 }
 
 template <
+    bool is_fp32_dest_acc_en,
     bool untilize = false,
-    bool is_fp32_dest_acc_en = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0,
     bool tilize = false /*unused*/>
@@ -70,10 +70,10 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params);
+    llk_pack_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -82,7 +82,7 @@ inline void llk_pack_untilize_hw_configure(
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -94,8 +94,8 @@ inline void llk_pack_untilize_hw_configure(
 }
 
 template <
+    bool is_fp32_dest_acc_en,
     bool untilize = false,
-    bool is_fp32_dest_acc_en = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0,
     bool tilize = false /*unused*/>
@@ -108,10 +108,10 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_untilize_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params, face_r_dim, num_faces);
+    llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -121,7 +121,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_reduce_hw_configure_<untilize, type, dim, is_fp32_dest_acc_en>(
+    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -133,17 +133,17 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
 }
 
 template <
-    bool untilize = false,
     PoolType type,
     ReduceDim dim,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
+    bool untilize = false,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0>
 inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output,
         .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
+    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
@@ -202,7 +202,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
-template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -210,7 +210,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
 
 /*************************************************************************
@@ -245,13 +245,15 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    uint32_t tile_dst_ct_offset = 0>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces = 4,
-    const std::uint32_t block_c_index = 0) {
+    const std::uint32_t block_c_index = 0,
+    const std::uint32_t tile_dst_rt_offset = 0) {
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -261,14 +263,18 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+            pack_tile_addr,
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces,
+            block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
 }
 
-template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
 inline void llk_matmul_pack(
     std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
@@ -279,8 +285,60 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
+}
+
+/*************************************************************************
+ * LLK PACK FAST TILIZE
+ *************************************************************************/
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure(const llk_pack_params_t* pack_params) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+
+    _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t pack_output) {
+    const llk_pack_params_t llk_pack_params = {.pack_output = pack_output};
+
+    llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
+}
+
+inline void llk_pack_fast_tilize_init(
+    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    const std::uint8_t input_id = get_output_id(input_operand);
+    const std::uint8_t output_id = get_output_id(pack_output);
+    const uint32_t use_32bit_dest =
+        pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+}
+
+inline void llk_pack_fast_tilize_block(
+    const std::uint32_t tile_index,
+    const std::uint32_t output,
+    const std::uint32_t output_tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
+    const std::uint8_t output_id = get_output_id(output);
+
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units);
 }
 
 /*************************************************************************
@@ -294,7 +352,7 @@ inline void llk_packer_set_math_semaphore() {
     _llk_packer_set_math_semaphore_<WaitRes>();
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
@@ -309,13 +367,13 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
         face_r_dim, narrow_tile);
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, untilize>(
         face_r_dim, narrow_tile);
 }
 
@@ -333,7 +391,7 @@ inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -351,7 +409,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         narrow_tile);
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -378,7 +436,7 @@ inline void llk_pack_reduce_mask_config() {
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
 
 // FIXME-WH-UPLIFT
-template <ReduceDim dim, bool at_kernel_start = false, bool revert = false, bool is_fp32_dest_acc_en = false>
+template <ReduceDim dim, bool is_fp32_dest_acc_en, bool at_kernel_start = false, bool revert = false>
 inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
     const bool untilize = false;
     if constexpr (at_kernel_start) {
@@ -394,7 +452,7 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
                 .Threshold = 0,
             }};
 
-        _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             tile_size,

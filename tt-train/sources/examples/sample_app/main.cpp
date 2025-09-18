@@ -14,7 +14,7 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // but we are using TILE layout. The printed format WILL NOT be correct. But good enough for a demo
 
     // Get the shape of the tensor
-    auto shape = tensor.get_logical_shape();
+    auto shape = tensor.logical_shape();
     // compyte the size of the tensor
     size_t size = 1;
     for (size_t i = 0; i < shape.size(); i++) size *= shape[i];
@@ -28,10 +28,9 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
         for (size_t dim1 = 0; dim1 < shape[1]; dim1++) {
             for (size_t dim2 = 0; dim2 < shape[2]; dim2++) {
                 for (size_t dim3 = 0; dim3 < shape[3]; dim3++) {
-                    std::cout << data
-                                     [dim0 * shape[1] * shape[2] * shape[3] + dim1 * shape[2] * shape[3] +
-                                      dim2 * shape[3] + dim3]
-                                         .to_float()
+                    std::cout << static_cast<float>(data
+                                                        [dim0 * shape[1] * shape[2] * shape[3] +
+                                                         dim1 * shape[2] * shape[3] + dim2 * shape[3] + dim3])
                               << " ";
                 }
                 std::cout << std::endl;
@@ -47,7 +46,6 @@ int main() {
     const size_t tensor_height = 32;
 
     // tell TTNN that we want to use the first device available
-    tt::ARCH arch_ = {};
     size_t num_devices_ = 0;
 
     std::srand(0);
@@ -60,7 +58,7 @@ int main() {
     std::cout << "Creating a tensor with bfloat16 data type" << std::endl;
     // TTNN wants us to explicitly specify if the tensor owns the buffer or not. if not, we need to make dman sure that
     // the buffer is not deallocated before the tensor
-    auto buffer = tt::tt_metal::host_buffer::create(create_random_vector_of_bfloat16_native(
+    auto buffer = tt::tt_metal::HostBuffer(create_random_vector_of_bfloat16_native(
         // In number of bytes. so 2 bytes per bfloat16 element
         tensor_width * tensor_height * 2
         //  max = 2, offset = -1, seed = 42. Effectively, the range is [-1, 1]. I know, weird API
@@ -71,7 +69,7 @@ int main() {
     // Now we create a tensor with the buffer we just created
     auto x = tt::tt_metal::Tensor(
         // Let the tensor take ownership of the buffer
-        tt::tt_metal::HostStorage{std::move(buffer)},
+        std::move(buffer),
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation
         ttnn::Shape({1, 1, tensor_width, tensor_height}),
         // The data type of the tensor

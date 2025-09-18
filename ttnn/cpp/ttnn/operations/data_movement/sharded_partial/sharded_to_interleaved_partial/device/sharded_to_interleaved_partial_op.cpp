@@ -4,7 +4,8 @@
 
 #include "sharded_to_interleaved_partial_op.hpp"
 
-#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -20,23 +21,23 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
         "Slice index and num_slices don't match! Index = {} num_slices = {}",
         slice_index,
         num_slices);
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
     TT_FATAL(
-        (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % num_slices == 0,
+        (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Error");
-    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (input_tensor.get_padded_shape()[-1] % shard_spec.shape[1] != 0 ||
-            ((input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (input_tensor.padded_shape()[-1] % shard_spec.shape[1] != 0 ||
+            ((input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
             TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
     }
-    if (input_tensor.get_dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+    if (input_tensor.dtype() != this->output_dtype) {
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
     }
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
@@ -45,6 +46,18 @@ std::vector<ttnn::TensorSpec> ShardedToInterleavedPartialDeviceOperation::comput
     const std::vector<Tensor>& input_tensors) const {
     // Don't create anything, we already passed in output tensor
     return {};
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = input_tensors.at(1);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks ShardedToInterleavedPartialDeviceOperation::create_program(

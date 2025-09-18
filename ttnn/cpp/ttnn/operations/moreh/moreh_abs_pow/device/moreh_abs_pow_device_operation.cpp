@@ -47,12 +47,12 @@ void MorehAbsPowOperation::validate_on_program_cache_hit(
 MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
     const auto& input = tensor_args.input;
     return TensorSpec(
-        input.get_logical_shape(),
-        TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), operation_attributes.memory_config));
+        input.logical_shape(),
+        TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }
 
 MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_tensors(

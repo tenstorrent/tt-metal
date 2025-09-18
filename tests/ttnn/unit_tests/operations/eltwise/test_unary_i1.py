@@ -7,10 +7,8 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import skip_for_grayskull
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -44,7 +42,6 @@ def test_i1_range(device, shapes):
     assert pcc >= 0.9999
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "shapes",
     [

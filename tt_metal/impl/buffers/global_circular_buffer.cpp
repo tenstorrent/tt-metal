@@ -7,7 +7,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include <global_circular_buffer_impl.hpp>
+#include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -27,7 +27,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 namespace experimental {
@@ -97,7 +97,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     // Write the config buffer to the device
     // Only block for the slow dispatch case
     auto config_buffer_address = cb_config_buffer_.get_buffer()->address();
-    const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+    const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
     uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
     uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
@@ -106,7 +106,6 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
         uint32_t sender_idx = core_to_core_id.at(sender_core) * cb_config_page_size / sizeof(uint32_t);
         uint32_t num_receivers = receiver_cores.num_cores();
-        uint32_t pages_acked_address = pages_sent_address + num_receivers * l1_alignment;
         cb_config_host_buffer[sender_idx++] = 1;
         cb_config_host_buffer[sender_idx++] = receiver_cores.num_cores();
         cb_config_host_buffer[sender_idx++] = buffer_address;
@@ -137,7 +136,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
     } else {
-        if (device_->using_slow_dispatch()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             detail::WriteToBuffer(*cb_config_buffer_.get_buffer(), cb_config_host_buffer);
             tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
         } else {

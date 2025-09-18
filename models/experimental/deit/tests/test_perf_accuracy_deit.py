@@ -14,14 +14,14 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.deit.tests.demo_utils import get_data
 
 
@@ -160,7 +160,6 @@ def run_perf_deit(
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
@@ -190,7 +189,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,

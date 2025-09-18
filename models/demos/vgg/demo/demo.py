@@ -3,20 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
 from loguru import logger
 from torchvision import models
-import pytest
-
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-import ttnn
-
-from models.demos.vgg.demo_utils import get_data_loader, get_batch
-from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.demos.vgg.demo_utils import get_batch, get_data_loader
 from models.demos.vgg.tt import ttnn_vgg
 
 vgg_model_config = {

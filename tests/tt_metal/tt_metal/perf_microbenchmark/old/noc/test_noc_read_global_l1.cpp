@@ -27,16 +27,19 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -50,19 +53,6 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
 
     std::vector<T> vec(first, last);
     return vec;
-}
-
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -115,7 +105,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -159,11 +149,10 @@ int main(int argc, char** argv) {
         if (print_tensor) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
-                    print_vec(
+                    print_vec_of_bfloat16(
                         tensors[r * num_cores_c + c].get_values(),
                         1,
-                        32,
-                        std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
+                        "input tensor " + std::to_string(r) + " " + std::to_string(c));
                     if (single_read || one_buffer_share) {
                         break;
                     }
@@ -201,7 +190,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_dst_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{dst_cb_index, data_format}})
                 .set_page_size(dst_cb_index, single_tile_size);
-        auto cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
         uint32_t activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
 
@@ -219,7 +208,7 @@ int main(int argc, char** argv) {
             activations_addr,
             activations_addr / 1024,
             Nt);
-        std::vector<std::shared_ptr<tt_metal::Buffer>> l1_buffers;
+        std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> l1_buffers;
 
         int l1_buffers_size = 1;
         if (!(single_read || one_buffer_share)) {
@@ -229,9 +218,17 @@ int main(int argc, char** argv) {
         l1_buffers.reserve(l1_buffers_size);
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                l1_buffers.push_back(tt_metal::Buffer::create(
-                    device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
-                tt_metal::detail::WriteToBuffer(*l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
+                tt_metal::distributed::ReplicatedBufferConfig replicated_config{.size = total_tiles_size_bytes};
+                tt_metal::distributed::DeviceLocalBufferConfig local_config{
+                    .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::L1};
+                l1_buffers.push_back(
+                    tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, device.get()));
+                tt_metal::distributed::WriteShard(
+                    device->mesh_command_queue(0),
+                    l1_buffers[r * num_cores_c + c],
+                    packed_tensors[r * num_cores_c + c],
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    true);
 
                 if (single_read || one_buffer_share) {
                     break;
@@ -246,20 +243,21 @@ int main(int argc, char** argv) {
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
                 std::vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromBuffer(*l1_buffers[r * num_cores_c + c], result_vec);
+                tt::tt_metal::distributed::ReadShard(
+                    device->mesh_command_queue(0),
+                    result_vec,
+                    l1_buffers[r * num_cores_c + c],
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    true);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                 if (print_tensor) {
-                    print_vec(
-                        result_bfp16,
-                        1,
-                        32,
-                        std::string("from l1 buffer " + std::to_string(r) + " " + std::to_string(c)));
-                    print_vec(
+                    print_vec_of_bfloat16(
+                        result_bfp16, 1, "from l1 buffer " + std::to_string(r) + " " + std::to_string(c));
+                    print_vec_of_bfloat16(
                         tensors[r * num_cores_c + c].get_values(),
                         1,
-                        32,
-                        std::string("tensor " + std::to_string(r) + " " + std::to_string(c)));
+                        "tensor " + std::to_string(r) + " " + std::to_string(c));
                 }
                 if (!(tensors[r * num_cores_c + c].get_values() == result_bfp16)) {
                     log_error(
@@ -307,17 +305,20 @@ int main(int argc, char** argv) {
                     program, mm_reader_kernel, core, {l1_buffer_addr, l1_buffer_offset, num_blocks, cb_n});
             }
         }
-
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
-        EnqueueProgram(device->command_queue(), program, false);
-        Finish(device->command_queue());
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -329,7 +330,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
                     tt_metal::detail::ReadFromDeviceL1(
-                        device, core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                     int tensors_idx = (single_read || one_buffer_share) ? (0) : (r * num_cores_c + c);
@@ -343,19 +344,11 @@ int main(int argc, char** argv) {
                         slice_vec(tensors[tensors_idx].get_values(), (index - cb_tiles) * 1024, index * 1024 - 1);
 
                     if (print_tensor) {
-                        print_vec(
-                            result_bfp16,
-                            32,
-                            32,
-                            std::string("result_bfp16 " + std::to_string(r) + " " + std::to_string(c)));
-
-                        print_vec(
-                            sliced_tensor,
-                            32,
-                            32,
-                            std::string("sliced_tensor " + std::to_string(r) + " " + std::to_string(c)));
+                        print_vec_of_bfloat16(
+                            result_bfp16, 1, "result_bfp16 " + std::to_string(r) + " " + std::to_string(c));
+                        print_vec_of_bfloat16(
+                            sliced_tensor, 1, "sliced_tensor " + std::to_string(r) + " " + std::to_string(c));
                     }
-
                     if (sliced_tensor != result_bfp16) {
                         log_error(LogTest, "{}/{} - comparision failed ", r, c);
                         pass = false;
@@ -368,7 +361,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
 
     } catch (const std::exception& e) {
         pass = false;

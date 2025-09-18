@@ -188,7 +188,7 @@ def test_moreh_mean_optional_output(input_shape_dim, optional_output, device):
         [[3, 4, 5, TILE_HEIGHT * 3 - 15, TILE_WIDTH * 4 - 10], [1]],  # c
     ],
 )
-def test_moreh_mean_callback(input_shape_dim, device, use_program_cache):
+def test_moreh_mean_callback(input_shape_dim, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):
@@ -259,7 +259,7 @@ def test_moreh_mean_backward_compute_kernel_options(input_shape_dim, compute_ker
         [[3, 4, 5, TILE_HEIGHT * 3 - 15, TILE_WIDTH * 4 - 10], [1]],  # c
     ],
 )
-def test_moreh_mean_backward_callback(input_shape_dim, device, use_program_cache):
+def test_moreh_mean_backward_callback(input_shape_dim, device):
     torch.manual_seed(2024)
     num_program_cache_entries_list = []
     for i in range(2):

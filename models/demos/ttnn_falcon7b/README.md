@@ -1,4 +1,16 @@
-# Falcon7B Demo
+# Falcon7B
+
+## Platforms:
+    Note: This version has been deprecated
+
+## Introduction
+This code was designed for the `tiiuae/falcon-7b-instruct` model version from Huggingface.
+
+Read more about it at [huggingface.co/tiiuae/falcon-7b-instruct](https://huggingface.co/tiiuae/falcon-7b-instruct)
+
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
 
@@ -10,7 +22,7 @@ To run the demo using prewritten prompts for a batch of 32 users run (currently 
 
 `pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' models/demos/ttnn_falcon7b/demo/demo.py`
 
-## Inputs
+### Inputs
 
 A sample of input prompts for 32 users is provided in `input_data.json` in demo directory. If you wish you to run the model using a different set of input prompts you can provide a different path, e.g.:
 

@@ -3,23 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <limits.h>
-#include <tt-metalium/dev_msgs.h>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <string_view>
 #include <unordered_map>
+#include <enchantum/enchantum.hpp>
 
 #include "assert.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,7 +27,8 @@ static_assert(
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
-        std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max(),
+        std::numeric_limits<dev_msgs::go_msg_t::FieldTraits<false, dev_msgs::go_msg_t::Field::dispatch_message_offset>::
+                                element_type>::max(),
     "DISPATCH_MESSAGES_MAX_OFFSET does not match the maximum value of go_msg_t::dispatch_message_offset. "
     "Fix the value in dispatch_settings.hpp");
 
@@ -76,14 +75,13 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
+        .prefetch_ringbuffer_size(1024_KB)
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
         .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
-
-        .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
 
         .build();
 }
@@ -96,12 +94,11 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
         .prefetch_max_cmd_size(32_KB)
         .prefetch_cmddat_q_size(64_KB)
         .prefetch_scratch_db_size(19_KB)
+        .prefetch_ringbuffer_size(70_KB)
         .prefetch_d_buffer_size(128_KB)
 
         .dispatch_size(128_KB)
         .dispatch_s_buffer_size(32_KB)
-
-        .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
         .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
@@ -120,7 +117,7 @@ DispatchSettings DispatchSettings::defaults(
         return eth_defaults(cluster, num_hw_cqs);
     }
 
-    TT_THROW("Default settings for core_type {} is not implemented", magic_enum::enum_name(core_type));
+    TT_THROW("Default settings for core_type {} is not implemented", enchantum::to_string(core_type));
 }
 
 std::vector<std::string> DispatchSettings::get_errors() const {
@@ -170,7 +167,7 @@ DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_
     if (!store.contains(k)) {
         TT_THROW(
             "DispatchSettings is not initialized for CoreType {}, {} CQs",
-            magic_enum::enum_name(core_type),
+            enchantum::to_string(core_type),
             num_hw_cqs);
     }
     return store[k];
@@ -206,9 +203,7 @@ bool DispatchSettings::operator==(const DispatchSettings& other) const {
            prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ && prefetch_d_pages_ == other.prefetch_d_pages_ &&
            dispatch_size_ == other.dispatch_size_ && dispatch_pages_ == other.dispatch_pages_ &&
            dispatch_s_buffer_size_ == other.dispatch_s_buffer_size_ &&
-           dispatch_s_buffer_pages_ == other.dispatch_s_buffer_pages_ &&
-           tunneling_buffer_size_ == other.tunneling_buffer_size_ &&
-           tunneling_buffer_pages_ == other.tunneling_buffer_pages_ && core_type_ == other.core_type_;
+           dispatch_s_buffer_pages_ == other.dispatch_s_buffer_pages_;
 }
 
 bool DispatchSettings::operator!=(const DispatchSettings& other) const { return !(*this == other); }
@@ -242,6 +237,12 @@ DispatchSettings& DispatchSettings::prefetch_scratch_db_size(uint32_t val) {
     return *this;
 }
 
+// Trivial setter for prefetch_ringbuffer_size
+DispatchSettings& DispatchSettings::prefetch_ringbuffer_size(uint32_t val) {
+    this->prefetch_ringbuffer_size_ = val;
+    return *this;
+}
+
 // Setter for prefetch_q_entries and update prefetch_q_size
 DispatchSettings& DispatchSettings::prefetch_q_entries(uint32_t val) {
     this->prefetch_q_entries_ = val;
@@ -268,14 +269,6 @@ DispatchSettings& DispatchSettings::dispatch_size(uint32_t val) {
 DispatchSettings& DispatchSettings::dispatch_s_buffer_size(uint32_t val) {
     this->dispatch_s_buffer_size_ = val;
     this->dispatch_s_buffer_pages_ = this->dispatch_s_buffer_size_ / (1 << DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
-    return *this;
-}
-
-// Setter for tunneling_buffer_size and update tunneling_buffer_pages
-DispatchSettings& DispatchSettings::tunneling_buffer_size(uint32_t val) {
-    this->tunneling_buffer_size_ = val;
-    this->tunneling_buffer_pages_ =
-        this->tunneling_buffer_size_ / (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE);  // match legacy DispatchMemMap
     return *this;
 }
 

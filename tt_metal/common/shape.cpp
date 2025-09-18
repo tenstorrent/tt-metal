@@ -4,10 +4,8 @@
 
 #include "shape.hpp"
 
-#include <boost/container/vector.hpp>
-#include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
 #include <ostream>
@@ -25,7 +23,7 @@ uint64_t Shape::volume() const { return std::accumulate(cbegin(), cend(), uint64
 
 std::array<uint32_t, 4> Shape::to_array_4D() const {
     TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
-    std::array<uint32_t, 4> ret_array;
+    std::array<uint32_t, 4> ret_array{};
     for (int i = 0; i < rank(); i++) {
         ret_array[i] = this->operator[](i);
     }
@@ -70,7 +68,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape) {
     return os;
 }
 
-tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape) {
+tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
     if (shape.rank() == 0) {
         return {};
     }
@@ -78,15 +76,23 @@ tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape)
     auto num_elements = shape.volume();
     // If any dim is 0, volume would be 0
     if (num_elements == 0) {
-        return tt::stl::SmallVector<uint32_t>(shape.rank(), 0);
+        return tt::stl::SmallVector<size_t>(shape.rank(), 0);
     }
 
-    ttnn::SmallVector<uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        num_elements /= shape[index];
+    tt::stl::SmallVector<size_t> strides;
+    for (size_t index = 0; index < shape.rank(); index++) {
+        num_elements /= static_cast<size_t>(shape[index]);
         strides.push_back(num_elements);
     }
     return strides;
 }
 
 }  // namespace tt::tt_metal
+
+nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
+    return ttsl::json::to_json(shape.view());
+}
+
+tt::tt_metal::Shape ttsl::json::from_json_t<tt::tt_metal::Shape>::operator()(const nlohmann::json& json_object) const {
+    return tt::tt_metal::Shape(ttsl::json::from_json<tt::tt_metal::ShapeBase::Container>(json_object));
+}

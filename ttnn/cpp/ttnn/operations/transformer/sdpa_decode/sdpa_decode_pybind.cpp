@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "sdpa_decode.hpp"
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -62,6 +62,7 @@ void py_bind_sdpa_decode(py::module& module) {
                const std::optional<const Tensor>& attn_mask,
                const std::vector<uint32_t>& cur_pos,
                const std::optional<const Tensor>& cur_pos_tensor,
+               const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
@@ -76,6 +77,7 @@ void py_bind_sdpa_decode(py::module& module) {
                     attn_mask,
                     cur_pos,
                     cur_pos_tensor,
+                    attention_sink,
                     scale,
                     memory_config,
                     program_config,
@@ -89,6 +91,7 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("attn_mask").noconvert() = std::nullopt,
             py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
             py::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt,
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
@@ -110,6 +113,7 @@ void py_bind_sdpa_decode(py::module& module) {
                const bool is_causal,
                const std::optional<const Tensor>& attn_mask,
                const std::optional<const Tensor>& cur_pos_tensor,
+               const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
@@ -124,6 +128,7 @@ void py_bind_sdpa_decode(py::module& module) {
                     is_causal,
                     attn_mask,
                     cur_pos_tensor,
+                    attention_sink,
                     scale,
                     memory_config,
                     program_config,
@@ -137,6 +142,109 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("is_causal").noconvert() = true,
             py::arg("attn_mask").noconvert() = std::nullopt,
             py::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt,
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
+
+    using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::flash_multi_latent_attention_decode,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const MLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const bool is_causal,
+               const std::optional<const Tensor>& attn_mask,
+               const std::vector<uint32_t>& cur_pos,
+               const std::optional<const Tensor>& cur_pos_tensor,
+               const std::optional<const Tensor>& attention_sink,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    is_causal,
+                    attn_mask,
+                    cur_pos,
+                    cur_pos_tensor,
+                    attention_sink,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::kw_only(),
+            py::arg("is_causal").noconvert() = true,
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
+            py::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt,
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
+
+    using PagedMLAOperationType = decltype(ttnn::transformer::paged_flash_multi_latent_attention_decode);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::paged_flash_multi_latent_attention_decode,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const PagedMLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const ttnn::Tensor& page_table_tensor,
+               const bool is_causal,
+               const std::optional<const Tensor>& attn_mask,
+               const std::optional<const Tensor>& cur_pos_tensor,
+               const std::optional<const Tensor>& attention_sink,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    page_table_tensor,
+                    is_causal,
+                    attn_mask,
+                    cur_pos_tensor,
+                    attention_sink,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::arg("page_table_tensor").noconvert(),
+            py::kw_only(),
+            py::arg("is_causal").noconvert() = true,
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            py::arg("attention_sink").noconvert() = std::nullopt,
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,

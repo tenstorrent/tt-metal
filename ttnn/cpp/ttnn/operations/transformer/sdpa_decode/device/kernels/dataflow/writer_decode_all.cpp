@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "debug/assert.h"
 
-#include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -15,24 +15,29 @@ void kernel_main() {
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
     constexpr uint32_t DHt = get_compile_time_arg_val(3);   // head dim
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);          // num cores per batch
-    constexpr uint32_t num_cores = get_compile_time_arg_val(8);                    // num running cores in total
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));  // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for sender
-    constexpr bool is_out_sharded = get_compile_time_arg_val(11);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(12);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(13);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(14);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(15);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(16);
-    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(17);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(19);
-    constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(21);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);  // head dim for V
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);  // number of tiles in seqlen of a k/v/mask chunk
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(6);
+    constexpr uint32_t zero_scalar_packed = get_compile_time_arg_val(7);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(8);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(9);           // num cores per batch
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);                    // num running cores in total
+    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));  // semaphore for reducer
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));   // semaphore for sender
+    constexpr bool is_out_sharded = get_compile_time_arg_val(13);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(14);
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(15);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(16);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(17);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(18);
+    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(20);
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(21);
+    constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
+
+    constexpr auto out_args = TensorAccessorArgs<25>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -63,7 +68,7 @@ void kernel_main() {
             cb_wait_front(cb_index_id, 1);
             uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-            cur_pos = index_ptr[cur_batch];
+            cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
         }
 
         if (cur_pos == UINT32_MAX) {
@@ -98,14 +103,13 @@ void kernel_main() {
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
 
-    constexpr uint32_t out_chunk_tiles = PNHt * DHt;
+    constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
     }
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_20;
     constexpr uint32_t cb_intermed_out =
         tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
@@ -114,16 +118,20 @@ void kernel_main() {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
+    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
 
     constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
+    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
     if (is_worker) {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                           // should not be more than one head per core
@@ -136,10 +144,8 @@ void kernel_main() {
     // *** Reducer Compute Below ***
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
-    constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
 
     uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out));
 
@@ -150,11 +156,13 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // generate and send mask to compute if causal
+
     if constexpr (is_causal) {
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
     noc_async_write_barrier();  // #19201 BH hang workaround
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -200,7 +208,11 @@ void kernel_main() {
 
         // Write entire out into its corresponding batch
         uint32_t out_tile_id = out_batch_offset;
-        cb_wait_front(cb_out, out_chunk_tiles);
+        {
+            if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+                cb_wait_front(cb_out, out_chunk_tiles);
+            }
+        }
         noc_async_writes_flushed();
 
         if constexpr (num_kv_heads > 1) {
@@ -279,7 +291,9 @@ void kernel_main() {
                     out_tile_id, out_writer, barrier_count);
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, out_chunk_tiles);
+        if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, out_chunk_tiles);
+        }
     }
 }

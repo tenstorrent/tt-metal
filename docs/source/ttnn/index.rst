@@ -20,14 +20,7 @@ Welcome to TT-NN documentation!
    ttnn/converting_torch_model_to_ttnn
    ttnn/adding_new_ttnn_operation
    ttnn/profiling_ttnn_operations
-   ttnn/dependencies/index.rst
    ttnn/demos
-
-.. toctree::
-   :caption: Models
-
-   tt_metal_models/get_started
-   tt_metal_models/get_performance
 
 .. toctree::
    :caption: Resources

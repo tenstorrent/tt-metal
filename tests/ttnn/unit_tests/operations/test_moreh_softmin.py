@@ -469,7 +469,7 @@ def test_softmin_backward_optional_output_tensor(shape_dim, dtype, device):
         ttnn.bfloat16,
     ],
 )
-def test_softmin_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_softmin_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.05
@@ -500,7 +500,7 @@ def test_softmin_callback(shape_dim_strategy, dtype, device, use_program_cache):
         ttnn.bfloat16,
     ],
 )
-def test_softmin_backward_callback(shape_dim_strategy, dtype, device, use_program_cache):
+def test_softmin_backward_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.05

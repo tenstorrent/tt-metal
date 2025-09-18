@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,13 +8,45 @@ import torch
 import ttnn
 
 from models.utility_functions import (
-    pad_and_fold_conv_activation_for_unity_stride,
     _nearest_y,
     is_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
+    assert stride_h == stride_w
+    assert activation_pyt_nchw_tensor.shape[2] == activation_pyt_nchw_tensor.shape[3]
+    # Fold activation for unity stride
+    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
+    C = _nearest_y(activation_pyt_nchw_tensor.shape[1], 4)
+    # Also, pre-pad the conv left right and top bottom padding
+    activation_pyt_padded = torch.nn.functional.pad(
+        activation_pyt_nchw_tensor, (pad_w, pad_w, pad_h, pad_h, 0, C - activation_pyt_nchw_tensor.shape[1])
+    )
+    # Fold the activation face by stride depth wise i.e. C,H,W -> C*stride_h*stride_w, H/stride_h, W/stride_w
+    assert activation_pyt_padded.shape[2] % stride_h == 0
+    activation_pyt_padded_folded = torch.zeros(
+        [
+            activation_pyt_padded.shape[0],
+            C * stride_h * stride_w,
+            (int)(activation_pyt_padded.shape[2] / stride_h),
+            (int)(activation_pyt_padded.shape[3] / stride_w),
+        ]
+    )
+    for h in range(0, activation_pyt_padded.shape[2], stride_h):
+        for w in range(0, activation_pyt_padded.shape[3], stride_w):
+            folded_h = (int)(h / stride_h)
+            folded_w = (int)(w / stride_w)
+            for i in range(stride_h * stride_w):
+                start_c = i * C
+                activation_pyt_padded_folded[:, start_c : start_c + C, folded_h, folded_w] = activation_pyt_padded[
+                    :, :, h + (int)(i / stride_w), w + (int)(i % stride_w)
+                ]
+
+    return activation_pyt_padded_folded
 
 
 def fold_torch(input_tensor, stride_h, stride_w):
@@ -25,63 +57,34 @@ def fold_torch(input_tensor, stride_h, stride_w):
     return transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
 
 
-def pad_and_fold_with_permute_and_reshape(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
-    # pad
-    C = _nearest_y(activation_pyt_nchw_tensor.shape[1], 4)
-    activation_pyt_padded = torch.nn.functional.pad(
-        activation_pyt_nchw_tensor, (pad_w, pad_w, pad_h, pad_h, 0, C - activation_pyt_nchw_tensor.shape[1])
+@pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
+@pytest.mark.parametrize("channels", [3, 32, 320])
+@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
+    batch_size, height, width = nhw
+    stride_h, stride_w = stride
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    torch_output_tensor = torch.reshape(
+        torch_input_tensor_nhwc, (batch_size, height // stride_h, stride_h, width // stride_w, stride_w, channels)
     )
-    # unpad params
-    n, c, h, w = activation_pyt_padded.shape
-    target_h = h // stride_h
-    target_w = w // stride_w
-    # pad to 256, 256
-    n, c, h, w = activation_pyt_padded.shape
-    pad_h = 256 - h
-    pad_w = 256 - w
-    activation_pyt_padded = torch.nn.functional.pad(activation_pyt_padded, (0, pad_w, 0, pad_h))
-    # transpose
-    n, c, h, w = activation_pyt_padded.shape
-    activation_pyt_padded = torch.permute(activation_pyt_padded, (0, 1, 3, 2))
-    n, c, w, h = activation_pyt_padded.shape
-    # transpose
-    activation_pyt_padded = torch.permute(activation_pyt_padded, (0, 2, 1, 3))
-    n, w, c, h = activation_pyt_padded.shape
-    # reshape
-    activation_pyt_padded = torch.reshape(activation_pyt_padded, (n, w // stride_w, c * stride_w, h))
-    n, w, c, h = activation_pyt_padded.shape
-    # transpose
-    activation_pyt_padded = torch.permute(activation_pyt_padded, (0, 1, 3, 2))
-    n, w, h, c = activation_pyt_padded.shape
-    # reshape
-    activation_pyt_padded = torch.reshape(activation_pyt_padded, (n, w, h // stride_h, c * stride_h))
-    n, w, h, c = activation_pyt_padded.shape
-    # transpose
-    activation_pyt_padded = torch.permute(activation_pyt_padded, (0, 2, 1, 3))
-    n, h, w, c = activation_pyt_padded.shape
-    # unpad
-    activation_pyt_padded = activation_pyt_padded[:, :target_h, :target_w, :]
-    return activation_pyt_padded
-
-
-@pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [3])
-@pytest.mark.parametrize("h", [224])
-@pytest.mark.parametrize("w", [224])
-@pytest.mark.parametrize("pad_h", [3])
-@pytest.mark.parametrize("pad_w", [3])
-@pytest.mark.parametrize("stride_h", [2])
-@pytest.mark.parametrize("stride_w", [2])
-def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, stride_h, stride_w):
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = pad_and_fold_conv_activation_for_unity_stride(
-        torch_input_tensor, pad_h, pad_w, stride_h, stride_w
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 1, 3, 2, 4, 5))
+    torch_output_tensor = torch.reshape(
+        torch_output_tensor, (batch_size, height // stride_h, width // stride_w, channels * stride_h * stride_w)
     )
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 3, 1))
-    torch_output_tensor_new = pad_and_fold_with_permute_and_reshape(
-        torch_input_tensor, pad_h, pad_w, stride_h, stride_w
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
     )
-    assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+    )
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    isequal = torch.equal(torch_output_tensor, tt_output_tensor)
+    assert isequal
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(
@@ -250,9 +253,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
 @pytest.mark.parametrize("pad_w", [3])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-def test_fold_with_permute_reshape_on_device_sharded(
-    device, n, c, h, w, pad_h, pad_w, stride_h, stride_w, use_program_cache
-):
+def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, pad_w, stride_h, stride_w):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -359,7 +360,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-def test_fold_sharded(device, use_program_cache):
+def test_fold_sharded(device):
     torch.manual_seed(0)
 
     for run in range(2):

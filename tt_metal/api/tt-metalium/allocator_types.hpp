@@ -20,7 +20,7 @@ address: bytes
 size: bytes
 */
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
-struct Allocator;
+class Allocator;
 class BankManager;
 
 // Setup what each core-type is

@@ -77,11 +77,11 @@ void calculate_sum_x_squared() {
             }
         }
         mul_binary_tile_init();
-        mul_binary_tile(working_register, working_register);
+        mul_binary_tile(working_register, working_register, working_register);
 
         if (col > 0) {
             add_binary_tile_init();
-            add_binary_tile(accum_register, working_register);
+            add_binary_tile(accum_register, working_register, accum_register);
         }
     }
     tile_regs_commit();
@@ -125,10 +125,10 @@ void calculate_sum_x_squared() {
             }
 
             mul_binary_tile_init();
-            mul_binary_tile(working_register, working_register);
+            mul_binary_tile(working_register, working_register, working_register);
             if (col > 0) {
                 add_binary_tile_init();
-                add_binary_tile(accum_register, working_register);
+                add_binary_tile(accum_register, working_register, accum_register);
             }
         }
 
@@ -297,7 +297,7 @@ void MAIN {
 
             const uint32_t reduction_register = 0;
             reconfig_data_format(cb_rms_before_reduction_intermediate, cb_scaler);
-            reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                 cb_rms_before_reduction_intermediate, cb_scaler, cb_rms_after_reduction_intermediate);
             reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                 cb_rms_before_reduction_intermediate,
@@ -305,7 +305,7 @@ void MAIN {
                 /* tile_idx */ 0,
                 /* tile_idx */ 0,
                 reduction_register);
-            reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_rms_before_reduction_intermediate);
+            reduce_uninit();
 
             const uint32_t eps_register = 1U;
             reconfig_data_format_srca(cb_eps);
@@ -314,7 +314,7 @@ void MAIN {
 
             reconfig_data_format(cb_rms_before_reduction_intermediate, cb_eps);
             add_binary_tile_init();
-            add_binary_tile(reduction_register, eps_register);
+            add_binary_tile(reduction_register, eps_register, reduction_register);
 
             sqrt_tile_init();
             sqrt_tile(reduction_register);

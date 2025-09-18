@@ -17,7 +17,6 @@
 # limitations under the License.
 
 import math
-
 from dataclasses import dataclass
 from enum import IntEnum
 

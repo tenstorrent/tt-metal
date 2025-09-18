@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_blackhole
         ((32, 32, 32, 32), 0),
     ),  # single tile
 )
-def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
+def test_sum_for_dim_hw(device, shape_dim):
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -34,7 +34,7 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
     # print(f"x.sum = {value}")
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
-    tt_npu = ttnn.sum(dev_x, dim)
+    tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
@@ -49,7 +49,7 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
         (32, 32, 32, 32),
     ),  # single tile
 )
-def test_sum_global(device, use_program_cache, shape):
+def test_sum_global(device, shape):
     torch.manual_seed(0)
 
     N = shape[0]
@@ -60,9 +60,9 @@ def test_sum_global(device, use_program_cache, shape):
     input_shape = (N, C, H, W)
     x = 1.0 + torch.ones(input_shape).bfloat16()
 
-    value = x.sum()
+    torch_output = x.sum()
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     tt_npu = ttnn.sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
-    assert torch.equal(tt_dev[0, 0, 0, 0].bfloat16(), torch.Tensor([value]).bfloat16()[0])
+    assert torch.equal(tt_dev.bfloat16(), torch_output.bfloat16())

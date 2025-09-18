@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class Conv:
-    def __init__(
-        self,
-        device,
-        conv_param,
-        conv_pth,
-        activation="",
-    ) -> None:
+    def __init__(self, device, conv_param, conv_pth, activation=None) -> None:
         self.conv_param = conv_param
         self.conv_pth = conv_pth
         self.device = device
@@ -25,31 +20,31 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=False,
         )
+        self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
             shard_layout=conv_param.shard_layout,
-            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
-            enable_act_double_buffer=conv_param.enable_act_double_buffer,
-            enable_split_reader=conv_param.enable_split_reader,
+            enable_act_double_buffer=True,
             output_layout=ttnn.TILE_LAYOUT,
-            transpose_shards=conv_param.transpose_shards,
         )
         config_override = None
         if conv_param.act_block_h is not None:
             self.conv_config.act_block_h_override = conv_param.act_block_h
 
+        if conv_param.num_cores_nhw is not None:
+            shard_grid = get_shard_grid_from_num_cores(conv_param.num_cores_nhw, device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
+
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
+            self.bias = conv_pth.bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        self.weight = conv_pth.weight
 
         if conv_param.shard_layout is None:
             self.input_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -76,25 +71,6 @@ class Conv:
             "conv_config": self.conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            self.weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight,
-                weights_format="OIHW",
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                has_bias=True,
-                **self.conv_kwargs,
-            )
-
-            self.bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.bias,
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                **self.conv_kwargs,
-            )
-            self.weight = ttnn.to_device(self.weight, device)
-            self.bias = ttnn.to_device(self.bias, device)
-
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
 
@@ -107,5 +83,6 @@ class Conv:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x, output_height, output_width

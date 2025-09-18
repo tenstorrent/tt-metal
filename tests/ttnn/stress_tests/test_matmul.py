@@ -1,6 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+import os
 
 import pytest
 
@@ -12,9 +14,17 @@ TEST_CASES = [
     "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_1d_matmul",
 ]
 
-NUM_REPEATS = 5
+NUM_REPEATS = 10
+NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
 
 
-def test_matmul():
+@pytest.fixture
+def use_num_devices_env():
+    os.environ[NUM_DEVICES_ENV_KEY] = "1"
+    yield
+    os.environ.pop(NUM_DEVICES_ENV_KEY)
+
+
+def test_matmul(use_num_devices_env):
     for _ in range(NUM_REPEATS):
-        pytest.main(TEST_CASES)
+        assert pytest.main(TEST_CASES) == pytest.ExitCode.OK

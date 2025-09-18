@@ -14,6 +14,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -22,8 +32,8 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
-    if enable_cache:
-        device.enable_program_cache()
+    if not enable_cache:
+        device.disable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -49,8 +59,9 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
-    if enable_cache:
-        device.enable_program_cache()
+    # respecting the parameters of the test, although cache should be active by default
+    if not enable_cache:
+        device.disable_and_clear_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(output_shape, dtype=torch.bfloat16)
@@ -182,7 +193,7 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h // 2, w * 2)
 
@@ -200,9 +211,9 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [8])
-def test_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     for _ in range(2):
-        run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache)
+        run_reshape_hw_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -394,7 +405,7 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-def test_reshape_tile_program_cache(device, use_program_cache):
+def test_reshape_tile_program_cache(device):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -492,6 +503,38 @@ def test_reshape_int(input_shape, output_shape, device):
 )
 def test_fp32_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 756, 128), (1, 27, 28, 128)),
+        ((1, 256, 16), (16, 256)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 16), (32, 8)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
+def test_int_support(input_shape, output_shape, device, dtype):
+    torch_input_tensor = random_torch_tensor(dtype, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
     input_tensor = ttnn.from_torch(

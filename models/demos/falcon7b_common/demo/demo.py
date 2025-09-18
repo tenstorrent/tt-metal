@@ -9,26 +9,23 @@ from functools import partial
 
 import torch
 import torch.nn.functional as F
-import ttnn
 from loguru import logger
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.falcon7b_common.tests.test_utils import (
-    initialize_kv_cache,
-    load_hf_model,
-    get_num_devices,
-)
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf, check_tokens_match
-from models.utility_functions import (
+from tqdm import tqdm
+from transformers import AutoTokenizer
+
+import ttnn
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     nearest_32,
     tt_tensors_to_torch_tensors,
 )
+from models.common.utils import top_k_top_p_filtering
+from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tqdm import tqdm
-from transformers import AutoTokenizer
-from transformers.generation.utils import top_k_top_p_filtering
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -133,6 +130,7 @@ def run_falcon_demo_kv(
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     json_perf_targets={},  # Optional perf targets for CSV output
     is_ci_env=False,  # Whether is running in CI environment
+    galaxy_type=None,  # "4U" or "6U" when running on WH-Galaxy
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -540,9 +538,12 @@ def run_falcon_demo_kv(
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
+    run_type = f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip"
+    if galaxy_type:
+        run_type += f"_{galaxy_type}"
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip",
+        run_type=run_type,
         ml_model_name=model_version,
         ml_model_type="llm",
         num_layers=num_layers,

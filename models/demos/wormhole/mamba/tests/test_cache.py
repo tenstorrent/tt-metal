@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
 
+import ttnn
 from models.demos.wormhole.mamba.tt.cache import TensorCache
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 @pytest.mark.parametrize("on_host", [True, False])

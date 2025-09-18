@@ -102,7 +102,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     ids=["0", "1", "0_1"],
 )
 @skip_for_grayskull()
-def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
+def test_fast_reduce_nc_with_prgm_caching(dims, device):
     torch.manual_seed(2023)
 
     input_shape_1 = [1, 8, 128, 4096]

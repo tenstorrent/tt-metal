@@ -25,8 +25,8 @@ struct CloneOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle read_kernel_id;
-            tt::tt_metal::KernelHandle write_kernel_id;
+            tt::tt_metal::KernelHandle read_kernel_id{};
+            tt::tt_metal::KernelHandle write_kernel_id{};
             std::vector<CoreCoord> cores;
         };
 
@@ -52,6 +52,8 @@ struct CloneOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,

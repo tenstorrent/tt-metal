@@ -4,17 +4,18 @@
 
 #pragma once
 
+#include <string>
+#include <utility>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <magic_enum/magic_enum.hpp>
-
-namespace py = pybind11;
+#include <enchantum/enchantum.hpp>
 
 template <typename E, typename... Extra>
-py::enum_<E> export_enum(const py::handle& scope, std::string name = "", Extra&&... extra) {
-    py::enum_<E> enum_type(
-        scope, name.empty() ? magic_enum::enum_type_name<E>().data() : name.c_str(), std::forward<Extra>(extra)...);
-    for (const auto& [value, name] : magic_enum::enum_entries<E>()) {
+pybind11::enum_<E> export_enum(const pybind11::handle& scope, const std::string& name = "", Extra&&... extra) {
+    pybind11::enum_<E> enum_type(
+        scope, name.empty() ? enchantum::type_name<E>.data() : name.c_str(), std::forward<Extra>(extra)...);
+    for (const auto [value, name] : enchantum::entries_generator<E>) {
         enum_type.value(name.data(), value);
     }
 

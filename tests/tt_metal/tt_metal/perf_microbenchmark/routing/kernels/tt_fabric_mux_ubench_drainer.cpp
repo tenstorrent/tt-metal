@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// clang-format off
+#include "dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+
+#include <cstddef>
+// clang-format on
+
+constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
+constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(1);
+constexpr size_t status_address = get_compile_time_arg_val(2);
+constexpr size_t termination_signal_address = get_compile_time_arg_val(3);
+constexpr size_t connection_info_address = get_compile_time_arg_val(4);
+constexpr size_t connection_handshake_address = get_compile_time_arg_val(5);
+constexpr size_t sender_flow_control_address = get_compile_time_arg_val(6);
+constexpr size_t channel_base_address = get_compile_time_arg_val(7);
+constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
+
+namespace tt::tt_fabric {
+using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
+using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
+using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
+using DrainerStatus = EDMStatus;
+}  // namespace tt::tt_fabric
+
+void kernel_main() {
+    size_t rt_args_idx = 0;
+    auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t an_available_temporary_addr = 0;
+    for (uint32_t i = 0; i < num_regions_to_clear; i++) {
+        auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        if (an_available_temporary_addr == 0) {
+            an_available_temporary_addr = address;
+        }
+        auto size = get_arg_val<uint32_t>(rt_args_idx++);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
+    auto mux_virtual_coord_x = get_arg_val<uint32_t>(rt_args_idx++);
+    auto mux_virtual_coord_y = get_arg_val<uint32_t>(rt_args_idx++);
+    auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
+    status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
+
+    // This mirrors an EDM interface. The Worker -> EDM interface has the worker communicate to the EDM interface via a
+    // autoinc stream register where the register holds #slots free.
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    const auto conn = &connection_info->read_only[1];
+    const uint32_t mux_dest_stream_id_addr =
+        reinterpret_cast<uint32_t>(conn) + offsetof(fabric_connection_info_t, worker_free_slots_stream_id);
+
+    auto mux_dest_stream_id_addr_aligned = mux_dest_stream_id_addr & ~0xF;
+    auto byte_offset = mux_dest_stream_id_addr - mux_dest_stream_id_addr_aligned;
+
+    noc_async_read(
+        get_noc_addr(mux_virtual_coord_x, mux_virtual_coord_y, mux_dest_stream_id_addr_aligned),
+        reinterpret_cast<uint32_t>(an_available_temporary_addr),
+        16);
+    noc_async_read_barrier();
+    uint32_t slots_free_stream_id = reinterpret_cast<volatile uint8_t*>(an_available_temporary_addr)[byte_offset];
+    for (size_t i = 0; i < 16; i++) {
+        reinterpret_cast<volatile uint8_t*>(an_available_temporary_addr)[i] = 0;
+    }
+
+    init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
+
+    tt::tt_fabric::DrainerChannelBuffer drainer_channel(
+        channel_base_address, BUFFER_SIZE_BYTES, sizeof(PACKET_HEADER_TYPE));
+
+    auto connection_worker_info_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::DrainerChannelClientLocationInfo*>(connection_info_address);
+    connection_worker_info_ptr->edm_read_counter = 0;
+
+    tt::tt_fabric::DrainerChannelWorkerInterface worker_interface(
+        connection_worker_info_ptr,
+        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+        0 /* unused, sender_sync_noc_cmd_buf */,
+        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);
+
+    bool connection_established = false;
+
+    volatile auto termination_signal_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+
+    status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
+    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+        invalidate_l1_cache();
+        bool has_unsent_payload = get_ptr_val(slots_free_stream_id) != NUM_BUFFERS;
+        if (has_unsent_payload) {
+            worker_interface.local_write_counter.increment();
+            worker_interface.local_read_counter.increment();
+            worker_interface.notify_worker_of_read_counter_update();
+            increment_local_update_ptr_val(slots_free_stream_id, 1);
+        }
+        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+            worker_interface, connection_established, slots_free_stream_id);
+    }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    status_ptr[0] = tt::tt_fabric::DrainerStatus::TERMINATED;
+}

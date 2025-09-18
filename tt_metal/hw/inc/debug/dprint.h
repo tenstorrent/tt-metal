@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "risc_common.h"
+
 /*
  * Device-side debug print API for device kernels.
  * Works on either one of NC/BR/TR threads.
@@ -23,6 +25,7 @@
  */
 
 #include <cstdint>
+#include <type_traits>
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
 // TODO(AP): this ifdef doesn't seem to make sense given we include risc_common.h
 // The issue is some files included inside risc_common.h only apply to NC/BRISCS
@@ -350,6 +353,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
         // buffer is full - wait for the host reader to flush+update rpos
         WAYPOINT("DPW");
         while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+            invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
@@ -392,6 +396,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
                 dprint_buffer->aux.wpos = wpos;
                 WAYPOINT("DPW");
                 while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+                    invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
                     internal_::risc_context_switch();
 #endif
@@ -463,6 +468,15 @@ template DebugPrinter operator<< <SETPRECISION>(DebugPrinter, SETPRECISION val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
+
+// This allows printing of any (non char) pointer types as uint32_t
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::remove_cv_t<T>, char>>>
+DebugPrinter operator<<(DebugPrinter dp, T* val) {
+    using KernelPointerType = uint32_t;
+    static_assert(sizeof(KernelPointerType) == sizeof(T*));
+
+    return dp << reinterpret_cast<KernelPointerType>(val);
+}
 
 // Tile printing only supported in kernels
 #if defined(KERNEL_BUILD)

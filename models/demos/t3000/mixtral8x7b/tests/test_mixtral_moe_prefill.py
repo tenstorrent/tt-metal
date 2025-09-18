@@ -1,22 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
+from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
-from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
-from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 @pytest.mark.parametrize(
@@ -28,7 +25,8 @@ from models.utility_functions import (
         1024 * 32,
     ),
 )
-def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, seq_len):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
@@ -66,8 +64,10 @@ def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, 
         },
     )
 
+    tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtMoeLayer(
         mesh_device=t3k_mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         experts=experts,
         args=model_args,

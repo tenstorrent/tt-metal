@@ -2,24 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.t3000.mixtral8x7b.reference.model import Transformer
+from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn_prefill,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    prepare_inputs_ttnn_prefill,
     set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.reference.model import Transformer
-from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class Emb(torch.nn.Module):
@@ -40,7 +40,8 @@ class Emb(torch.nn.Module):
         1024 * 32,
     ),
 )
-def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_seeds, seq_len, is_ci_env):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_mixtral_model_inference_CI(t3k_mesh_device, reset_seeds, seq_len, is_ci_env):
     # Set additional Mistral flag for CI
     if is_ci_env:
         os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"

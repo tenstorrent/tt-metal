@@ -6,7 +6,8 @@
 
 #include <chrono>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <utility>
 
 namespace tt {
 template <typename TimeUnit = std::chrono::nanoseconds>
@@ -27,7 +28,8 @@ struct ScopedTimer {
         }
     }
 
-    ScopedTimer(std::string name_, bool print_duration_ = true) : name(name_), print_duration(print_duration_) {
+    ScopedTimer(std::string name_, bool print_duration_ = true) :
+        name(std::move(name_)), print_duration(print_duration_) {
         this->start = std::chrono::time_point_cast<std::chrono::nanoseconds>(Clock::now());
     }
 
@@ -35,7 +37,7 @@ struct ScopedTimer {
         auto end = std::chrono::time_point_cast<std::chrono::nanoseconds>(Clock::now());
         this->elapsed = std::chrono::duration_cast<TimeUnit>(end - this->start);
         if (print_duration) {
-            tt::log_info(tt::LogTimer, "{} -- elapsed: {}{}", this->name, this->elapsed.count(), time_unit_to_string());
+            log_info(tt::LogTimer, "{} -- elapsed: {}{}", this->name, this->elapsed.count(), time_unit_to_string());
         }
     }
 

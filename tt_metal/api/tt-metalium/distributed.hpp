@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh_socket.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -63,6 +64,13 @@ void ReadShard(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     const MeshCoordinate& coord,
     bool blocking = true) {
+    // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
+    // Tracking removal of free function APIs in this file in this issue.
+    auto mesh_device = mesh_cq.device();
+    if (!mesh_device->is_local(coord)) {
+        return;
+    }
+
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
@@ -77,7 +85,7 @@ template <typename DType>
 void EnqueueWriteMeshBuffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
-    std::vector<DType>& src,
+    const std::vector<DType>& src,
     bool blocking = false) {
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }
@@ -95,19 +103,32 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
+// Make the specified MeshCommandQueue record an event.
+// Host is not notified when this event completes.
+// Can be used for CQ to CQ synchronization.
 MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
+// Make the specified MeshCommandQueue record an event and notify the host when it completes.
+// Can be used for CQ to CQ and host to CQ synchronization.
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
+// Make the specified MeshCommandQueue wait for the completion of an event.
+// This operation is non-blocking on host, however the specified command queue
+// will stall until the event is recorded.
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
 
+// Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
+
+// Query the status of an event tied to a MeshCommandQueue.
+// Returns true if the CQ has completed recording the event, false otherwise.
+bool EventQuery(const MeshEvent& event);
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
@@ -121,6 +142,9 @@ void Synchronize(
     MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+// Returns true if the distributed environment is initialized and world_size > 1.
+bool UsingDistributedEnvironment();
 
 }  // namespace distributed
 }  // namespace tt::tt_metal

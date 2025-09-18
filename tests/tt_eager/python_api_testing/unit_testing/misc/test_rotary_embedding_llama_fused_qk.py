@@ -103,7 +103,6 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     datatype,
     pcc,
     device,
-    use_program_cache,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:

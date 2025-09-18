@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import Optional, Tuple, Union
+
+import torch
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.models.segformer.modeling_segformer import SegformerPreTrainedModel
-from models.demos.segformer.reference.segformer_model import SegformerModelReference
+
 from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
+from models.demos.segformer.reference.segformer_model import SegformerModelReference
 
 
 class SegformerForSemanticSegmentationReference(SegformerPreTrainedModel):

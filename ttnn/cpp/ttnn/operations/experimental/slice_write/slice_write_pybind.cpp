@@ -1,13 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "slice_write_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "cpp/ttnn-pybind/decorators.hpp"
 
+#include "ttnn-pybind/decorators.hpp"
 #include "slice_write.hpp"
-#include "slice_write_pybind.hpp"
 
 namespace ttnn::operations::experimental::slice_write {
 namespace py = pybind11;
@@ -55,9 +59,9 @@ void bind_slice_write(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& output_tensor,
-               const std::array<uint32_t, 4>& start,
-               const std::array<uint32_t, 4>& end,
-               const std::array<uint32_t, 4>& step,
+               const ttnn::SmallVector<uint32_t>& start,
+               const ttnn::SmallVector<uint32_t>& end,
+               const ttnn::SmallVector<uint32_t>& step,
                QueueId queue_id) { return self(queue_id, input_tensor, output_tensor, start, end, step); },
             py::arg("input_tensor"),
             py::arg("output_tensor"),

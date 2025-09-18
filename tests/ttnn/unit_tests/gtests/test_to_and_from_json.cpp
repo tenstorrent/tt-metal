@@ -23,9 +23,9 @@ class TEST_MEMORY_CONFIG : public ::testing::TestWithParam<TestMemoryConfigParam
 
 TEST_P(TEST_MEMORY_CONFIG, SerializeDeserialize) {
     const auto& memory_config = GetParam().memory_config;
-    auto json_object = tt::stl::json::to_json(memory_config);
+    auto json_object = ttsl::json::to_json(memory_config);
 
-    auto deserialized_memory_config = tt::stl::json::from_json<ttnn::MemoryConfig>(json_object);
+    auto deserialized_memory_config = ttsl::json::from_json<ttnn::MemoryConfig>(json_object);
 
     ASSERT_EQ(memory_config, deserialized_memory_config);
 }
@@ -38,17 +38,16 @@ INSTANTIATE_TEST_SUITE_P(
         // Interleaved
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::INTERLEAVED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = std::nullopt
+                ttnn::TensorMemoryLayout::INTERLEAVED,
+                ttnn::BufferType::DRAM
             }
         },
         // Physical shard mode
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+                ttnn::BufferType::DRAM,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
@@ -58,9 +57,9 @@ INSTANTIATE_TEST_SUITE_P(
         // Logical shard mode
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::BLOCK_SHARDED,
+                ttnn::BufferType::DRAM,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
                     {5, 6},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR,
@@ -71,9 +70,9 @@ INSTANTIATE_TEST_SUITE_P(
         // Logical shard mode + custom physical shard shape
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-                .buffer_type = ttnn::BufferType::L1,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+                ttnn::BufferType::L1,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
                     {3, 4},
                     {32, 32},
@@ -90,10 +89,10 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
         ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{CoreCoord{2, 3}, 32, 64, 48, 128, 96};
     auto matmul_program_config = ttnn::operations::matmul::MatmulProgramConfig{matmul_multi_core_reuse_program_config};
 
-    auto json_object = tt::stl::json::to_json(matmul_program_config);
+    auto json_object = ttsl::json::to_json(matmul_program_config);
 
     auto deserialized_matmul_program_config =
-        tt::stl::json::from_json<ttnn::operations::matmul::MatmulProgramConfig>(json_object);
+        ttsl::json::from_json<ttnn::operations::matmul::MatmulProgramConfig>(json_object);
 
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.compute_with_storage_grid_size,

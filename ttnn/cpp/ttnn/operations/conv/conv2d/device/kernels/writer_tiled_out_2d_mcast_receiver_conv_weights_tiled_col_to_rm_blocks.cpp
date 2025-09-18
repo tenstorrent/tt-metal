@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "dataflow_api.h"
 
 #define ENABLE_DEBUG 0
@@ -13,34 +14,23 @@
 
 void kernel_main() {
     // This writer is for output tensor in tile format
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(1);
-
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(8);
 
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(16);
-    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(17);
-    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(18);
-
-    uint32_t i = 2;
-    const uint32_t out_start_tile_id = get_arg_val<uint32_t>(i++);
-    const uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i++);
-    const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
-    i += 1;
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(14);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
 
     // mcast args
+    uint32_t i = 0;
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-    const uint32_t out_aligned_page_size = get_arg_val<uint32_t>(i++);
 
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
@@ -49,7 +39,6 @@ void kernel_main() {
 
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(2);
     bool load_bias = true;
 #endif
 
@@ -61,7 +50,8 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
-            for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
+            for (uint32_t weight_tile_h_outer_i = 0;
+                 weight_tile_h_outer_i < weight_block_height_num_outer * num_blocks_weight_h;
                  weight_tile_h_outer_i++) {
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 // Set weights semaphore value to INVALID
@@ -97,6 +87,5 @@ void kernel_main() {
         }  // out_num_blocks_h
     }  // out_num_blocks_w
 
-    cb_wait_front(cb_id_out0, output_rows_tiles);
     noc_async_write_barrier();
 }

@@ -27,14 +27,13 @@ struct DeviceLocalBufferConfig {
     // Can be DRAM, L1, SYSTEM_MEMORY, L1_SMALL, TRACE.
     BufferType buffer_type = BufferType::DRAM;
 
-    // Can be INTERLEAVED, HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED.
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
-
-    // Must be set for sharded buffer layouts.
-    std::optional<ShardSpecBuffer> shard_parameters;
+    BufferShardingArgs sharding_args;
 
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;
+
+    // Optional: Specify the worker sub device this buffer will be allocated on
+    std::optional<SubDeviceId> sub_device_id = std::nullopt;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -79,7 +78,7 @@ class MeshBuffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_layout,
+        const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
     ~MeshBuffer();
@@ -131,7 +130,7 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
-        buffers_(MeshShape(mesh_device->shape()), nullptr),
+        buffers_(MeshShape(mesh_device->shape())),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
@@ -146,7 +145,7 @@ private:
         DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device) :
-        buffers_(MeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
+        buffers_(MeshShape(mesh_device->shape())),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
@@ -161,7 +160,7 @@ private:
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
-    MeshContainer<std::shared_ptr<Buffer>> buffers_;
+    DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.

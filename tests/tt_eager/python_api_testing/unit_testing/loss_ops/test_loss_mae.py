@@ -68,7 +68,7 @@ class TestMAELoss:
         pt_mae_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
 
         comp_pass_a, comp_out_a = comparison_funcs.comp_allclose(
-            pt_mae_output, torch.tensor(tt_mae_output[0, 0, 0, 0]), atol=1e-1, rtol=1e-1
+            pt_mae_output, torch.tensor(tt_mae_output), atol=1e-1, rtol=1e-1
         )
 
         logger.debug(comp_out_a)
@@ -94,7 +94,7 @@ class TestMAELoss:
         pt_mae_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
 
         comp_pass_a, comp_out_a = comparison_funcs.comp_allclose(
-            pt_mae_output, torch.tensor(tt_mae_output[0, 0, 0, 0]), atol=1e-1, rtol=1e-1
+            pt_mae_output, torch.tensor(tt_mae_output), atol=1e-1, rtol=1e-1
         )
 
         logger.debug(comp_out_a)

@@ -8,7 +8,7 @@
 #include <new>
 #include <utility>
 
-namespace tt::stl {
+namespace ttsl {
 
 // `Indestructible` is a wrapper around `T` that behaves like `T` but does not call the destructor of `T`.
 // This is useful for creating objects with static storage duration: `Indestructible` avoids heap allocation, provides
@@ -45,7 +45,13 @@ public:
 
 private:
     // A buffer of std::byte with alignment of T and size of T
-    alignas(T) std::byte storage_[sizeof(T)];
+    alignas(T) std::byte storage_[sizeof(T)]{};
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

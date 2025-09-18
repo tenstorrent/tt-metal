@@ -81,7 +81,7 @@ struct address_map {
 
     static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3616;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 5072;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
@@ -109,12 +109,18 @@ struct address_map {
     };
 
     static constexpr std::int32_t RISC_LOCAL_MEM_BASE =
-        0xffb00000;  // Actaul local memory address as seen from risc firmware
+        0xffb00000;  // Actual local memory address as seen from risc firmware
                      // As part of the init risc firmware will copy local memory data from
                      // l1 locations listed above into internal local memory that starts
                      // at RISC_LOCAL_MEM_BASE address
 
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
+
+    static constexpr std::uint32_t CRC_ERR_ADDR = 0x1F7C;
+
+    // The following access 64-bit values, low bits located at +4 Byte offset
+    static constexpr std::uint32_t CORR_CW_HI_ADDR = 0x1F90;
+    static constexpr std::uint32_t UNCORR_CW_HI_ADDR = 0x1F98;
 };
 }  // namespace eth_l1_mem

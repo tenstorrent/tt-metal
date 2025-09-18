@@ -17,7 +17,9 @@ void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
     *(sync_ptr) = sync_num;
 #endif
 #else
-    while (*(sync_ptr) != sync_num) { ; }
+    while (*(sync_ptr) != sync_num) {
+        invalidate_l1_cache();
+    }
 #endif
 }
 

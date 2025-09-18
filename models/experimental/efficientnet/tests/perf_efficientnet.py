@@ -8,7 +8,7 @@ from loguru import logger
 import torchvision
 import pytest
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     profiler,
     disable_persistent_kernel_cache,
@@ -41,7 +41,6 @@ def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
 )
 def test_perf_efficientnet_b0(
     device,
-    use_program_cache,
     imagenet_sample_input,
     expected_inference_time,
     expected_compile_time,

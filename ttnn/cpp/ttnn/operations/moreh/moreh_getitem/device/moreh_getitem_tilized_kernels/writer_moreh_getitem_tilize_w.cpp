@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -32,12 +33,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-
-    const InterleavedAddrGen<dst_is_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = 1024 * element_size,
-    };
+    constexpr auto dst_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
 
 #define NOC_MINIMUM_READ_SIZE 32
 
@@ -49,7 +46,7 @@ void kernel_main() {
         uint32_t output_stick_w = i % num_alignment_width;
         uint32_t w_off = output_stick_w * num_elements_per_alignment;
         uint32_t w_start = w_off;
-        uint32_t w_end = min(w_off + num_elements_per_alignment, output_size_w_without_padding);
+        uint32_t w_end = std::min(w_off + num_elements_per_alignment, output_size_w_without_padding);
 
         uint32_t stick_y = (i / num_alignment_width);
         uint32_t stick_x = w_start / FACE_WIDTH;

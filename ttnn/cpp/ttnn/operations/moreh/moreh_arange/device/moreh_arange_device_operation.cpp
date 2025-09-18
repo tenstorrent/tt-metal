@@ -27,11 +27,10 @@ void MorehArangeOperation::validate_inputs(
         return;
     }
     TT_FATAL(output->buffer() != nullptr, "Must have 1 output tensor.");
-    TT_FATAL(
-        dtype == output->get_dtype(), "If output is provided as input, its dtype should match the dtype parameter.");
-    TT_FATAL(output->memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(dtype == output->dtype(), "If output is provided as input, its dtype should match the dtype parameter.");
+    TT_FATAL(output->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
 
-    auto output_layout = output->get_layout();
+    auto output_layout = output->layout();
     if (operation_attributes.untilize_out) {
         TT_FATAL(
             output_layout == Layout::ROW_MAJOR, "Error: output_layout must be Layout::ROW_MAJOR when untilize_out");
@@ -58,7 +57,7 @@ void MorehArangeOperation::validate_on_program_cache_hit(
 MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
     uint32_t num_elems = static_cast<uint32_t>(
@@ -100,7 +99,7 @@ MorehArangeOperation::invoke(
             end,
             step,
             untilize_out,
-            dtype.value_or(any.get_dtype()),
+            dtype.value_or(any.dtype()),
             memory_config.value_or(any.memory_config()),
         },
         tensor_args_t{

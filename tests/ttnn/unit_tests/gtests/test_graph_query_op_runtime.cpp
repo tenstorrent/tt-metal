@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <memory>
 #include <tuple>
@@ -19,14 +19,13 @@
 #include "ttnn/graph/graph_query_op_runtime.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -83,7 +82,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
+        log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 
@@ -96,7 +95,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
+        log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 

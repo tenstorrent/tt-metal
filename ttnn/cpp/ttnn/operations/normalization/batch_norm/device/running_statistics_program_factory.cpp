@@ -4,6 +4,7 @@
 
 #include "running_statistics_device_operation.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
@@ -38,13 +39,12 @@ void set_or_update_runtime_arguments(
 
     const auto ashape = batch_mean_tensor.padded_shape();
     const auto bshape = batch_var_tensor.padded_shape();
-    const auto cshape = c.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(batch_mean_tensor);
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_var_tensor);
     const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.physical_volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -75,7 +75,7 @@ void set_or_update_runtime_arguments(
 
         uint32_t cHtWt = cHt * cWt;
         const auto scalar = momentum;
-        const auto packed_scalar_momentum = batch_mean_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32
+        const auto packed_scalar_momentum = batch_mean_tensor.dtype() == tt::tt_metal::DataType::FLOAT32
                                                 ? std::bit_cast<uint32_t>(scalar)
                                                 : pack_two_bfloat16_into_uint32({scalar, scalar});
         std::array reader_runtime_args = {
@@ -141,13 +141,13 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     const bool running_mean_has_value = running_mean_tensor.has_value();
     const bool running_var_has_value = running_var_tensor.has_value();
 
-    auto a_data_format = datatype_to_dataformat_converter(batch_mean_tensor.get_dtype());
-    auto b_data_format = datatype_to_dataformat_converter(batch_var_tensor.get_dtype());
-    auto c_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    auto d_data_format = running_mean_has_value ? datatype_to_dataformat_converter(running_mean_tensor->get_dtype())
-                                                : DataFormat::Float16_b;
-    auto e_data_format = running_var_has_value ? datatype_to_dataformat_converter(running_var_tensor->get_dtype())
-                                               : DataFormat::Float16_b;
+    auto a_data_format = datatype_to_dataformat_converter(batch_mean_tensor.dtype());
+    auto b_data_format = datatype_to_dataformat_converter(batch_var_tensor.dtype());
+    auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+    auto d_data_format =
+        running_mean_has_value ? datatype_to_dataformat_converter(running_mean_tensor->dtype()) : DataFormat::Float16_b;
+    auto e_data_format =
+        running_var_has_value ? datatype_to_dataformat_converter(running_var_tensor->dtype()) : DataFormat::Float16_b;
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -155,10 +155,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     uint32_t d_single_tile_size = tt_metal::detail::TileSize(d_data_format);
     uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
 
-    uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
-
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -238,16 +235,32 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto [tmp3_cb, tmp3_cb_handle] =
         create_cb(tt::CBIndex::c_11, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
-    auto a_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto b_is_dram = static_cast<uint32_t>(batch_var_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto c_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    const auto d_is_dram =
-        running_mean_has_value and running_mean_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    const auto e_is_dram =
-        running_var_has_value and running_var_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    std::vector<uint32_t> reader_compile_time_args = {
+        batch_mean_tensor_cb,
+        momentum_cb,
+        one_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(running_mean_has_value),
+        static_cast<uint32_t>(running_var_has_value),
+        batch_var_tensor_cb,
+        output_tensor_cb,
+        old_running_mean_tensor_cb,
+        old_running_var_tensor_cb,
+        updated_m_cb,
+        updated_v_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
-    if (batch_mean_tensor.get_dtype() == DataType::FLOAT32) {
+    if (batch_mean_tensor.dtype() == DataType::FLOAT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
     } else {
@@ -261,8 +274,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(
-            {a_is_dram, batch_mean_tensor_cb, momentum_cb, one_cb}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
@@ -270,26 +282,11 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(
-            {
-                b_is_dram,
-                c_is_dram,
-                d_is_dram,
-                e_is_dram,
-                static_cast<uint32_t>(running_mean_has_value),
-                static_cast<uint32_t>(running_var_has_value),
-                batch_var_tensor_cb,
-                output_tensor_cb,
-                old_running_mean_tensor_cb,
-                old_running_var_tensor_cb,
-                updated_m_cb,
-                updated_v_cb,
-            },
-            std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {

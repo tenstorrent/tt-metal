@@ -3,15 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.common.lightweightmodule import LightweightModule
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtMoeLayer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, experts, args, layer_num, dtype):
+    def __init__(self, mesh_device, tt_ccl, state_dict, experts, args, layer_num, dtype):
         super().__init__()
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -60,7 +62,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
+        self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2, keepdim=True)
 
         top2_mask = torch.full((1, 1, 1, 32), fill_value=torch.finfo(torch.float).min)
         top2_mask[:, :, :, :2] = 0.0
@@ -71,7 +73,7 @@ class TtMoeLayer(LightweightModule):
             device=mesh_device,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
+        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2, keepdim=True)
 
         reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
         for i in range(self.tile_size):
@@ -112,7 +114,8 @@ class TtMoeLayer(LightweightModule):
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
-            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
+            mask_B2 = ttnn.typecast(mask_B2, topk_values.get_dtype())
+            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3, keepdim=True)
 
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
@@ -130,7 +133,17 @@ class TtMoeLayer(LightweightModule):
 
         # All gather
         if mode == "prefill":
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
+            output_11BH_gathered = ttnn.experimental.all_gather_async(
+                results_11BH,
+                persistent_output_buffer=None,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
             results_11BH.deallocate(True)
             # Sum reduction
             output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
@@ -138,7 +151,17 @@ class TtMoeLayer(LightweightModule):
             )
             output_11BH_gathered.deallocate(True)
         else:  # Decode mode
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
+            output_11BH_gathered = ttnn.experimental.all_gather_async(
+                results_11BH,
+                persistent_output_buffer=None,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
             results_11BH.deallocate(True)
             # Reduction
             output_11BH_reduced = ttnn.matmul(

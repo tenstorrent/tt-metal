@@ -7,7 +7,7 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -30,8 +30,8 @@ bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float at
         af = static_cast<float>(a);
         bf = static_cast<float>(b);
     } else {
-        af = a.to_float();
-        bf = b.to_float();
+        af = static_cast<float>(a);
+        bf = static_cast<float>(b);
     }
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
@@ -39,10 +39,10 @@ bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float at
     auto absdiff = fabsf(af - bf);
     auto reldenom = fmaxf(fabsf(af), fabsf(bf));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
-    if (result != true) {
-        tt::log_error(tt::LogTest, "Discrepacy: A={}, B={}", af, bf);
-        tt::log_error(tt::LogTest, "   absdiff={}, atol={}", absdiff, atol);
-        tt::log_error(tt::LogTest, "   reldiff={}, rtol={}", absdiff / (reldenom + 1e-6f), rtol);
+    if (!result) {
+        log_error(tt::LogTest, "Discrepacy: A={}, B={}", af, bf);
+        log_error(tt::LogTest, "   absdiff={}, atol={}", absdiff, atol);
+        log_error(tt::LogTest, "   reldiff={}, rtol={}", absdiff / (reldenom + 1e-6f), rtol);
     }
     return result;
 }
@@ -50,7 +50,7 @@ template <typename ValueType>
 bool is_close_vectors(
     const std::vector<ValueType>& vec_a,
     const std::vector<ValueType>& vec_b,
-    std::function<bool(ValueType, ValueType)> comparison_function,
+    const std::function<bool(ValueType, ValueType)>& comparison_function,
     int* argfail = nullptr) {
     TT_FATAL(
         vec_a.size() == vec_b.size(),
@@ -73,7 +73,7 @@ template <typename ValueType, typename PackType>
 bool is_close_packed_vectors(
     const std::vector<PackType>& vec_a,
     const std::vector<PackType>& vec_b,
-    std::function<bool(ValueType, ValueType)> comparison_function,
+    const std::function<bool(ValueType, ValueType)>& comparison_function,
     int* argfail = nullptr) {
     return is_close_vectors(
         unpack_vector<ValueType, PackType>(vec_a),

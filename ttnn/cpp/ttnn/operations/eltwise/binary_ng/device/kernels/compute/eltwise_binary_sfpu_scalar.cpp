@@ -10,13 +10,13 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int32_sfpu.h"
-#include "compute_kernel_api/add_uint32_sfpu.h"
-#include "compute_kernel_api/add_uint16_sfpu.h"
-#include "compute_kernel_api/sub_int32_sfpu.h"
-#include "compute_kernel_api/sub_uint16_sfpu.h"
+#include "compute_kernel_api/add_int_sfpu.h"
+#include "compute_kernel_api/sub_int_sfpu.h"
+#include "compute_kernel_api/mul_int_sfpu.h"
+#include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/quantization.h"
-
+#include "compute_kernel_api/xlogy.h"
+#include "compute_kernel_api/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
@@ -62,7 +62,7 @@ void MAIN {
         copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
-            BINARY_SFPU_OP(i * 2, i * 2 + 1);
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();

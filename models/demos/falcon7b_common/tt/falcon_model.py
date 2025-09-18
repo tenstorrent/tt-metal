@@ -6,19 +6,19 @@ from abc import abstractmethod
 from typing import Optional, Tuple
 
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from tqdm import tqdm
 
-from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
-from models.utility_functions import nearest_32
+import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.falcon7b_common.tests.test_utils import (
     create_prefill_attn_mask_for_sharded_softmax,
-    tt_from_torch,
     get_num_devices,
-    dump_device_profiler,
+    read_device_profiler,
+    tt_from_torch,
 )
-from tqdm import tqdm
+from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtFalconModelShared(torch.nn.Module):
@@ -271,7 +271,7 @@ class TtFalconModelShared(torch.nn.Module):
             layer_output = layer_output[0]
 
             if device_perf_run and idx % 8 == 0:
-                dump_device_profiler(self.mesh_device)
+                read_device_profiler(self.mesh_device)
 
         # apply final norm layer
         layer_output = layernorm(

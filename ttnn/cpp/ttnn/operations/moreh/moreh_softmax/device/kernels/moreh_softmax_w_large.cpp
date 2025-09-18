@@ -7,7 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -34,13 +34,12 @@ void MAIN {
         if (Wt == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            reduce_tile_to_cb<false, PoolType::MAX, REDUCE_DIM>(
-                cb_tmp, cb_bcast_scaler, cb_max, Wt, /*pop0=*/1, /*pop1=*/0);
+            reduce_tile_to_cb<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, cb_max, Wt, /*pop0=*/1, /*pop1=*/0);
         } else {
             cb_reserve_back(cb_max, onetile);
 
             tile_regs_acquire();
-            reduce_init_delta_with_dt<false, PoolType::MAX, REDUCE_DIM>(cb_max, cb_in0, cb_bcast_scaler);
+            reduce_init_delta_with_dt<PoolType::MAX, REDUCE_DIM>(cb_max, cb_in0, cb_bcast_scaler);
             for (uint32_t w = 0; w < Wt - 1; ++w) {
                 cb_wait_front(cb_in0, onetile);
 
@@ -49,7 +48,7 @@ void MAIN {
 
                 cb_pop_front(cb_in0, onetile);
             }
-            reduce_revert_delta(cb_max);
+            reduce_uninit();
             tile_regs_commit();
 
             tile_regs_wait();
@@ -68,9 +67,9 @@ void MAIN {
             copy_tile(cb_max, 0, dst0);
 
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_init_delta_with_dt<false, PoolType::MAX, REDUCE_DIM>(cb_max, cb_tmp, cb_bcast_scaler);
+            reduce_init_delta_with_dt<PoolType::MAX, REDUCE_DIM>(cb_max, cb_tmp, cb_bcast_scaler);
             reduce_tile<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, 0, bcast_scaler0, dst0);
-            reduce_revert_delta(cb_max);
+            reduce_uninit();
             tile_regs_commit();
 
             tile_regs_wait();
@@ -128,11 +127,11 @@ void MAIN {
 
 #ifdef LOG
         // compute log(sum)
-        reduce_and_log_tile_to_cb<false, PoolType::SUM, REDUCE_DIM>(
+        reduce_and_log_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
             cb_add, cb_bcast_scaler, cb_recipsumexps, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
 #else
         // compute 1/sum(exp(x))
-        reduce_and_recip_tile_to_cb<false, PoolType::SUM, REDUCE_DIM>(
+        reduce_and_recip_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
             cb_add, cb_bcast_scaler, cb_recipsumexps, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
 #endif
 

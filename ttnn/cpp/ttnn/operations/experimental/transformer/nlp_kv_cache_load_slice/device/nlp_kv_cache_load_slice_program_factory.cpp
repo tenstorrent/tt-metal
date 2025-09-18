@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
@@ -22,7 +23,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
     auto input_buffer = input_tensor.buffer();
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
 
     std::vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
 
@@ -31,7 +32,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+    for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         // reader and writer kernel args
@@ -50,14 +51,12 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    const auto output_shape = output.get_padded_shape();
-    const auto input_shape = a.get_padded_shape();
+    const auto output_shape = output.padded_shape();
+    const auto& input_shape = a.padded_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::IDevice* device = a.device();
-
     auto shard_spec = output.shard_spec().value();
     auto all_cores = shard_spec.grid;
     auto num_cores_total = all_cores.num_cores();
@@ -72,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -90,17 +89,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
         (input_shape[-2] / TILE_HEIGHT - num_unpadded_tiles_seqlen_dim) * (input_shape[-1] / TILE_WIDTH);
 
     // Reader compile-time args
-    // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
-    // Reader
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_is_dram,
-                                                      (std::uint32_t)num_tiles_per_core,
-                                                      (std::uint32_t)num_unpadded_tiles_head_dim,
-                                                      (std::uint32_t)num_unpadded_tiles_seqlen_dim,
-                                                      (std::uint32_t)num_padded_tiles_seqlen_dim,
-                                                      (std::uint32_t)num_cores_total};
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)num_tiles_per_core,
+        (std::uint32_t)num_unpadded_tiles_head_dim,
+        (std::uint32_t)num_unpadded_tiles_seqlen_dim,
+        (std::uint32_t)num_padded_tiles_seqlen_dim,
+        (std::uint32_t)num_cores_total};
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/device/kernels/dataflow/"
@@ -137,7 +132,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         auto dst_tensor_buffer = dst_tensor.buffer();
 

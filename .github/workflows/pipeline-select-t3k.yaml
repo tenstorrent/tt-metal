@@ -51,6 +51,8 @@ run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -58,6 +60,8 @@ jobs:
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -119,7 +123,7 @@ jobs:
   t3000-profiler-tests:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}

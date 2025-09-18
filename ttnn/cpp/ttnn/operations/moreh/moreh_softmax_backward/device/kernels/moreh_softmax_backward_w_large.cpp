@@ -7,7 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -51,7 +51,7 @@ void MAIN {
             }
         }
 
-        reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)
@@ -83,7 +83,7 @@ void MAIN {
         }
 
         // step 2, compute sum(y * dy)
-        reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {

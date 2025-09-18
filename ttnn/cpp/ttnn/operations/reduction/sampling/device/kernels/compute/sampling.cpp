@@ -34,7 +34,9 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     rand_scale.f = 1;
     uint32_t rand_from = 0;
 
-    rand_tile_init(seed);
+    if (seed != 0) {
+        rand_tile_init(seed);
+    }
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
@@ -102,7 +104,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
-void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -117,9 +119,9 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             cb_pop_front(in0_cb, 1);
-            cb_reserve_back(in0_cb, 1);
-            pack_tile(0, in0_cb);
-            cb_push_back(in0_cb, 1);
+            cb_reserve_back(out_cb, 1);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
             release_dst();
         }
     }
@@ -161,7 +163,7 @@ void reduce_c() {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
     reconfig_data_format(in0_cb, scale_cb);
-    reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
@@ -183,7 +185,7 @@ void reduce_c() {
         release_dst();
     }
 
-    reduce_revert_delta<reduce_dim>(out_cb);
+    reduce_uninit();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
@@ -342,6 +344,36 @@ void top_k() {
     sfpu::_init_sfpu_config_reg();
 }
 
+template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
+void mul_block_bcast_scalar_inplace() {
+    // Precondition: in0_cb has num_tiles produced
+    // Precondition: in1_scalar_cb has 1 produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_scalar_cb has 1 produced
+
+    uint32_t dst_tiles = num_tiles;
+    uint32_t granularity = 1;
+
+    reconfig_data_format(in0_cb, in1_scalar_cb);
+    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_scalar_cb, 1);
+
+    for (uint32_t g = 0; g < granularity; ++g) {
+        acquire_dst();
+        for (uint32_t i = 0; i < dst_tiles; ++i) {
+            mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, i, 0, i);
+        }
+        cb_pop_front(in0_cb, dst_tiles);
+        cb_reserve_back(in0_cb, dst_tiles);
+        for (uint32_t i = 0; i < dst_tiles; ++i) {
+            pack_tile(i, in0_cb);
+        }
+        cb_push_back(in0_cb, dst_tiles);
+        release_dst();
+    }
+}
+
 void MAIN {
     constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
@@ -357,12 +389,14 @@ void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(10);
     constexpr uint32_t Wt = get_compile_time_arg_val(11);
     constexpr uint32_t logWt = get_compile_time_arg_val(12);
-    constexpr uint32_t nearest32_K = get_compile_time_arg_val(13);
-    constexpr uint32_t logk = get_compile_time_arg_val(14);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(15);
-    constexpr uint32_t seed = get_compile_time_arg_val(16);
-
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
+    constexpr uint32_t seed = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
+    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
     generate_rand_tile(rand_tile_index, seed);
+
+    const uint32_t nearest32_K = 32;
+    const uint32_t logk = 5;  // log(32)
 
     // top-k
     top_k<
@@ -378,17 +412,20 @@ void MAIN {
         values_cb_index,
         output_ind_cb_index,
         true>();
+    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
+
+    // scale temperature
 
     // mask out all values except the top-k
-    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     cb_wait_front(topk_mask_cb_index, Kt);
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
-
+    mul_block_bcast_scalar_inplace<values_cb_index, temp_cb_index, Ht * Kt>();
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
     recip_block_inplace(cb_cur_sum, Ht);
-    mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
+    mul_block_bcast_cols(values_cb_index, cb_cur_sum, cb_local_vals, Ht, Kt);
 }
 }  // namespace NAMESPACE

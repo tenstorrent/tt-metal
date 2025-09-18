@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_linear_backward_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -23,8 +25,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     Program program{};
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& bias_grad_shape = bias_grad.get_logical_shape();
-    const auto& output_grad_shape_wo_padding = output_grad.get_logical_shape();
+    const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -36,8 +37,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t mask_w =
         do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
-    const auto& output_grad_shape = output_grad.get_padded_shape();
-    uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
+    const auto& output_grad_shape = output_grad.padded_shape();
+    uint32_t batch_num = output_grad.physical_volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / constants::TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / constants::TILE_WIDTH;
     uint32_t num_tiles = batch_num * Ht;
@@ -48,7 +49,6 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     // This should allocate a DRAM buffer on the device
     IDevice* device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto arch = device->arch();
     const auto num_cores_y = grid.y;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -70,7 +70,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t out0_t = 1;
     const uint32_t im0_t = 1;
     const uint32_t im1_t = 1;
-    auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
+    auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
 
     CreateCircularBuffer(
         program,
@@ -88,9 +88,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad)), packed_scaler_value};
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler_value};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
@@ -105,7 +106,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);

@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/decorators.hpp"
 
@@ -40,13 +41,14 @@ struct ConvTranpose2dOperation {
         std::array<uint32_t, 2> output_padding = std::array<uint32_t, 2>{0, 0},
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
+        const std::optional<const DataType>& dtype = std::nullopt,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool mirror_kernel = true,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 
     static Result invoke(
         QueueId queue_id,
@@ -64,13 +66,14 @@ struct ConvTranpose2dOperation {
         std::array<uint32_t, 2> output_padding = std::array<uint32_t, 2>{0, 0},
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool mirror_kernel = true,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 };
 
 }  // namespace conv_transpose2d

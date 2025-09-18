@@ -5,6 +5,7 @@
 #include "moreh_norm_backward_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
@@ -33,10 +34,10 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
-        return output_grad.get_logical_shape();
+        return output_grad.logical_shape();
     }
 
-    auto shape = input_grad.get_logical_shape();
+    auto shape = input_grad.logical_shape();
     auto rank = shape.rank();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
@@ -62,7 +63,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto& input_grad_shape = input_grad.get_logical_shape();
+    const auto& input_grad_shape = input_grad.logical_shape();
     const auto input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
@@ -85,7 +86,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         }
     }
 
-    const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
+    const auto num_input_grad_tiles = input_grad.physical_volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -110,7 +111,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input(==x)
@@ -164,12 +165,12 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
         "writer_moreh_norm_backward.cpp";
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(output)),
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(input_grad_rank)};
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_grad_rank)};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 

@@ -10,8 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-#include <magic_enum/magic_enum.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;
@@ -24,12 +22,13 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
     auto& tensor = input_tensors.at(0);
 
-    TT_FATAL(tensor.get_layout() == Layout::TILE, "Only tilized inputs supported.");
+    TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
-        tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
+        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Only interleaved inputs supported.");
     TT_FATAL(
-        tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B ||
-            tensor.get_dtype() == DataType::FLOAT32,
+        tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
+            tensor.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -38,7 +37,7 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) c
 std::vector<TensorSpec> LayerNormPreAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = input_tensors.at(0).get_logical_shape();
+    auto output_shape = input_tensors.at(0).logical_shape();
     uint32_t num_tiles_w = 1;
     if (this->norm_type == LayerNormDistributedType::LAYERNORM) {
         num_tiles_w = 2;
@@ -53,7 +52,8 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     const auto& a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    return layernorm_pre_allgather_multi_core(a, output_tensor, this->norm_type, this->compute_kernel_config);
+    return layernorm_pre_allgather_multi_core(
+        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid);
 }
 
 }  // namespace ttnn::operations::normalization

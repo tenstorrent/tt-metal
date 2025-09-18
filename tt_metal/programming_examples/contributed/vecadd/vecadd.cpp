@@ -6,6 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -44,8 +45,8 @@ std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool 
 
 CBHandle MakeCircularBuffer(
     Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
-    return CreateCircularBuffer(program, core, cb_src0_config);
+    CircularBufferConfig cb_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
+    return CreateCircularBuffer(program, core, cb_config);
 }
 
 // Circular buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.
@@ -78,6 +79,9 @@ void help(std::string_view program_name) {
     exit(0);
 }
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main(int argc, char** argv) {
     int seed = std::random_device{}();
     int device_id = 0;
@@ -120,9 +124,9 @@ int main(int argc, char** argv) {
     const uint32_t tiles_per_cb = 4;
     // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
     // and for the compute cores to stream data out.
-    CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
+    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);
@@ -138,19 +142,30 @@ int main(int argc, char** argv) {
     // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result
     // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
     // output buffer C.
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
         core,
         ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 
@@ -182,8 +197,8 @@ int main(int argc, char** argv) {
     bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
     for (int i = 0; i < n; i++) {
-        std::cout << "  " << a_bf16[i].to_float() << " + " << b_bf16[i].to_float() << " = " << c_bf16[i].to_float()
-                  << "\n";
+        std::cout << "  " << static_cast<float>(a_bf16[i]) << " + " << static_cast<float>(b_bf16[i]) << " = "
+                  << static_cast<float>(c_bf16[i]) << "\n";
     }
     std::cout << std::flush;
 

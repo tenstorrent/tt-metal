@@ -94,7 +94,6 @@ def test_create_head_interleaved(
     batch,
     parallel_factor,
     device,
-    use_program_cache,
     is_dram,
 ):
     torch.manual_seed(0)
@@ -197,7 +196,6 @@ def test_create_head_max_width_shard(
     head_dim,
     batch,
     device,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 
@@ -219,7 +217,7 @@ def run_test_create_min_width_shard(
 ):
     # Split Heads
     if not overlap_coregrid and (slice_size >= 32 if slice_size is not None else batch >= 32):
-        # Test with smaller batch size for CI to pass on devices not utlizing full coregrid
+        # Test with smaller batch size for CI to pass on devices not utilizing full coregrid
         pytest.skip(
             "Skipping tests for batch_per_device>=32 for non-overlapping coregrid as CI device does not support full coregrid"
         )
@@ -353,7 +351,6 @@ def test_create_min_width_shard(
     head_dim,
     device,
     overlap_coregrid,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 
@@ -391,7 +388,6 @@ def test_create_heads_with_slice(
     overlap_coregrid,
     batch_offset,
     slice_size,
-    use_program_cache,
 ):
     torch.manual_seed(0)
     batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
@@ -441,7 +437,6 @@ def test_create_min_width_shard_subcoregrid(
     n_local_kv_heads,
     head_dim,
     overlap_coregrid,
-    use_program_cache,
     sub_core_grids,
 ):
     torch.manual_seed(0)
@@ -554,7 +549,6 @@ def test_create_width_shard_by_head(
     n_local_kv_heads,
     head_dim,
     device,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 

@@ -11,6 +11,6 @@ class YOLOv4Runner:
         self.model = TtYOLOv4(parameters, device)
         self.resolution = resolution
 
-    def run(self, input):
+    def run(self, input, mesh_composer=None):
         ttnn_output_tensor = self.model(input)
-        return get_model_result(ttnn_output_tensor, self.resolution)
+        return get_model_result(ttnn_output_tensor, self.resolution, mesh_composer=mesh_composer)

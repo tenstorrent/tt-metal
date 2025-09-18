@@ -11,7 +11,6 @@ from models.demos.yolov4.tests.pcc.test_ttnn_yolov4 import run_yolov4
 def test_yolov4(device, reset_seeds, model_location_generator):
     run_yolov4(
         device,
-        reset_seeds,
         model_location_generator,
         True,
         (640, 640),

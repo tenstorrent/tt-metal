@@ -23,13 +23,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
     const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     TT_FATAL(
-        input_tensor.get_padded_shape()[3] % (num_q_heads + (2 * num_kv_heads_val)) == 0,
+        input_tensor.padded_shape()[3] % (num_q_heads + (2 * num_kv_heads_val)) == 0,
         "Flattened hidden dimension {} must be a multiple of the combined Q {}, K {} and V {} heads",
-        input_tensor.get_padded_shape()[3],
+        input_tensor.padded_shape()[3],
         num_q_heads,
         num_kv_heads_val,
         num_kv_heads_val);
-    const uint32_t head_dim = input_tensor.get_padded_shape()[3] / (num_q_heads + (2 * num_kv_heads_val));
+    const uint32_t head_dim = input_tensor.padded_shape()[3] / (num_q_heads + (2 * num_kv_heads_val));
     auto optional_outputs = std::vector<std::optional<Tensor>>{};
     if (optional_output_tensors.has_value()) {
         optional_outputs = {optional_output_tensors.value().begin(), optional_output_tensors.value().end()};
@@ -43,23 +43,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
         optional_outputs,
         queue_id);
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
-}
-
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::invoke(
-    const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const std::optional<uint32_t> num_kv_heads,
-    const bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor,
-        num_q_heads,
-        num_kv_heads,
-        transpose_k_heads,
-        memory_config,
-        std::move(optional_output_tensors));
 }
 
 }  // namespace ttnn::operations::experimental::transformer

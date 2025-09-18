@@ -14,6 +14,7 @@ void MAIN {
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     uint32_t cb_in_idx = get_compile_time_arg_val(2);
     uint32_t cb_out_idx = get_compile_time_arg_val(3);
+    compute_kernel_hw_startup(cb_in_idx, cb_out_idx);
     tilize_init(cb_in_idx, per_core_block_tile_cnt, cb_out_idx);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {

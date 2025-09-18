@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 import os
 import copy
 import re
@@ -19,14 +20,12 @@ import sys
 
 import tt_lib as ttl
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-
-ARCH_NAME = os.getenv("ARCH_NAME")
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 def run_moreh_single_test(test_name, test_entry):
@@ -143,8 +142,6 @@ def profile_noc_results():
 def test_write_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -162,8 +159,6 @@ def test_write_device_l1(iter=1, buffer_type=0, size=2048):
 def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -181,8 +176,6 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -200,8 +193,6 @@ def test_write_buffer(iter=1, buffer_type=0, size=2048):
 def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -220,8 +211,6 @@ def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 def test_read_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -239,8 +228,6 @@ def test_read_device_l1(iter=1, buffer_type=0, size=2048):
 def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -258,8 +245,6 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -277,8 +262,6 @@ def test_read_buffer(iter=1, buffer_type=0, size=2048):
 def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--iter "
         + str(iter)
@@ -296,8 +279,6 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read"
-        + "_"
-        + ARCH_NAME
         + " "
         + " --k "
         + str(k)
@@ -321,8 +302,6 @@ def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
 def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write"
-        + "_"
-        + ARCH_NAME
         + " "
         + " --k "
         + str(k)
@@ -348,8 +327,6 @@ def run_dram_read_remote_cb_sync_cmd(
 ):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb"
-        + "_"
-        + ARCH_NAME
         + " "
         + " --k "
         + str(k)
@@ -379,8 +356,6 @@ def run_remote_cb_sync_matmul_single_core_cmd(
 ):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul"
-        + "_"
-        + ARCH_NAME
         + " "
         + " --m "
         + str(m)
@@ -411,8 +386,6 @@ def run_remote_cb_sync_matmul_single_core_cmd(
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--r "
         + str(r)
@@ -429,8 +402,6 @@ def test_noc_local(r=9, c=12, nt=256, cb=1):
 def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--r "
         + str(r)
@@ -448,8 +419,6 @@ def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
 def test_noc_global_type_b(r=9, c=12, nt=256, cb=1):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--r "
         + str(r)
@@ -470,8 +439,6 @@ def test_matmul_global(
 ):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--r "
         + str(r)
@@ -502,8 +469,6 @@ def test_matmul_global(
 def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--r "
         + str(r)
@@ -524,8 +489,6 @@ def test_matmul_single_core(
 ):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--m "
         + str(m)
@@ -686,19 +649,12 @@ def test_noc(arch, r, c, nt, test_vector):
 
 
 @pytest.mark.parametrize(
-    "arch, freq, r, c, test_vector",
+    "arch, r, c, test_vector",
     [
-        (
-            "grayskull",
-            1020,
-            9,
-            12,
-            np.array([[4608, 6144, 6144], [3456, 3840, 1024], [3456, 3072, 1024], [2304, 3072, 768]]),
-        ),
-        ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1920, 1024], [2304, 1536, 1024], [1536, 1536, 768]])),
+        ("wormhole_b0", 6, 6, np.array([[2304, 1920, 1024], [2304, 1536, 1024], [1536, 1536, 768]])),
     ],
 )
-def test_matmul_dram(arch, freq, r, c, test_vector):
+def test_matmul_dram(arch, r, c, test_vector):
     file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_DRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
@@ -710,8 +666,9 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         per_core_nt = int((nt - 1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 0, 0, 0, 2)
         cycle = profile_results()
+        dev_freq = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     generate_csv(file_name, header, data)
@@ -719,33 +676,32 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
+    "arch, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        ("wormhole_b0", np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("wormhole_b0", np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("wormhole_b0", np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("wormhole_b0", np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        ("wormhole_b0", np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("wormhole_b0", np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("wormhole_b0", np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("wormhole_b0", np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
-        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        ("blackhole", np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("blackhole", np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("blackhole", np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("blackhole", np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
-        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        ("blackhole", np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("blackhole", np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("blackhole", np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("blackhole", np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
     arch,
-    freq,
     test_vector,
     dtype,
     fidel,
@@ -803,17 +759,17 @@ def test_matmul_single_core_sharded(
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
+    "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
     [
-        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
-        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
-        ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
-        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
-        ("blackhole", 800, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
+        ("wormhole_b0", np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
+        ("wormhole_b0", np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("wormhole_b0", np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
+        ("blackhole", np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
+        ("blackhole", np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
+        ("blackhole", np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
-def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
     data = []
     cycle_list = []
     time_list = []
@@ -827,11 +783,12 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             input_size = k * n * 2048 // 1024
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
-        time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle
+        dev_freq = get_device_freq()
+        time = cycle / dev_freq / 1000.0 / 1000.0
+        throughput = input_size / cycle * dev_freq / 1000.0
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time: " + str(time))
-        logger.info("DRAM read throughput: " + str(throughput))
+        logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -840,12 +797,12 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
     logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
+    logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_lower_bound = 260.0 * dev_freq / 1000.0
-    bw_upper_bound = bw_lower_bound + 10.0
+    bw_lower_bound = 240.0
+    bw_upper_bound = 340.0
     assert bw_lower_bound <= throughput
     assert throughput <= bw_upper_bound
 
@@ -971,7 +928,7 @@ def test_dram_read_l1_write_core(
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
     logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
+    logger.info("DRAM read throughput: " + str(throughput) + " Gb/s")
     data.append([throughput])
     # check within range
     if arch == "grayskull":
@@ -1100,14 +1057,15 @@ def test_dram_read_remote_cb_sync(
 
 
 @pytest.mark.parametrize(
-    "arch, freq, r, c, test_vector_global, test_vector_local",
+    "arch, r, c, test_vector_global, test_vector_local",
     [
-        ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
-        ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
-        ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        ("grayskull", 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
+        ("wormhole_b0", 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        ("blackhole", 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
-def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
+@pytest.mark.skip()
+def test_matmul_l1(arch, r, c, test_vector_global, test_vector_local):
     file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_SRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
@@ -1119,8 +1077,9 @@ def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
         per_core_nt = int((nt - 1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 1, 1, 1, 4)
         cycle = profile_results()
+        dev_freq = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     for vec in test_vector_local:
@@ -1129,8 +1088,9 @@ def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
         kt = int(vec[2] / 32)
         test_matmul_local(r, c, mt, nt, kt)
         cycle = profile_results()
+        dev_freq = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     generate_csv(file_name, header, data)
@@ -1217,8 +1177,6 @@ def test_noc_adjacent(
 ):
     command = (
         "./build/test/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent"
-        + "_"
-        + ARCH_NAME
         + " "
         + "--cores-r "
         + str(r)

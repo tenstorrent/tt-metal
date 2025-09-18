@@ -38,12 +38,9 @@ TIMEOUT = 30
 # output_layout
 # has_bias
 # enable_act_double_buffer
-# enable_split_reader
-# enable_subblock_padding
 # groups
 # override_sharding_config
 # core_grid
-# use_shallow_conv_variant
 # deallocate_activation
 # enable_auto_formatting
 # padded_input_channels
@@ -56,7 +53,6 @@ TIMEOUT = 30
 # groups
 # override_sharding_config
 # core_grid
-# use_shallow_conv_variant
 # deallocate_activation
 
 # Keeping rest of the params constant
@@ -72,8 +68,6 @@ TIMEOUT = 30
 # output_layout
 # has_bias
 # enable_act_double_buffer
-# enable_split_reader
-# enable_subblock_padding
 # enable_auto_formatting
 # activations_dtype
 # weights_dtype
@@ -108,8 +102,6 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [False],
-        "enable_split_reader": [False],
-        "enable_subblock_padding": [False],
         # Parameters-to-check starts
         "activations_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "weights_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -125,7 +117,6 @@ parameters = {
         "groups": [1],
         "override_sharding_config": [False],
         "core_grid": [None],
-        "use_shallow_conv_variant": [False],
         "deallocate_activation": [False],
         "enable_auto_formatting": [False],
         "padded_input_channels": [None],
@@ -147,8 +138,6 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [False],
-        "enable_split_reader": [False],
-        "enable_subblock_padding": [False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -168,7 +157,6 @@ parameters = {
             ((0, 0), (4, 4), (0, 6), (1, 6)),  # Uneven shape, 27 cores
             ((0, 0), (5, 5), (0, 6), (2, 6)),  # Uneven shape, 39 cores
         ],
-        "use_shallow_conv_variant": [True],
         "deallocate_activation": [True],
         # Parameters-to-check ends
         "enable_auto_formatting": [False],
@@ -191,8 +179,6 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [True, False],
-        "enable_split_reader": [True, False],
-        "enable_subblock_padding": [True, False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -201,7 +187,6 @@ parameters = {
         "groups": [1],
         "override_sharding_config": [False],
         "core_grid": [None],  # ignored
-        "use_shallow_conv_variant": [False],
         "deallocate_activation": [False],
         "enable_auto_formatting": [False],
         "padded_input_channels": [None],
@@ -225,8 +210,6 @@ def run(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
-    enable_subblock_padding,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -235,7 +218,6 @@ def run(
     groups,
     override_sharding_config,
     core_grid,
-    use_shallow_conv_variant,
     deallocate_activation,
     enable_auto_formatting,
     padded_input_channels=None,
@@ -250,8 +232,6 @@ def run(
         output_layout,
         has_bias,
         enable_act_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding,
         activations_dtype,
         weights_dtype,
         math_fidelity,
@@ -260,7 +240,6 @@ def run(
         groups,
         override_sharding_config,
         core_grid,
-        use_shallow_conv_variant,
         deallocate_activation,
         enable_auto_formatting,
         device,

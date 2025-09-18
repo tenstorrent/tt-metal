@@ -13,6 +13,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -21,9 +22,10 @@ public:
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
-    explicit MeshShape(uint32_t x);
-    MeshShape(uint32_t x, uint32_t y);
-    MeshShape(uint32_t x, uint32_t y, uint32_t z);
+    // The values s0...sn are assumed to be supplied in row-major order (from outer dim to inner dim).
+    explicit MeshShape(uint32_t s);
+    MeshShape(uint32_t s0, uint32_t s1);
+    MeshShape(uint32_t s0, uint32_t s1, uint32_t s2);
 
     explicit MeshShape(const tt::stl::SmallVector<uint32_t>& shape);
     explicit MeshShape(tt::stl::SmallVector<uint32_t>&& shape);
@@ -38,6 +40,9 @@ public:
 
     // Returns the total number of elements in the mesh.
     size_t mesh_size() const;
+
+    // Returns true if the mesh shape is in a line topology: at most 1 dimension can be non-unit.
+    bool is_line_topology() const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
@@ -56,15 +61,13 @@ private:
     tt::stl::SmallVector<size_t> strides_;
 };
 
-// Returns true if the mesh shape is in a line topology: at most 1 dimension can be non-unit.
-bool is_line_topology(const MeshShape& shape);
-
 class MeshCoordinate {
 public:
     // Shorthands for constructing 1D, 2D and 3D coordinates.
-    explicit MeshCoordinate(uint32_t x);
-    MeshCoordinate(uint32_t x, uint32_t y);
-    MeshCoordinate(uint32_t x, uint32_t y, uint32_t z);
+    // The values c0...cn are assumed to be supplied in row-major order (from outer dim to inner dim).
+    explicit MeshCoordinate(uint32_t c);
+    MeshCoordinate(uint32_t c0, uint32_t c1);
+    MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2);
 
     // Constructs a generic N-dimensional coordinate.
     explicit MeshCoordinate(tt::stl::Span<const uint32_t> coords);
@@ -78,8 +81,22 @@ public:
     // Returns the coordinate values as a span.
     tt::stl::Span<const uint32_t> coords() const;
 
-    // Returns the coordinate value at the given index.
-    uint32_t operator[](size_t dim) const;
+    // Provides access to the coordinate value at the given index.
+    // Supports negative indexing.
+    uint32_t operator[](int32_t dim) const;
+    uint32_t& operator[](int32_t dim);
+
+    // Converts a MeshCoordinate to a linear index.
+    // Throws if `coord` is out of bounds of `shape`.
+    size_t to_linear_index(const MeshShape& shape) const;
+
+    // Returns a neighbor along the given dimension.
+    // `BoundaryMode` specifies how to handle coordinates that are out of bounds.
+    // Negative offsets and dim are allowed, and the input coordinate must be within bounds.
+    enum class BoundaryMode { WRAP, CLAMP, NONE };
+
+    std::optional<MeshCoordinate> get_neighbor(
+        const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode = BoundaryMode::WRAP) const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
@@ -100,10 +117,6 @@ bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
 
-// Converts a MeshCoordinate to a linear index.
-// Throws if `coord` is out of bounds of `shape`.
-size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord);
-
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
 public:
@@ -123,6 +136,9 @@ public:
     const MeshCoordinate& start_coord() const;
     const MeshCoordinate& end_coord() const;
 
+    // Returns the shape of the coordinate range (dimensions).
+    MeshShape shape() const;
+
     // Returns true if the range contains the given coordinate.
     bool contains(const MeshCoordinate& coord) const;
 
@@ -139,9 +155,11 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("start", "end");
     auto attribute_values() const { return std::forward_as_tuple(start_, end_); }
 
+    // Iterator over the range, provides access to coordinates in row-major order.
     class Iterator {
     public:
         Iterator& operator++();
+        Iterator operator++(int);
         const MeshCoordinate& operator*() const;
         bool operator==(const Iterator& other) const;
         bool operator!=(const Iterator& other) const;
@@ -216,9 +234,9 @@ namespace detail {
 template <typename T>
 class MeshCoordinateValueProxy {
 public:
-    MeshCoordinateValueProxy(const MeshCoordinate* coord, T* value_ptr) : coord_(coord), value_ptr_(value_ptr) {}
+    MeshCoordinateValueProxy(const MeshCoordinate& coord, T* value_ptr) : coord_(coord), value_ptr_(value_ptr) {}
 
-    const MeshCoordinate& coord() const { return *coord_; }
+    const MeshCoordinate& coord() const { return coord_; }
     T& value() { return *value_ptr_; }
     const T& value() const { return *value_ptr_; }
 
@@ -251,7 +269,7 @@ public:
     }
 
 private:
-    const MeshCoordinate* coord_ = nullptr;
+    MeshCoordinate coord_;
     T* value_ptr_ = nullptr;
 };
 
@@ -271,14 +289,23 @@ public:
     // Returns (inclusive) range of coordinates in the container.
     const MeshCoordinateRange& coord_range() const;
 
+    // Returns the number of elements in the container.
+    size_t size() const;
+
     // Accessor methods.
     T& at(const MeshCoordinate& coord);
     const T& at(const MeshCoordinate& coord) const;
 
     // Allows to iterate over the container elements, returning a pair of (coordinate, value reference).
+    // Note: End iterators have undefined coordinates and should not be dereferenced, following C++ iterator conventions.
     class Iterator {
     public:
         using ValueProxy = detail::MeshCoordinateValueProxy<T>;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = ValueProxy;
+        using difference_type = std::ptrdiff_t;
+        using pointer = ValueProxy*;
+        using reference = ValueProxy&;
 
         Iterator& operator++();
         ValueProxy& operator*() { return value_proxy_; }
@@ -303,6 +330,11 @@ public:
     class ConstIterator {
     public:
         using ValueProxy = detail::MeshCoordinateValueProxy<const T>;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = ValueProxy;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const ValueProxy*;
+        using reference = const ValueProxy&;
 
         ConstIterator& operator++();
         const ValueProxy& operator*() const { return value_proxy_; }
@@ -344,6 +376,49 @@ private:
     std::vector<T> values_;
 };
 
+/**
+ * A specialized MeshContainer where some values may be locally present and some are remote.
+ *
+ * This container simplifies the creation and management of distributed mesh structures where some values may be remote
+ * (on other hosts) and some are local. The values are wrapped in MaybeRemote<T> to allow for easy distinction between
+ * local and remote values.
+ *
+ * @tparam T The type of values stored (will be wrapped in MaybeRemote<T>)
+ */
+template <typename T>
+class DistributedMeshContainer : public MeshContainer<MaybeRemote<T>> {
+public:
+    /**
+     * Initialize a distributed mesh container with all remote values.
+     *
+     * @param global_shape The global shape of the mesh
+     */
+    explicit DistributedMeshContainer(const MeshShape& global_shape) :
+        MeshContainer<MaybeRemote<T>>(global_shape, MaybeRemote<T>::remote()) {}
+
+    /**
+     * Initialize a distributed mesh container with a vector of values.
+     *
+     * @param global_shape The global shape of the mesh
+     * @param values The values to populate in the container
+     */
+    explicit DistributedMeshContainer(const MeshShape& global_shape, std::vector<MaybeRemote<T>> values) :
+        MeshContainer<MaybeRemote<T>>(global_shape, std::move(values)) {}
+
+    /**
+     * Check if a global coordinate contains a local value.
+     *
+     * @param coord The global coordinate to check
+     * @return true if the coordinate contains a local value, false if remote
+     */
+    bool is_local(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
+};
+
+template <typename T>
+size_t MeshContainer<T>::size() const {
+    return values_.size();
+}
+
 template <typename T>
 MeshContainer<T>::MeshContainer(const MeshShape& shape, const T& fill_value) :
     shape_(shape), coord_range_(shape), values_(shape.mesh_size(), fill_value) {}
@@ -355,7 +430,7 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
         shape.mesh_size() == values_.size(),
         "Shape and values size mismatch; shape: {}, values: {}",
         shape,
-        values.size());
+        values_.size());
 }
 
 template <typename T>
@@ -370,12 +445,12 @@ const MeshCoordinateRange& MeshContainer<T>::coord_range() const {
 
 template <typename T>
 T& MeshContainer<T>::at(const MeshCoordinate& coord) {
-    return values_.at(to_linear_index(shape_, coord));
+    return values_.at(coord.to_linear_index(shape_));
 }
 
 template <typename T>
 const T& MeshContainer<T>::at(const MeshCoordinate& coord) const {
-    return values_.at(to_linear_index(shape_, coord));
+    return values_.at(coord.to_linear_index(shape_));
 }
 
 template <typename T>
@@ -384,13 +459,17 @@ MeshContainer<T>::Iterator::Iterator(
     container_(container),
     coord_iter_(coord_iter),
     linear_index_(linear_index),
-    value_proxy_(&(*coord_iter_), &container_->values_[linear_index_]) {}
+    value_proxy_(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr) {}
 
 template <typename T>
 typename MeshContainer<T>::Iterator& MeshContainer<T>::Iterator::operator++() {
     ++linear_index_;
     ++coord_iter_;
-    value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
+    value_proxy_ = ValueProxy(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container_->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr);
     return *this;
 }
 
@@ -400,13 +479,17 @@ MeshContainer<T>::ConstIterator::ConstIterator(
     container_(container),
     coord_iter_(coord_iter),
     linear_index_(linear_index),
-    value_proxy_(&(*coord_iter_), &container_->values_[linear_index_]) {}
+    value_proxy_(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr) {}
 
 template <typename T>
 typename MeshContainer<T>::ConstIterator& MeshContainer<T>::ConstIterator::operator++() {
     ++linear_index_;
     ++coord_iter_;
-    value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
+    value_proxy_ = ValueProxy(
+        coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container_->shape().dims()),
+        linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr);
     return *this;
 }
 

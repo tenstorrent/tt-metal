@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -21,23 +21,24 @@ namespace tt::tt_metal {
 
 class SingleDeviceLightMetalFixture : public CommandQueueFixture {
 protected:
-    bool replay_binary_;
+    bool replay_binary_{};
     std::string trace_bin_path_;
-    bool write_bin_to_disk_;
-    bool replay_manages_device_;
-    size_t trace_region_size_;
+    bool write_bin_to_disk_{};
+    bool replay_manages_device_{};
+    size_t trace_region_size_{};
 
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        TT_FATAL(!this->IsSlowDispatch(), "Test is running in slow dispatch mode, which is not supported.");
     }
 
     void CreateDeviceAndBeginCapture(
         const size_t trace_region_size,
         const bool replay_manages_device = false,
         const bool replay_binary = true,
-        const std::string trace_bin_path = "") {
+        const std::string& trace_bin_path = "") {
         // Skip writing to disk by default, unless user sets env var for local testing
         write_bin_to_disk_ = tt::parse_env("LIGHTMETAL_SAVE_BINARY", false);
         replay_manages_device_ = replay_manages_device;

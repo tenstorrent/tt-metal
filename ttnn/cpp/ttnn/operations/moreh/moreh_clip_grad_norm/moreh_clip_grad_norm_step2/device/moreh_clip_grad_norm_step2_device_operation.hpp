@@ -32,9 +32,9 @@ struct MorehClipGradNormStep2Operation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id{};
+            tt::tt_metal::KernelHandle writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreCoord single_core;
         };
 
@@ -62,10 +62,10 @@ struct MorehClipGradNormStep2Operation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& tmp_pow_sum,
-        const float norm_type,
+        float norm_type,
         const std::optional<Tensor>& total_norm,
         const std::optional<MemoryConfig>& memory_config,
-        const DeviceComputeKernelConfig compute_kernel_config);
+        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2

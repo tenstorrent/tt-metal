@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -97,24 +97,29 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
-    Shard2dConfig,
-    Concat2dConfig,
+    PlacementReplicate,
+    PlacementShard,
+    MeshMapperConfig,
+    MeshComposerConfig,
     get_device_tensors,
-    aggregate_as_tensor,
+    from_host_shards,
+    combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
-    shard_tensor_to_2d_mesh_mapper,
+    create_mesh_mapper,
     concat_mesh_to_tensor_composer,
-    concat_2d_mesh_to_tensor_composer,
+    create_mesh_composer,
+    compute_distribution_to_mesh_mapping,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -125,16 +130,32 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
+
+# Import cluster functions and types
+from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+)
+
+from ttnn._ttnn.mesh_socket import (
+    create_socket_pair,
+    MeshSocket,
+    SocketConfig,
+    SocketMemoryConfig,
+    SocketConnection,
+    MeshCoreCoord,
 )
 
 from ttnn.types import (
@@ -152,6 +173,8 @@ from ttnn.types import (
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,
+    ShardShapeAlignment,
+    ShardDistributionStrategy,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -161,6 +184,7 @@ from ttnn.types import (
     ShardOrientation,
     ShardMode,
     ShardSpec,
+    NdShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
@@ -171,9 +195,12 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
+    TensorSpec,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
@@ -187,6 +214,15 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
+    TensorAccessorArgs,
 )
 
 from ttnn.device import (
@@ -208,7 +244,7 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
-    DumpDeviceProfiler,
+    ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,
@@ -238,8 +274,6 @@ from ttnn.core import (
     LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
-    dump_memory_config,
-    load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
@@ -317,7 +351,9 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -332,11 +368,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
-)
+from ttnn.operations.ccl import Topology
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -346,11 +378,18 @@ from ttnn.operations.conv2d import (
     Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
+    SlidingWindowParallelConfig,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

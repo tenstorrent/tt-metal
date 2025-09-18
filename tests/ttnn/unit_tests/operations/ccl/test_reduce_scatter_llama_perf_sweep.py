@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import run_reduce_scatter_sharded_test
 
 
@@ -88,7 +88,6 @@ def test_width_sharded_reduce_scatter_post_commit(
     input_dtype,
     tensor_layout,
     tensor_mem_layout,
-    use_program_cache,
     function_level_defaults,
     num_iters,
     n_worker,
@@ -108,7 +107,6 @@ def test_width_sharded_reduce_scatter_post_commit(
         input_dtype,
         tensor_layout,
         tensor_mem_layout,
-        use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
         num_iters=num_iters,
         n_worker=n_worker,

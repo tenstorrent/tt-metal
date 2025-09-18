@@ -15,7 +15,7 @@ struct MorehMatmulBackward {
         const std::optional<const Tensor>& input_grad,
         const std::optional<const Tensor>& other_grad,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward
 

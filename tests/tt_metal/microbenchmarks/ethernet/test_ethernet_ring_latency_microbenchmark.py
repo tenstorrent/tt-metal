@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,8 @@ import sys
 
 from loguru import logger
 import pytest
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 @pytest.mark.parametrize("sample_counts", [(1024,)])
@@ -29,10 +29,9 @@ def test_multichip_hop_latency(sample_counts, page_sizes, channel_counts, hop_co
     channel_counts_str = " ".join([str(s) for s in channel_counts])
     hop_counts_str = " ".join([str(s) for s in hop_counts])
 
-    ARCH_NAME = os.getenv("ARCH_NAME")
     rc = os.system(
         f"TT_METAL_DEVICE_PROFILER=1 \
-            ./build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_hop_latencies_no_edm_{ARCH_NAME} \
+            ./build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_hop_latencies_no_edm \
                 {len(sample_counts)} {sample_counts_str} \
                     {len(page_sizes)} {page_sizes_str} \
                         {len(channel_counts)} {channel_counts_str} \

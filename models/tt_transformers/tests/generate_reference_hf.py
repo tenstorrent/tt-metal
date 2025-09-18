@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import argparse
 import bz2
 import os
-import argparse
-from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+
+import torch
 from loguru import logger
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
 def generate_reference_outputs(total_length, output_file, model_name):

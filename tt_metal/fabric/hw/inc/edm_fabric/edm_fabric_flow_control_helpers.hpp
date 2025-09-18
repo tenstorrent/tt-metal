@@ -4,28 +4,22 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
+#include <utility>
+#include <limits>
+
+#include "debug/assert.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 
+#include "debug/assert.h"
+
 namespace tt::tt_fabric {
-
-template <typename T, typename Parameter>
-class NamedType {
-public:
-    FORCE_INLINE explicit NamedType(const T& value) : value_(value) {}
-    FORCE_INLINE explicit NamedType(T&& value) : value_(std::move(value)) {}
-    FORCE_INLINE NamedType<T, Parameter>& operator=(const NamedType<T, Parameter>& rhs) = default;
-    FORCE_INLINE T& get() { return value_; }
-    FORCE_INLINE const T& get() const { return value_; }
-    FORCE_INLINE operator T() const { return value_; }
-    FORCE_INLINE operator T&() { return value_; }
-
-private:
-    T value_;
-};
 
 using BufferIndex = NamedType<uint8_t, struct BufferIndexType>;
 using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
@@ -44,6 +38,13 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
 }
+
+// Increments val and wraps to 0 if it reaches limit
+template <typename T>
+FORCE_INLINE auto wrap_increment(T val, T limit) -> T {
+    return (val == static_cast<T>(limit - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
+}
+
 template <size_t LIMIT, typename T>
 FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
     constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
@@ -102,7 +103,6 @@ FORCE_INLINE uint8_t distance_behind(const BufferPtr& trailing_ptr, const Buffer
     constexpr bool is_size_pow2 = is_power_of_2(NUM_BUFFERS);
     constexpr uint8_t ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
     constexpr uint8_t ptr_wrap_size = 2 * NUM_BUFFERS;
-    bool leading_gte_trailing_ptr = leading_ptr >= trailing_ptr;
     if constexpr (is_size_pow2) {
         return (leading_ptr - trailing_ptr) & ptr_wrap_mask;
     } else {
@@ -159,32 +159,28 @@ private:
     BufferPtr ptr = BufferPtr{0};
 };
 
+// Must call reset() before using
 template <uint8_t NUM_BUFFERS>
 struct ChannelCounter {
     static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(NUM_BUFFERS);
-    uint32_t counter = 0;
-    BufferIndex index{0};
+    uint32_t counter;
+    BufferIndex index;
 
-    FORCE_INLINE BufferIndex get_buffer_index() const {
-        if constexpr (IS_POW2_NUM_BUFFERS) {
-            return BufferIndex{static_cast<uint8_t>(counter & (NUM_BUFFERS - 1))};
-        } else {
-            return index;
-        }
+    FORCE_INLINE void reset() {
+        this->counter = 0;
+        this->index = BufferIndex(0);
     }
+
+    FORCE_INLINE BufferIndex get_buffer_index() const { return index; }
 
     FORCE_INLINE void increment() {
         counter++;
-        if constexpr (!IS_POW2_NUM_BUFFERS) {
-            index = BufferIndex{wrap_increment<NUM_BUFFERS>(index.get())};
-        }
+        index = BufferIndex{wrap_increment<NUM_BUFFERS>(index.get())};
     }
 
     FORCE_INLINE void increment_n(uint32_t n) {
         counter += n;
-        if constexpr (!IS_POW2_NUM_BUFFERS) {
-            index = BufferIndex{wrap_increment_n<NUM_BUFFERS>(index.get(), n)};
-        }
+        index = BufferIndex{wrap_increment_n<NUM_BUFFERS>(index.get(), n)};
     }
 
     FORCE_INLINE bool is_caught_up_to(const ChannelCounter& leading_counter) const {
@@ -193,6 +189,81 @@ struct ChannelCounter {
 
     FORCE_INLINE uint32_t distance_behind(const ChannelCounter& leading_counter) const {
         return leading_counter.counter - this->counter;
+    }
+};
+
+/*
+ * Tracks receiver channel pointers (from sender side)
+ */
+template <uint8_t RECEIVER_NUM_BUFFERS>
+struct OutboundReceiverChannelPointers {
+    uint32_t num_free_slots;
+    BufferIndex remote_receiver_buffer_index;
+    size_t cached_next_buffer_slot_addr;
+
+    FORCE_INLINE void init() {
+        this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->remote_receiver_buffer_index = BufferIndex{0};
+        this->cached_next_buffer_slot_addr = 0;
+    }
+
+    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
+};
+
+/*
+ * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
+ */
+template <uint8_t RECEIVER_NUM_BUFFERS>
+struct ReceiverChannelPointers {
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+
+    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
+        src_chan_ids[buffer_index.get()] = src_chan_id;
+    }
+
+    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
+
+    FORCE_INLINE void init() { reset(); }
+
+    FORCE_INLINE void reset() {
+        wr_sent_counter.reset();
+        wr_flush_counter.reset();
+        ack_counter.reset();
+        completion_counter.reset();
+    }
+};
+
+// Forward‐declare the Impl primary template:
+template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
+struct ChannelPointersTupleImpl;
+
+// Provide the specialization that actually holds the tuple and `get<>`:
+template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
+struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
+    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
+
+    template <size_t I>
+    constexpr auto& get() {
+        return std::get<I>(channel_ptrs);
+    }
+};
+
+// Simplify the "builder" so that make() returns the Impl<…> directly:
+template <template <uint8_t> class ChannelType, auto& BufferSizes>
+struct ChannelPointersTuple {
+    static constexpr size_t N = std::size(BufferSizes);
+
+    static constexpr auto make() {
+        // call init() on each element and return it
+        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        std::apply(
+            [&](auto&... chans) { ((chans.init()), ...); },
+            channel_ptrs.channel_ptrs);  // Apply to the actual tuple member
+        return channel_ptrs;
     }
 };
 

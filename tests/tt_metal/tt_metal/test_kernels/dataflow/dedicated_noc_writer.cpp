@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,8 +55,8 @@ void kernel_main() {
     }
 
     // Test gen_fast
-    const InterleavedAddrGenFast<false> s0 = {
-        .bank_base_address = l1_read_addr, .page_size = page_size, .data_format = DataFormat::Float16_b};
+    constexpr auto s_args = TensorAccessorArgs<2>();
+    const auto s0 = TensorAccessor(s_args, l1_read_addr, page_size);
 
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t noc = noc_index;
@@ -84,13 +84,12 @@ void kernel_main() {
         if (mcast) {
             // write mcast
             noc_async_write_multicast_one_packet(
-                l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, true, noc);
-            noc_async_write_multicast(l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, true, noc);
-            noc_async_write_multicast_loopback_src(
-                l1_read_addr, mcast_addr_self_noc, page_size, num_dests, false, true, noc);
+                l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
+            noc_async_write_multicast(l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
+            noc_async_write_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, page_size, num_dests, false, noc);
             // semaphore mcast
-            noc_semaphore_set_multicast(l1_read_addr, mcast_addr_self_noc, num_dests - 1, false, true, noc);
-            noc_semaphore_set_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, num_dests, false, true, noc);
+            noc_semaphore_set_multicast(l1_read_addr, mcast_addr_self_noc, num_dests - 1, false, noc);
+            noc_semaphore_set_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, num_dests, false, noc);
         }
 
 // dw_write skip BH since there's HW issue

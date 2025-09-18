@@ -1,23 +1,14 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
-    ethernet/test_ethernet_read_and_send_data.cpp
-    ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
+    dispatch/benchmark_rw_buffer.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
-    routing/test_tx_rx.cpp
-    routing/test_mux_demux.cpp
-    routing/test_vc_mux_demux.cpp
-    routing/test_mux_demux_2level.cpp
-    routing/test_vc_uni_tunnel.cpp
-    routing/test_vc_bi_tunnel_2ep.cpp
-    routing/test_vc_bi_tunnel_4ep.cpp
-    routing/test_vc_loopback_tunnel.cpp
-    routing/test_tt_fabric_sanity.cpp
-    routing/test_tt_fabric_multi_hop_sanity.cpp
-    routing/test_tt_fabric_socket_sanity.cpp
+    routing/test_tt_fabric_mux_bandwidth.cpp
+    routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
+    tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
     old/matmul/matmul_local_l1.cpp
     old/noc/test_noc_read_global_l1.cpp
@@ -51,54 +42,52 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     list(APPEND PERF_MICROBENCH_TESTS_SRCS ${X86_64_ONLY_TESTS})
 endif()
 
-set(ARCHITECTURES
-    "wormhole"
-    "blackhole"
-)
+foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
+    get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
+    get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
+    # test_rw_buffer have two versions >:/ can we remove one?
+    if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
+        set(TEST_TARGET "test_rw_buffer_old")
+    endif()
+    string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
-foreach(arch ${ARCHITECTURES})
-    foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
-        get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
-        get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
-        # test_rw_buffer have two versions >:/ can we remove one?
-        if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
-            set(TEST_TARGET "test_rw_buffer_old")
-        endif()
-        set(TEST_TARGET "${TEST_TARGET}_${arch}")
-        string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
+    add_executable(${TEST_TARGET} ${TEST_SRC})
+    target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
 
-        add_executable(${TEST_TARGET} ${TEST_SRC})
-        target_link_libraries(
+    if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+    if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+
+    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
+        target_sources(
             ${TEST_TARGET}
-            PUBLIC
-                test_metal_common_libs
             PRIVATE
-                yaml-cpp::yaml-cpp
-                fabric
+                routing/tt_fabric_test_config.cpp
+                routing/tt_fabric_test_context.cpp
         )
-        if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
-            target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
-        endif()
-        target_include_directories(
-            ${TEST_TARGET}
-            BEFORE
-            PRIVATE
-                ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
-                "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-                ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
-                ${PROJECT_SOURCE_DIR}/tests
-                ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
-                ${CMAKE_CURRENT_SOURCE_DIR}
-        )
-        set_target_properties(
-            ${TEST_TARGET}
-            PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY
-                    ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
-        )
-        target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
-        list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
-    endforeach()
+        target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
+    endif()
+    target_include_directories(
+        ${TEST_TARGET}
+        BEFORE
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_target_properties(
+        ${TEST_TARGET}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
+    )
+    target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
+    list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()
 
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})

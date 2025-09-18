@@ -68,6 +68,7 @@ Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordere
         input_height,
         input_width,
         ## optional arguments
+        dtype,
         conv_config,
         compute_config,
         groups,
@@ -92,6 +93,7 @@ Arguments:
 * `batch_size` an `int`.
 * `input_height` an `int`.
 * `input_width` an `int`.
+* `dtype = ttnn.bfloat16`_optional_ output data type. If not set defaults to input activations data type
 * `conv_config` _optional_ structure of configuration parameters of type `Conv2DConfig`. This is described in detail below.
 * `compute_config` _optional_ structure of compute configuration parameters of type `DeviceConfiguration`. This is described in detail below.
 * `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
@@ -103,10 +105,8 @@ Arguments:
 
 Following are the conv2d operation configuration parameters:
 
-* `dtype = ttnn.bfloat16` input activations data type.
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
-* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels <= 16` when the alignment can be set to 16 instead of 32.
 * `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
 * `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
 * `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.
@@ -119,7 +119,6 @@ Following are the conv2d operation configuration parameters:
 * `output_layout = ttnn.TILE_LAYOUT` _optional_ `ttnn.Layout` to specify whether the output tensor be in `TILE` or `ROW_MAJOR` layout.
 * `enable_act_double_buffer = False` _optional_ bool to enable activation double buffering.
 * `enable_weights_double_buffer = False` _optional_ bool to enable weights double buffering when using block sharding.
-* `enable_split_reader = False` _optional_ bool to two concurrent reader kernels instead of one.
 
 #### Compute Config
 
@@ -174,7 +173,6 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
 ```python
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16
     )
 
@@ -194,6 +192,7 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
         input_width=input_width,
         conv_config=conv_config,
         return_output_dim=True,
+        dtype=ttnn.bfloat16,
     )
 ```
 
@@ -205,7 +204,6 @@ To achieve higher performance it is advisable to use the following optional argu
 * `reallocate_halo_output = True` The `conv2d` operation executes a _haloing_ step before computing the convolutions to optimize memory accesses. This option will reallocate the output of this step in order to reduce memory fragmentation to avoid memory fitting issues.
 * `enable_act_double_buffer = True` If enough memory is available, enabling double buffering of the input activations will result in a better performance.
 * `enable_weights_double_buffer = false` If enough memory is available, enabling weights double buffering can improve performance when using block sharding.
-* `enable_split_reader = True` By default, a single reader kernel is used to read in activations from the input shard. Enabling this option will use two concurrent reader kernels, potentially improving overall performance.
 
 ##### Output post-processing
 
@@ -283,7 +281,7 @@ corresponding input activation and weight blocks can be determined as in
 the following.
 
 In order to compute an output block of dimensions $[bH_{o}, bW_{o}]$, we
-need the the following input blocks:
+need the following input blocks:
 
 1.  an activation matrix of dimensions
     $[bH_{o}\textbf{,} \ K_h \times K_w \times C_i]$

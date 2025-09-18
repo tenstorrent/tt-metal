@@ -18,9 +18,9 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& bx = input_tensors[1];
     TT_FATAL(a.dtype() == bx.dtype(), "Expected input tensors to have the same data type");
     TT_FATAL(a.layout() == Layout::TILE && bx.layout() == Layout::TILE, "Expected input tensors to be tile layout");
-    TT_FATAL(a.get_padded_shape() == bx.get_padded_shape(), "Expected input tensors to have the same shape");
+    TT_FATAL(a.padded_shape() == bx.padded_shape(), "Expected input tensors to have the same shape");
 
-    const auto& shape = a.get_padded_shape();
+    const auto& shape = a.padded_shape();
     TT_FATAL(shape.rank() == 4, "Expected input tensors to be rank 4");
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
     TT_FATAL(
@@ -49,9 +49,9 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> PrefixScan::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
     return {TensorSpec(
-        a.get_logical_shape(),
+        a.logical_shape(),
         TensorLayout::fromPaddedShape(
-            dtype, PageConfig(Layout::TILE), memory_config, a.get_logical_shape(), a.get_padded_shape()))};
+            dtype, PageConfig(Layout::TILE), memory_config, a.logical_shape(), a.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks PrefixScan::create_program(

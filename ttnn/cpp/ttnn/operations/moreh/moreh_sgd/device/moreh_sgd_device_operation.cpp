@@ -47,21 +47,21 @@ void MorehSgdOperation::validate_on_program_cache_hit(
 
 MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor_shape = tensor_args.param_in.get_logical_shape();
-    auto dtype = tensor_args.param_in.get_dtype();
+    auto input_tensor_shape = tensor_args.param_in.logical_shape();
+    auto dtype = tensor_args.param_in.dtype();
     Layout layout{Layout::TILE};
 
     std::vector<std::optional<TensorSpec>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out->get_tensor_spec());
+        ret.push_back(tensor_args.param_out->tensor_spec());
     } else {
         ret.push_back(TensorSpec(
             input_tensor_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.param_out_memory_config)));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out->get_tensor_spec());
+        ret.push_back(tensor_args.momentum_buffer_out->tensor_spec());
     } else if (operation_attributes.momentum != 0.0f) {
         ret.push_back(TensorSpec(
             input_tensor_shape,

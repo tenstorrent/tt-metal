@@ -7,11 +7,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -20,7 +20,7 @@ using namespace tt;
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
-    const string& kernel_src_code = R"(
+    const std::string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "dataflow_api.h"
 
@@ -45,7 +45,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
-    const string& kernel_src_code = R"(
+    const std::string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "compute_kernel_api.h"
 
@@ -76,7 +76,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 }
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
-    const string& kernel_src_code = R"(
+    const std::string& kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "dataflow_api.h"
 

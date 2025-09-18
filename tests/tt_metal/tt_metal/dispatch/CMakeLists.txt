@@ -5,8 +5,7 @@ TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_smoke)
 target_sources(
     unit_tests_dispatch_smoke
     PRIVATE
-        dispatch_buffer/test_sub_device.cpp
-        dispatch_device/test_enqueue_read_write_l1.cpp
+        dispatch_device/test_enqueue_read_write_core.cpp
         dispatch_event/test_EnqueueWaitForEvent.cpp
         dispatch_event/test_events.cpp
         dispatch_program/test_dispatch_stress.cpp
@@ -32,10 +31,11 @@ TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_basic)
 target_sources(
     unit_tests_dispatch_basic
     PRIVATE
+        dispatch_buffer/test_sub_device.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
-        dispatch_program/test_program_reuse.cpp
         dispatch_trace/test_sub_device.cpp
+        dispatch_util/test_ringbuffer_cache.cpp
 )
 target_include_directories(
     unit_tests_dispatch_basic
@@ -55,6 +55,7 @@ target_sources(
     unit_tests_dispatch_slow
     PRIVATE
         dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp # FIXME: Fix the heap-buffer-overflow in here and see if it's fast enough for Basic
+        dispatch_buffer/test_large_mesh_buffer.cpp
         dispatch_program/test_EnqueueProgram.cpp
         dispatch_trace/test_EnqueueTrace.cpp
 )

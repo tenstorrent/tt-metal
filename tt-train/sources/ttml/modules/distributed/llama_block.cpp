@@ -13,10 +13,16 @@
 
 namespace ttml::modules::distributed {
 
-DistributedLlamaMLP::DistributedLlamaMLP(uint32_t embedding_size, float dropout_prob) {
-    uint32_t multiple_of = 256;
-    const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
-    const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
+DistributedLlamaMLP::DistributedLlamaMLP(
+    uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim) {
+    uint32_t multiple_of = 256U;
+    uint32_t hidden_size = 0U;
+    if (intermediate_dim) {
+        hidden_size = *intermediate_dim;
+    } else {
+        const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4U * embedding_size) * (2.0F / 3.0F));
+        hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
+    }
     m_w1 = std::make_shared<ColumnParallelLinear>(
         embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false);
     m_w3 = std::make_shared<ColumnParallelLinear>(
@@ -46,8 +52,9 @@ DistributedLlamaBlock::DistributedLlamaBlock(
     uint32_t num_heads,
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
-    float dropout_prob) {
-    m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob);
+    float dropout_prob,
+    std::optional<uint32_t> intermediate_dim) {
+    m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob, intermediate_dim);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<DistributedGroupedQueryAttention>(GQAConfig{

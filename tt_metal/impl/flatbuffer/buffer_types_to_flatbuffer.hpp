@@ -6,7 +6,7 @@
 
 #include "buffer_types_generated.h"
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -20,6 +20,8 @@ flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation);
 flatbuffer::ShardMode to_flatbuffer(ShardMode shard_mode);
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
     const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder);
+flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(
+    const std::optional<BufferDistributionSpec>& spec, flatbuffers::FlatBufferBuilder& builder);
 
 flatbuffers::Offset<flatbuffer::ShardSpecBuffer> to_flatbuffer(
     const std::optional<ShardSpecBuffer>& shard_parameters, ::flatbuffers::FlatBufferBuilder& builder);

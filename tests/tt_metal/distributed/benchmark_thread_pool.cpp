@@ -67,5 +67,3 @@ BENCHMARK(BM_DistributedBoostThreadPool)
     ->UseRealTime();
 
 BENCHMARK(BM_DeviceBoundThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();
-
-BENCHMARK_MAIN();

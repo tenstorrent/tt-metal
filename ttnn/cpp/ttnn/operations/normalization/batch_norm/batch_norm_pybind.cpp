@@ -4,22 +4,36 @@
 
 #include "batch_norm_pybind.hpp"
 
-#include "batch_norm.hpp"
+#include <optional>
 
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "batch_norm.hpp"
 #include "ttnn-pybind/decorators.hpp"
-namespace py = pybind11;
+
 namespace ttnn::operations::normalization::detail {
-void bind_batch_norm_operation(pybind11::module& module) {
+
+void bind_batch_norm_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::batch_norm,
         R"doc(
-            Applies Spatial Batch Normalization over each channel on :attr:`input_tensor`. Inputs must be must be tilized and interleaved.
 
+        Applies batch norm over each channel on :attr:`input_tensor`.
+        See `Spatial Batch Normalization <https://arxiv.org/abs/1502.03167>`_ for more details.
+
+        .. math::
+
+            \text{batch_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
+
+        Where:
+            - :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively
+            - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
+            - :math:`\epsilon` is a small constant.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor of shape `[N, C, H, W]`.
-
 
         Keyword args:
             eps (float, optional): Epsilon value. Defaults to `1e-05`.
@@ -31,12 +45,11 @@ void bind_batch_norm_operation(pybind11::module& module) {
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
             output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to 0.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
-
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -51,18 +64,32 @@ void bind_batch_norm_operation(pybind11::module& module) {
                  - TILE
                  - 4
 
+            These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
+
+        Limitations:
+            - All input tensors must be tilized, interleaved, rank 4, and on-device.
 
         Example:
+            .. code-block:: python
 
-            >>> input_tensor = ttnn.from_torch(torch.rand([2, 3, 4, 5], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> running_mean = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> running_var = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> weight = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> bias = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> eps = 1e-05
-            >>> momentum = 0.1
-            >>> output = ttnn.batch_norm(input_tensor, running_mean = running_mean, running_var = running_var, weight = weight, bias = bias, eps = eps, momentum = momentum, training = True)
+                N, C, H, W = 2, 3, 4, 5
 
+                input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                running_mean = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                running_var = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                weight = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+                bias = ttnn.from_torch(torch.rand([1, C, 1, 1], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+                output = ttnn.batch_norm(
+                    input_tensor,
+                    running_mean = running_mean,
+                    running_var = running_var,
+                    weight = weight,
+                    bias = bias,
+                    eps = 1e-05,
+                    momentum = 0.1,
+                    training = True
+                )
 
         )doc",
         ttnn::pybind_arguments_t{
@@ -77,6 +104,7 @@ void bind_batch_norm_operation(pybind11::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::normalization::detail

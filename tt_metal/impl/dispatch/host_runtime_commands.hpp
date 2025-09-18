@@ -23,11 +23,13 @@
 #include "dispatch_settings.hpp"
 #include "tt-metalium/program.hpp"
 #include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
+#include "program/dispatch.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -40,8 +42,8 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-class BufferRegion;
-class Event;
+struct BufferRegion;
+struct Event;
 class Trace;
 
 // Only contains the types of commands which are enqueued onto the device
@@ -52,7 +54,6 @@ enum class EnqueueCommandType {
     ADD_BUFFER_TO_PROGRAM,
     SET_RUNTIME_ARGS,
     ENQUEUE_PROGRAM,
-    ENQUEUE_TRACE,
     ENQUEUE_RECORD_EVENT,
     ENQUEUE_WAIT_FOR_EVENT,
     FINISH,
@@ -63,7 +64,7 @@ enum class EnqueueCommandType {
 
 class Command {
 public:
-    Command() {}
+    Command() = default;
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
 };
@@ -84,6 +85,7 @@ private:
     uint32_t unicast_cores_launch_message_wptr = 0;
     // TODO: There will be multiple ids once programs support spanning multiple sub_devices
     SubDeviceId sub_device_id = SubDeviceId{0};
+    program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
 
 public:
     EnqueueProgramCommand(
@@ -97,11 +99,12 @@ public:
         uint32_t expected_num_workers_completed,
         uint32_t multicast_cores_launch_message_wptr,
         uint32_t unicast_cores_launch_message_wptr,
-        SubDeviceId sub_device_id);
+        SubDeviceId sub_device_id,
+        program_dispatch::ProgramDispatchMetadata& dispatch_md);
 
-    void process();
+    void process() override;
 
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
+    EnqueueCommandType type() override { return EnqueueCommandType::ENQUEUE_PROGRAM; }
 
     constexpr bool has_side_effects() { return true; }
 };
@@ -115,9 +118,9 @@ private:
 public:
     EnqueueTerminateCommand(uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager);
 
-    void process();
+    void process() override;
 
-    EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
+    EnqueueCommandType type() override { return EnqueueCommandType::TERMINATE; }
 
     constexpr bool has_side_effects() { return false; }
 };

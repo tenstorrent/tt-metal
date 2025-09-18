@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -274,9 +274,9 @@ void MAIN {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                reduce_init_delta_with_dt<false>(cb_dgamma, cb_ydyadd, cb_scaler);
+                reduce_init_delta_with_dt(cb_dgamma, cb_ydyadd, cb_scaler);
                 reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
-                reduce_revert_delta(cb_dgamma);
+                reduce_uninit();
             } else {
                 // Just copy
                 copy_tile_init_with_dt(cb_ydyadd);
@@ -300,9 +300,9 @@ void MAIN {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                reduce_init_delta_with_dt<false>(cb_dbeta, cb_dyadd, cb_scaler);
+                reduce_init_delta_with_dt(cb_dbeta, cb_dyadd, cb_scaler);
                 reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
-                reduce_revert_delta(cb_dbeta);
+                reduce_uninit();
             } else {
                 // Just copy
                 copy_tile_init_with_dt(cb_dyadd);

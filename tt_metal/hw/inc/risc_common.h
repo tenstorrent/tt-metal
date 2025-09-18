@@ -145,6 +145,17 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     return 0;
 }
 
+// Invalidates Blackhole's entire L1 cache
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
+#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
+    asm("fence");
+#endif
+}
+
 // risc_init function isn't required for TRISCS
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
@@ -175,29 +186,39 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
-// MMU or range registers).
-//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read by riscv
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
-    asm("fence");
-#endif
-}
-
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
-// Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
-//  between FW end and Kernel start.
-// This works because risc tries to prefetch 1 cache line.
-// The 32B still get cached but they are never executed
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
+    }
+#else
+#pragma GCC unroll 128
+    for (int i = 0; i < 128; i++) {
+        __asm__ volatile("nop");
     }
 #endif
+}
+
+// Zero a buffer in L1 memory
+void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
+    for (uint32_t i = 0; i < size_bytes / 4; i++) {
+        buf[i] = 0;
+    }
+}
+
+// Get the wall clock timestamp. Reading RISCV_DEBUG_REG_WALL_CLOCK_L samples/freezes (for readback)
+// upper 32 bits of the 64-bit timestamp. Upper 32 bits are read from RISCV_DEBUG_REG_WALL_CLOCK_H.
+inline uint64_t get_timestamp() {
+    volatile uint timestamp_low = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint timestamp_high = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+}
+
+// Get only the lower 32 bits of the wall clock timestamp
+inline uint32_t get_timestamp_32b() {
+    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
 #endif

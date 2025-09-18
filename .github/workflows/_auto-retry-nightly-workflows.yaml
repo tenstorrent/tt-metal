@@ -13,18 +13,7 @@ on:
         type: number
   workflow_run:
     workflows:
-      - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 frequent tests"
-      - "(T3K) T3000 model perf tests"
-      - "(T3K) T3000 nightly tests"
-      - "(T3K) T3000 perplexity tests"
-      - "(T3K) T3000 profiler tests"
-      - "(T3K) T3000 unit tests"
-      - "(TG) TG demo tests"
-      - "(TG) TG frequent tests"
-      - "(TG) TG model perf tests"
-      - "(TG) TG nightly tests"
-      - "(TG) TG unit tests"
+      - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
     types:
       - completed

@@ -12,6 +12,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
@@ -105,7 +106,7 @@ struct TileIterator {
         tile_end_w(in_end_w - 1),
         first(true) {};
 
-    inline bool next() {
+    bool next() {
         if (first) {
             first = false;
             return true;
@@ -135,9 +136,9 @@ protected:
     const uint32_t tile_end_w;
     bool first;
 
-    inline uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() { return start_h + tile_idx_h; }
 
-    inline uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -161,7 +162,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 
     TileIterator output_tile_iterator(ho_0, wo_0, ho_sz, wo_sz);
 
-    uint32_t prev_offset_i, prev_offset_o, prev_page_idx_i;
+    uint32_t prev_offset_i{}, prev_offset_o{}, prev_page_idx_i{};
 
     // TODO there are properties of the mapping we could take advantage of to avoid some computation.
     while (output_tile_iterator.next()) {
@@ -287,30 +288,27 @@ Tensor compute_reshape_mapping_host_tensor(
 
 tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const Tensor& input_tensor, const Tensor& output_tensor) {
-    const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& output_shape = output_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& output_shape = output_tensor.logical_shape();
 
     TT_FATAL(input_shape.volume() == output_shape.volume(), "Requested shapes are not of equal volume");
 
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
     TT_ASSERT(input_shape.size() == 3 && output_shape.size() == 3, "Kernel designed for rank 3 tensors");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const uint32_t num_input_pages = tt::div_up(input_tensor.volume(), tile_shape[0] * tile_shape[1]);
-    const uint32_t num_output_pages = tt::div_up(output_tensor.volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
@@ -328,8 +326,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     // PCC fails when this is greater than 1. TODO figure out why.
     constexpr auto reader_cb_len = 1;
 
-    auto mapping_page_size = mapping_tensor.get_logical_shape()[-1];
-    auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    auto mapping_page_size = mapping_tensor.logical_shape()[-1];
+    auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     auto mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
     constexpr auto mapping_cb_idx = tt::CBIndex::c_0;
 
@@ -337,10 +335,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::CircularBufferConfig(
             mapping_page_size_bytes * reader_cb_len, {{mapping_cb_idx, mapping_dataformat}})
             .set_page_size(mapping_cb_idx, mapping_page_size_bytes);
-    const auto cb_mapping = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
 
     // set up CB for input tiles
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto input_tile_size_bytes = tt::tile_size(input_cb_data_format);
     constexpr auto input_cb_idx = tt::CBIndex::c_1;
 
@@ -348,17 +346,17 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::CircularBufferConfig(
             input_tile_size_bytes * reader_cb_len, {{input_cb_idx, input_cb_data_format}})
             .set_page_size(input_cb_idx, input_tile_size_bytes);
-    auto cb_input = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_input_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_input_config);
 
     // TODO assert output tile size and data format same as input
-    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const auto output_tile_size_bytes = tt::tile_size(output_cb_data_format);
     constexpr auto output_cb_idx = tt::CBIndex::c_2;
 
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_tile_size_bytes, {{output_cb_idx, output_cb_data_format}})
             .set_page_size(output_cb_idx, output_tile_size_bytes);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -366,30 +364,33 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     TT_ASSERT(num_cores <= num_output_pages);
 
+    std::vector<uint32_t> reader_compile_time_args = {
+        mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
+    tt::tt_metal::TensorAccessorArgs(*mapping_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            {input_is_dram, mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx}));
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
     std::vector<uint32_t> writer_compile_time_args = {
-        output_is_dram,
         input_tile_size_bytes,
         max_map_entries,
         tt::datum_size(output_cb_data_format),
         mapping_cb_idx,
         input_cb_idx,
         output_cb_idx};
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/"
         "writer_reshape_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    uint32_t page_idx_start = 0, page_idx_end = 0, total_pages = 0;
+    uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
@@ -407,7 +408,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {output_buffer->address(), page_idx_start, page_idx_end};
-        total_pages += (page_idx_end - page_idx_start);
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 

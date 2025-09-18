@@ -1,22 +1,23 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm, TransformerBlock, precompute_freqs_cis
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn_prefill,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    prepare_inputs_ttnn_prefill,
     set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
-from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis, RMSNorm
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 @pytest.mark.parametrize(
@@ -28,7 +29,8 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
         1024 * 32,
     ),
 )
-def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, seq_len):
     """
     b: batch
     s: sequence length
@@ -59,8 +61,10 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     )
 
     # Initialize TT model
+    tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtTransformerBlock(
         mesh_device=t3k_mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,

@@ -29,8 +29,8 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 4)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
         + gen_shapes([32, 32], [256, 256], [32, 32], 4),
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.int32],
+        "input_b_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -68,8 +68,8 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    torch_input_tensor_a = torch.randint(-100, 100, input_shape, dtype=torch.int32)
-    torch_input_tensor_b = torch.randint(-80, 180, input_shape, dtype=torch.int32)
+    torch_input_tensor_a = torch.randint(-2147483647, 2147483648, input_shape, dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(-2147483647, 2147483648, input_shape, dtype=torch.int32)
 
     golden_function = ttnn.get_golden_function(ttnn.gcd)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)

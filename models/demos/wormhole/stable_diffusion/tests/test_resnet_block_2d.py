@@ -2,22 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from diffusers import StableDiffusionPipeline
-import pytest
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.common.utility_functions import skip_for_grayskull
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def ttnn_to_torch(input):
@@ -28,7 +26,7 @@ def ttnn_to_torch(input):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, memory_layout, buffer_type, shard_end_core, shard_shape, out_channels, use_in_shortcut, block_name, block_index, resnet_index",
     [
@@ -82,7 +80,6 @@ def test_resnet_block_2d_512x512(
     block_name,
     block_index,
     resnet_index,
-    use_program_cache,
 ):
     load_from_disk = False
     if not load_from_disk:

@@ -5,9 +5,15 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  packages: write
+  contents: write
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true

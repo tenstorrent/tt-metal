@@ -120,7 +120,7 @@ def test_uniform(shape, rand_range, dtype, seed, device):
 @pytest.mark.parametrize("rand_range", [[-3, 4]])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("seed", [0])
-def test_uniform_callback(shape, rand_range, dtype, seed, device, use_program_cache):
+def test_uniform_callback(shape, rand_range, dtype, seed, device):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

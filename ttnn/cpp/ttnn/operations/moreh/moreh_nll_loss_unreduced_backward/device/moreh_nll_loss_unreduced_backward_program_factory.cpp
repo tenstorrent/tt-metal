@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
+#include <string>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
@@ -22,12 +24,9 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.get_padded_shape();
+    auto input_grad_shape = input_grad.padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
-
-    auto W = input_grad_shape[-1];
-    auto Wt = W / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
@@ -35,7 +34,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -46,7 +45,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
     auto Ct = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
     auto Nt = tt::div_up(N, tt::constants::TILE_WIDTH);
@@ -62,22 +61,23 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =
@@ -147,16 +147,12 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.get_padded_shape();
-    auto N = input_grad_shape[0];
+    auto input_grad_shape = input_grad.padded_shape();
     auto channel_size = input_grad_shape[1];
 
     auto W = input_grad_shape[-1];
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
-
-    auto target_shape = target.get_padded_shape();
-    auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
@@ -164,7 +160,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -175,7 +171,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
     CreateCircularBuffer(
         program,
@@ -189,22 +185,23 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =
@@ -272,7 +269,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.get_padded_shape();
+    auto input_grad_shape = input_grad.padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -282,7 +279,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto W = input_grad_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
-    auto num_inner_tile = target.volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    auto num_inner_tile = target.physical_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
@@ -290,7 +287,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.volume() / H / W * Ht * Wt;
+    uint32_t units_to_divide = input_grad.physical_volume() / H / W * Ht * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -301,7 +298,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
     CreateCircularBuffer(
         program,
@@ -315,22 +312,23 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false)};
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =
@@ -408,7 +406,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
     const Tensor& input_grad = tensor_return_value;
 
     // split work
-    auto input_grad_shape = input_grad.get_logical_shape();
+    const auto& input_grad_shape = input_grad.logical_shape();
     auto input_grad_rank = input_grad_shape.rank();
 
     if (input_grad_rank == 2) {

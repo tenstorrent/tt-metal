@@ -8,9 +8,34 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.utility_functions import skip_for_wormhole_b0, is_grayskull
 from models.utility_functions import torch_random
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, h, w, dim",
+    [
+        (1, 32, 128000, -1),
+        (1, 2048, 32000, -1),
+        (1, 512, 32000, -1),
+        (1, 32, 32000, -1),  # base case
+    ],
+)
+def test_large_softmax(device, batch_size, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
 @pytest.mark.parametrize(
@@ -107,7 +132,7 @@ def run_softmax_stable_with_program_cache(
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_stable_with_program_cache(
-    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
+    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
     for _ in range(2):
         run_softmax_stable_with_program_cache(
@@ -205,7 +230,7 @@ def run_softmax_sharded_stable(
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_sharded_stable_with_program_cache(
-    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
+    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
     for _ in range(2):
         run_softmax_sharded_stable(
@@ -227,7 +252,7 @@ def test_softmax_sharded_stable_with_program_cache(
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, -3])
+@pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
@@ -238,7 +263,6 @@ def test_softmax(device, batch_size, h, w, dim):
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=dim)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -251,7 +275,6 @@ def test_softmax_with_3D(device):
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -266,7 +289,6 @@ def test_softmax_with_padded_tile_layout(device):
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -281,7 +303,6 @@ def test_softmax_with_padded_tile_layout_large(device):
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -368,3 +389,105 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     assert output_tensor.shape == torch_output_tensor.shape
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+def test_softmax_sd(device):
+    shape = (1, 16, 256, 256)
+
+    input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
+
+    out_torch = ttnn.softmax_in_place.golden_function(input)
+
+    softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        subblock_w=1,
+        block_h=2,
+        block_w=8,
+    )
+
+    mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            [64, 256],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+
+    input = ttnn.from_torch(input, device=device, layout=ttnn.Layout.TILE, memory_config=mem_config)
+
+    out = ttnn.softmax_in_place(
+        input,
+        program_config=softmax_program_config,
+    )
+
+    passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype",
+    [
+        ([32, 32], -1, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32], -1, [torch.float32, ttnn.float32]),
+        ([32, 32], 0, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32], 0, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -1, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -1, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -2, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -2, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -3, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -3, [torch.float32, ttnn.float32]),
+    ],
+)
+def test_softmax_dtypes(device, shape, dim, dtype):
+    torch.manual_seed(0)
+
+    torch_dtype, ttnn_dtype = dtype
+
+    torch_tensor = torch.rand(shape, dtype=torch_dtype)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype)
+
+    torch_output = torch.softmax(
+        torch_tensor,
+        dim=dim,
+    )
+    ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.997)
+
+
+@pytest.mark.parametrize(
+    "fp32_acc_en, math_approx_mode, expected_ulp",
+    [
+        (True, False, 3),
+        (False, True, 11),
+        (True, True, 9),
+        (False, False, 7),
+    ],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
+def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp):
+    torch.manual_seed(0)
+
+    # Reference output
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
+
+    # TTNN Softmax
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=True,
+    )
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config)
+
+    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
+    output_torch = ttnn_output.cpu().to_torch()
+
+    assert_with_ulp(torch_output, output_torch, expected_ulp)

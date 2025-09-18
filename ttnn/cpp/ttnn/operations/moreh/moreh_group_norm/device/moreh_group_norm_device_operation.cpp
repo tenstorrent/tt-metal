@@ -31,31 +31,31 @@ void MorehGroupNormOperation::validate_tensors(
     check_tensor(beta, "moreh_group_norm", "beta");
 
     // input (N, C, H, W)
-    auto C = input.get_padded_shape()[1];
+    auto C = input.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
     if (output.has_value()) {
-        C = output.value().get_padded_shape()[1];
+        C = output.value().padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
     }
     // gamma (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_logical_shape()[-1];
+        C = gamma.value().logical_shape()[-1];
         TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
     // beta (1, 1, 1, C)
     if (beta.has_value()) {
-        C = beta.value().get_logical_shape()[-1];
+        C = beta.value().logical_shape()[-1];
         TT_FATAL(C % num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
     if (mean.has_value()) {
-        TT_FATAL(mean.value().get_logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+        TT_FATAL(mean.value().logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
     }
     // rstd (1, 1, N, num_groups)
     if (rstd.has_value()) {
-        TT_FATAL(rstd.value().get_logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+        TT_FATAL(rstd.value().logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
     }
 }
 
@@ -77,10 +77,10 @@ void MorehGroupNormOperation::validate_on_program_cache_hit(
 MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    auto dtype = tensor_args.input.get_dtype();
+    auto dtype = tensor_args.input.dtype();
     Layout layout{Layout::TILE};
     // mean, rstd (1, 1, N, num_groups)
-    const auto output_shape = tensor_args.input.get_logical_shape();
+    const auto output_shape = tensor_args.input.logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
     Shape mean_rstd_shape({1, 1, N, num_groups});
@@ -90,7 +90,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
 
     // output
     if (tensor_args.output.has_value()) {
-        result.push_back(tensor_args.output->get_tensor_spec());
+        result.push_back(tensor_args.output->tensor_spec());
     } else {
         result.push_back(
             TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
@@ -98,7 +98,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
 
     // mean
     if (tensor_args.mean.has_value()) {
-        result.push_back(tensor_args.mean->get_tensor_spec());
+        result.push_back(tensor_args.mean->tensor_spec());
     } else if (operation_attributes.are_required_outputs[1]) {
         result.push_back(
             TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
@@ -108,7 +108,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
 
     // rstd
     if (tensor_args.rstd.has_value()) {
-        result.push_back(tensor_args.rstd->get_tensor_spec());
+        result.push_back(tensor_args.rstd->tensor_spec());
     } else if (operation_attributes.are_required_outputs[2]) {
         result.push_back(
             TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));

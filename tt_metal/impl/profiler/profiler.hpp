@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,244 +6,271 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <iostream>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "buffer.hpp"
-#include "mesh_buffer.hpp"
-#include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
-#include "profiler_paths.hpp"
-#include "profiler_state.hpp"
 #include "profiler_types.hpp"
-#include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
-class Buffer;
 class IDevice;
-class Program;
 }  // namespace tt_metal
 }  // namespace tt
 
-using std::chrono::duration;
-using std::chrono::duration_cast;
-using std::chrono::nanoseconds;
-using std::chrono::steady_clock;
+using RuntimeID = uint32_t;
 
 namespace tt {
 
 namespace tt_metal {
 
-struct DisptachMetaData {
-    // Dispatch command queue command type
-    std::string cmd_type = "";
+template <typename T1, typename T2>
+struct pair_hash {
+    size_t operator()(const std::pair<T1, T2>& p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        constexpr std::size_t hash_combine_prime = 0x9e3779b9;
+        return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
+    }
+};
 
-    // Worker's runtime id
-    uint32_t worker_runtime_id = 0;
+class FabricRoutingLookup;
 
-    // dispatch command subtype.
-    std::string cmd_subtype = "";
+struct SyncInfo {
+    double cpu_time = 0.0;
+    double device_time = 0.0;
+    double frequency = 0.0;
+
+    SyncInfo(double cpu_time, double device_time, double frequency) :
+        cpu_time(cpu_time), device_time(device_time), frequency(frequency) {}
+
+    SyncInfo() : SyncInfo(0.0, 0.0, 0.0) {}
+};
+
+struct FabricEventMarkers {
+    std::vector<tracy::TTDeviceMarker> fabric_write_markers;
+    tracy::TTDeviceMarker fabric_routing_fields_marker;
+    tracy::TTDeviceMarker local_noc_write_marker;
+    std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
 };
 
 class DeviceProfiler {
 private:
     // Device architecture
-    tt::ARCH device_architecture;
+    tt::ARCH device_arch{tt::ARCH::Invalid};
+
+    // Device ID
+    chip_id_t device_id{};
 
     // Device frequency
-    int device_core_frequency;
+    int device_core_frequency{};
+
+    // Thread pool used for processing data when dumping results
+    std::shared_ptr<ThreadPool> thread_pool{};
+
+    // Last fast dispatch read performed flag
+    bool is_last_fd_read_done{};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 
-    // Output Dir for device Profile Logs
+    // Output directory for device profiler logs
     std::filesystem::path output_dir;
 
-    // Device-Core tracy context
-    std::map<std::pair<uint16_t, CoreCoord>, TracyTTCtx> device_tracy_contexts;
-
     // Hash to zone source locations
-    std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
+    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
-    // Zone sourece locations
-    std::unordered_set<std::string> zone_src_locations;
-
-    // Iterator on the current zone being processed
-    std::set<tracy::TTDeviceEvent>::iterator current_zone_it;
-
-    // Holding current data collected for dispatch command queue zones
-    DisptachMetaData current_dispatch_meta_data;
+    // Device-Core tracy context
+    std::unordered_map<std::pair<chip_id_t, CoreCoord>, TracyTTCtx, pair_hash<chip_id_t, CoreCoord>>
+        device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device
-    std::tuple<double, double, double> device_sync_info;
+    SyncInfo device_sync_info;
 
     // Per-core sync info used to make tracy context
-    std::map<CoreCoord, std::tuple<double, double, double>> core_sync_info;
+    std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
 
-    // 32bit FNV-1a hashing
-    uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
+    // Storage for all core's control buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
-    // XORe'd 16-bit FNV-1a hashing functions
-    uint16_t hash16CT(const std::string& str);
+    // Storage for all core's L1 data buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
-    // Iterate through all zone source locations and generate hash
-    void generateZoneSourceLocationsHashes();
+    // Storage for all noc trace data
+    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
 
-    // serialize all noc trace data into per-op json trace files
-    void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id);
+    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
+    // twice
+    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
 
-    void emitCSVHeader(
-        std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
+    // Output directory for noc trace data
+    std::filesystem::path noc_trace_data_output_dir;
 
-    // translates potentially-virtual coordinates recorded on Device into physical coordinates
-    CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
+    // Read all control buffers
+    void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
-    // Dumping profile result to file
-    void logPacketData(
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log,
-        uint32_t runHostID,
-        const std::string& opname,
-        chip_id_t device_id,
-        CoreCoord core,
-        int core_flat,
-        int risc_num,
-        uint64_t stat_value,
-        uint32_t timer_id,
-        uint64_t timestamp);
+    // Read control buffer for a single core
+    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
 
-    // logs packet data to CSV file
-    void logPacketDataToCSV(
-        std::ofstream& log_file_ofs,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        const std::string_view risc_name,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        const std::string_view source_file,
-        const nlohmann::json& metaData);
+    // Reset all control buffers
+    void resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
-    // dump noc trace related profile data to json file
-    void logNocTracePacketDataToJson(
-        nlohmann::ordered_json& noc_trace_json_log,
-        chip_id_t device_id,
-        int core_x,
-        int core_y,
-        const std::string_view risc_name,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        uint64_t data,
-        uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
-        kernel_profiler::PacketTypes packet_type,
-        uint64_t source_line,
-        const std::string_view source_file);
+    // Read all L1 data buffers
+    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+
+    // Read L1 data buffer for a single core
+    void readL1DataBufferForCore(
+        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
+
+    // Read device profiler buffer
+    void readProfilerBuffer(IDevice* device);
+
+    // Read data from profiler buffer using fast dispatch
+    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from profiler buffer using slow dispatch
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from L1 data buffer using fast dispatch
+    void issueFastDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
+
+    // Read data from L1 data buffer using slow dispatch
+    void issueSlowDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
-        const ProfilerDumpState state,
-        const std::optional<ProfilerOptionalMetadata>& metadata,
-        std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log);
+        ProfilerDataBufferSource data_source,
+        const std::optional<ProfilerOptionalMetadata>& metadata);
 
-    // Track the smallest timestamp dumped to file
-    void firstTimestamp(uint64_t timestamp);
+    // Read marker data to be displayed
+    void readDeviceMarkerData(
+        std::set<tracy::TTDeviceMarker>& device_markers,
+        uint32_t run_host_id,
+        const std::string& op_name,
+        chip_id_t device_id,
+        const CoreCoord& physical_core,
+        tracy::RiscType risc_type,
+        uint64_t data,
+        uint32_t timer_id,
+        uint64_t timestamp);
 
-    // Get tracy context for the core
-    void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
+    // Track the smallest timestamp read
+    void updateFirstTimestamp(uint64_t timestamp);
+
+    // Dump device results to files
+    void writeDeviceResultsToFiles() const;
+
+    // Push device results to tracy
+    void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
+    // Initialize tracy contexts that haven't been initialized yet
+    void initializeMissingTracyContexts(bool blocking = true);
+
+    // Update tracy contexts
+    void updateTracyContexts(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
+    // Update tracy context for the core
+    void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
+
+    // Iterate over all markers and update their data if needed
+    void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 
 public:
-    DeviceProfiler(const bool new_logs);
+    DeviceProfiler(const IDevice* device, bool new_logs);
 
     DeviceProfiler() = delete;
 
-    ~DeviceProfiler();
-
-    // DRAM buffer for device side results
-    distributed::AnyBuffer output_dram_buffer;
-    std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
+    ~DeviceProfiler() = default;
 
     // Device-core Syncdata
-    std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
+    std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    // Device events
-    std::set<tracy::TTDeviceEvent> device_events;
+    // Number of bytes reserved in each DRAM bank for storing device profiling data
+    uint32_t profile_buffer_bank_size_bytes{};
 
-    std::set<tracy::TTDeviceEvent> device_sync_events;
+    // Device markers grouped by (physical core, risc type)
+    std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
 
-    std::set<tracy::TTDeviceEvent> device_sync_new_events;
+    std::set<tracy::TTDeviceMarker> device_sync_markers;
+
+    std::set<tracy::TTDeviceMarker> device_sync_new_markers;
 
     // shift
     int64_t shift = 0;
 
     // frequency scale
-    double freqScale = 1.0;
+    double freq_scale = 1.0;
 
     // Freshen device logs
     void freshDeviceLog();
 
-    // Set the device architecture
-    void setDeviceArchitecture(tt::ARCH device_arch);
-
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
 
-    // Traverse all cores on the device and dump the device profile results
-    void dumpResults(
+    // Traverse all cores on the device and read the device profile results
+    void readResults(
         IDevice* device,
-        const std::vector<CoreCoord>& worker_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const std::vector<CoreCoord>& virtual_cores,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
+        ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
-    // Push device results to tracy
-    void pushTracyDeviceResults();
+    // Process the device profile results previously read
+    void processResults(
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
+        ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
+        const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+    void dumpRoutingInfo() const;
+
+    void dumpClusterCoordinates() const;
+
+    // Dump device results to files and tracy
+    void dumpDeviceResults(bool is_mid_run_dump = false);
 
     // Update sync info for this device
-    void setSyncInfo(std::tuple<double, double, double> sync_info);
+    void setSyncInfo(const SyncInfo& sync_info);
+
+    // Destroy tracy contexts
+    void destroyTracyContexts();
+
+    // Get marker details for the marker corresponding to the given timer id
+    tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
+
+    // setter and getter on last fast dispatch read
+    void setLastFDReadAsDone();
+
+    void setLastFDReadAsNotDone();
+
+    bool isLastFDReadDone() const;
 };
 
-void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+bool useFastDispatch(IDevice* device);
 
-void write_control_buffer_to_core(
-    IDevice* device,
-    const CoreCoord& core,
-    const HalProgrammableCoreType core_type,
-    const ProfilerDumpState state,
-    std::vector<uint32_t>& control_buffer);
+void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
 
 }  // namespace tt_metal
 

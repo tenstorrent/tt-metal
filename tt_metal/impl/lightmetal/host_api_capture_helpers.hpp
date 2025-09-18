@@ -6,7 +6,7 @@
 
 #include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
@@ -21,7 +21,7 @@ struct EthernetConfig;
 
 class IDevice;
 struct BufferConfig;
-struct CircularBufferConfig;
+class CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 //////////////////////////////////////////////////////////////
@@ -73,21 +73,20 @@ void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool block
 
 void CaptureEnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
 
-void CaptureLoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid);
+void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t tid);
 
 void CaptureReleaseTrace(IDevice* device, uint32_t tid);
 
 void CaptureBufferCreate(
     const std::shared_ptr<Buffer>& buffer,
     IDevice* device,
-    const std::optional<DeviceAddr> address,  // Made optional to share with 2 variants.
+    std::optional<DeviceAddr> address,  // Made optional to share with 2 variants.
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id);
+    BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    std::optional<bool> bottom_up,
+    std::optional<SubDeviceId> sub_device_id);
 
 void CaptureBufferDeallocate(const Buffer& buffer);
 void CaptureBufferDelete(const Buffer& buffer);
@@ -126,12 +125,6 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     KernelHandle kernel_id,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
-
-void CaptureSetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 void CaptureCreateCircularBuffer(
     CBHandle& cb_handle,

@@ -4,11 +4,12 @@
 
 
 import math
-import torch
-
 from typing import Optional
-import ttnn
+
+import torch
 from tt_lib.utils import pad_weight
+
+import ttnn
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
@@ -186,11 +187,11 @@ class TtMultiHeadAttentionModel:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
             qkv_weight_cache_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+                f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             qkv_bias_cache_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
+                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.tensorbin"
             )
 
         def compute_qkv_weight():

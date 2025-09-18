@@ -10,7 +10,7 @@ import evaluate
 from loguru import logger
 from datasets import load_dataset
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     Profiler,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
@@ -153,7 +153,7 @@ def run_perf_distilbert(expected_inference_time, expected_compile_time, device, 
         ),
     ),
 )
-def test_perf_bare_metal(device, use_program_cache, expected_inference_time, expected_compile_time, iterations):
+def test_perf_bare_metal(device, expected_inference_time, expected_compile_time, iterations):
     run_perf_distilbert(expected_inference_time, expected_compile_time, device, iterations)
 
 
@@ -168,5 +168,5 @@ def test_perf_bare_metal(device, use_program_cache, expected_inference_time, exp
         ),
     ),
 )
-def test_perf_virtual_machine(device, use_program_cache, expected_inference_time, expected_compile_time, iterations):
+def test_perf_virtual_machine(device, expected_inference_time, expected_compile_time, iterations):
     run_perf_distilbert(expected_inference_time, expected_compile_time, device, iterations)

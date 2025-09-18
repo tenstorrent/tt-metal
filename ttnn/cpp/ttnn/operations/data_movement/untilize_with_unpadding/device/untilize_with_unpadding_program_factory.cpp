@@ -13,6 +13,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
@@ -23,28 +24,27 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    const auto& input_shape = a.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    tt::log_debug("untilize_with_unpadding_single_core");
-    tt::log_debug("input_cb_data_format: {}", input_cb_data_format);
-    tt::log_debug("output_cb_data_format: {}", output_cb_data_format);
+    log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "output_cb_data_format: {}", output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    int32_t num_tiles = a.volume() / TILE_HW;
+    int32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -59,8 +59,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
     auto output_x = output_shape[-1];
 
-    uint32_t num_padded_sticks = input_w * input_z * input_y;
-    uint32_t num_unpadded_sticks = input_w * input_z * output_y;
     uint32_t padded_stick_size = input_x * output.element_size();  // Assuming bfloat16 dataformat
     uint32_t unpadded_stick_size = output_x * output.element_size();
 
@@ -105,14 +103,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(
                               num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
                               .set_page_size(src0_cb_index, input_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
                                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
                                 .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     const std::array writer_kernel_args = {
         dst_buffer->address(),
@@ -124,7 +122,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         padded_Y_diff_blocks,
         num_leftover_Y,
         output_x,
-        unpadded_stick_size,
         padded_stick_size,
         num_blocks_w_input,
         num_blocks_w_output,
@@ -132,19 +129,15 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         block_row_size,
         block_row_leftover_size};
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t stick_size = unpadded_stick_size;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size,
-        (std::uint32_t)(
-            (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32))};
+        (std::uint32_t)((
+            input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
+            input_cb_data_format == tt::DataFormat::Int32)),
+        unpadded_stick_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -167,20 +160,26 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         uint32_t(src0_cb_index),
         uint32_t(output_cb_index)};
 
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
-    auto untilize_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel,
         core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
@@ -217,21 +216,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
-    uint32_t num_blocks = (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
 
     auto
         [ncores,
@@ -255,7 +254,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     uint32_t unpadded_row_size_bytes;
 
     uint32_t el_size = a.element_size();
-    if (a.get_dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
         el_size = output.element_size();
@@ -309,7 +308,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     }
 
     if (has_cliff_col) {
-        auto [src3_cb_index, cb_src3] = create_cb(
+        create_cb(
             tt::CBIndex::c_0,
             program,
             cliff_col_core_range,
@@ -317,7 +316,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             single_block_size,
             input_cb_data_format);
 
-        auto [output3_cb_index, cb_output3] = create_cb(
+        create_cb(
             tt::CBIndex::c_16,
             program,
             cliff_col_core_range,
@@ -332,10 +331,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     // reader
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t num_tiles_2d = a.get_padded_shape()[-1] * a.get_padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.get_logical_shape();
+    auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -343,55 +341,59 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, total_tiles_per_row};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, total_tiles_per_row}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
-    uint32_t total_num_rows = output.get_logical_shape()[-2];
-    std::map<std::string, std::string> writer_defines = {
-        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
-
+    uint32_t total_num_rows = output.logical_shape()[-2];
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
+        WriterDataMovementConfig(writer_ct_args));
 
     // compute
-
+    bool use_pack_kernel = true;
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+        use_pack_kernel = false;
+    }
     if (core_range.size() > 0) {
-        auto untilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
-        auto tilize_col_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
-        auto tilize_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -399,9 +401,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     }
 
     if (has_cliff_col) {
-        auto tilize_col_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -445,7 +449,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             TILE_WIDTH * el_size * single_block_size_row_arg,
             start_row_id,
             start_column_id,
@@ -505,36 +508,33 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = input_shape[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
     uint32_t el_size = a.element_size();
-    if (a.get_dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
+    if (a.dtype() == DataType::BFLOAT8_B) {
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {
-        padded_row_size_bytes = input_shape[-1] * a.element_size();
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
@@ -547,10 +547,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     // reader
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t num_tiles_2d = a.get_padded_shape()[-1] * a.get_padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.get_logical_shape();
+    auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -558,35 +557,32 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, nblocks_per_core};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_col_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, nblocks_per_core}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
+    uint32_t total_num_rows = output.logical_shape()[-2];
 
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
-    uint32_t total_num_rows = output.get_logical_shape()[-2];
-
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, ncores, third_dim, TILE_WIDTH, unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_col_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, stick_size_is_power_of_two, log2_stick_size, total_num_rows, ncores, third_dim, TILE_WIDTH}));
+        WriterDataMovementConfig(writer_ct_args));
 
     // compute
 
     std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
 
     if (core_range.size() > 0) {
-        auto tilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range,
@@ -595,7 +591,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
                 .compile_args = {nblocks_per_core, num_tiles_per_col, third_dim}});
     }
     if (has_cliff) {
-        auto tilize_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range_cliff,
@@ -620,7 +616,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             i,
             size_per_row_per_block,
             number_blocks_per_core,
@@ -665,21 +660,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
 
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
@@ -687,8 +682,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
         if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-            uint32_t num_blocks_block =
-                (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+            uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
 
             auto
                 [ncores_block,
@@ -718,7 +712,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
-    if (a.get_dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
     } else {
@@ -736,69 +730,69 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** reader
      */
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     /** writer
      */
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
+                        input_cb_data_format == tt::DataFormat::UInt32 or
+                        input_cb_data_format == tt::DataFormat::Int32),
+        unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram,
-             stick_size_is_power_of_two,
-             log2_stick_size,
-             (std::uint32_t)(
-                 input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)}));
+        WriterDataMovementConfig(writer_ct_args));
 
     /** compute
      */
-
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
     if (core_range.size() > 0) {
-        auto tilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
+                .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff) {
-        auto tilize_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16}});
+                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
+                .defines = compute_kernel_defines});
     }
 
-    uint32_t tile_height = output.get_tensor_spec().tile().get_height();
+    uint32_t tile_height = output.tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    uint32_t ncores_x = grid_size.x;
 
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores; ++i) {
@@ -808,7 +802,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         // writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             padded_row_size_bytes,
             row_start_id,
             static_cast<unsigned int>(assignment.size()),
@@ -890,15 +883,12 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
     // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.get_padded_shape()[-1] == 16 && output.get_padded_shape()[-2] % TILE_HEIGHT == 0;
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    IDevice* device = a.device();
-
-    auto grid_size = device->compute_with_storage_grid_size();
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
@@ -916,26 +906,25 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.volume() / (a.get_padded_shape()[-2] * a.get_padded_shape()[-1]);
+    uint32_t batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
     block_row_size = out_shard_spec.shape[1] * output.element_size();         // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
-    last_block_row_size_unpadded =
-        block_row_size -
-        (tt::round_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
-            output.element_size();
-    uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
+    output_row_size = output.padded_shape()[-1] * output.element_size();      // output row size bytes
+    last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
+                                                     output.padded_shape()[-1]) *
+                                                        output.element_size();
+    uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
-    if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = tt::div_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - 1;
-    } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        last_idx = tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1;
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
-            tt::div_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - 1,
+            tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1,
             tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
     }
     if (!row_major) {
@@ -953,6 +942,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         src_sharded ? a.buffer() : nullptr);
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
+    auto aligned_page_size = output.buffer()->aligned_page_size();
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
@@ -966,7 +956,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                                                                           output.buffer())
                                                                     : std::make_tuple(tt::CBIndex::c_17, CBHandle{});
 
-    Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -985,7 +974,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        std::vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
+        std::vector<uint32_t> writer_ct_args = {
+            (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16
@@ -996,11 +986,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)out_is_dram,
             (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                       input_cb_data_format == tt::DataFormat::UInt32)};
+                       input_cb_data_format == tt::DataFormat::UInt32 or input_cb_data_format == tt::DataFormat::Int32),
+            output_row_size};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
@@ -1017,24 +1007,31 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         (uint32_t)output_cb_index,
     };
 
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    } else if (
+        !use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
-    auto untilize_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel,
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
 
     // reader runtime args
     const std::array reader_rt_args = {
@@ -1058,8 +1055,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
     } else {
-        uint32_t tile_start_id = 0;
-        uint32_t row_start_id = 0;
         cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             CoreCoord& core = cores[i];
@@ -1069,7 +1064,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
             uint32_t num_rows_unpadded = num_rows_block;
-            if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
                 if (i > last_idx) {
@@ -1081,7 +1076,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
                 }
-            } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 block_start_row_offset = 0;
                 block_start_row_id_offset = i * num_rows_block;
                 if (i > last_idx) {
@@ -1126,7 +1121,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                 std::uint32_t{1},
                 std::uint32_t{1},
                 std::uint32_t{1},
-                output_row_size,
                 row_size_unpadded,
                 num_rows_unpadded,
                 block_start_row_id_offset,
@@ -1149,7 +1143,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);

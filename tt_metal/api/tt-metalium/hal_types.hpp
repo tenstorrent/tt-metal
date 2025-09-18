@@ -27,7 +27,7 @@ enum class HalL1MemAddrType : uint8_t {
     MAILBOX,
     LAUNCH,
     WATCHER,
-    DPRINT,
+    DPRINT_BUFFERS,
     PROFILER,
     KERNEL_CONFIG,  // End is start of unreserved memory
     UNRESERVED,     // Only for ethernet cores
@@ -35,17 +35,28 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
+    GO_MSG_INDEX,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
     APP_SYNC_INFO,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
     RETRAIN_FORCE,
+    CRC_ERR,    // Link status - CRC error count
+    CORR_CW,    // Link status - Corrected Codewords count
+    UNCORR_CW,  // Link status - Uncorrected Codewords count
+    LINK_UP,    // Link status - Link up status
     FABRIC_ROUTER_CONFIG,
+    ETH_FW_MAILBOX,
+    TENSIX_ROUTING_TABLE,
+    TENSIX_FABRIC_CONNECTIONS,
+    TENSIX_ROUTING_PATH_1D,
+    TENSIX_ROUTING_PATH_2D,
+    LITE_FABRIC_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
-enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
+enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
 

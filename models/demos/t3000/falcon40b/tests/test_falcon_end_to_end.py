@@ -2,32 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
-from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.t3000.falcon40b.tt.falcon_common import (
-    PytorchFalconCausalLM,
-)
-
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_and_get_pcc
-from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     skip_for_grayskull,
 )
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_and_get_pcc, comp_pcc
+from ttnn import ConcatMeshToTensor
 
 
 # TODO: Replace this with actual Falcon application-level tests
@@ -439,6 +430,7 @@ def run_test_FalconCausalLM_end_to_end(
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,
@@ -453,7 +445,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     model_config_str = f"{data_type}-{memcfg}"
     if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:

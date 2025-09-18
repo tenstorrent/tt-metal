@@ -17,23 +17,60 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from models.utility_functions import skip_for_blackhole
 
 
-def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids):
+def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
     """
     Check that the sampling operation is deterministic for the same seed.
     """
     # Run the operation twice with the same seed
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor_1 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+        seed=seed,
+        sub_core_grids=sub_core_grids,
     )
     output_1 = ttnn.to_torch(output_tensor_1)
 
     output_tensor_2 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+        seed=seed,
+        sub_core_grids=sub_core_grids,
     )
     output_2 = ttnn.to_torch(output_tensor_2)
 
     # Ensure the outputs match for all users
     assert torch.allclose(output_1, output_2), "Output is not deterministic for the same seed"
+
+
+def check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device):
+    """
+    Check that the sampling operation is random without setting the seed.
+    """
+    # Run the operation twice with the same seed
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor_1 = ttnn.sampling(
+        input_values_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp, sub_core_grids=sub_core_grids
+    )
+    output_1 = ttnn.to_torch(output_tensor_1)
+
+    output_tensor_2 = ttnn.sampling(
+        input_values_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp, sub_core_grids=sub_core_grids
+    )
+    output_2 = ttnn.to_torch(output_tensor_2)
+
+    # Ensure different outputs
+    assert not torch.allclose(output_1, output_2), "Output is deterministic without setting the seed"
 
 
 def validate_statistics(input_values, output, k, p):
@@ -60,7 +97,7 @@ def validate_statistics(input_values, output, k, p):
             sorted_probs, _ = torch.sort(probs, descending=True)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
             cutoff_index = torch.searchsorted(cumulative_probs.squeeze(0).squeeze(0), user_p) + 1
-            top_k_values, top_k_ind = torch.topk(user_input_values, k=cutoff_index, dim=-1)
+            top_k_values, top_k_ind = torch.topk(user_input_values, k=cutoff_index + 1, dim=-1)
             assert torch.all(
                 torch.isin(user_output.int(), top_k_ind.int())
             ), f"Output values for user {user_idx} are not within the top-{cutoff_index} values"
@@ -71,8 +108,19 @@ def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p
     Test edge cases for the sampling operation.
     """
     num_users = len(k)
+    k_tensor = ttnn.from_torch(
+        torch.tensor([32] * num_users), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    p_tensor = ttnn.from_torch(torch.tensor(p) * 0.0, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor_k1 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=[1] * num_users, p=p, seed=seed, sub_core_grids=sub_core_grids
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+        seed=seed,
+        sub_core_grids=sub_core_grids,
     )
     output_k1 = ttnn.to_torch(output_tensor_k1)
     top_1_value, top_1_ind = torch.topk(input_values, k=1, dim=-1)
@@ -86,16 +134,28 @@ def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_
     input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     # Call the sampling operation
     output_tensor = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+        seed=seed,
+        sub_core_grids=sub_core_grids,
     )
 
     # Convert the output tensor back to torch
     output = ttnn.to_torch(output_tensor)
 
     # Perform determinism check
-    check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids)
+    check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device)
+
+    # Perform randomness check
+    check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device)
 
     # Perform statistical validation
     validate_statistics(input_values, output, k, p)
@@ -121,7 +181,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
+@skip_for_blackhole("Failing on Blackhole, see Issue#26176")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -131,8 +191,8 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 )
 @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
-@pytest.mark.parametrize("seed", [2024, 11, 0])
-def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
+@pytest.mark.parametrize("seed", [2024, 11, 123])
+def test_sampling_callback(shape, k, p, seed, device):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
@@ -146,7 +206,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
+@skip_for_blackhole("Failing on Blackhole, see Issue#26176")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -159,7 +219,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
 @pytest.mark.parametrize(
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
-def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, use_program_cache):
+def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

@@ -86,17 +86,17 @@ def normalize_global(x, *args, **kwargs):
 
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
-    return torch.sum(x, dim=dim, keepdim=True)
+    return torch.sum(x, dim=dim)
 
 
 def where(x, y, z, *args, **kwargs):
-    return torch.where(x > 0, y, z)
+    return torch.where(x.bool(), y, z)
 
 
 def where_scalar(x, *args, **kwargs):
     y = kwargs.pop("scalar_true")
     z = kwargs.pop("scalar_false")
-    return torch.where(x > 0, y, z)
+    return torch.where(x.bool(), y, z)
 
 
 def where_bw(x, y, z, w, *args, **kwargs):
@@ -974,10 +974,9 @@ def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
 
-def prod(x, *args, all_dimensions, dim, **kwargs):
-    if all_dimensions:
+def prod(x, *args, dim, **kwargs):
+    if dim is None:
         return torch.prod(x)
-
     return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
@@ -1234,15 +1233,15 @@ def outer(x, y, *args, **kwargs):
     return torch.outer(x.squeeze(), y.squeeze())
 
 
-def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_sum(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
 
 
-def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_max(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
 
-def reduce_min(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_min(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amin(x, dims, keepdim)
 
 
@@ -1477,7 +1476,13 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
-        return torch.clamp(x.to(torch.int32), min=0, max=65535)
+        return x.to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x, min=0, max=65535)
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x, min=0, max=65535)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:

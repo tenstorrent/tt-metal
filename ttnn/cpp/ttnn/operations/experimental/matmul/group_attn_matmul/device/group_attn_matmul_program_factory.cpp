@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
@@ -27,7 +28,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -35,12 +37,12 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32
                                             ? tt::DataFormat::Float32
                                             : tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
     uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
@@ -87,17 +89,17 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     uint32_t ONE_ROW_BFLOAT16_BYTES = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? 128 : 64;
     const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w;  // TODO: Generalize
 
-    log_debug("in0_block_w: {}", in0_block_w);
-    log_debug("out_subblock_h: {}", out_subblock_h);
-    log_debug("out_subblock_w: {}", out_subblock_w);
-    log_debug("math_fidelity: {}", math_fidelity);
-    log_debug("math_approx_mode: {}", math_approx_mode);
-    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    log_debug("packer_l1_acc: {}", packer_l1_acc);
-    log_debug("in0_data_format: {}", in0_data_format);
-    log_debug("in1_data_format: {}", in1_data_format);
-    log_debug("interm_data_format: {}", interm_data_format);
-    log_debug("output_data_format: {}", output_data_format);
+    log_debug(tt::LogOp, "in0_block_w: {}", in0_block_w);
+    log_debug(tt::LogOp, "out_subblock_h: {}", out_subblock_h);
+    log_debug(tt::LogOp, "out_subblock_w: {}", out_subblock_w);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "packer_l1_acc: {}", packer_l1_acc);
+    log_debug(tt::LogOp, "in0_data_format: {}", in0_data_format);
+    log_debug(tt::LogOp, "in1_data_format: {}", in1_data_format);
+    log_debug(tt::LogOp, "interm_data_format: {}", interm_data_format);
+    log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
 
     // Mcast args
     auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
@@ -179,7 +181,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::CircularBufferConfig(
             interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
-    auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
     uint32_t cb_intermed1_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_interm1_config =
@@ -209,27 +211,23 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     }
 
-    const uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)src1_is_dram,
         (uint32_t)transpose_hw_bool,
         (uint32_t)row_major,
         out_subblock_w,
     };
+    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)dst_is_dram,
         (uint32_t)output_cb_index,
         out_subblock_w,
         intermediate_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_kernel_defines;
-    std::map<string, string> writer_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
+    std::map<std::string, std::string> writer_kernel_defines;
     if (in0_is_sharded) {
         writer_kernel_defines["IN0_SHARDED"] = "1";
     }
@@ -324,7 +322,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::Buffer* src1_buffer = b.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-        const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+        const auto& ashape = a.padded_shape();
+        const auto& bshape = b.padded_shape();
 
         tt::tt_metal::IDevice* device = a.device();
 
@@ -513,7 +512,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
             device_compute_with_storage_grid.y,
             row_major);
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         std::vector<std::vector<uint32_t>> all_reader_runtime_args = {cores.size(), reader_runtime_args};
         std::vector<std::vector<uint32_t>> all_writer_runtime_args = {cores.size(), writer_runtime_args};
@@ -522,8 +520,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         // Set runtime args
         uint32_t num_output_blocks_per_core;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_output_blocks_per_core = num_output_blocks_per_core_group_1;
             } else {

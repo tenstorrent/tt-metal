@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 
@@ -32,13 +33,12 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = tmp_pow_sum.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto num_tiles = tmp_pow_sum.volume() / tt::constants::TILE_HW;
+    const auto num_tiles = tmp_pow_sum.physical_volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 
@@ -61,7 +61,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     const uint32_t im2_t = 1;  // log(x)
     const uint32_t im3_t = 1;  // exp(log(x) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.dtype());
 
     CreateCircularBuffer(
         program,
@@ -87,8 +87,12 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "writer_moreh_clip_grad_norm_step2.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, single_core);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, single_core);
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(reader_ct_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, single_core, reader_ct_args);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*total_norm.buffer()).append_to(writer_ct_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, single_core, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -107,18 +111,15 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
 
     // reader
     const std::array reader_runtime_args{
-        input_addr,
-        static_cast<uint32_t>(tmp_pow_sum.buffer()->is_dram()),
-        num_tiles,
-        *reinterpret_cast<uint32_t*>(&decimal)};
+        input_addr, static_cast<uint32_t>(num_tiles), *reinterpret_cast<uint32_t*>(&decimal)};
     SetRuntimeArgs(program, reader_kernel_id, single_core, reader_runtime_args);
 
     // writer
-    const std::array writer_runtime_args{output_addr, static_cast<uint32_t>(total_norm.buffer()->is_dram())};
+    const std::array writer_runtime_args{output_addr};
     SetRuntimeArgs(program, writer_kernel_id, single_core, writer_runtime_args);
 
     // compute
-    const std::array compute_runtime_args{num_tiles, p, static_cast<uint32_t>(p_is_negative)};
+    const std::array compute_runtime_args{static_cast<uint32_t>(num_tiles), p, static_cast<uint32_t>(p_is_negative)};
     SetRuntimeArgs(program, compute_kernel_id, single_core, compute_runtime_args);
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, single_core}};
@@ -144,7 +145,7 @@ void MorehClipGradNormStep2Operation::ProgramFactory::override_runtime_arguments
     {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, single_core);
         runtime_args[0] = input_address;
-        runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
+        runtime_args[2] = *reinterpret_cast<uint32_t*>(&decimal);
     }
 
     {

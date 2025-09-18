@@ -1,27 +1,43 @@
 .. _Tutorials:
 
-.. note::
-   Certain TT-NN tutorials currently work on Grayskull only. Please check the specific pages
-   of tutorials below for more information.
-
 Tutorials
 #########
 
-This is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
-notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
+This section provides a collection of Python tutorials designed to help you get started with **TT-NN** for tasks such as tensor operations, model conversion, and inference.
 
-These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
-followed the instructions for `installing and building the software from source <https://github.com/tenstorrent/tt-metal/blob/main/README.md>`_.
+To run these tutorials smoothly, we recommend using a Python virtual environment with the necessary dependencies installed. You can set this up in one of two ways:
 
-From within the `ttnn/tutorials` directory, launch the notebooks with: :code:`jupyter lab --no-browser --port=8888`
-Hint: Be sure to always run the cells from top to bottom as the order of the cells are dependent.
+- **Full Development Environment:**
+  Follow the instructions in the
+  `TT-NN / TT-Metal Installation Guide <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_
+  to set up the complete development environment.
+
+- **Lightweight Tutorial Environment:**
+  Use the provided
+  `Python Environment Setup Script <https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/tutorials_venv.sh>`_
+  to create a minimal virtual environment specifically for running the tutorials.
+
+Each tutorial also has an equivalent standalone Python script that you can run locally. These scripts are located in the
+`ttnn/tutorials/basic_python/ <https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python>`_
+directory of the **TT-Metal** repository.
+
+With your virtual environment activated, you can run the tutorials directly:
+
+.. code-block:: console
+
+   $ python3 --version
+   Python 3.10.12
+   $ python3 example.py
+   ...
+
+Available tutorials:
 
 .. toctree::
 
-   tutorials/tensor_and_add_operation.rst
-   tutorials/matmul.rst
-   tutorials/multihead-attention.rst
-   tutorials/ttnn-tracer.rst
-   tutorials/profiling.rst
-   tutorials/resnet-basic-block.rst
-   tutorials/graphing_torch_dit.rst
+   tutorials/2025_dx_rework/ttnn_add_tensors.ipynb
+   tutorials/2025_dx_rework/ttnn_basic_operations.ipynb
+   tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.ipynb
+   tutorials/2025_dx_rework/ttnn_multihead_attention.ipynb
+   tutorials/2025_dx_rework/ttnn_basic_conv.ipynb
+   tutorials/2025_dx_rework/ttnn_simplecnn_inference.ipynb
+   tutorials/2025_dx_rework/ttnn_visualizer.md

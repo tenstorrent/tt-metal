@@ -5,7 +5,8 @@
 #include <limits>
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
@@ -25,7 +26,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_padded_shape();
+    const auto input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
@@ -34,9 +35,9 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     const auto Ht = H / tt::constants::TILE_HEIGHT;
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
-    const auto num_units = input.volume() / H / W * Ht;
+    const auto num_units = input.physical_volume() / H / W * Ht;
 
-    const auto origin_w = input.get_logical_shape()[input_rank - 1];
+    const auto origin_w = input.logical_shape()[input_rank - 1];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -59,7 +60,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
     const uint32_t in0_t{1};  // input
@@ -96,8 +97,12 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_ct_args);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

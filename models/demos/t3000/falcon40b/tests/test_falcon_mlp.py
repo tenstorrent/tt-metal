@@ -2,23 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-import ttnn
-from ttnn import ConcatMeshToTensor
 
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+import ttnn
+from models.common.utility_functions import skip_for_grayskull
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from ttnn import ConcatMeshToTensor
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -68,9 +63,10 @@ def run_test_FalconMLP_inference(
     pytorch_FalconMLP_model = PytorchFalconMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
     # TT hardware execution -------------------------------------------------------------
-
+    tt_ccl = TT_CCL(mesh_device)
     tt_FalconMLP_model = TtFalconMLP(
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -133,6 +129,7 @@ def run_test_FalconMLP_inference(
     ],
     ids=("BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconMLP_inference(
     num_devices,
     model_version,
@@ -144,7 +141,6 @@ def test_FalconMLP_inference(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")

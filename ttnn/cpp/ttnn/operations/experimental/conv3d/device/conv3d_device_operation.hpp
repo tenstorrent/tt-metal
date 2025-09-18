@@ -21,6 +21,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t H_in,
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
+    const std::array<uint32_t, 3>& stride,
     const std::array<uint32_t, 3>& kernel_size);
 }  // namespace detail
 
@@ -38,7 +39,7 @@ struct Conv3dConfig {
         const std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
         const std::array<uint32_t, 3> stride_ = {1, 1, 1},
         const std::array<uint32_t, 3> padding_ = {0, 0, 0},
-        const std::string padding_mode_ = "zeros",
+        const std::string& padding_mode_ = "zeros",
         uint32_t groups_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         dtype(dtype_),
@@ -90,7 +91,7 @@ struct Conv3dConfig {
         "groups",
         "compute_with_storage_grid_size");
 
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->dtype,
             this->weights_dtype,

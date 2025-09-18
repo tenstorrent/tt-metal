@@ -18,13 +18,19 @@ repos:
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
   hooks:
-    -  id: autoflake
-       args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
-       files: ^models/  # Run only on files in the models directory
+    - id: autoflake
+      args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+      files: ^models/  # Run only on files in the models directory
+- repo: https://github.com/pycqa/isort
+  rev: 5.13.2
+  hooks:
+    - id: isort
+      files: ^models/
+      exclude: ^models/(demos/llama3_70b_galaxy|experimental)/
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:
-  - id: gersemi
+    - id: gersemi
 - repo: https://github.com/adrienverge/yamllint.git
   rev: v1.35.1
   hooks:
@@ -44,3 +50,16 @@ repos:
       entry: python3 scripts/validate_metalium_api.py tt_metal/api
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-torch-imports-in-ttnn
+      name: Verify that there is no global torch import in ttnn
+      entry: python3 scripts/validate_no_global_torch_imports.py
+      language: system
+      pass_filenames: false
+- repo: local
+  hooks:
+    - id: convert-notebooks-to-py
+      name: Convert .ipynb to .py for ttnn basic examples
+      entry: python3 scripts/convert_notebooks_to_python.py
+      language: system

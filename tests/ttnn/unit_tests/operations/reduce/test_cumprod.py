@@ -8,124 +8,229 @@ import torch
 
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_allclose_and_pcc
 
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+
+def get_backward_tensors(output_grad_shape, input_grad_shape, device):
+    torch.manual_seed(2023)
+    npu_dtype = ttnn.bfloat16
+    cpu_dtype = torch.bfloat16
+    npu_layout = ttnn.TILE_LAYOUT
+    torch_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype, requires_grad=True)
+    torch_input_grad = torch.randint(-2, 3, input_grad_shape, dtype=cpu_dtype)
+
+    tt_output_grad = ttnn.Tensor(torch_output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+
+    return tt_output_grad, tt_input_grad, torch_output_grad
+
+
+@pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
     [
         [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
+        [2],
+        [2000],
         [1000, 32, 32],
+        [5, 5, 5, 5, 1, 1, 1],
     ],
 )
-def test_cumprod_with_uint8(dim, shape, device):
-    torch.manual_seed(22041997)
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, None),
+        (torch.bfloat16, ttnn.float32),
+    ],
+)
+def test_cumprod_normal(dim, shape, dtypes, device):
+    torch.manual_seed(0)
+    if dim < len(shape) and -len(shape) <= dim:
+        for _ in range(2):
+            torch_input_tensor = torch.randn(shape, dtype=dtypes[0])
+            torch_result_tensor = torch.cumprod(torch_input_tensor, dim)
+            ttnn_input_tensor = ttnn.from_torch(
+                torch_input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+            )
+            ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, dtype=dtypes[1])
 
-    input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim)
+            # assert metadata
+            assert ttnn_input_tensor.shape == ttnn_result_tensor.shape
+            assert torch_input_tensor.shape == ttnn_input_tensor.shape
+            assert torch_result_tensor.shape == ttnn_input_tensor.shape
+            assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
+            # assert values with pcc
+            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+        assert device.num_program_cache_entries() >= 1
+    else:
+        pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 
 
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+@pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
     [
         [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
+        [2],
+        [2000],
         [1000, 32, 32],
+        [5, 5, 5, 5, 1, 1, 1],
     ],
 )
-def test_cumprod_with_bfloat16(dim, shape, device):
-    torch.manual_seed(22041997)
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, None),
+        (torch.bfloat16, ttnn.float32),
+    ],
+)
+def test_cumprod_backward(dim, shape, dtypes, device):
+    torch.manual_seed(0)
+    if dim < len(shape) and -len(shape) <= dim:
+        (torch_dtype, ttnn_dtype) = dtypes
 
-    input_tensor = torch.randn(shape, dtype=torch.bfloat16)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim)
+        # Generate integer input on [-2; 2];
+        # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
+        # which are not handled yet
+        torch_input_tensor = torch.randint(-2, 3, size=shape, dtype=torch_dtype, requires_grad=True)
 
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
+        (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(shape, shape, device)
+
+        torch_output = torch.cumprod(torch_input_tensor, dim)
+        torch_output.backward(torch_output_grad)
+
+        tt_input_grad_cpu = ttnn.to_torch(
+            ttnn.cumprod(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
+        )
+
+        assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
+
+        # test for equivalance
+        rtol = atol = 0.1
+        assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+
+    else:
+        pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 
 
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+@pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
     [
         [],
-        [0],
         [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
+        [2000],
         [1000, 32, 32],
+        [5, 5, 5, 5, 1, 1, 1],
     ],
 )
-def test_cumprod_with_bfloat16_and_preallocation(dim, shape, device):
-    torch.manual_seed(22041997)
-
-    input_tensor = torch.randn(shape, dtype=torch.bfloat16)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    preallocated_tensor = ttnn.zeros_like(ttnn_tensor)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim, out=preallocated_tensor)
-
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert preallocated_tensor.shape == result_tensor.shape
-    assert preallocated_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
-
-
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
 @pytest.mark.parametrize(
-    "shape",
+    "dtypes",
     [
-        [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
-        [1000, 32, 32],
+        (torch.float32, None),
     ],
 )
-def test_cumprod_with_uint8_and_preallocation(dim, shape, device):
-    torch.manual_seed(22041997)
+def test_cumprod_preallocated(dim, shape, dtypes, device):
+    torch.manual_seed(0)
+    if dim < len(shape) and -len(shape) <= dim:
+        for _ in range(2):
+            torch_input_tensor = torch.randn(shape, dtype=dtypes[0])
+            torch_preallocated_tensor = torch.zeros_like(torch_input_tensor)
+            torch_result_tensor = torch.cumprod(torch_input_tensor, dim, out=torch_preallocated_tensor)
+            ttnn_input_tensor = ttnn.from_torch(
+                torch_input_tensor, dtype=dtypes[1], layout=ttnn.Layout.TILE, device=device
+            )
+            ttnn_preallocated_tensor = ttnn.zeros_like(ttnn_input_tensor)
+            ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, out=ttnn_preallocated_tensor)
 
-    input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
-    preallocated_tensor = ttnn.zeros_like(ttnn_tensor)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim, out=preallocated_tensor)
+            # assert metadata
+            assert ttnn_input_tensor.shape == ttnn_result_tensor.shape
+            assert ttnn_preallocated_tensor.shape == ttnn_result_tensor.shape
+            assert ttnn_preallocated_tensor.dtype == ttnn_result_tensor.dtype
+            assert torch_input_tensor.shape == ttnn_input_tensor.shape
+            assert torch_result_tensor.shape == ttnn_input_tensor.shape
+            assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert preallocated_tensor.shape == result_tensor.shape
-    assert preallocated_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
+            # assert values with pcc
+            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+            assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, 0.98)
+    else:
+        pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
+
+
+@pytest.mark.parametrize(
+    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout",
+    [
+        (
+            -10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_rank vs dim
+        (
+            10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_rank vs dim
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_shape vs output_shape
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.TILE,
+        ),  # input_shape vs output_shape
+        (
+            3,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Layout.ROW_MAJOR,
+        ),  # unsupported layout
+    ],
+)
+def test_cumprod_failing_cases(
+    dim,
+    input_shape,
+    output_shape,
+    torch_dtype,
+    input_dtype,
+    output_dtype,
+    memory_config,
+    layout,
+    device,
+):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
+    with pytest.raises(RuntimeError):
+        ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

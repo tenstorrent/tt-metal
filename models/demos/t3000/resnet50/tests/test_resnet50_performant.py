@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import ttnn
-from models.utility_functions import (
-    run_for_wormhole_b0,
-)
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.resnet50_performant import (
-    run_resnet50_inference,
     run_resnet50_2cqs_inference,
-    run_resnet50_trace_inference,
+    run_resnet50_inference,
     run_resnet50_trace_2cqs_inference,
+    run_resnet50_trace_inference,
 )
 
 
@@ -23,7 +22,6 @@ from models.demos.ttnn_resnet.tests.resnet50_performant import (
 )
 def test_run_resnet50_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -51,7 +49,6 @@ def test_run_resnet50_inference(
 )
 def test_run_resnet50_trace_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -79,7 +76,6 @@ def test_run_resnet50_trace_inference(
 )
 def test_run_resnet50_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,
@@ -109,7 +105,6 @@ def test_run_resnet50_2cqs_inference(
 )
 def test_run_resnet50_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     device_batch_size,
     act_dtype,
     weight_dtype,

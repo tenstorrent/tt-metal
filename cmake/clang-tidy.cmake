@@ -7,9 +7,6 @@ configure_file(
     COPYONLY
 )
 
-# Disable clang-tidy for all generated files; we typically don't have control over them.
-configure_file(
-    "${CMAKE_CURRENT_LIST_DIR}/clang-tidy.d/.clang-tidy.disable.yaml"
-    "${PROJECT_BINARY_DIR}/.clang-tidy"
-    COPYONLY
-)
+# Copy the .clang-tidy to the build dir in case it's not a child of the source dir.
+# CMAKE_VERIFY_INTERFACE_HEADER_SETS will generate files in the build dir that we want scanned.
+configure_file("${PROJECT_SOURCE_DIR}/.clang-tidy" "${PROJECT_BINARY_DIR}/.clang-tidy" COPYONLY)

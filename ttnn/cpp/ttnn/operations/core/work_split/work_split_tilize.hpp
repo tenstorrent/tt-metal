@@ -88,8 +88,6 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
-    const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = (ncores_x == 0) ? 0 : divCeil(ncores, ncores_x);
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;

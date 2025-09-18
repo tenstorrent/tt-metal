@@ -6,7 +6,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "typecast.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 namespace ttnn::operations::experimental::copy {
 
@@ -24,14 +24,6 @@ ttnn::Tensor TypecastOperation::invoke(
                {optional_output_tensor},
                queue_id)
         .at(0);
-}
-
-ttnn::Tensor TypecastOperation::invoke(
-    const Tensor& input_tensor,
-    const DataType& dtype,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, dtype, output_mem_config, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::copy

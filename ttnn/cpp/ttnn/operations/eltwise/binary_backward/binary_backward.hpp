@@ -136,14 +136,14 @@ struct ExecuteBackwardBiasGelu {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
-        string approximate,
+        std::string approximate,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_a_arg,
         float scalar,
-        string approximate,
+        std::string approximate,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
@@ -227,7 +227,7 @@ struct ExecuteBackwardDiv {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
-        const std::optional<string>& round_mode = std::nullopt,
+        const std::optional<std::string>& round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
@@ -236,7 +236,7 @@ struct ExecuteBackwardDiv {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         const Tensor& other_tensor_arg,
-        const std::optional<string>& round_mode = std::nullopt,
+        const std::optional<std::string>& round_mode = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt,

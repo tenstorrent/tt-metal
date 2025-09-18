@@ -4,6 +4,8 @@
 
 #include "examples_pybind.hpp"
 
+#include <pybind11/pybind11.h>
+
 #include "ttnn/operations/examples/example/example_pybind.hpp"
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return_pybind.hpp"
 

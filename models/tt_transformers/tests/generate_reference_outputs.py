@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
+import argparse
 import bz2
 import os
-import argparse
-from models.tt_transformers.tt.model_config import ModelArgs, CheckpointType
+
+import torch
 from loguru import logger
-from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
 
 
 def generate_reference_outputs(total_length, output_file, hf_model_name=None):
@@ -26,11 +28,11 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
             hf_model_name, config=config, torch_dtype=torch.float32 if device == "cpu" else None, device_map="auto"
         )
         model.eval()
-        model_args = ModelArgs(mesh_device=None)
+        model_args = ModelArgs(mesh_device=None, cache_hf=True)
 
     else:
         # Original path - load reference model
-        model_args = ModelArgs(mesh_device=None)
+        model_args = ModelArgs(mesh_device=None, cache_hf=True)
         model_args.max_seq_len = total_length
         tokenizer = model_args.tokenizer
         assert tokenizer is not None, "Tokenizer must be provided for non-dummy weights"

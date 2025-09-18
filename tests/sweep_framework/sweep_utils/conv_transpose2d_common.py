@@ -56,8 +56,6 @@ def run_full(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
-    enable_subblock_padding,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -66,7 +64,6 @@ def run_full(
     groups,
     override_sharding_config,
     core_grid,
-    use_shallow_conv_variant,
     deallocate_activation,
     enable_auto_formatting,
     device,
@@ -118,7 +115,6 @@ def run_full(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
         shard_layout=None,
@@ -128,8 +124,6 @@ def run_full(
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
-        enable_subblock_padding=enable_subblock_padding,
     )
 
     if override_sharding_config:
@@ -158,6 +152,7 @@ def run_full(
         conv_config=conv_config,
         groups=groups,
         return_output_dim=True,
+        dtype=activations_dtype,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -246,6 +241,7 @@ def run_short(
         input_width=input_width,
         groups=groups,
         return_output_dim=True,
+        dtype=ttnn.bfloat16,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

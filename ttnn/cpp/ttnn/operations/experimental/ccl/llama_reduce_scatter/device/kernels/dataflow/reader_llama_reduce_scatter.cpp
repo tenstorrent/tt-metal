@@ -4,23 +4,9 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 // #include <unistd.h>
-
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
 
 void kernel_main() {
     // Constants for indexing
@@ -50,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(18);
     constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(19);
+    constexpr bool needs_signaler = get_compile_time_arg_val(20) == 1;
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -80,6 +67,14 @@ void kernel_main() {
     uint32_t sender_shard_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+
+    // Get signal here
+    if constexpr (needs_signaler) {
+        uint32_t signaler_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
+        volatile tt_l1_ptr uint32_t* signaler_semaphore_address_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signaler_semaphore_address);
+        noc_semaphore_wait(signaler_semaphore_address_ptr, 1);
+    }
 
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);

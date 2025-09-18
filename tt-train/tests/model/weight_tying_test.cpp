@@ -110,10 +110,10 @@ TEST_F(WeightTyingTest, ModelFC) {
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto data_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(features, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+        ttml::core::from_vector(features, ttnn::Shape({batch_size, 1, 1, num_features}), device));
 
     auto targets_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, output_features}), device));
+        ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1, 1, output_features}), device));
 
     auto optimizer_params = ttml::optimizers::AdamWConfig();
     optimizer_params.lr = 0.01F;

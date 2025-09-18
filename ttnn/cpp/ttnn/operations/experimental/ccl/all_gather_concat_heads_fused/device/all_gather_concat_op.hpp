@@ -14,11 +14,12 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -34,6 +35,7 @@ struct AllGatherConcat {
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const uint32_t num_heads;
+    bool use_noc1_only;
     const uint32_t cluster_axis;
 
     AllGatherConcat(
@@ -45,15 +47,17 @@ struct AllGatherConcat {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         uint32_t num_heads,
+        bool use_noc1_only,
         uint32_t cluster_axis) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         num_heads(num_heads),
+        use_noc1_only(use_noc1_only),
         cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
@@ -68,6 +72,7 @@ struct AllGatherConcat {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("num_heads", num_heads);
+        attrs.emplace_back("use_noc1_only", use_noc1_only);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
@@ -89,7 +94,6 @@ struct AllGatherConcat {
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    bool persistent_fabric_mode,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
@@ -100,14 +104,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_heads);
+    uint32_t num_heads,
+    bool use_noc1_only);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
@@ -115,14 +120,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_heads);
+    uint32_t num_heads,
+    bool use_noc1_only);
 
 namespace operations {
 namespace experimental {
@@ -131,14 +137,15 @@ namespace ccl {
 Tensor all_gather_concat(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    const uint32_t dim,
-    const uint32_t cluster_axis,
+    uint32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
-    const uint32_t num_heads,
+    uint32_t num_heads,
+    bool use_noc1_only,
     const MemoryConfig& memory_config,
-    const std::optional<uint32_t> num_links = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    std::optional<uint32_t> num_links = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl

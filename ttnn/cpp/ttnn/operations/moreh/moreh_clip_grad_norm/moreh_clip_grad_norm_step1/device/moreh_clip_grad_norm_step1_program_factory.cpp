@@ -9,6 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1 {
 
@@ -46,7 +47,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
+        const auto& input_shape_without_padding = inputs.at(j).logical_shape();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 
@@ -86,7 +87,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
     const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.dtype());
 
     CreateCircularBuffer(
         program,
@@ -116,8 +117,13 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1);
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1, reader_ct_args);
+
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -146,22 +152,16 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = input.volume() / tt::constants::TILE_HW;
+        const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
         const std::array reader_runtime_args{
-            input_addr,
-            static_cast<uint32_t>(input.buffer()->is_dram()),
-            num_tiles,
-            *reinterpret_cast<uint32_t*>(&decimal),
-            origin_h,
-            origin_w};
+            input_addr, num_tiles, *reinterpret_cast<uint32_t*>(&decimal), origin_h, origin_w};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{
-            output_addr, static_cast<uint32_t>(tmp_pow_sum.buffer()->is_dram()), tile_offset};
+        const std::array writer_runtime_args{output_addr, tile_offset};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute
@@ -204,7 +204,7 @@ void MorehClipGradNormStep1Operation::ProgramFactory::override_runtime_arguments
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = tensor_args.inputs.at(i).buffer()->address();
-            runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
+            runtime_args[2] = *reinterpret_cast<uint32_t*>(&decimal);
         }
 
         {

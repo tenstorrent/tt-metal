@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15
 
@@ -122,11 +123,12 @@ def run_layer_norm(device, params):
     bias_tensor = ttnn.from_torch(torch_bias_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight_tensor, bias=bias_tensor, epsilon=eps)
-    output_tensor = ttnn.to_torch(output_tensor)
+    op_output_tensor = ttnn.layer_norm(input_tensor, weight=weight_tensor, bias=bias_tensor, epsilon=eps)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
-    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+    tensors = [input_tensor, weight_tensor, bias_tensor, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("params", parameters["default"]["params"])

@@ -1,30 +1,26 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
+import numpy as np
 import pytest
+import torch
 from loguru import logger
 from tqdm import tqdm
-import numpy as np
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn,
-    get_single_rot_mat,
-    cache_attention,
-)
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.t3000.mixtral8x7b.reference.model import Transformer
-from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.datasets.llm_dataset_utils import (
-    prepare_textgen_dataset,
-    prepare_textgen_dataloader,
     calculate_acc_metrics,
+    prepare_textgen_dataloader,
+    prepare_textgen_dataset,
     verify_acc_metrics,
 )
+from models.demos.t3000.mixtral8x7b.reference.model import Transformer
+from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import cache_attention, get_single_rot_mat, prepare_inputs_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
+from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from ttnn import ConcatMeshToTensor
 
 
 class Emb(torch.nn.Module):
@@ -37,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def run_test_perplexity(
     mesh_device,
     batch_size,
@@ -134,6 +131,7 @@ def run_test_perplexity(
 
     cache_attention(
         mesh_device,
+        tt_model.tt_ccl,
         state_dict,
         model_args,
         current_rot_mat,
@@ -263,7 +261,6 @@ def run_test_perplexity(
 )
 def test_mixtral_perplexity(
     t3k_mesh_device,
-    use_program_cache,
     reset_seeds,
     llm_mode,
     max_seq_len,

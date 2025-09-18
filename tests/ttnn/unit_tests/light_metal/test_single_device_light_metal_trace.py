@@ -41,8 +41,6 @@ def reset_device_and_replay_binary(reset_device, device, binary_data):
 def test_single_op_test_light_metal_capture(device, reset_device, shape, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
-    device.enable_program_cache()
-
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     output_tensor = ttnn.add(input_0_dev, input_1_dev)
@@ -64,7 +62,6 @@ def test_single_op_test_light_metal_capture(device, reset_device, shape, blockin
 def test_chain_op_test_light_metal_capture(device, reset_device, shape, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
-    device.enable_program_cache()
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 

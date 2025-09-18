@@ -3,21 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
 import time
-import torch
-import pytest
-import transformers
 
+import pytest
+import torch
+import transformers
 from loguru import logger
-from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import (
-    is_grayskull,
-    enable_persistent_kernel_cache,
+import ttnn
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_grayskull,
 )
+from models.demos.bert.tt import ttnn_optimized_bert
 from models.perf.perf_utils import prep_perf_report
 
 
@@ -39,7 +39,7 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("bert", [ttnn_optimized_bert])
-def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, bert):
+def test_performance(device, model_name, batch_size, sequence_size, bert):
     disable_persistent_kernel_cache()
 
     config = transformers.RobertaConfig.from_pretrained(model_name)

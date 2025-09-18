@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -39,20 +37,7 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << ", ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
 
@@ -68,7 +53,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }
@@ -334,14 +319,14 @@ int main(int argc, char** argv) {
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
-                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+                auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
                 auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
-                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+                auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
@@ -398,8 +383,9 @@ int main(int argc, char** argv) {
                     per_core_M * per_core_N * single_tile_size,
                     result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-                auto result_untilized = untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
+                auto result_flat_layout =
+                    convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+                auto result_untilized = untilize_swizzled(result_flat_layout, per_core_M * 32, per_core_N * 32);
                 pass &= (per_core_golden == result_untilized);
             }
         }

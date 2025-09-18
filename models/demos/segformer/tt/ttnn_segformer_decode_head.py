@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import ttnn
-from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from models.demos.segformer.tt.common import Conv
+from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
@@ -33,7 +34,12 @@ class TtSegformerDecodeHead:
             mlps.append(mlp)
         self.linear_c = mlps
 
-        self.linear_fuse = Conv([1, 1, 0, 0], parameters=parameters["linear_fuse"], activation="relu", deallocate=False)
+        self.linear_fuse = Conv(
+            [1, 1, 0, 0],
+            parameters=parameters["linear_fuse"],
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            deallocate=False,
+        )
 
         self.classifier = Conv(
             [1, 1, 0, 0],

@@ -4,19 +4,26 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+#include <tuple>
+#include <type_traits>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <type_traits>
+#include <reflect>
 
 #include "ttnn/decorators.hpp"
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/types.hpp"
 #include "types.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn {
 namespace decorators {
+
+// NOLINTBEGIN(performance-unnecessary-value-param)
+
+namespace py = pybind11;
 
 template <typename T, typename return_t, typename... args_t>
 constexpr auto resolve_call_method(return_t (*function)(args_t...)) {
@@ -126,12 +133,12 @@ auto bind_registered_operation(
 
     py_operation.def_property_readonly(
         "name",
-        [](const registered_operation_t& self) -> const std::string { return self.base_name(); },
+        [](const registered_operation_t& self) -> std::string { return self.base_name(); },
         "Shortened name of the api");
 
     py_operation.def_property_readonly(
         "python_fully_qualified_name",
-        [](const registered_operation_t& self) -> const std::string { return self.python_fully_qualified_name(); },
+        [](const registered_operation_t& self) -> std::string { return self.python_fully_qualified_name(); },
         "Fully qualified name of the api");
 
     // Attribute to identify of ttnn operations
@@ -153,6 +160,8 @@ auto bind_registered_operation(
 
     return py_operation;
 }
+
+// NOLINTEND(performance-unnecessary-value-param)
 
 }  // namespace decorators
 

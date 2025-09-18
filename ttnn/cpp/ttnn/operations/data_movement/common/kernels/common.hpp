@@ -8,6 +8,7 @@
 // issues
 #include <stdio.h>
 #include <cstring>
+#include <type_traits>
 
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
@@ -123,8 +124,9 @@ FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {
     return ieee_float.f;
 }
 
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+template <typename T = uint32_t>
+FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, T val) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
         ptr[i] = val;
     }
@@ -141,6 +143,11 @@ template <uint32_t a, uint32_t b>
 FORCE_INLINE constexpr uint32_t round_up() {
     return b * div_up<a, b>();
 }
+
+// Utility functions
+FORCE_INLINE uint32_t div_up(const uint32_t a, const uint32_t b) { return static_cast<uint32_t>((a + b - 1) / b); }
+
+FORCE_INLINE uint32_t round_up(const uint32_t a, const uint32_t b) { return b * div_up(a, b); }
 
 // Function template to swap two elements in a uint32_t array
 template <size_t N>
@@ -183,6 +190,19 @@ FORCE_INLINE void transpose_2d(
 template <uint32_t AlignReq>
 FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
     return (address & mask) + AlignReq;
+}
+
+// Wait for a specified number of cycles
+// This is a blocking wait, so it should only be used for debugging purposes
+// It is not recommended to use this in production code
+inline void spin(uint32_t cycles) {
+    volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    uint64_t wall_clock = 0;
+    do {
+        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
 }  // namespace tt::data_movement::common

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 
 namespace ttnn {
 namespace ccl {

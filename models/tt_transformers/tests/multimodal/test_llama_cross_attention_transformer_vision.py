@@ -1,22 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -29,7 +27,8 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_vision_transformer_inference(mesh_device, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_vision_transformer_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.79
 
@@ -48,8 +47,10 @@ def test_vision_transformer_inference(mesh_device, use_program_cache, reset_seed
     reference_model = llama_reference_mod.CrossAttentionTransformerVision(model_args)
     reference_model.load_state_dict(partial_state_dict, strict=True)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttentionTransformerVision(
         mesh_device,
+        tt_ccl,
         state_dict,
         first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

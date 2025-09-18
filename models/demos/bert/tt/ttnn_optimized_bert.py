@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import is_grayskull
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
@@ -310,10 +310,7 @@ def preprocess_inputs(
 
 def custom_preprocessor(torch_model, name):
     import torch
-    from ttnn.model_preprocessing import (
-        preprocess_linear_bias,
-        preprocess_linear_weight,
-    )
+    from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
     parameters = {}
     if hasattr(torch_model, "query") and hasattr(torch_model, "key") and hasattr(torch_model, "value"):

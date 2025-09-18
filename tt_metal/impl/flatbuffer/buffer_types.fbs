@@ -1,5 +1,5 @@
-include "flatbuffer/base_types.fbs";
-include "flatbuffer/program_types.fbs"; // For CoreRangeSet
+include "base_types.fbs";
+include "program_types.fbs"; // For CoreRangeSet
 
 namespace tt.tt_metal.flatbuffer;
 
@@ -13,7 +13,6 @@ enum BufferType: ushort {
 
 enum TensorMemoryLayout: ushort {
   Interleaved = 0,
-  SingleBank = 1,
   HeightSharded = 2,
   WidthSharded = 3,
   BlockSharded = 4,
@@ -49,6 +48,12 @@ table ShardSpecBuffer {
   page_shape_w: uint32;
   tensor2d_shape_in_pages_h: uint32;
   tensor2d_shape_in_pages_w: uint32;
+}
+
+table BufferDistributionSpec {
+  tensor_shape_in_pages: [uint32];
+  shard_shape_in_pages: [uint32];
+  cores: [CoreCoord];
 }
 
 struct CBConfigPageSize {

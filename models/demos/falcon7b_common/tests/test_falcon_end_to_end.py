@@ -5,27 +5,28 @@
 import numpy as np
 import pytest
 import torch
-import ttnn
 from loguru import logger
-from models.demos.falcon7b_common.tests.test_utils import (
-    concat_device_out_layer_present,
-    get_rand_falcon_inputs,
-    load_hf_model,
-    get_num_devices,
-)
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from sklearn.metrics import top_k_accuracy_score
 
-# TODO: Remove this?
-from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
-from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.utility_functions import (
+import ttnn
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     is_e75,
     profiler,
     tt_tensors_to_torch_tensors,
 )
-from sklearn.metrics import top_k_accuracy_score
+from models.demos.falcon7b_common.tests.test_utils import (
+    concat_device_out_layer_present,
+    get_num_devices,
+    get_rand_falcon_inputs,
+    load_hf_model,
+)
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+
+# TODO: Remove this?
+from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.falcon7b_common.tt.model_config import get_model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -335,7 +336,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_version,
     model_location_generator,
     get_tt_cache_path,
-    use_program_cache,
 ):
     if is_e75(mesh_device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")

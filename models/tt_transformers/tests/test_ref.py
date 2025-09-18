@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
 import os
+
+import pytest
+import torch
+
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
@@ -49,14 +51,13 @@ def test_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
@@ -80,11 +81,22 @@ def test_attention_inference(
     ref_state_dict = ref_model.attention.state_dict()  # should contain hf keys and weights
     hf_state_dict = hf_model.state_dict()
 
-    for key in ["k_proj", "q_proj"]:
-        for suffix in ["weight", "bias"]:
+    if model_args.fuse_qkv:
+        print(
+            f"qkv_proj.weight: ref matches hf : {torch.allclose(ref_state_dict['qkv_proj.weight'], hf_state_dict['qkv_proj.weight'])}"
+        )
+        if "qkv_proj.bias" in ref_state_dict:
             print(
-                f"{key}.{suffix}: ref matches hf : {torch.allclose(ref_state_dict[key + '.' + suffix], hf_state_dict[key + '.' + suffix])}"
+                f"qkv_proj.bias: ref matches hf : {torch.allclose(ref_state_dict['qkv_proj.bias'], hf_state_dict['qkv_proj.bias'])}"
             )
+            print(" ".join(f"{x:+3.1f}" for x in ref_state_dict["qkv_proj.bias"]))
+            print(" ".join(f"{x:+3.1f}" for x in hf_state_dict["qkv_proj.bias"]))
+    else:
+        for key in ["k_proj", "q_proj"]:
+            for suffix in ["weight", "bias"]:
+                print(
+                    f"{key}.{suffix}: ref matches hf : {torch.allclose(ref_state_dict[key + '.' + suffix], hf_state_dict[key + '.' + suffix])}"
+                )
 
-    print(" ".join(f"{x:+3.1f}" for x in ref_state_dict["k_proj.bias"]))
-    print(" ".join(f"{x:+3.1f}" for x in hf_state_dict["k_proj.bias"]))
+        print(" ".join(f"{x:+3.1f}" for x in ref_state_dict["k_proj.bias"]))
+        print(" ".join(f"{x:+3.1f}" for x in hf_state_dict["k_proj.bias"]))

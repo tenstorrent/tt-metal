@@ -26,9 +26,10 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
+    float value1 = 0.0f;
+    float value2 = 0.0f;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -41,8 +42,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
@@ -51,7 +52,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.get_dtype() == DataType::BFLOAT8_B || input.get_dtype() == DataType::BFLOAT4_B) {
+    if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
@@ -79,6 +80,15 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    // tmp sharded CB
+    uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
+        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
+            tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
+                .set_page_size(tmp_cb_id, in_cb_pagesize);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+    }
+
     // output sharded CB
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig out_cb_config =
@@ -102,7 +112,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -117,13 +127,33 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tmp_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
-    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.get_dtype());
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded);
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
+    std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
 
+    if (!ops_chain[0].empty()) {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
+            case UnaryOpType::WHERE_TSS:
+                value1 = *ops_chain[0].get_param_if<float>(0);
+                value2 = *ops_chain[0].get_param_if<float>(1);
+                if (input.dtype() == DataType::INT32) {
+                    unary_defines["FILL_INT"] = "fill_tile_int";
+                } else {
+                    unary_defines["FILL_FLOAT"] = "fill_tile";
+                }
+                break;
+            default: break;
+        }
+    }
+
+    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
+
+    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
+    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
@@ -144,6 +174,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         {
             (uint32_t)(num_tile_per_core),
         });
+
+    tt::tt_metal::SetRuntimeArgs(program, eltwise_unary_kernel_group_1_id, all_cores, {packed_scalar1, packed_scalar2});
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
 }

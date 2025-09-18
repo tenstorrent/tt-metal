@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,18 @@ def prepare_gn_mask(device, C, G, num_cores):
     return input_mask_tensor
 
 
+def prepare_gn_mask_negative_mask(device, C, G, num_cores):
+    input_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, G, num_cores)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return input_mask_tensor
+
+
 def prepare_gn_beta_gamma(device, weights, bias, num_cores):
     gamma = ttnn.create_group_norm_weight_bias_rm(weights, weights.shape[0], num_cores)
     beta = ttnn.create_group_norm_weight_bias_rm(bias, bias.shape[0], num_cores)
@@ -52,37 +64,16 @@ def prepare_gn_beta_gamma(device, weights, bias, num_cores):
 
 
 def prepare_linear_params(device, weights, bias, dtype):
-    tt_weights = ttnn.from_torch(torch.permute(weights, (0, 1, 3, 2)), dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weights = ttnn.from_torch(weights.movedim(-1, -2), dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
     return tt_weights, tt_bias
 
 
-def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        input_channels_alignment=32,
-        deallocate_activation=True,
-        reallocate_halo_output=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
-
+def prepare_conv_params(
+    weights,
+    bias,
+    dtype,
+):
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
     tt_weights = ttnn.from_torch(weights, dtype)
     tt_bias = ttnn.from_torch(bias, dtype) if bias is not None else None
@@ -93,35 +84,17 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
     }
 
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def prepare_split_conv_params(
-    device, weights, bias, split_in, split_out, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0
+    weights,
+    bias,
+    dtype,
+    split_in,
+    split_out,
 ):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        input_channels_alignment=32,
-        deallocate_activation=True,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
+    dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype  # TODO: figure out why PCC drops when dtype is used
 
     Cout, Cin, _, _ = weights.shape
     Cout_split = Cout // split_out
@@ -173,7 +146,7 @@ def prepare_split_conv_params(
         ]
         for tt_w_out in tt_weights
     ]
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def split_conv2d(
@@ -187,6 +160,7 @@ def split_conv2d(
     compute_config,
     conv_config,
     conv_params,
+    conv_dtype,
     stride,
     padding,
     dilation,
@@ -230,6 +204,7 @@ def split_conv2d(
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=conv_dtype,
             )
 
             device_weights[idx_out].append(d_w)
@@ -240,7 +215,9 @@ def split_conv2d(
                 dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
                 intermediate.deallocate(True)
             else:
-                dram_intermediate = ttnn.add(dram_intermediate, intermediate, output_tensor=dram_intermediate)
+                dram_intermediate = ttnn.add(
+                    dram_intermediate, intermediate, output_tensor=dram_intermediate, use_legacy=False
+                )
                 intermediate.deallocate(True)
 
         if dram_intermediate.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

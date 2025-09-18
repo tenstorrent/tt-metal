@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import pickle
 from datetime import datetime
+from typing import List
+
 import pytz
 from loguru import logger
-from typing import List
 
 # Decouple dependency of model tests on infra folder unless running in CI
 IS_CI_ENV = os.getenv("CI") == "true"
@@ -166,14 +168,14 @@ class BenchmarkData:
                 measurements=self.measure_data,
             )
 
-            json_data = partial_benchmark_run.model_dump_json()
+            pkl_data = pickle.dumps(partial_benchmark_run)
 
-            filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.json")
+            filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.pkl")
             parent_dir = os.path.dirname(filename)
             if parent_dir != "" and not os.path.exists(parent_dir):
                 os.makedirs(parent_dir)
-            with open(filename, "w") as f:
-                f.write(json_data)
+            with open(filename, "wb") as f:
+                f.write(pkl_data)
             logger.info(f"Run and measurement data saved to {filename}")
         else:
-            logger.info("Skipping saving benchmark data JSON since not running in CI environment")
+            logger.info("Skipping saving partial benchmark data PKL since not running in CI environment")

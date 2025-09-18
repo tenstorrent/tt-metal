@@ -41,9 +41,9 @@ void MAIN {
         tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
         uint64_t dispatch_addr = NOC_XY_ADDR(
-            NOC_X(mailboxes->go_message.master_x),
-            NOC_Y(mailboxes->go_message.master_y),
-            DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_message.dispatch_message_offset);
+            NOC_X(mailboxes->go_messages[mailboxes->go_message_index].master_x),
+            NOC_Y(mailboxes->go_messages[mailboxes->go_message_index].master_y),
+            DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_messages[mailboxes->go_message_index].dispatch_message_offset);
         noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
                         noc_index,
                         NCRISC_AT_CMD_BUF,
@@ -59,7 +59,7 @@ void MAIN {
 #if defined(TRISC0) or defined(TRISC1) or defined(TRISC2)
 #define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-    volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
+    volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,10 @@
 
 #if SFPU_OP_SQRT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
+#endif
+
+#if SFPU_OP_RSQRT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #endif
 
 #if SFPU_OP_RECIP_INCLUDE
@@ -92,12 +96,8 @@
 #include "compute_kernel_api/eltwise_unary/bitwise_or.h"
 #endif
 
-#if SFPU_OP_FLOOR_INCLUDE
-#include "compute_kernel_api/eltwise_unary/floor.h"
-#endif
-
-#if SFPU_OP_ROUND_INCLUDE
-#include "compute_kernel_api/eltwise_unary/round.h"
+#if SFPU_OP_ROUND_FAMILY_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rounding.h"
 #endif
 
 #if SFPU_OP_LEFT_SHIFT_INCLUDE
@@ -112,16 +112,16 @@
 #include "compute_kernel_api/eltwise_unary/fmod.h"
 #endif
 
-#if SFPU_OP_CEIL_INCLUDE
-#include "compute_kernel_api/eltwise_unary/ceil.h"
-#endif
-
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #endif
 
 #if SFPU_OP_SOFTPLUS_INCLUDE
 #include "compute_kernel_api/eltwise_unary/softplus.h"
+#endif
+
+#if SFPU_OP_SELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/selu.h"
 #endif
 
 #if SFPU_OP_PRELU_INCLUDE
@@ -138,6 +138,30 @@
 
 #if SFPU_OP_LOG1P_INCLUDE
 #include "compute_kernel_api/eltwise_unary/log1p.h"
+#endif
+
+#if SFPU_OP_UNARY_COMP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/comp.h"
+#endif
+
+#if SFPU_OP_ACTIVATIONS_INCLUDE
+#include "compute_kernel_api/eltwise_unary/activations.h"
+#endif
+
+#if SFPU_OP_THRESHOLD_INCLUDE
+#include "compute_kernel_api/eltwise_unary/threshold.h"
+#endif
+
+#if SFPU_OP_WHERE_INCLUDE
+#include "compute_kernel_api/eltwise_unary/where.h"
+#endif
+
+#if SFPU_OP_CLAMP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/clamp.h"
+#endif
+
+#if SFPU_OP_HARDTANH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardtanh.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

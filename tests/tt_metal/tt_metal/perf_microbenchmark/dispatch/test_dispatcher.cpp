@@ -8,7 +8,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
@@ -25,22 +24,22 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/utils.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -384,8 +383,6 @@ void gen_cmds(
     CoreRange worker_cores,
     DeviceData& device_data,
     uint32_t page_size) {
-    uint32_t total_size_bytes = 0;
-    uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {
@@ -491,7 +488,7 @@ int main(int argc, char** argv) {
         uint32_t dram_data_addr = l1_buf_base;
         uint32_t l1_data_addr = l1_buf_base;
 
-        // Seperate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
+        // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
         if (paged_test) {
             // Seems like 16B alignment is required otherwise mismatches in readback. Linear writes only target 16B
             // aligned transfer sizes too. It's okay for these not to be, the random calc below will align final
@@ -512,6 +509,7 @@ int main(int argc, char** argv) {
             // Just avoid hazard by bumping up min, max - and let user know with a warning.
             if (min_paged_write_base_addr_g < min_buffer_addr) {
                 log_warning(
+                    tt::LogTest,
                     "min_paged_write_base_addr_g: {:x} is too low. Increasing to min_buffer_addr: {:x}",
                     min_paged_write_base_addr_g,
                     min_buffer_addr);
@@ -520,6 +518,7 @@ int main(int argc, char** argv) {
             if (max_paged_write_base_addr_g < min_buffer_addr ||
                 max_paged_write_base_addr_g < min_paged_write_base_addr_g) {
                 log_warning(
+                    tt::LogTest,
                     "max_paged_write_base_addr_g: {:x} is too low. Increasing to min_buffer_addr: {:x}",
                     max_paged_write_base_addr_g,
                     min_buffer_addr);
@@ -533,7 +532,7 @@ int main(int argc, char** argv) {
         }
 
         DeviceData device_data(
-            device, all_workers_g, l1_data_addr, dram_data_addr, 0, paged_test, DRAM_DATA_SIZE_WORDS);
+            device, all_workers_g, l1_data_addr, dram_data_addr, nullptr, paged_test, DRAM_DATA_SIZE_WORDS);
 
         if (is_paged_dram_test() && debug_g) {
             initialize_dram_banks(device);
@@ -542,7 +541,8 @@ int main(int argc, char** argv) {
         // Generate commands once and write them to prefetcher core.
         vector<uint32_t> cmds;
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
-        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         const uint32_t spoof_prefetch_core_sem_0_id =
             tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
@@ -566,51 +566,74 @@ int main(int argc, char** argv) {
                 .dispatch_mem_map(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
-        std::vector<uint32_t> dispatch_compile_args = {
-            l1_buf_base,
-            log_dispatch_buffer_page_size_g,
-            dispatch_buffer_size_g / dispatch_buffer_page_size_g,
-            dispatch_cb_sem,
-            dispatch_cb_sem,  // ugly, share an address
-            dispatch_buffer_size_blocks_g,
-            prefetch_sync_sem,
-            // Hugepage compile args aren't used in this test since WriteHost is not tested here
-            0,                  // command_queue_base_addr
-            0,                  // completion_queue_base_addr
-            0,                  // completion_queue_size
-            0,                  // downstream_cb_base
-            0,                  // downstream_cb_size
-            0,                  // my_downstream_cb_sem_id
-            0,                  // downstream_cb_sem_id
-            0,                  // split_dispatch_page_preamble_size
-            false,              // split_prefetcher
-            0,                  // prefetch noc_xy
-            0,                  // prefetch_local_downstream_sem_addr
-            0,                  // prefetch_downstream_buffer_pages
-            num_compute_cores,  // max_write_packed_cores
-            0,
-            DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-            0,
-            0,
-            0,
-            host_completion_queue_wr_ptr,
-            dev_completion_queue_wr_ptr,
-            dev_completion_queue_rd_ptr,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            true,  // is_dram_variant
-            true,  // is_host_variant
+        std::vector<uint32_t> dispatch_compile_args = {};
+
+        std::map<std::string, std::string> dispatch_defines = {
+            {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
+            {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(log_dispatch_buffer_page_size_g)},
+            {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_size_g / dispatch_buffer_page_size_g)},
+            {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},
+            {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},
+            {"DISPATCH_CB_BLOCKS", std::to_string(dispatch_buffer_size_blocks_g)},
+            {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+            {"COMMAND_QUEUE_BASE_ADDR", "0"},
+            {"COMPLETION_QUEUE_BASE_ADDR", "0"},
+            {"COMPLETION_QUEUE_SIZE", "0"},
+            {"DOWNSTREAM_CB_BASE", "0"},
+            {"DOWNSTREAM_CB_SIZE", "0"},
+            {"MY_DOWNSTREAM_CB_SEM_ID", "0"},
+            {"DOWNSTREAM_CB_SEM_ID", "0"},
+            {"SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE", "0"},
+            {"SPLIT_PREFETCH", "0"},
+            {"PREFETCH_H_NOC_XY", "0"},
+            {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", "0"},
+            {"PREFETCH_H_MAX_CREDITS", "0"},
+            {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
+            {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
+            {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+            {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
+             std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+            {"MCAST_GO_SIGNAL_ADDR", "0"},
+            {"UNICAST_GO_SIGNAL_ADDR", "0"},
+            {"DISTRIBUTED_DISPATCHER", "0"},
+            {"HOST_COMPLETION_Q_WR_PTR", std::to_string(host_completion_queue_wr_ptr)},
+            {"DEV_COMPLETION_Q_WR_PTR", std::to_string(dev_completion_queue_wr_ptr)},
+            {"DEV_COMPLETION_Q_RD_PTR", std::to_string(dev_completion_queue_rd_ptr)},
+            {"FIRST_STREAM_USED",
+             std::to_string(MetalContext::instance().dispatch_mem_map(CoreType::WORKER).get_dispatch_stream_index(0))},
+            {"VIRTUALIZE_UNICAST_CORES", "0"},
+            {"NUM_VIRTUAL_UNICAST_CORES", "0"},
+            {"NUM_PHYSICAL_UNICAST_CORES", "0"},
+            {"FABRIC_HEADER_RB_BASE", "0"},
+            {"FABRIC_HEADER_RB_ENTRIES", "0"},
+            {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+            {"FABRIC_MUX_X", "0"},
+            {"FABRIC_MUX_Y", "0"},
+            {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+            {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+            {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+            {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+            {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+            {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+            {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+            {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+            {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+            {"WORKER_CREDITS_STREAM_ID", "0"},
+            {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+            {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+            {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+            {"NUM_HOPS", "0"},
+            {"MY_DEV_ID", "0"},
+            {"EW_DIM", "0"},
+            {"TO_MESH_ID", "0"},
+            {"TO_DEV_ID", "0"},
+            {"ROUTER_DIRECTION", "0"},
+            {"WORKER_MCAST_GRID", "0"},
+            {"NUM_WORKER_CORES_TO_MCAST", "0"},
+            {"IS_D_VARIANT", "1"},
+            {"IS_H_VARIANT", "1"},
         };
+
         std::vector<uint32_t> spoof_prefetch_compile_args = {
             l1_buf_base,
             log_dispatch_buffer_page_size_g,
@@ -622,7 +645,7 @@ int main(int argc, char** argv) {
             prefetch_sync_sem,
         };
 
-        std::map<string, string> prefetch_defines = {
+        std::map<std::string, std::string> prefetch_defines = {
             {"MY_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
             {"MY_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
             {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
@@ -630,7 +653,7 @@ int main(int argc, char** argv) {
             {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
         };
         if (fire_once_g) {
-            prefetch_defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));
+            prefetch_defines.insert(std::pair<std::string, std::string>("FIRE_ONCE", std::to_string(1)));
         }
 
         auto sp1 = tt_metal::CreateKernel(
@@ -652,6 +675,7 @@ int main(int argc, char** argv) {
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_defines,
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
@@ -728,7 +752,7 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

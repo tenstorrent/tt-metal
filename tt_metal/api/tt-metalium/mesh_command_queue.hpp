@@ -25,19 +25,18 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_trace.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
+class WorkerConfigBufferMgr;
 namespace distributed {
 class MeshDevice;
 class MeshWorkload;
@@ -49,11 +48,15 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;
+class MeshTraceDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
+struct MeshCoreDataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
+// THREAD SAFETY: All methods are thread safe.
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
     // Currently only supports dispatching workloads and relies on the
@@ -73,6 +76,7 @@ public:
 
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
+    virtual std::optional<MeshTraceId> trace_id() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
 
@@ -96,6 +100,8 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+    virtual void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
@@ -103,6 +109,12 @@ public:
     virtual void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking) = 0;
+    // TODO: does "enqueue" make sense anymore? Return the object by value instead.
+    virtual void enqueue_read(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
 
     virtual MeshEvent enqueue_record_event(
@@ -114,7 +126,10 @@ public:
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void reset_worker_state(
-        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) = 0;
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;

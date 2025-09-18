@@ -6,6 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -26,33 +27,44 @@ Program CreateEltwiseAddProgram(
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, tile_size_bytes);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, tile_size_bytes);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
     constexpr uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, tile_size_bytes);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
 
     // Add data movement kernels
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*a->get_reference_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b->get_reference_buffer()).append_to(reader_compile_time_args);
     KernelHandle reader = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
         target_tensix_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*c->get_reference_buffer()).append_to(writer_compile_time_args);
     KernelHandle writer = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
         target_tensix_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     // Create the eltwise binary kernel
     auto compute = CreateKernel(
@@ -96,11 +108,8 @@ int main() {
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -138,21 +147,19 @@ int main() {
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
     // Verify results
-    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
+    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
     std::vector<uint32_t> golden_data =
         pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
-    bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
-    bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
     bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
 
     size_t num_failures = 0;
     auto total_values = result_data.size() * 2;
     for (int i = 0; i < total_values; i++) {
-        if (!is_close(c_bf16[i].to_float(), golden_bf16[i].to_float())) {
+        if (!is_close(static_cast<float>(c_bf16[i]), static_cast<float>(golden_bf16[i]))) {
             num_failures++;
         }
     }

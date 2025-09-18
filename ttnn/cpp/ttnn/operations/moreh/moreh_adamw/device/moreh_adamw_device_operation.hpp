@@ -47,14 +47,14 @@ struct MorehAdamWDeviceOperation {
 
     struct MultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_group1_id;
-            tt::tt_metal::KernelHandle compute_kernel_group2_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_group1_id{};
+            tt::tt_metal::KernelHandle compute_kernel_group2_id{};
             CoreRangeSet core_group_1;
             CoreRangeSet core_group_2;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
+            std::size_t num_cores{};
+            std::size_t num_cores_y{};
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -91,13 +91,13 @@ struct MorehAdamWDeviceOperation {
         const Tensor& exp_avg_in,
         const Tensor& exp_avg_sq_in,
 
-        const std::optional<float> lr,
-        const std::optional<float> beta1,
-        const std::optional<float> beta2,
-        const std::optional<float> eps,
-        const std::optional<float> weight_decay,
-        const std::optional<uint32_t> step,
-        const std::optional<bool> amsgrad,
+        std::optional<float> lr,
+        std::optional<float> beta1,
+        std::optional<float> beta2,
+        std::optional<float> eps,
+        std::optional<float> weight_decay,
+        std::optional<uint32_t> step,
+        std::optional<bool> amsgrad,
 
         const std::optional<Tensor>& max_exp_avg_sq_in,
         const std::optional<Tensor>& param_out,
@@ -105,7 +105,7 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& exp_avg_sq_out,
         const std::optional<Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };

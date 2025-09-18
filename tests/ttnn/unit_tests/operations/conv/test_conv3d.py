@@ -10,8 +10,8 @@ import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
-def _out_size(in_size, pad, k):
-    return in_size + 2 * pad - (k - 1)
+def _out_size(in_size, pad, stride, k):
+    return (in_size + 2 * pad - k) // stride + 1
 
 
 ALIGNMENT = 32  # Valid L1 alignment for Wormhole and Blackhole
@@ -100,9 +100,9 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
 
     # Define input dimensions
     N, C, D, H, W = input_shape
-    D_out = _out_size(D, padding[0], kernel_size[0])
-    H_out = _out_size(H, padding[1], kernel_size[1])
-    W_out = _out_size(W, padding[2], kernel_size[2])
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0])
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1])
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2])
 
     # Create input tensor and PyTorch Conv3d module
     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
@@ -176,7 +176,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 @pytest.mark.parametrize("H", [10, 13])
 @pytest.mark.parametrize("W", [9, 12])
 @pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
-@pytest.mark.parametrize("stride", [(1, 1, 1)], ids=["stride_111"])
+@pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
@@ -196,9 +196,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-def test_conv3d_cache_address(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
-):
+def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
@@ -215,9 +213,7 @@ def test_conv3d_cache_address(
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-def test_conv3d_cache_hash(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
-):
+def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []

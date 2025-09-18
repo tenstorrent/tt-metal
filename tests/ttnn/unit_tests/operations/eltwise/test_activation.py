@@ -6,8 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
@@ -50,7 +49,6 @@ def test_log_sigmoid(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.log_sigmoid)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mish(device, h, w):
@@ -118,7 +116,6 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, p
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("beta", [-1, 0.5, 1, 2])
@@ -257,21 +254,32 @@ def test_scalarB_elu(device, h, w, scalar):
     run_activation_test_elu(device, h, w, scalar, ttnn.elu)
 
 
-@pytest.mark.parametrize("alpha", [1, 2.5, 5.0])
+@pytest.mark.parametrize("alpha", [1, 2.5, 5.0, -1, -5, 0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_celu(device, h, w, alpha):
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat4_b)],
+)
+def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
+    if alpha == 0:
+        pytest.skip("alpha=0 is not supported")
+
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn.celu)
-    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat4_b:
+        torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
+
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
 
     output_tensor = ttnn.celu(input_tensor_a, alpha=alpha)
     output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_ulp(torch_output_tensor, output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -307,7 +315,6 @@ def test_scalarB_leaky_relu(device, h, w, scalar):
     run_activation_test_leaky_relu(device, h, w, scalar, ttnn.leaky_relu)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

@@ -15,7 +15,7 @@
 
 #include <utility>
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
@@ -40,10 +40,12 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
 #elif defined(COMPILE_FOR_NCRISC)
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET 1
-#elif defined(COMPILE_FOR_ERISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET (COMPILE_FOR_IDLE_ERISC)
+#elif defined(COMPILE_FOR_AERISC)
+#define WATCHER_WAYPOINT_MAILBOX_OFFSET (COMPILE_FOR_AERISC)
+#elif defined(COMPILE_FOR_ERISC)
+#define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
 #else
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
 #endif

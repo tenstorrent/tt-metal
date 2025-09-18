@@ -1,15 +1,18 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <algorithm>
+#include <string>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -88,9 +91,9 @@ operation::ProgramWithCallbacks argmax_single_core(
     const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
     tt::tt_metal::Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_unit_size = input.element_size();
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_unit_size = output.element_size();
 
     const tt::tt_metal::IDevice* device = output.device();
@@ -102,7 +105,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
     const bool reduce_all = not dim.has_value();
 
@@ -118,7 +121,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     tt::tt_metal::CircularBufferConfig src_cb_config =
         tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_page_size);
-    const auto src_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
@@ -126,21 +129,17 @@ operation::ProgramWithCallbacks argmax_single_core(
     const tt::tt_metal::CircularBufferConfig dst_db_config =
         tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
             .set_page_size(dst_cb_idx, dst_page_size);
-    const auto dst_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.get_logical_volume() / inner_dim_units / red_dim_units;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         src_cb_idx,
         dst_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         outer_dim_units,
@@ -148,8 +147,10 @@ operation::ProgramWithCallbacks argmax_single_core(
         red_dim_units,
         (uint32_t)(reduce_all),
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
 
-    const std::map<string, string> kernel_defines;
+    const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
@@ -185,10 +186,6 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     return {std::move(program), override_runtime_args_callback};
 }
-
-// NOC transactions need to be 32B aligned.
-// So, for bfloat16 dtype, we need at least 16 units per core to avoid unaligned accesses.
-constexpr uint32_t min_red_dim_units_per_core = 16;
 
 /*
  * Design of argmax_multi_core:
@@ -271,12 +268,12 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto input_unit_size = input.element_size();
-    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto output_unit_size = output.element_size();
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const auto rank = input_shape.size();
     const bool reduce_all = not dim.has_value();
 
@@ -287,6 +284,16 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
     const tt::tt_metal::IDevice* device = output.device();
+
+    const auto src_buffer = input.buffer();
+    const auto dst_buffer = output.buffer();
+    const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    // NOC transactions need to be aligned.
+    // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned
+    // accesses.
+    const auto alignment = src_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const auto min_red_dim_units_per_core = alignment / sizeof(bfloat16);
 
     // Distribute work to cores
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
@@ -306,7 +313,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto src_cb_config0 =
         tt::tt_metal::CircularBufferConfig(src_cb_page_size0, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_cb_page_size0);
-    const auto src_cb0 = tt::tt_metal::CreateCircularBuffer(program, cores0, src_cb_config0);
+    tt::tt_metal::CreateCircularBuffer(program, cores0, src_cb_config0);
 
     // We only create the second CB if there are some cores assigned to the second group
     if (num_cores1 > 0) {
@@ -314,14 +321,14 @@ operation::ProgramWithCallbacks argmax_multi_core(
         const auto src_cb_config1 =
             tt::tt_metal::CircularBufferConfig(src_cb_page_size1, {{src_cb_idx, input_cb_data_format}})
                 .set_page_size(src_cb_idx, src_cb_page_size1);
-        const auto src_cb1 = tt::tt_metal::CreateCircularBuffer(program, cores1, src_cb_config1);
+        tt::tt_metal::CreateCircularBuffer(program, cores1, src_cb_config1);
     }
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
     const auto dst_db_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
                                    .set_page_size(dst_cb_idx, dst_page_size);
-    const auto dst_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
 
     // Create intermediate CB for indices based on number of cores and output shape's last dimension
     const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
@@ -329,7 +336,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto red_idxs_db_config =
         tt::tt_metal::CircularBufferConfig(red_idxs_page_size, {{red_idxs_cb_idx, output_cb_data_format}})
             .set_page_size(red_idxs_cb_idx, red_idxs_page_size);
-    const auto red_idxs_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_db_config);
 
     // Create intermediate CB for values based on number of cores and output shape's last dimension
     const uint32_t red_vals_cb_idx = tt::CBIndex::c_3;
@@ -337,15 +344,10 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto red_vals_cb_config =
         tt::tt_metal::CircularBufferConfig(red_vals_page_size, {{red_vals_cb_idx, input_cb_data_format}})
             .set_page_size(red_vals_cb_idx, red_vals_page_size);
-    const auto cb_red_vals = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
-
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
-    const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const auto dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
 
     const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.get_logical_volume() / inner_dim_units / red_dim_units;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
@@ -399,8 +401,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
         dst_cb_idx,
         red_idxs_cb_idx,
         red_vals_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         red_idxs_page_size / num_total_cores,
@@ -427,8 +427,10 @@ operation::ProgramWithCallbacks argmax_multi_core(
         start_sem_idx,
         done_sem_idx,
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_args);
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
@@ -438,15 +440,17 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
-    tt::tt_metal::KernelHandle reader_kernel_id1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        cores1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
-
+    tt::tt_metal::KernelHandle reader_kernel_id1 = 0;
+    if (num_cores1 > 0) {
+        reader_kernel_id1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+            cores1,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+    }
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 

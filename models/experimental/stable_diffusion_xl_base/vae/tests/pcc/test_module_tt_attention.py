@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
-from diffusers import DiffusionPipeline
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
@@ -16,17 +18,31 @@ from models.utility_functions import torch_random
         ((1, 512, 128, 128), None),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_vae_attention(device, input_shape, encoder_shape, use_program_cache, reset_seeds):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+@pytest.mark.parametrize(
+    "block_name",
+    [
+        "encoder",
+        "decoder",
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+def test_vae_attention(device, input_shape, encoder_shape, block_name, is_ci_env, reset_seeds):
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="vae",
+        local_files_only=is_ci_env,
     )
-    vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
-    torch_attention = vae.decoder.mid_block.attentions[0]
-    tt_attention = TtAttention(device, state_dict, "decoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+    if block_name == "encoder":
+        torch_attention = vae.encoder.mid_block.attentions[0]
+        tt_attention = TtAttention(device, state_dict, "encoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+    else:
+        torch_attention = vae.decoder.mid_block.attentions[0]
+        tt_attention = TtAttention(device, state_dict, "decoder.mid_block.attentions.0", 512, 1, 512, None, 512)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
         torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32) if encoder_shape is not None else None
@@ -62,4 +78,7 @@ def test_vae_attention(device, input_shape, encoder_shape, use_program_cache, re
     output_tensor = output_tensor.reshape(B, H, W, C)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    del vae, tt_attention
+    gc.collect()
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.995)

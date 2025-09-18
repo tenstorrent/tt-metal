@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/common/constants.hpp"
@@ -24,14 +25,16 @@ namespace ttnn::operations::data_movement::detail {
 // Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
     // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
+    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_config.cpp
     // which can be used as a reminder.
     uint32_t src_cb_id = 32;
-    uint32_t pad_cb_id = 32;
+    uint32_t pad_cb_id0 = 32;
+    uint32_t pad_cb_id1 = 32;
     uint32_t out_cb_id = 32;
 
     // Additional CBs for sharded data kernel configs
-    uint32_t padding_config = 32;
+    uint32_t padding_config0 = 32;
+    uint32_t padding_config1 = 32;
     uint32_t gather_config0 = 32;
     uint32_t gather_config1 = 32;
     uint32_t untilize_out_cb_id0 = 32;
@@ -61,7 +64,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config,
+    const Tensor& padding_config0,
+    const Tensor& padding_config1,
     const Tensor& gather_config0,
     const Tensor& gather_config1,
     const std::vector<uint16_t>& number_of_blocks_per_core,
@@ -69,19 +73,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const bool transpose_mcast,
     Tensor& output_tensor,
     const int block_size,
-    const bool capture_buffers) {
-    IDevice* device = input_tensor.device();
+    bool config_tensors_in_dram) {
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    const auto input_shape = input_tensor.get_padded_shape();
-    const auto output_shape = output_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
-    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
+    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
+    const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t out_nbytes = datum_size(out_df);
 
     const CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
@@ -130,18 +132,21 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 
-    // Used for storing padding immediate values (TODO: use zeroed memory region instead)
+    // Used for storing padding immediate values (only used if not zero padding)
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
-    cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
+    cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
+    cb_indices.pad_cb_id1 = cb_indices.get_next_cb_id();
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id1, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
-    uint32_t pagesize = 0;
 
     uint32_t input_to_writer_cb_id0 = cb_indices.src_cb_id;
     uint32_t input_to_writer_cb_id1 = cb_indices.src_cb_id;
+    const bool is_rm_orientation = shard_orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
+
     if (!skip_untilize) {
         cb_indices.untilize_out_cb_id0 = cb_indices.get_next_cb_id();
         cb_indices.untilize_out_cb_id1 = cb_indices.get_next_cb_id();
@@ -149,9 +154,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
         const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
         const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
-        auto untilize_out_cb0 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
-        auto untilize_out_cb1 = create_circular_buffer(
+        create_circular_buffer(
             program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
         const std::string compute_kernel_name =
@@ -167,32 +172,49 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         KernelHandle untilize_kernel_id =
             CreateKernel(program, compute_kernel_name, all_cores, ComputeConfig{.compile_args = compute_ct_args});
 
-        const bool is_rm_orientation = shard_orientation == ShardOrientation::ROW_MAJOR;
-        const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
         for (int core_id = 0; core_id < cores.size(); core_id++) {
             SetRuntimeArgs(program, untilize_kernel_id, cores[core_id], {number_of_blocks_per_core[core_id]});
         }
     }
 
-    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config0.get_dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config1.get_dtype() == DataType::UINT16);
+    log_debug(
+        tt::LogOp,
+        "\n\n Halo Config Tensors: Padding: \n\t {} \n\t {} \nGather \n\t {} \n\t {}",
+        padding_config0,
+        padding_config1,
+        gather_config0,
+        gather_config1);
 
-    const uint32_t num_cores = all_cores.num_cores();
+    TT_ASSERT(padding_config0.dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config1.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config1.dtype() == DataType::UINT16);
 
-    auto padding_config_storage = padding_config.device_storage();
-    auto padding_config_buffer = padding_config_storage.get_buffer();
-    cb_indices.padding_config = cb_indices.get_next_cb_id();
-    auto padding_config_cb = create_circular_buffer(
+    const auto& padding_config_storage0 = padding_config0.device_storage();
+    auto padding_config_buffer0 = padding_config_storage0.get_buffer();
+    cb_indices.padding_config0 = cb_indices.get_next_cb_id();
+    auto padding_config_cb0 = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.padding_config,
+        cb_indices.padding_config0,
         kernel_config_df,
         1,
-        padding_config_buffer->size() / num_cores,
-        padding_config_buffer);
+        padding_config_buffer0->page_size(),
+        config_tensors_in_dram ? nullptr : padding_config_buffer0);
 
-    auto gather_config_storage0 = gather_config0.device_storage();
+    const auto& padding_config_storage1 = padding_config1.device_storage();
+    auto padding_config_buffer1 = padding_config_storage1.get_buffer();
+    cb_indices.padding_config1 = cb_indices.get_next_cb_id();
+    auto padding_config_cb1 = create_circular_buffer(
+        program,
+        all_cores,
+        cb_indices.padding_config1,
+        kernel_config_df,
+        1,
+        padding_config_buffer1->page_size(),
+        config_tensors_in_dram ? nullptr : padding_config_buffer1);
+
+    const auto& gather_config_storage0 = gather_config0.device_storage();
     auto gather_config_buffer0 = gather_config_storage0.get_buffer();
     cb_indices.gather_config0 = cb_indices.get_next_cb_id();
     auto gather_config_cb0 = create_circular_buffer(
@@ -201,10 +223,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         cb_indices.gather_config0,
         kernel_config_df,
         1,
-        gather_config_buffer0->size() / num_cores,
-        gather_config_buffer0);
+        gather_config_buffer0->page_size(),
+        config_tensors_in_dram ? nullptr : gather_config_buffer0);
 
-    auto gather_config_storage1 = gather_config1.device_storage();
+    const auto& gather_config_storage1 = gather_config1.device_storage();
     auto gather_config_buffer1 = gather_config_storage1.get_buffer();
     cb_indices.gather_config1 = cb_indices.get_next_cb_id();
     auto gather_config_cb1 = create_circular_buffer(
@@ -213,11 +235,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         cb_indices.gather_config1,
         kernel_config_df,
         1,
-        gather_config_buffer1->size() / num_cores,
-        gather_config_buffer1);
+        gather_config_buffer1->page_size(),
+        config_tensors_in_dram ? nullptr : gather_config_buffer1);
 
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
@@ -227,13 +250,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
     const std::string reader_kernel_name =
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp";
-    std::vector<uint32_t> reader_ct_args = {
-        0,  // padding_config_cb_id
-        0,  // gather_config_cb_id
+    std::vector<uint32_t> common_reader_ct_args = {
+        0,  // padding config cb
+        0,  // gather config cb
         cb_indices.src_cb_id,
         input_to_writer_cb_id0,
         cb_indices.out_cb_id,
-        cb_indices.pad_cb_id,
+        0,  // padding value cb
         pad_val,
         input_npages,
         out_stick_nbytes,
@@ -248,39 +271,90 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         0,            // Block start offset
         block_stride  // Block stride
     };
+    std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> core_0_reader_ct_args = common_reader_ct_args;
+    std::vector<uint32_t> core_1_reader_ct_args = common_reader_ct_args;
 
-    reader_ct_args[0] = 0;
-    reader_ct_args[1] = cb_indices.gather_config0;
-    KernelHandle reader_kernel_id0 = CreateKernel(
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        core_0_reader_ct_args.push_back(padding_config_storage0.get_buffer()->address());
+        core_0_reader_ct_args.push_back(padding_config_storage0.get_buffer()->page_size());
+
+        core_0_reader_ct_args.push_back(gather_config_storage0.get_buffer()->address());
+        core_0_reader_ct_args.push_back(gather_config_storage0.get_buffer()->page_size());
+
+        core_1_reader_ct_args.push_back(padding_config_storage1.get_buffer()->address());
+        core_1_reader_ct_args.push_back(padding_config_storage1.get_buffer()->page_size());
+
+        core_1_reader_ct_args.push_back(gather_config_storage1.get_buffer()->address());
+        core_1_reader_ct_args.push_back(gather_config_storage1.get_buffer()->page_size());
+
+        tt::tt_metal::TensorAccessorArgs(padding_config_storage0.get_buffer()).append_to(core_0_reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(gather_config_storage0.get_buffer()).append_to(core_0_reader_ct_args);
+
+        tt::tt_metal::TensorAccessorArgs(padding_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(gather_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
+    }
+    const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
+    const bool enable_padding = config_tensors_in_dram ||
+                                padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
+                                padding_config_buffer1->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
+
+    core_0_reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
+    core_0_reader_ct_args[1] = cb_indices.gather_config0;
+    core_0_reader_ct_args[5] = cb_indices.pad_cb_id0;
+
+    core_1_reader_ct_args[0] = enable_padding ? cb_indices.padding_config1 : 0;
+    core_1_reader_ct_args[1] = cb_indices.gather_config1;
+    core_1_reader_ct_args[3] = input_to_writer_cb_id1;
+    core_1_reader_ct_args[5] = cb_indices.pad_cb_id1;
+    core_1_reader_ct_args[17] = 1;  // Block start offset
+
+    auto reader_0_kernel_id = CreateKernel(
         program,
         reader_kernel_name,
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = core_0_reader_ct_args,
+            .defines = reader_defines});
 
-    reader_ct_args[0] = cb_indices.padding_config;
-    reader_ct_args[1] = cb_indices.gather_config1;
-    reader_ct_args[3] = input_to_writer_cb_id1;
-    reader_ct_args[17] = 1;  // Block start offset
-    KernelHandle reader_kernel_id1 = CreateKernel(
+    auto reader_1_kernel_id = CreateKernel(
         program,
         reader_kernel_name,
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = core_1_reader_ct_args,
+            .defines = reader_defines});
 
-    // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
-    if (!capture_buffers) {
-        padding_config_storage = {};
-        gather_config_storage0 = {};
-        gather_config_storage1 = {};
+    if (config_tensors_in_dram) {
+        uint32_t core_index = 0;
+        for (auto core : cores) {
+            if (is_height_sharded) {
+                SetRuntimeArgs(program, reader_0_kernel_id, core, {core_index});
+                SetRuntimeArgs(program, reader_1_kernel_id, core, {core_index});
+            } else if (is_width_sharded) {
+                SetRuntimeArgs(program, reader_0_kernel_id, core, {0});
+                SetRuntimeArgs(program, reader_1_kernel_id, core, {0});
+            } else if (is_block_sharded) {
+                auto nhw_index = is_rm_orientation ? core.y : core.x;
+                SetRuntimeArgs(program, reader_0_kernel_id, core, {nhw_index});
+                SetRuntimeArgs(program, reader_1_kernel_id, core, {nhw_index});
+            }
+            core_index++;
+        }
     }
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
-                                                padding_config_cb,
+                                                padding_config_cb0,
+                                                padding_config_cb1,
                                                 gather_config_cb0,
                                                 gather_config_cb1,
-                                                padding_config_storage,
+                                                padding_config_storage0,
+                                                padding_config_storage1,
                                                 gather_config_storage0,
                                                 gather_config_storage1](
                                                    const void* operation,
@@ -316,27 +390,29 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
+    const bool padding_exists,
     const uint32_t ncores_nhw,
     const uint32_t ncores_c,
+    const uint32_t num_cores_x,
     const uint32_t max_out_nsticks_per_core,
     const uint32_t max_ref_size,
+    const uint32_t in_out_shard_size_delta,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
-    const bool capture_buffers) {
+    bool config_tensors_in_dram) {
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
 
-    tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
     CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
@@ -354,7 +430,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    const bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
@@ -377,13 +453,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
+    create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
-    uint32_t config_nbytes =
-        tt::datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
-    uint32_t pagesize = 0;
 
     uint32_t temp_cb_id = 0;
     uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
@@ -396,7 +468,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             CircularBufferConfig(output_ntiles * out_tile_size, {{cb_indices.untilize_out_cb_id, out_df}})
                 .set_page_size(cb_indices.untilize_out_cb_id, out_tile_size)
                 .set_globally_allocated_address(*dst_buffer);  // untilize into the dst buffer for in place untilize
-        auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
+        CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
         log_debug(
             tt::LogOp,
             "CB {} :: npages = {}, pagesize = {}",
@@ -411,8 +483,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             // wide tensors use a different compute kernel which requires use of a temp buffer for the intermediate
             // untilized results
             temp_cb_id = cb_indices.get_next_cb_id();
-            auto temp_cb =
-                create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
+            create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
             log_debug(
                 tt::LogOp,
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
@@ -424,17 +495,14 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
         }
-        KernelHandle untilize_kernel_id =
-            CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+        CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.dtype() == DataType::UINT16);
 
-    const uint32_t num_cores = all_cores.num_cores();
-
-    auto padding_config_storage = padding_config.device_storage();
+    const auto& padding_config_storage = padding_config.device_storage();
     auto padding_config_buffer = padding_config_storage.get_buffer();
     cb_indices.padding_config_cb_id = cb_indices.get_next_cb_id();
     auto padding_config_cb = create_circular_buffer(
@@ -443,10 +511,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         cb_indices.padding_config_cb_id,
         kernel_config_df,
         1,
-        padding_config_buffer->size() / num_cores,
-        padding_config_buffer);
+        padding_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : padding_config_buffer);
 
-    auto local_config_storage = local_config.device_storage();
+    const auto& local_config_storage = local_config.device_storage();
     auto local_config_buffer = local_config_storage.get_buffer();
     cb_indices.local_config_cb_id = cb_indices.get_next_cb_id();
     auto local_config_cb = create_circular_buffer(
@@ -455,10 +523,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         cb_indices.local_config_cb_id,
         kernel_config_df,
         1,
-        local_config_buffer->size() / num_cores,
-        local_config_buffer);
+        local_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : local_config_buffer);
 
-    auto remote_config_storage = remote_config.device_storage();
+    const auto& remote_config_storage = remote_config.device_storage();
     auto remote_config_buffer = remote_config_storage.get_buffer();
     cb_indices.remote_config_cb_id = cb_indices.get_next_cb_id();
     auto remote_config_cb = create_circular_buffer(
@@ -467,19 +535,16 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         cb_indices.remote_config_cb_id,
         kernel_config_df,
         1,
-        remote_config_buffer->size() / num_cores,
-        remote_config_buffer);
+        remote_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : remote_config_buffer);
 
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
-    if (!skip_untilize) {
-        in_out_buffer_start_delta = 0;
-    }
     const auto delta = output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
     TT_ASSERT(
-        src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
+        src_buffer->address() == dst_buffer->address() + delta,
         "In-place halo requires input and output buffers to be sharded at the same address");
     TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
@@ -491,12 +556,12 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             CircularBufferConfig(
                 max_ref_size * output_shard_shape[1] * out_nbytes, {{remote_temp_cb_id, kernel_config_df}})
                 .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
-        CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+        CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
     }
 
     // noc conversion function
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
     };
@@ -507,8 +572,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     // compute the number of noop cores
     const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
-    int32_t num_cores_x = device->compute_with_storage_grid_size().x;
-    int32_t num_cores_y = device->compute_with_storage_grid_size().y;
     int32_t num_active_cores = cores.size();
     int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
     int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
@@ -544,12 +607,21 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
+
+    // create the NC/BR sync CBs
+    int32_t sync_cb_id1 = cb_indices.get_next_cb_id();
+    create_circular_buffer(program, all_cores, sync_cb_id1, tt::DataFormat::UInt16, 1, 2);
+    int32_t sync_cb_id2 = cb_indices.get_next_cb_id();
+    create_circular_buffer(program, all_cores, sync_cb_id2, tt::DataFormat::UInt16, 1, 2);
+
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
-        0,  // padding_config_cb_id
-        0,  // local_config_cb_id
-        0,  // remote_config_cb_id
-        0,  // remote_temp_cb_id
+        true,  // main thread
+        padding_exists,
+        cb_indices.padding_config_cb_id,
+        cb_indices.local_config_cb_id,
+        cb_indices.remote_config_cb_id,
+        remote_temp_cb_id,
         cb_indices.src_cb_id,
         input_to_writer_cb_id,
         cb_indices.out_cb_id,
@@ -571,32 +643,51 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         rectangular_y,
         last_active_x,
         semaphore_id,
-        in_out_buffer_start_delta,
+        in_out_shard_size_delta,
         temp_cb_id,
         ntiles_per_block,
-        input_nblocks_per_core};
+        input_nblocks_per_core,
+        sync_cb_id1,
+        sync_cb_id2};
 
-    reader_ct_args[0] = 0;
-    reader_ct_args[1] = cb_indices.local_config_cb_id;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id;
-    reader_ct_args[3] = remote_temp_cb_id;
+    std::map<std::string, std::string> reader_defines;
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        reader_ct_args.push_back(padding_config_storage.get_buffer()->address());
+        reader_ct_args.push_back(padding_config_storage.get_buffer()->page_size());
+
+        reader_ct_args.push_back(local_config_storage.get_buffer()->address());
+        reader_ct_args.push_back(local_config_storage.get_buffer()->page_size());
+
+        reader_ct_args.push_back(remote_config_storage.get_buffer()->address());
+        reader_ct_args.push_back(remote_config_storage.get_buffer()->page_size());
+
+        tt::tt_metal::TensorAccessorArgs(padding_config_storage.get_buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(local_config_storage.get_buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(remote_config_storage.get_buffer()).append_to(reader_ct_args);
+    }
+
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
         rectangular_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_ct_args,
+            .defines = reader_defines});
 
-    reader_ct_args[0] = cb_indices.padding_config_cb_id;
-    reader_ct_args[1] = 0;
-    reader_ct_args[2] = 0;
-    reader_ct_args[3] = 0;
+    reader_ct_args[0] = false;  // secondary thread
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
         rectangular_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_ct_args,
+            .defines = reader_defines});
 
     for (uint32_t core_i = 0; core_i < num_cores_rectangular; core_i++) {
         uint32_t core_x_i = core_i % rectangular_x;
@@ -607,16 +698,19 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
         std::vector<uint32_t> reader_rt_args0 = {(uint32_t)noop_core, (uint32_t)cast_core};
         std::vector<uint32_t> reader_rt_args1 = {(uint32_t)noop_core, (uint32_t)false};
+
+        if (is_height_sharded) {
+            reader_rt_args0.push_back(core_i);
+        } else if (is_width_sharded) {
+            reader_rt_args0.push_back(0);
+        } else if (is_block_sharded) {
+            auto nhw_index = is_rm_orientation ? core_y_i : core_x_i;
+            reader_rt_args0.push_back(nhw_index);
+        }
         SetRuntimeArgs(program, reader_kernel_id0, core, reader_rt_args0);
         SetRuntimeArgs(program, reader_kernel_id1, core, reader_rt_args1);
     }
 
-    if (!capture_buffers) {
-        padding_config_storage = {};
-        local_config_storage = {};
-        remote_config_storage = {};
-    }
-    // Capture padding_config_storage, local_config_storage, remote_config_storage to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb,

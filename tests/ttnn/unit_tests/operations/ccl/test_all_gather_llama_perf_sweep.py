@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 import itertools
 from ttnn import ShardTensorToMesh
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import run_all_gather_sharded
@@ -86,7 +86,6 @@ def test_all_gather_sharded_post_commit(
     n_worker,
     n_buffer,
     # num_cores,
-    use_program_cache,
     function_level_defaults,
     num_iter,
 ):
@@ -104,7 +103,6 @@ def test_all_gather_sharded_post_commit(
         tensor_layout,
         tensor_mem_layout,
         # num_cores,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         n_worker=n_worker,

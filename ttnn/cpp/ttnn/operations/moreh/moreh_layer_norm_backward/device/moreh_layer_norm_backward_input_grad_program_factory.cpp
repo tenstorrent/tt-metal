@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -36,8 +39,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
-    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -52,8 +55,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    const auto mean_rstd_shape = mean.get_padded_shape();
-    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
+    const auto mean_rstd_shape = mean.padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
@@ -109,7 +112,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const uint32_t im6_t = 1;
     uint32_t im7_t = 1;
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_format);
@@ -157,19 +160,18 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(mean)),
-        static_cast<uint32_t>(is_dram(rstd)),
-        static_cast<uint32_t>(is_dram(gamma)),
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(do_mask_h),
-        static_cast<uint32_t>(do_mask_w)};
+    std::vector<uint32_t> reader_compile_time_args{
+        static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(do_mask_h), static_cast<uint32_t>(do_mask_w)};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma.has_value() ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     if (is_lastdim_layer_norm) {

@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, run_for_wormhole_b0
+from models.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
 
 
 def test_base_case(device):
@@ -33,6 +33,43 @@ def test_base_case(device):
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_embedding(
+    device,
+    batch_size,
+    sentence_size,
+    hidden_embedding_dim,
+    vocabulary_size,
+    dtype,
+    input_mem_config,
+    output_mem_config,
+    layout,
+):
+    torch.manual_seed(1234)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
+
+    output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@skip_for_blackhole("TODO: Fix on BH #26230")
+@pytest.mark.parametrize("batch_size", [55, 100, 200])
+@pytest.mark.parametrize("sentence_size", [1, 10, 100])
+@pytest.mark.parametrize("hidden_embedding_dim", [1, 128])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize(
+    "vocabulary_size", [768]
+)  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_embedding_unaligned_RM_pages(
     device,
     batch_size,
     sentence_size,
@@ -413,6 +450,66 @@ def test_tg_llama_sharded_embedding(
     output_tensor = ttnn.reshape(
         output_tensor,
         ttnn.Shape((batch_size, 1, hidden_embedding_dim)),
+        ttnn.Shape((batch_size, 32, hidden_embedding_dim)),
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+def test_tg_llama_sharded_rm_embedding(device):
+    torch.manual_seed(1234)
+    unharvested_grid_size = (7, 10)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if unharvested_grid_size[0] > compute_grid_size.x or unharvested_grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    batch_size = 16
+    num_heads = 8
+    vocabulary_size = 4096
+    hidden_embedding_dim = 128
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, num_heads))
+    torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    start_core = ttnn.CoreCoord(1, 0)
+    core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    num_cores = batch_size
+    shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, core_grid, row_wise=True)
+    shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        ((batch_size * num_heads) // num_cores, hidden_embedding_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+
+    input_tensor = ttnn.as_tensor(
+        torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weights = ttnn.as_tensor(
+        torch_weights,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for i in range(2):
+        output_tensor = ttnn.embedding(
+            input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config
+        )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(output_tensor, torch_output_tensor)
+    assert device.num_program_cache_entries() == 1

@@ -5,18 +5,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
-from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
+from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
         "w1": ttnn.bfloat4_b,

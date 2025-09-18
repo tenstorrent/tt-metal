@@ -6,6 +6,7 @@
 
 #include "device/tanh_accurate_device_operation.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn {
 
@@ -13,17 +14,19 @@ namespace operations {
 
 namespace unary {
 
-Tensor Tanh_accurate::invoke(
+namespace {
+inline Tensor invoke_accurate_common(
     QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    TT_FATAL(
-        input_tensor.get_dtype() == DataType::BFLOAT16,
-        "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
-
-    auto input_dtype = input_tensor.get_dtype();
+    const std::optional<Tensor>& optional_output_tensor,
+    UnaryOpType op_type) {
+    auto input_dtype = input_tensor.dtype();
     DataType output_dtype = input_dtype;
+
+    TT_FATAL(
+        input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
+        "Supported dtypes for accurate operations is : BFLOAT16 or FLOAT32");
 
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
 
@@ -37,15 +40,35 @@ Tensor Tanh_accurate::invoke(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
 
+    const std::vector<EltwiseUnaryWithParam>& op_chain = {EltwiseUnaryWithParam{op_type}};
     return prim::tanh_accurate(
         queue_id,
         input_tensor,
+        op_chain,
         output_dtype,
         output_memory_config,
         fp32_dest_acc_en,
         preserve_fp32_precision,
         bfp8_pack_precise,
         optional_output_tensor);
+}
+}  // namespace
+
+Tensor Tanh_accurate::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke_accurate_common(queue_id, input_tensor, memory_config, optional_output_tensor, UnaryOpType::TANH);
+}
+
+Tensor Tanhshrink_accurate::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke_accurate_common(
+        queue_id, input_tensor, memory_config, optional_output_tensor, UnaryOpType::TANHSHRINK);
 }
 
 }  // namespace unary

@@ -6,6 +6,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -46,7 +47,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-    const auto cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
+    const auto& cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
 
     std::shared_ptr<Program> program = std::make_shared<Program>();
 
@@ -55,13 +56,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
+    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
+    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
@@ -69,27 +70,34 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
+    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src0_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_buf).append_to(reader_compile_time_args);
     auto binary_reader_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> compute_kernel_args = {};
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    std::map<string, string> binary_defines = {
+    std::map<std::string, std::string> binary_defines = {
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
@@ -157,10 +165,7 @@ int main() {
     };
     // Specify data layout on a single physical device
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
     // Allocate buffers in distributed memory space for first MeshWorkload
     auto add_src0_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
     auto add_src1_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
@@ -265,13 +270,13 @@ int main() {
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
     for (int i = 0; i < add_dst_vec.size(); i++) {
-        pass &= (add_dst_vec[i].to_float() == workload_0_src0_val + workload_0_src1_val);
+        pass &= (static_cast<float>(add_dst_vec[i]) == workload_0_src0_val + workload_0_src1_val);
     }
     for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
         if (i < mul_sub_dst_vec.size() / 2) {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val * workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val * workload_1_src1_val);
         } else {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val - workload_1_src1_val);
         }
     }
     ReleaseTrace(mesh_device.get(), trace_id);

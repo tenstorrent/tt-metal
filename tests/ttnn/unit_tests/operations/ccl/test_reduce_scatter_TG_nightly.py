@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
@@ -59,32 +60,36 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.reduce_scatter(
-        input_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=ttnn.Topology.Linear,
-    )
+    pytest.skip(LEGACY_CCL_SKIP)
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # tt_out_tensor = ttnn.reduce_scatter(
+    #     input_tensor,
+    #     dim=dim,
+    #     cluster_axis=cluster_axis,
+    #     mesh_device=mesh_device,
+    #     math_op=math_op,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    #     topology=ttnn.Topology.Linear,
+    # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.reduce_scatter(
-            input_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
-        )
+        pytest.skip(LEGACY_CCL_SKIP)
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # tt_out_tensor = ttnn.reduce_scatter(
+        #     input_tensor,
+        #     dim=dim,
+        #     cluster_axis=cluster_axis,
+        #     mesh_device=mesh_device,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     topology=ttnn.Topology.Linear,
+        # )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
@@ -108,7 +113,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     num_reduce_scatter_instances: int = 1,
@@ -119,8 +123,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     use_reduce_scatter_async=False,
     use_persistent_output=False,
 ):
-    mesh_device.enable_program_cache()
-
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices_per_line
     full_mesh_input_shape = list(per_reduce_scatter_output_shape)
@@ -290,16 +292,18 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                ttnn_tensor_out = ttnn.reduce_scatter(
-                    ttnn_tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    math_op=math_op,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
-                )
+                pytest.skip(LEGACY_CCL_SKIP)
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                # ttnn_tensor_out = ttnn.reduce_scatter(
+                #     ttnn_tensor,
+                #     dim=dim,
+                #     cluster_axis=cluster_axis,
+                #     mesh_device=mesh_device,
+                #     math_op=math_op,
+                #     num_links=num_links,
+                #     memory_config=output_mem_config,
+                #     topology=ttnn.Topology.Linear,
+                # )
 
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -380,7 +384,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=16,
@@ -398,7 +401,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
@@ -441,7 +443,6 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=16,
@@ -460,7 +461,6 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,

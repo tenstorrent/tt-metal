@@ -3,7 +3,18 @@
 # their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
 set(CMAKE_C_CLANG_TIDY "")
 set(CMAKE_CXX_CLANG_TIDY "")
+set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
+
+add_compile_options(-Wno-unused-variable)
+
+############################################################################################################################
+# NUMA
+############################################################################################################################
+find_library(NUMA_LIBRARY NAMES numa)
+if(NOT NUMA_LIBRARY)
+    message(FATAL_ERROR "NUMA library not found")
+endif()
 
 ############################################################################################################################
 # Boost
@@ -40,18 +51,24 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(span INTERFACE)
-target_link_libraries(
-    span
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
-)
+############################################################################################################################
+# protobuf
+############################################################################################################################
 
-add_library(small_vector INTERFACE)
-target_link_libraries(
-    small_vector
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+CPMAddPackage(
+    NAME protobuf
+    GITHUB_REPOSITORY protocolbuffers/protobuf
+    GIT_TAG
+        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "protobuf_BUILD_TESTS OFF"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "protobuf_INSTALL OFF"
+        "BUILD_TESTING OFF"
+        "protobuf_BUILD_EXAMPLES OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
 ############################################################################################################################
@@ -61,13 +78,13 @@ target_link_libraries(
 CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
-    GIT_TAG 0.8.0
-    PATCHES
-        yaml-cpp.patch
+    GIT_TAG
+        2f86d13775d119edbb69af52e5f566fd65c6953b # 0.8.0 + patches
     OPTIONS
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
+    CUSTOM_CACHE_KEY "0_8_0_upstream_patched"
 )
 
 ############################################################################################################################
@@ -92,7 +109,7 @@ endif()
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
 
-CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
+CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
 if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
@@ -112,9 +129,13 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME magic-enum-dev)
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 OPTIONS "MAGIC_ENUM_OPT_INSTALL TRUE")
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+CPMAddPackage(
+    NAME enchantum
+    GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
+    GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
@@ -135,6 +156,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    CUSTOM_CACHE_KEY "0_12_0_patched"
 )
 
 ############################################################################################################################
@@ -172,6 +194,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_8_0_patched"
 )
 CPMAddPackage(
     NAME xtensor
@@ -182,6 +205,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_26_0_patched"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -192,6 +216,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
 ############################################################################################################################
@@ -231,6 +256,12 @@ CPMAddPackage(
         "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    target_compile_options(
+        Taskflow
+        INTERFACE
+            -isystem
+            ${Taskflow_SOURCE_DIR}
+    )
     add_library(Taskflow::Taskflow ALIAS Taskflow)
 endif()
 
@@ -265,3 +296,31 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+####################################################################################################################
+# spdlog
+####################################################################################################################
+
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME spdlog-dev)
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    VERSION 1.15.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "SPDLOG_FMT_EXTERNAL_HO ON"
+        "SPDLOG_INSTALL ON"
+)
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+
+####################################################################################################################
+# tt-logger
+####################################################################################################################
+CPMAddPackage(
+    NAME tt-logger
+    GITHUB_REPOSITORY tenstorrent/tt-logger
+    VERSION 1.1.5
+    OPTIONS
+        "TT_LOGGER_INSTALL ON"
+        "TT_LOGGER_BUILD_TESTING OFF"
+)

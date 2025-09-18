@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -26,11 +27,9 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     auto& output = tensor_return_value;
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
-    tt_metal::IDevice* device = input_tensor.device();
-
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -38,7 +37,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     tt_metal::Buffer* in0_buffer = input_tensor.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
-    tt_metal::Buffer* in1_buffer;
+    tt_metal::Buffer* in1_buffer = nullptr;
     uint32_t in1_buffer_addr = 0;
     tt_metal::BufferType in1_buffer_type = tt_metal::BufferType::DRAM;
     if (read_from_input_tensor_kv) {
@@ -54,7 +53,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
-        in1_w_tiles = input_tensor_kv.value().get_padded_shape()[3] / TILE_WIDTH;
+        in1_w_tiles = input_tensor_kv.value().padded_shape()[3] / TILE_WIDTH;
     }
 
     // Per output tensor args
@@ -70,7 +69,6 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
     uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
@@ -96,37 +94,32 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = false;
-    if (read_from_input_tensor_kv) {
-        in1_is_dram = in1_buffer_type == tt_metal::BufferType::DRAM;
-    }
-
-    // TODO: Q, K, V doesn't necessarily need to be the same output mem config
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    // Always append placeholder/accessor for in1 to keep offsets stable
+    tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
+        .append_to(reader_compile_time_args);
+
+    // TODO: Q, K, V doesn't necessarily need to be the same output mem config
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
         (std::uint32_t)q_out_h_tiles,
         (std::uint32_t)q_out_w_tiles,
         (std::uint32_t)q_out_HtWt,
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
     };
+    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     if (transpose_k_heads) {
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
-        auto compute_kernel_id_group_1 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
             core_group_1,
@@ -134,7 +127,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
 
         if (core_group_2.num_cores() > 0) {
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
-            auto compute_kernel_id_group_2 = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
                 core_group_2,
@@ -172,7 +165,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb1_num_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // If we transpose_k_heads:
     // - reader will write to cb0, instead of cb1
@@ -184,14 +177,14 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t out_cb_index = 16;
         uint32_t out_cb_num_tiles = cb_num_tiles;
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_cb_num_tiles * single_tile_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size);
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     }
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
@@ -235,7 +228,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         num_blocks_written += num_blocks_per_core;
     }
 
-    auto override_runtime_arguments_callback =
+    [[maybe_unused]] auto override_runtime_arguments_callback =
         [reader_kernel_id,
          writer_kernel_id,
          num_cores,
@@ -257,7 +250,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
             auto dst_buffer_key = output_tensors.at(1).buffer();
             auto dst_buffer_value = output_tensors.at(2).buffer();
 
-            for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+            for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {
@@ -298,7 +291,7 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
     auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
-    for (uint32_t i = 0, num_blocks_written = 0; i < cached_program.shared_variables.num_cores; i++) {
+    for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; i++) {
         CoreCoord core = {
             i / cached_program.shared_variables.num_cores_y, i % cached_program.shared_variables.num_cores_y};
 
@@ -335,11 +328,9 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
-
     tt_metal::IDevice* device = input_tensor.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
@@ -625,13 +616,6 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor_q.buffer();
-
-    uint32_t src_kv_buffer_addr = 0;
-    if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
-    }
-
     auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
     auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();

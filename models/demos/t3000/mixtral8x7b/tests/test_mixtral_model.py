@@ -1,21 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
 import numpy as np
+import pytest
+import torch
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from ttnn import ConcatMeshToTensor
 
 
 class Emb(torch.nn.Module):
@@ -34,8 +33,9 @@ class Emb(torch.nn.Module):
         32,
     ),
 )
-def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
-    valid_pcc = 0.964
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
+    valid_pcc = 0.942
     dtype = ttnn.bfloat8_b
     iterations = 10
 

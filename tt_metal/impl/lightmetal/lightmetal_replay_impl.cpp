@@ -7,18 +7,19 @@
 #include <iostream>
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
-#include <trace_buffer.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -241,7 +242,6 @@ void LightMetalReplayImpl::setup_devices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
-    const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
     const chip_id_t mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
@@ -349,10 +349,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_SetRuntimeArgsUint32VecPerCoreCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsCommand: {
-            execute(command->cmd_as_SetRuntimeArgsCommand());
-            break;
-        }
         case ::tt::tt_metal::flatbuffer::CommandType::CreateCircularBufferCommand: {
             execute(command->cmd_as_CreateCircularBufferCommand());
             break;
@@ -364,10 +360,12 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         case ::tt::tt_metal::flatbuffer::CommandType::NONE:
             TT_THROW("LightMetalReplay execute encountered unsupported cmd type NONE");
             break;
+        default: TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type()); break;
     }
 }
 
 // Per API command handlers.
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -375,10 +373,11 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
-    EnqueueTrace(cq, cmd->tid(), cmd->blocking());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -386,19 +385,24 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
+    TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
-    auto trace_desc = get_trace_by_id(cmd->tid());
-    LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
+    // auto trace_desc = get_trace_by_id(cmd->tid());
+    // LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
 
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
-    ReleaseTrace(this->device_, cmd->tid());
+    TT_THROW("Light Metal Trace is no longer supported.");
+    // ReleaseTrace(this->device_, cmd->tid());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd) {
@@ -413,6 +417,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
 
     // Handle optionals
     const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    const auto dist_spec = from_flatbuffer(cmd->buffer_distribution_spec());
+    auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
         cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
@@ -425,8 +431,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -437,8 +442,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -558,7 +562,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
-    std::shared_ptr<Kernel> kernel = program->get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program->impl().get_kernel(kernel_id);
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
@@ -605,22 +609,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     auto core_spec = from_flatbuffer(cmd->core_spec());
     auto runtime_args = from_flatbuffer(cmd->args());
     SetRuntimeArgs(*program, kernel_id, core_spec, runtime_args);
-}
-
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* cmd) {
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(SetRuntimeArgs). kernel_global_id: {} rt_args_size: {}",
-        cmd->kernel_global_id(),
-        cmd->args()->size());
-    auto core_spec = core_spec_from_flatbuffer(cmd);
-    auto runtime_args = rt_args_from_flatbuffer(cmd->args());
-    auto kernel = get_kernel_from_map(cmd->kernel_global_id());
-    TT_FATAL(
-        kernel,
-        "Attempted to SetRuntimeArgs() using a Kernel w/ global_id: {} that was not previously created.",
-        cmd->kernel_global_id());
-    SetRuntimeArgs(this->device_, kernel, core_spec, runtime_args);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd) {
@@ -738,7 +726,7 @@ bool LightMetalReplayImpl::run() {
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
-        uint32_t idx = 1;
+        [[maybe_unused]] uint32_t idx = 1;
         for (const auto* cmd : *commands) {
             auto str_name = std::string(EnumNameCommandType(cmd->cmd_type()));
             log_trace(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", idx++, commands->size(), str_name);
@@ -753,7 +741,7 @@ bool LightMetalReplayImpl::run() {
 
         return true;
     } catch (const std::exception& e) {
-        log_fatal(e.what());
+        log_fatal(tt::LogMetalTrace, "{}", e.what());
         clear_object_maps();
         if (replay_manages_device) {
             close_devices();

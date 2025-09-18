@@ -7,12 +7,13 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-NUM_BUFFERS = 8
+NUM_BUFFERS = 16
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -69,30 +70,29 @@ def run_with_trace(
     # Compile Run
     logger.info("Compiling model")
     if use_all_gather_async:
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
             input_tensor,
             dim,
+            multi_device_global_semaphore=ccl_semaphore_handles[0],
             cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
             topology=all_gather_topology,
-            multi_device_global_semaphore=ccl_semaphore_handles[0]
-            if type(ccl_semaphore_handles) == list
-            else ccl_semaphore_handles,
-            persistent_output_tensor=persistent_output_tensor,
+            persistent_output_buffer=persistent_output_tensor,
             num_links=num_links,
             memory_config=output_mem_config,
-            subdevice_id=worker_sub_device_id,
+            sub_device_id=worker_sub_device_id,
         )
     else:
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=all_gather_topology,
-        )
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        pytest.skip(LEGACY_CCL_SKIP)
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor,
+        #     dim=dim,
+        #     cluster_axis=cluster_axis,
+        #     mesh_device=mesh_device,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     topology=all_gather_topology,
+        # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
@@ -102,30 +102,29 @@ def run_with_trace(
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(n_iters):
             if use_all_gather_async:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor,
                     dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                     cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
-                    if type(ccl_semaphore_handles) == list
-                    else ccl_semaphore_handles,
-                    persistent_output_tensor=persistent_output_tensor,
+                    persistent_output_buffer=persistent_output_tensor,
                     num_links=num_links,
                     memory_config=output_mem_config,
-                    subdevice_id=worker_sub_device_id,
+                    sub_device_id=worker_sub_device_id,
                 )
             else:
-                tt_out_tensor = ttnn.all_gather(
-                    input_tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                )
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                pytest.skip(LEGACY_CCL_SKIP)
+                # tt_out_tensor = ttnn.all_gather(
+                #     input_tensor,
+                #     dim=dim,
+                #     cluster_axis=cluster_axis,
+                #     mesh_device=mesh_device,
+                #     num_links=num_links,
+                #     memory_config=output_mem_config,
+                #     topology=all_gather_topology,
+                # )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         return trace_id
@@ -171,7 +170,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     output_shard_spec: ttnn.ShardSpec = None,
@@ -186,6 +184,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     # New all-gather-async and persistent fabric params
     use_all_gather_async=False,
     use_persistent_output=False,
+    linear=True,
 ):
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
@@ -239,8 +238,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
-    # TODO: Take as an arg
-    linear = True
     if linear:
         all_gather_topology = ttnn.Topology.Linear
         wrap_mesh = False
@@ -305,28 +302,29 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             for i in range(num_iters):
                 if use_all_gather_async:
                     logger.info("Running all-gather async")
-                    ttnn_tensor_out = ttnn.experimental.all_gather_async(
+                    ttnn_tensor_out = ttnn.experimental.all_gather_command_processor_async(
                         ttnn_tensor,
                         dim,
-                        cluster_axis=cluster_axis,
-                        mesh_device=mesh_device,
-                        topology=all_gather_topology,
                         multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
-                        persistent_output_tensor=ttnn_persistent_output_tensor,
+                        cluster_axis=cluster_axis,
+                        topology=all_gather_topology,
+                        persistent_output_buffer=ttnn_persistent_output_tensor,
                         num_links=num_links,
                         memory_config=output_mem_config,
-                        subdevice_id=worker_sub_device_id,
+                        sub_device_id=worker_sub_device_id,
                     )
                 else:
-                    ttnn_tensor_out = ttnn.all_gather(
-                        ttnn_tensor,
-                        dim=dim,
-                        cluster_axis=cluster_axis,
-                        mesh_device=mesh_device,
-                        num_links=num_links,
-                        memory_config=output_mem_config,
-                        topology=all_gather_topology,
-                    )
+                    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                    pytest.skip(LEGACY_CCL_SKIP)
+                    # ttnn_tensor_out = ttnn.all_gather(
+                    #     ttnn_tensor,
+                    #     dim=dim,
+                    #     cluster_axis=cluster_axis,
+                    #     mesh_device=mesh_device,
+                    #     num_links=num_links,
+                    #     memory_config=output_mem_config,
+                    #     topology=all_gather_topology,
+                    # )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             signpost("stop")
     except Exception as e:
@@ -411,7 +409,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
@@ -428,7 +425,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -472,7 +468,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
@@ -489,7 +484,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,

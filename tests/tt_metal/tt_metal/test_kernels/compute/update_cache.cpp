@@ -21,10 +21,10 @@ void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
 
-    untilize_init(in_cb, untilized_in_cb);
+    compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
     for (uint32_t b = 0; b < B / 32; b++) {
-        untilize_init_short(in_cb);
+        untilize_init(in_cb);
 
         cb_wait_front(in_cb, Wt);
         cb_reserve_back(untilized_in_cb, Wt);
@@ -34,7 +34,7 @@ void MAIN {
         untilize_uninit(in_cb);
 
         for (uint32_t u = 0; u < 32; u++) {
-            untilize_init_short(cache_cb);
+            untilize_init(cache_cb);
             cb_wait_front(cache_cb, Wt);
             cb_reserve_back(untilized_cache_cb, Wt);
             untilize_block(cache_cb, Wt, untilized_cache_cb);
@@ -42,7 +42,7 @@ void MAIN {
             cb_pop_front(cache_cb, Wt);
             untilize_uninit(cache_cb);
 
-            tilize_init_short(untilized_cache2_cb, Wt, out_cb);
+            tilize_init(untilized_cache2_cb, Wt, out_cb);
             cb_wait_front(untilized_cache2_cb, Wt);
             cb_reserve_back(out_cb, Wt);
             tilize_block(untilized_cache2_cb, Wt, out_cb);

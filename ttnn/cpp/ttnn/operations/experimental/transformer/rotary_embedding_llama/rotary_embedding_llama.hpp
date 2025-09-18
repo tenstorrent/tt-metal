@@ -17,9 +17,9 @@ struct RotaryEmbeddingLlamaOperation {
         const Tensor& cos_cache,
         const Tensor& sin_cache,
         const Tensor& trans_mat,
-        const bool is_decode_mode = false,
+        bool is_decode_mode = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer

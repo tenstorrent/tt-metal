@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh
 import json
 import math
+
+import torch
+from loguru import logger
+
+import ttnn
+from ttnn import ReplicateTensorToMesh
 
 
 # load from json, return as a list
@@ -212,7 +214,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-def cache_attention(mesh_device, state_dict, model_args, current_rot_mat, rot_matrix, dtype):
+def cache_attention(mesh_device, tt_ccl, state_dict, model_args, current_rot_mat, rot_matrix, dtype):
     from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 
     logger.info(f"Caching attention...")
@@ -228,6 +230,7 @@ def cache_attention(mesh_device, state_dict, model_args, current_rot_mat, rot_ma
 
     tt_attn = TtMixtralAttention(
         mesh_device,
+        tt_ccl,
         state_dict,
         model_args,
         layer_num=0,

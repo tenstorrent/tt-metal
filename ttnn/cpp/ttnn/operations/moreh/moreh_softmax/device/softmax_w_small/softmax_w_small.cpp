@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <string>
+
+#include "tt-metalium/assert.hpp"
+#include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -21,16 +25,15 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input.get_padded_shape();
+    auto shape = input.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto num = input.volume() / H / W;
+    auto num = input.physical_volume() / H / W;
 
     uint32_t num_kernel_rows = num * Ht;
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -40,10 +43,16 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
+        TT_THROW(
+            "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
+            "compute kernel configuration.");
+    }
+
     Program program = Program();
 
     // create circular buffers
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     CreateCircularBuffer(
@@ -63,26 +72,27 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         });
 
     // create read/wrtie kernel
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
-
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w.cpp",
         all_cores,
-        {src_is_dram},
+        reader_ct_args,
         reader_defines);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w.cpp",
         all_cores,
-        {dst_is_dram},
+        writer_ct_args,
         writer_defines);
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
     } else {
@@ -125,7 +135,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = input.get_logical_shape()[-1] % tt::constants::TILE_WIDTH;
+        uint32_t mask_w = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
         if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
         }

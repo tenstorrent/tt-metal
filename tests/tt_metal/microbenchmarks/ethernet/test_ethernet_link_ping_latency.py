@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,8 @@ import sys
 
 from loguru import logger
 import pytest
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_possetupt_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 @pytest.mark.parametrize("sample_counts", [(1024,)])  # , 8, 16, 64, 256],
@@ -37,10 +37,9 @@ def test_bidirectional_erisc_bandwidth(sample_counts, sample_sizes, channel_coun
     sample_sizes_str = " ".join([str(s) for s in sample_sizes])
     channel_counts_str = " ".join([str(s) for s in channel_counts])
 
-    ARCH_NAME = os.getenv("ARCH_NAME")
     rc = os.system(
         f"TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_link_ping_latency_no_edm_{ARCH_NAME} \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_link_ping_latency_no_edm \
                 {len(sample_counts)} {sample_counts_str} \
                     {len(sample_sizes)} {sample_sizes_str} \
                         {len(channel_counts)} {channel_counts_str} \

@@ -8,7 +8,6 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <magic_enum/magic_enum.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,17 +25,9 @@ namespace core {
 struct ToLayout {
     static Tensor invoke(
         const ttnn::Tensor& tensor_arg,
-        const ttnn::Layout layout,
+        ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        IDevice* device = nullptr);
-
-    static Tensor invoke(
-        const ttnn::Tensor& tensor_arg,
-        const ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        MeshDevice* device = nullptr);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace core

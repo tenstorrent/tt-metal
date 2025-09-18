@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 
 
 def load_hf_model(model_location_generator, model_version):

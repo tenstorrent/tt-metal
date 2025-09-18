@@ -13,7 +13,7 @@ import random
 from PIL import Image
 import torchvision.transforms as transforms
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -145,7 +145,6 @@ def run_perf_efficientnet_b0(
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     imagenet_sample_input,
     model_location_generator,
     expected_inference_time,
@@ -175,7 +174,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     imagenet_sample_input,
     model_location_generator,
     expected_inference_time,

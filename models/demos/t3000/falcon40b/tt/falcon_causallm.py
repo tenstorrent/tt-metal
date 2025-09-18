@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import Optional, Tuple
 
-import ttnn
-from ttnn import ShardTensorToMesh
-from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
+import torch
 
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
+import ttnn
+from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
+from models.demos.t3000.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconCausalLM(TtFalconModelShared):

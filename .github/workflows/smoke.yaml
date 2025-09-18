@@ -15,24 +15,27 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 3.5
+        default: 4.0 # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+      product:
+        required: true
+        type: string # tt-metalium or tt-nn
 
 jobs:
-  metalium-smoke:
+  smoke:
     runs-on: >-
       ${{
-        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && format('tt-ubuntu-2204-{0}-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b' || contains(inputs.runner, 'viommu')) && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
@@ -47,7 +50,20 @@ jobs:
 
       - name: Install packages
         run: |
-          apt install ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+          # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+
+      - name: Warmup caches
+        timeout-minutes: 2
+        env:
+          GTEST_COLOR: yes
+          TT_METAL_HOME: /usr/libexec/tt-metalium
+          LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+          # TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
+        run: |
+          # Run a single test to warm up caches before the full test suite
+          /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Run a test
         id: test
@@ -56,12 +72,14 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
-          TT_METAL_WATCHER: 5
+          LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+          # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          /usr/bin/tt-metalium-validation-smoke
+          /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: workaround
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           # The test-reporting action runs git ls-files with no way to opt-out.
           # Give it a dummy repo so it doesn't fail.
@@ -72,7 +90,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ inputs.runner }} smoke tests
+          name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work

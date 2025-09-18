@@ -16,20 +16,22 @@ constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;  // for L1 alignment
 
 // Prefetcher CMD ID enums
 enum CQPrefetchCmdId : uint8_t {
-    CQ_PREFETCH_CMD_ILLEGAL = 0,               // common error value
-    CQ_PREFETCH_CMD_RELAY_LINEAR = 1,          // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED = 2,           // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 3,    // relay banked/paged data from multiple srcs to dispacher
-    CQ_PREFETCH_CMD_RELAY_INLINE = 4,          // relay (inline) data from CmdDatQ to dispatcher
-    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 5,  // same as above, but doesn't flush the page to dispatcher
-    CQ_PREFETCH_CMD_EXEC_BUF = 6,              // execute commands from a buffer
-    CQ_PREFETCH_CMD_EXEC_BUF_END = 7,  // finish executing commands from a buffer (return), payload like relay_inline
-    CQ_PREFETCH_CMD_STALL = 8,         // drain pipe through dispatcher
-    CQ_PREFETCH_CMD_DEBUG = 9,         // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_TERMINATE = 10,    // quit
-    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 11,    // Copy paged data to the ringbuffer
-    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 12,  // Set an offset in the ringbuffer for later reads.
-    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 13,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_ILLEGAL = 0,       // common error value
+    CQ_PREFETCH_CMD_RELAY_LINEAR = 1,  // relay banked/paged data from src_noc to dispatcher
+    CQ_PREFETCH_CMD_RELAY_LINEAR_H =
+        2,  // relay linear from src_noc on prefetch_h chip to dispatcher. Must be only command in fetchq entry.
+    CQ_PREFETCH_CMD_RELAY_PAGED = 3,           // relay banked/paged data from src_noc to dispatcher
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 4,    // relay banked/paged data from multiple srcs to dispacher
+    CQ_PREFETCH_CMD_RELAY_INLINE = 5,          // relay (inline) data from CmdDatQ to dispatcher
+    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 6,  // same as above, but doesn't flush the page to dispatcher
+    CQ_PREFETCH_CMD_EXEC_BUF = 7,              // execute commands from a buffer
+    CQ_PREFETCH_CMD_EXEC_BUF_END = 8,  // finish executing commands from a buffer (return), payload like relay_inline
+    CQ_PREFETCH_CMD_STALL = 9,         // drain pipe through dispatcher
+    CQ_PREFETCH_CMD_DEBUG = 10,        // log waypoint data to watcher, checksum
+    CQ_PREFETCH_CMD_TERMINATE = 11,    // quit
+    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 12,    // Copy paged data to the ringbuffer
+    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 13,  // Set an offset in the ringbuffer for later reads.
+    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 14,       // Relay data from the ringbuffer to the dispatcher
     CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
@@ -50,7 +52,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
     CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
@@ -63,7 +65,7 @@ enum GoSignalMcastSettings : uint8_t {
 
 enum DispatcherSelect : uint8_t {
     DISPATCH_MASTER = 0,
-    DISPATCH_SLAVE = 1,
+    DISPATCH_SUBORDINATE = 1,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -83,14 +85,24 @@ struct CQPrefetchBaseCmd {
     enum CQPrefetchCmdId cmd_id;
 } __attribute__((packed));
 
+// Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH)
 struct CQPrefetchRelayLinearCmd {
+    uint16_t pad1;
+    uint8_t length_hi;
+    uint32_t length;
+    uint32_t noc_xy_addr;
+    uint32_t addr;
+} __attribute__((packed));
+
+// Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only
+// command in fetchq entry.
+struct CQPrefetchRelayLinearHCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t noc_xy_addr;
     uint32_t addr;
-    uint32_t length;
+    uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
 } __attribute__((packed));
-;
 
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0xff;
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT = 15;
@@ -142,15 +154,18 @@ constexpr uint32_t CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START = 1;
 // Will always flush writes before reading.
 struct CQPrefetchPagedToRingbufferCmd {
     uint8_t flags;
-    uint8_t pad1;
     uint8_t log2_page_size;
-    uint32_t start_page;
+    uint8_t start_page;
+    uint32_t wp_offset_update;  // set final increment ringbuffer write pointer
     uint32_t base_addr;  // Base address of the interleaved buffer to read from.
     uint32_t length;     // multiple of DRAM alignment
 } __attribute__((packed));
 
 struct CQPrefetchSetRingbufferOffsetCmd {
     uint32_t offset;
+    uint16_t pad1;
+    uint8_t pad2;
+    uint8_t update_wp;  // if set, the ringbuffer write pointer will be updated to the offset
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -170,6 +185,7 @@ struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
         CQPrefetchRelayLinearCmd relay_linear;
+        CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
@@ -201,8 +217,7 @@ struct CQDispatchWriteHostCmd {
     uint8_t is_event;  // one flag, false=read buffer
     uint16_t pad1;
     uint32_t pad2;
-    uint32_t pad3;
-    uint32_t length;
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
@@ -226,6 +241,7 @@ enum CQDispatchCmdPackedWriteType {
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_GO_MSG_INDEX = 0x5 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
 };
 
 struct CQDispatchWritePackedCmd {
@@ -257,7 +273,7 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint8_t flags;
 } __attribute__((packed));
 
-constexpr inline __attribute__((always_inline)) uint32_t
+constexpr __attribute__((always_inline)) uint32_t
 get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
@@ -309,12 +325,12 @@ struct CQDispatchDelayCmd {
     uint32_t delay;
 } __attribute__((packed));
 
+// The maximum value allowed for offset_count in CQDispatchSetWriteOffsetCmd.
+constexpr uint32_t CQ_DISPATCH_MAX_WRITE_OFFSETS = 4;
+
 struct CQDispatchSetWriteOffsetCmd {
-    uint8_t pad1;
+    uint8_t offset_count;  // Number of uint32_t offsets this command sets. Offsets are stored after the CQDispatchCmd.
     uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
-    uint32_t offset0;
-    uint32_t offset1;
-    uint32_t offset2;
 } __attribute__((packed));
 
 struct CQDispatchSetUnicastOnlyCoresCmd {
@@ -323,16 +339,19 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
     uint32_t num_unicast_only_cores;
 } __attribute__((packed));
 
+constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
+
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t num_mcast_txns;
+    uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
+                                  // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
-struct CQDispatchNotifySlaveGoSignalCmd {
+struct CQDispatchNotifySubordinateGoSignalCmd {
     // sends a counter update to dispatch_s when it sees this cmd
     uint8_t wait;  // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t index_bitmask;
@@ -366,7 +385,7 @@ struct CQDispatchCmd {
         CQDispatchSetWriteOffsetCmd set_write_offset;
         CQDispatchGoSignalMcastCmd mcast;
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
-        CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
+        CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
     } __attribute__((packed));

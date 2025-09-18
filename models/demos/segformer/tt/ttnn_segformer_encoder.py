@@ -2,14 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import (
-    TtSegformerOverlapPatchEmbeddings,
-)
-from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from dataclasses import dataclass
+import ttnn
+from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
+from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import TtSegformerOverlapPatchEmbeddings
 
 
 @dataclass

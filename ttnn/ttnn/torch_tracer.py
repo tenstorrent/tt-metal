@@ -448,6 +448,9 @@ def preprocess_return_value(return_value):
             output_tensors += preprocess_return_value(value)
     elif return_value is None:
         pass
+    elif hasattr(return_value, "key_cache") and hasattr(return_value, "value_cache"):
+        output_tensors += preprocess_return_value(return_value.key_cache)
+        output_tensors += preprocess_return_value(return_value.value_cache)
     else:
         logger.warning(f"preprocess_return_value: unsupported type {type(return_value)}")
     return output_tensors
@@ -472,6 +475,10 @@ def postprocess_return_value(return_value, output_tensors):
         return type(return_value)(**updated_fields)
     elif isinstance(return_value, dict):
         return {name: postprocess_return_value(value, output_tensors) for name, value in return_value.items()}
+    elif hasattr(return_value, "key_cache") and hasattr(return_value, "value_cache"):
+        return_value.key_cache = postprocess_return_value(return_value.key_cache, output_tensors)
+        return_value.value_cache = postprocess_return_value(return_value.value_cache, output_tensors)
+        return return_value
     else:
         return return_value
 

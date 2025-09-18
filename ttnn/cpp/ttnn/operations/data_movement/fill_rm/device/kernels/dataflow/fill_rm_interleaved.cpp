@@ -22,8 +22,8 @@ void kernel_main() {
     uint32_t val_hi = get_arg_val<uint32_t>(6);
     uint32_t val_lo = get_arg_val<uint32_t>(7);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = W << 1};
+    constexpr auto dst_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
     // ENDL();

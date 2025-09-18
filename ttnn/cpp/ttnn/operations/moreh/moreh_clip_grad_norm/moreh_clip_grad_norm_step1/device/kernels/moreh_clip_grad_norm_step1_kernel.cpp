@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
@@ -134,9 +134,9 @@ void MAIN {
     cb_wait_front(cb_xpowadd, onetile);
     cb_reserve_back(cb_y, onetile);
 
-    reduce_init_delta<false>(cb_xpowadd, cb_one, cb_y);
+    reduce_init(cb_xpowadd, cb_one, cb_y);
     reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
-    reduce_revert_delta(cb_y);
+    reduce_uninit();
     tile_regs_commit();
 
     tile_regs_wait();

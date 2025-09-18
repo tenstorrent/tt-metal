@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,11 +29,24 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void logical_not_unary_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vFloat, float>(idst)));
+}
+
+ALWI void logical_not_unary_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vInt, int16_t>(idst)));
+}
+
+ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vUInt, uint16_t>(idst)));
+}
+
+ALWI void logical_not_unary_tile_uint16(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_uint16<APPROX>(idst)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void logical_not_unary_tile_init() { MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_init<APPROX>())); }
+
 }  // namespace ckernel

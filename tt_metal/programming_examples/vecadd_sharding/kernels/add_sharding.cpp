@@ -10,6 +10,12 @@
 
 namespace NAMESPACE {
 void MAIN {
+    // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
+    // do not call cb_wait_front() because there is no wait. And we ensured there is enough
+    // spece in the circular buffers for the entirty of the computation.
+    // if calling cb_wait_front() here, the kernel will hang forever as no one is producing
+    // data to the circular buffers.
+
     // We are going to read from these two circular buffers
     constexpr auto cb_in0 = get_compile_time_arg_val(0);
     constexpr auto cb_in1 = get_compile_time_arg_val(1);
@@ -18,29 +24,14 @@ void MAIN {
 
     uint32_t num_tile = get_arg_val<uint32_t>(0);
 
-    // The destination register.
-    // Quote the doc: "This register is an array of 16 tiles of 32x32 elements
-    // each." If you are familiar with the concept of rotating register file
-    // from computer architecture. Think it like that. Later on we will ensure
-    // that registers are free and then we will submit compute to the FPU/SFPU
-    // that writes to the register.
     constexpr uint32_t dst_reg = 0;
 
-    // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and
-    // c_out0 to perform the computation.
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    // And we are going to add tiles. This function is only called if we ever
-    // need to switch operation to something else. Since we are only adding
-    // tiles, this function is only called once before the loop.
     add_tiles_init(cb_in0, cb_in1);
 
-    // Loop over the assigned tiles and perform the computation
+    // The standard vector addition kernel but without waiting on circular buffers (as explained
+    // above).
     for (uint32_t i = 0; i < num_tile; i++) {
-        // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
-        // do not call cb_wait_front() because there is no wait.
-        // if calling cb_wait_front() here, the kernel will hang forever.
-
-        // Make sure there is a valid MATH thread register we can use.
         tile_regs_acquire();
 
         // Add the tiles from the input circular buffers and write the result to

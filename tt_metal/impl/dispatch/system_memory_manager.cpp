@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
+#include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
@@ -16,21 +15,29 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "memcpy.hpp"
+#include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
-// #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
-// guards
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
-#include "utils.hpp"
-
-enum class CoreType;
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <tracy/Tracy.hpp>
+#include <utils.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+bool wrap_ge(uint32_t a, uint32_t b) {
+    // SIgned Diff uses 2's Complement to handle wrap
+    // Works as long as a and b are 2^31 apart
+    int32_t diff = a - b;
+    return diff >= 0;
+}
+}  // namespace
 
 SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
     device_id(device_id),
@@ -57,7 +64,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     // TODO(abhullar): Remove env var and expose sizing at the API level
     char* cq_size_override_env = std::getenv("TT_METAL_CQ_SIZE_OVERRIDE");
     if (cq_size_override_env != nullptr) {
-        uint32_t cq_size_override = std::stoi(string(cq_size_override_env));
+        uint32_t cq_size_override = std::stoi(std::string(cq_size_override_env));
         this->cq_size = cq_size_override;
     } else {
         this->cq_size =
@@ -152,7 +159,7 @@ void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
     TT_ASSERT(
-        event_id >= this->cq_to_last_completed_event[cq_id],
+        wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
         "completed event is {}",
         event_id,
@@ -355,6 +362,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
     auto wait_for_fetch_q_space = [&]() {
+        if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
+            return;
+        }
+        ZoneScopedN("wait_for_fetch_q_space");
         // Loop until space frees up
         while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -383,12 +394,38 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-    do {
+    // Body of the operation to be timed out
+    auto wait_operation_body =
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-    } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+
+        if (exit_condition.load()) {
+            return write_ptr_and_toggle;
+        }
+
+        return write_ptr_and_toggle;
+    };
+
+    // Condition to check if the operation should continue
+    auto wait_condition = [&cq_interface, &write_ptr, &write_toggle]() -> bool {
+        return cq_interface.completion_fifo_rd_ptr == write_ptr and
+               cq_interface.completion_fifo_rd_toggle == write_toggle;
+    };
+
+    // Handler for the timeout
+    auto on_timeout = [&exit_condition]() {
+        exit_condition.store(true);
+        TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
+    };
+
+    tt::utils::loop_and_wait_with_timeout(
+        wait_operation_body,
+        wait_condition,
+        on_timeout,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+
     return write_ptr_and_toggle;
 }
 

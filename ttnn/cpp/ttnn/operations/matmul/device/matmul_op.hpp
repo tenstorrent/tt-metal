@@ -19,6 +19,20 @@ namespace operations {
 
 namespace matmul {
 
+// shared variables between override and program
+
+enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
+
+struct matmul_mcast_1d_common_override_variables_t {
+    std::vector<tt::tt_metal::KernelHandle> kernels;
+    std::vector<tt::tt_metal::CBHandle> cbs;
+    bool extract_shard_sub_blocks;
+    CoreCoord start_core;
+    std::vector<CoreCoord> cores;
+    uint32_t num_cores_with_work;
+    Matmul1DType type;
+};
+
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.
@@ -40,6 +54,19 @@ using ttnn::operations::unary::UnaryWithParam;
  */
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
 
+/**
+ * @brief Computes the output shape of a sparse matmul operation given two input tensors.
+ *
+ * The output shape for a sparse matmul is the same as for a dense matmul, but allows for
+ * batching on both input tensors.
+ * The final output shape as batched dimensions from input B first (inner), then input A (outer).
+ * @param input_tensor_a First input tensor
+ * @param input_tensor_b Second input tensor
+ * @return Shape of the resulting tensor after sparse matmul
+ */
+ttnn::Shape compute_sparse_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse);
+
 /*
  * GENERAL MATMUL AND BMM
  */
@@ -52,9 +79,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -124,53 +151,79 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     bool fuse_batch,
     bool untilize_out);
 
+/*
+ * SPARSE MATMUL
+ */
+tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mcast_1d_optimized(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
+    Tensor& output_tensor,
+    CoreCoord compute_with_storage_grid_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool mcast_in0,
+    bool gather_in0,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
 // for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool transpose_mcast;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool transpose_mcast{};
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool fuse_batch;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool fuse_batch{};
     std::optional<UnaryWithParam> fused_activation;
-    bool mcast_in0;
-    bool gather_in0;
+    bool mcast_in0{};
+    bool gather_in0{};
     CoreRangeSet hop_cores;
-    std::size_t num_global_cb_receivers;
+    std::size_t num_global_cb_receivers{};
+    bool untilize_out{};
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
-    std::size_t in0_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
     std::optional<UnaryWithParam> fused_activation;
 };
 
@@ -227,12 +280,62 @@ Matmul create_matmul_struct(
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
+struct SparseMatmul {
+    const std::optional<uint32_t> nnz;
+    bool is_input_a_sparse;
+    const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
+    const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    const std::optional<DataType> output_dtype = std::nullopt;
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+    const std::optional<const CoreCoord> user_core_coord = std::nullopt;
+    const std::optional<const tt::tt_metal::Tile> output_tile;
+    const std::optional<const GlobalCircularBuffer> global_cb;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+};
+
+SparseMatmul create_sparse_matmul_struct(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
+
+matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    std::optional<CoreRangeSet> restricted_cores);
+
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
@@ -257,7 +360,23 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const QueueId queue_id = DefaultQueueId,
+    QueueId queue_id = DefaultQueueId,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+std::vector<Tensor> matmul_batched_weights(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const struct Matmul& parameters = Matmul{},
+    QueueId queue_id = DefaultQueueId,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+Tensor sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters = SparseMatmul{},
+    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul
@@ -269,13 +388,20 @@ Tensor matmul(
 namespace bmm_op_utils {
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    const bool per_core_N_equals_subblock_w_constraint,
-    const bool fp32_dest_acc_en);
-
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool per_core_M_equals_subblock_h_constraint,
+    bool per_core_N_equals_subblock_w_constraint,
+    bool fp32_dest_acc_en);
 
 }  // namespace bmm_op_utils
+
+namespace reuse_mcast_1d_optimized_helpers {
+void override_program_parameters(
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& shared_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors);
+}  // namespace reuse_mcast_1d_optimized_helpers

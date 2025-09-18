@@ -95,9 +95,9 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_dispatch_set_write_offsets() {
+    void add_dispatch_set_write_offsets(uint32_t num_offsets) {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_offsets * sizeof(uint32_t);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -129,6 +129,22 @@ public:
         this->cmd_write_offsetB += increment_sizeB;
     }
 
+    void add_prefetch_relay_ringbuffer(uint16_t num_sub_cmds) {
+        static_assert(sizeof(CQPrefetchRelayRingbufferSubCmd) % sizeof(uint32_t) == 0);
+
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayRingbufferSubCmd);
+        uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+        this->cmd_write_offsetB += increment_sizeB;
+    }
+
+    void add_prefetch_set_ringbuffer_offset() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
+    void add_prefetch_paged_to_ringbuffer() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint16_t num_sub_cmds,
@@ -138,7 +154,6 @@ public:
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
         uint32_t packed_write_max_multicast_sub_cmds =
             get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -209,10 +224,10 @@ public:
     // of sub commands that can be written in a single dispatch command.
     template <typename PackedSubCmd>
     void insert_write_packed_payloads(
-        const uint32_t num_sub_cmds,
-        const uint32_t sub_cmd_sizeB,
-        const uint32_t max_prefetch_command_size,
-        const uint32_t packed_write_max_unicast_sub_cmds,
+        uint32_t num_sub_cmds,
+        uint32_t sub_cmd_sizeB,
+        uint32_t max_prefetch_command_size,
+        uint32_t packed_write_max_unicast_sub_cmds,
         std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads);
 
     // Clear calculator state

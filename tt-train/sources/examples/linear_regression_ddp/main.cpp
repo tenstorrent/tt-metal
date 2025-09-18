@@ -32,7 +32,7 @@ int main() {
     const size_t num_targets = 32;
     const float noise = 0.0F;
     const bool bias = true;
-    ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+    ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
 
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
@@ -58,14 +58,11 @@ int main() {
                 std::move(target.begin(), target.end(), std::back_inserter(targets));
             }
 
-            xt::xarray<float> data_xtensor = xt::adapt(data, std::vector<size_t>{batch_size, 1, 1, num_features});
-            xt::xarray<float> targets_xtensor = xt::adapt(targets, std::vector<size_t>{batch_size, 1, 1, num_targets});
-
-            auto mesh_shape = device->shape();
-            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 0);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(data_xtensor, device, composer));
-            auto targets_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_xtensor(targets_xtensor, device, composer));
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+                data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
+            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+                targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
 
             return std::make_pair(data_tensor, targets_tensor);
         };
@@ -86,11 +83,9 @@ int main() {
             optimizer.zero_grad();
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
-            fmt::print("Loss shape: {}\n", loss->get_value().get_logical_shape());
+            fmt::print("Loss shape: {}\n", loss->get_value().logical_shape());
             auto mesh_shape = device->shape();
-            ttml::core::MeshToXTensorVariant<float> identity_composer =
-                ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), identity_composer);
+            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
             float loss_float_0 = loss_xtensors[0](0);
             float loss_float_1 = loss_xtensors[1](0);
             fmt::print("Step: {} Loss: {} {}\n", training_step++, loss_float_0, loss_float_1);

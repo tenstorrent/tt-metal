@@ -18,7 +18,7 @@ struct RotaryEmbeddingLlamaFusedQKOperation {
         const Tensor& cos_cache,
         const Tensor& sin_cache,
         const Tensor& trans_mat,
-        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer

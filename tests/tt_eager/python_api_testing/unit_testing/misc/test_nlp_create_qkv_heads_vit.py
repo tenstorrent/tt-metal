@@ -104,7 +104,7 @@ def test_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, ou
     run_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
-def test_nlp_create_qkv_heads_vit_with_program_cache(device, use_program_cache):
+def test_nlp_create_qkv_heads_vit_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

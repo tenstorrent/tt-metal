@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 TEST(
@@ -118,7 +118,7 @@ TEST(
                 tensor_slice_offset_current.x = tensor_slice_offset_base.x;
                 for (size_t x = 0; x < tensor_slice_shape.x; x++) {
                     bool last_x = x == tensor_slice_shape.x - 1;
-                    bool end_of_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
+                    [[maybe_unused]] auto result = ttnn::ccl::v2::advance_worker_global_page(
                         curr_page_idx,
                         offset_into_worker_slice,   // local to the worker chunk
                         start_offset_worker_slice,  // local to the tensor slice
@@ -171,7 +171,7 @@ TEST(
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape{1, 1, 1, 288};
 
     auto old_page_id = curr_page_idx;
-    bool end_of_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
+    [[maybe_unused]] auto result = ttnn::ccl::v2::advance_worker_global_page(
         curr_page_idx,
         offset_into_worker_slice,   // local to the worker chunk
         start_offset_worker_slice,  // local to the tensor slice

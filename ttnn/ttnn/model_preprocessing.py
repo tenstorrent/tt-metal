@@ -12,10 +12,14 @@ from typing import Optional, Union, Callable
 from ttnn.dot_access import make_dot_access_dict
 
 from loguru import logger
-import torch
 
 import ttnn
 from ttnn.torch_tracer import trace, visualize
+
+try:
+    import torch
+except ImportError:
+    raise ImportError("Torch is not installed. Model preprocessing functions require torch to be installed.")
 
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
@@ -282,7 +286,7 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
                 parameters = {int(key): value for key, value in parameters.items()}
                 parameters = ParameterList([parameters[index] for index in sorted(parameters.keys())])
             output[name] = parameters
-        elif extension == ".bin":
+        elif extension == ".tensorbin":
             output[name] = ttnn.load_tensor(path)
         elif extension == ".pt":
             output[name] = torch.load(path)
@@ -304,7 +308,7 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
                 _dump_parameters(model_cache_path / name / str(index), element)
         elif isinstance(value, ttnn.Tensor):
             file_path = str(model_cache_path / name)
-            file_name = file_path + ".bin"
+            file_name = file_path + ".tensorbin"
             ttnn.dump_tensor(file_name, value)
         elif isinstance(value, (torch.Tensor, torch.nn.Parameter)):
             file_path = str(model_cache_path / name)

@@ -4,14 +4,10 @@
 
 import pytest
 
+import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    skip_for_grayskull,
-)
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -62,6 +58,7 @@ from models.utility_functions import (
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,
@@ -76,7 +73,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
 ):
     model_config_str = f"{data_type}-{memcfg}"
     if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:

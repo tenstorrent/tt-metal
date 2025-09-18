@@ -4,13 +4,14 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace constants;
@@ -19,18 +20,15 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_hw(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math, bool inplace) {
-    const auto ashape = a.get_padded_shape();
-    const auto bshape = b.get_padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
     uint32_t W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -53,9 +51,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         shard_spec = output.shard_spec().value();
     }
 
-    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
     uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
@@ -101,7 +99,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
@@ -113,22 +111,22 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
-
-    std::map<string, string> reader_defines;
-    std::map<string, string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
+    std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_args;
+    std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
         bcast_compute_defines["BCAST_SCALAR"] = "1";
     }
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
+    } else {
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
@@ -136,7 +134,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }
@@ -237,18 +235,15 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
         auto dst_buffer = output_tensor.buffer();
 
-        const auto ashape = input_tensors.at(0).get_padded_shape();
-        const auto bshape = input_tensors.at(1).get_padded_shape();
+        const auto ashape = input_tensors.at(0).padded_shape();
+        const auto bshape = input_tensors.at(1).padded_shape();
         uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
         uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
         uint32_t H = ashape[-2];
         uint32_t W = ashape[-1];
         uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
         uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-        uint32_t bH = bshape[-2];
-        uint32_t bW = bshape[-1];
         uint32_t NC = N * C;
-        uint32_t HW = H * W;
 
         uint32_t Wt = W / TILE_WIDTH;
         uint32_t Ht = H / TILE_HEIGHT;

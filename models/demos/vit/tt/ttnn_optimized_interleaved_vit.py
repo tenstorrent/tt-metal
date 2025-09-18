@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
 import torch
+import transformers
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-)
 
 core_grid = ttnn.CoreGrid(y=8, x=12)
 

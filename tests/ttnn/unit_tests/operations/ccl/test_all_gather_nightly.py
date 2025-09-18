@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     is_unsupported_case,
@@ -15,8 +16,12 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
 from ttnn import ShardTensorToMesh
 
 
+pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -49,7 +54,7 @@ from ttnn import ShardTensorToMesh
 )
 @pytest.mark.parametrize("tile_h", [32])
 def test_line_all_gather_on_t3000_nightly(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -57,13 +62,12 @@ def test_line_all_gather_on_t3000_nightly(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     tile_h,
     num_iters=1,
 ):
     run_all_gather_on_t3000_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -71,7 +75,6 @@ def test_line_all_gather_on_t3000_nightly(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -115,7 +118,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -128,7 +130,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
@@ -136,7 +137,7 @@ def test_line_all_gather_on_t3000_nightly_two_link(
 
 
 def run_line_all_gather_instances(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_instances,
     input_shape,
@@ -145,12 +146,11 @@ def run_line_all_gather_instances(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
     tile=(32, 32),
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
+    if mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
     logger.info(f"Input shape: {input_shape}")
@@ -164,7 +164,7 @@ def run_line_all_gather_instances(
 
     t3k_device = []
 
-    for device in t3k_mesh_device.get_device_ids():
+    for device in mesh_device.get_device_ids():
         t3k_device.append(device)
     t3k_device[4:] = t3k_device[::-1][:4]
     t3000_device_rows = [
@@ -177,21 +177,23 @@ def run_line_all_gather_instances(
     input_tensor = torch.rand(input_shape).bfloat16()
 
     ttnn_tensor = ttnn.from_torch(
-        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim)
+        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(mesh_device, dim=dim)
     )
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 
     result_mesh_tensors = []
     for loop in range(num_iters):
         for i, devices in enumerate(t3000_device_rows):
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
-            )
-            result_mesh_tensors.append(tt_out_tensor)
-
+            pytest.skip(LEGACY_CCL_SKIP)
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # tt_out_tensor = ttnn.all_gather(
+            #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+            # )
+            # result_mesh_tensors.append(tt_out_tensor)
+            assert False, "Legacy ccl call removed until new implementation is done"
     for loop in range(num_iters):
         ## Wait for completion
-        ttnn.synchronize_device(t3k_mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
         for tt_out_tensor in result_mesh_tensors:
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -206,6 +208,7 @@ def run_line_all_gather_instances(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_instances, num_links, input_shape, dim, layout",
     [
@@ -232,7 +235,7 @@ def run_line_all_gather_instances(
     ],
 )
 def test_line_all_gather_on_t3000_nightly_instances(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_instances,
     input_shape,
@@ -241,12 +244,11 @@ def test_line_all_gather_on_t3000_nightly_instances(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
     run_line_all_gather_instances(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         num_instances,
         input_shape,
@@ -255,7 +257,6 @@ def test_line_all_gather_on_t3000_nightly_instances(
         input_dtype,
         layout,
         mem_config,
-        use_program_cache,
         function_level_defaults,
         num_iters,
     )

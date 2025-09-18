@@ -10,12 +10,12 @@ from PIL import Image
 from loguru import logger
 from collections import defaultdict
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import Profiler
+from models.common.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
 from models.experimental.ssd.tt.ssd_lite import ssd_for_object_detection
 from models.experimental.ssd.reference.utils.metrics import load_ground_truth_labels, calculate_ap
@@ -157,7 +157,6 @@ def run_perf_ssd(
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     imagenet_sample_input,
@@ -187,7 +186,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     expected_inference_time,
     expected_compile_time,
     imagenet_sample_input,

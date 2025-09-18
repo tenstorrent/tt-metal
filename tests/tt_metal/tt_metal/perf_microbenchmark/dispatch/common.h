@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,18 +7,19 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "noc/noc_parameters.h"
+#include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <magic_enum/magic_enum.hpp>
+
+#include "llrt/hal.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;  // test only
 
@@ -32,11 +33,11 @@ extern bool perf_test_g;
 extern uint32_t hugepage_issue_buffer_size_g;
 
 struct one_core_data_t {
-    CoreType core_type;
+    CoreType core_type{CoreType::COUNT};
     CoreCoord logical_core;
     CoreCoord phys_core;
-    int bank_id;
-    int bank_offset;
+    int bank_id{};
+    int bank_offset{};
     std::vector<bool> valid;
     std::vector<uint32_t> data;
 };
@@ -46,8 +47,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[magic_enum::enum_count<CoreType>()];
-    uint64_t base_result_data_addr[magic_enum::enum_count<CoreType>()];
+    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
+    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -56,7 +57,7 @@ private:
         IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
-        const uint32_t start_index,
+        uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 
@@ -112,16 +113,14 @@ DeviceData::DeviceData(
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) {
+    uint32_t dram_data_size_words) :
+    banked(is_banked), amt_written(0) {
     this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
-
-    this->banked = is_banked;
-    this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
@@ -193,7 +192,7 @@ void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
+        [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
@@ -376,7 +375,7 @@ inline bool DeviceData::validate_one_core(
         return false;
     }
 
-    string core_string;
+    std::string core_string;
     if (core_type == CoreType::WORKER) {
         core_string = "L1";
     } else if (core_type == CoreType::DRAM) {
@@ -384,7 +383,7 @@ inline bool DeviceData::validate_one_core(
     } else if (core_type == CoreType::PCIE) {
         core_string = "PCIE";
     } else {
-        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
         TT_ASSERT(false, "Core type not found");
     }
 
@@ -394,7 +393,8 @@ inline bool DeviceData::validate_one_core(
         tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
-        results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+        results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device->id(), phys_core, result_addr, size_bytes);
     }
 
     log_info(
@@ -454,7 +454,6 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, c
     uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(CoreType::PCIE)];
 
     int fail_count = 0;
-    bool done = false;
     for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
         validated_cores.insert(this->host_core);
         if (host_data.data[data_index] != results[host_data_index] && fail_count < 20) {
@@ -532,8 +531,9 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,  // yes, copy
+    const std::string& path,
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
@@ -546,7 +546,7 @@ void configure_kernel_variant(
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
@@ -555,12 +555,18 @@ void configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(0xff)},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
-        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
+        {"FD_CORE_TYPE", std::to_string(0)},                     // todo, support dispatch on eth
+        {"IS_D_VARIANT", std::to_string(is_dram_variant)},
+        {"IS_H_VARIANT", std::to_string(is_host_variant)},
     };
+
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
+
+    defines.insert(defines_in.begin(), defines_in.end());
+
     tt::tt_metal::CreateKernel(
         program,
         path,
@@ -615,7 +621,6 @@ inline void generate_random_payload(
     bool is_mcast = false,
     bool prepend_cmd = false) {
     static uint32_t coherent_count = 0;
-    const uint32_t bank_id = 0;  // No interleaved pages here.
 
     // Host data puts the command in the datastream...
     if (prepend_cmd) {
@@ -662,7 +667,8 @@ inline void generate_random_paged_payload(
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
-        uint32_t bank_offset = tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
+        [[maybe_unused]] uint32_t bank_offset =
+            tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
             auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
@@ -730,7 +736,6 @@ inline void generate_random_packed_large_payload(
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
-    bool first_core = true;
     CoreCoord first_worker = range.start_coord;
     uint32_t data_base = generated_data.size();
     for (uint32_t i = 0; i < size_words; i++) {
@@ -768,7 +773,7 @@ inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
     size_t prior = cmds.size();
 
     if (debug_g) {
-        CQDispatchCmd debug_cmd;
+        CQDispatchCmd debug_cmd{};
         memset(&debug_cmd, 0, sizeof(CQDispatchCmd));
 
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
@@ -852,7 +857,8 @@ inline void add_dispatcher_packed_cmd(
     add_bare_dispatcher_cmd(cmds, cmd);
     for (CoreCoord core : worker_cores) {
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
-        cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
+        cmds.push_back(
+            tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y));
     }
     cmds.resize(
         padded_size(cmds.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
@@ -865,14 +871,15 @@ inline void add_dispatcher_packed_cmd(
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -885,14 +892,15 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
 
 inline void gen_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -910,16 +918,15 @@ inline void gen_dispatcher_multicast_write_cmd(
     // TODO Hmm, ideally only need to relevel the core range
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
     CoreCoord physical_end = device->worker_core_from_logical_core(worker_core_range.end_coord);
-    const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr =
-        NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+    cmd.write_linear.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        physical_start.x, physical_start.y, physical_end.x, physical_end.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_coord);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
@@ -962,7 +969,7 @@ inline void gen_dispatcher_paged_write_cmd(
     uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
     uint16_t start_page_cmd = start_page % num_banks;
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
     cmd.write_paged.is_dram = is_dram;
@@ -996,7 +1003,7 @@ inline void gen_dispatcher_packed_write_cmd(
     // Pad w/ blank data until all workers are at the same address
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
@@ -1099,7 +1106,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         space_available -= xfer_size_bytes;
     }
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
     cmd.write_packed_large.count = ntransactions;
@@ -1121,11 +1128,11 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
 
         device_data.relevel(range);
 
-        CQDispatchWritePackedLargeSubCmd sub_cmd;
+        CQDispatchWritePackedLargeSubCmd sub_cmd{};
         CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
         CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
-        sub_cmd.noc_xy_addr =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+        sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+            physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
         sub_cmd.num_mcast_dests =
@@ -1149,7 +1156,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
 }
 
 inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
@@ -1160,7 +1167,7 @@ inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, DeviceDat
 }
 
 inline void gen_bare_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
@@ -1172,19 +1179,19 @@ inline void gen_bare_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, uint
 
 inline void gen_dispatcher_set_write_offset_cmd(
     std::vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
-    cmd.set_write_offset.offset0 = wo0;
-    cmd.set_write_offset.offset1 = wo1;
-    cmd.set_write_offset.offset2 = wo2;
-    uint32_t payload_length = 0;
-    add_dispatcher_cmd(cmds, cmd, payload_length);
+    cmd.set_write_offset.offset_count = 3;
+    add_bare_dispatcher_cmd(cmds, cmd);
+    cmds.push_back(wo0);
+    cmds.push_back(wo1);
+    cmds.push_back(wo2);
 }
 
 inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;

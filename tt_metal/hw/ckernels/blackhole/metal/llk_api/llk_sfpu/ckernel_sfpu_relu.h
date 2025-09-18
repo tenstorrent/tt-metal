@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -15,7 +15,7 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
-    vFloat threshold = Converter::to_float(uint_threshold);
+    vFloat threshold = Converter::as_float(uint_threshold);
     for (int d = 0; d < 8; d++) {
         vFloat a = dst_reg[0];
         v_if(a < threshold) { a = threshold; }
@@ -27,7 +27,7 @@ inline void relu_min(uint uint_threshold) {
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
-    vFloat threshold = Converter::to_float(uint_threshold);
+    vFloat threshold = Converter::as_float(uint_threshold);
     for (int d = 0; d < 8; d++) {
         vFloat a = dst_reg[0];
         v_if(a > threshold) { a = threshold; }

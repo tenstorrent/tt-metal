@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -22,11 +22,12 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
@@ -37,6 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// Access to internal API: ProgramImpl::get_kernel
+#include "impl/program/program_impl.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -45,29 +49,13 @@ namespace tt::tt_metal {
 namespace {
 
 struct L1Config {
-    uint32_t num_cores_height = 1;
-    uint32_t num_cores_width = 2;
-    uint32_t num_tiles_per_core_height = 2;
-    uint32_t num_tiles_per_core_width = 2;
+    uint32_t num_elements = 8 * tt::constants::TILE_HW;
     uint32_t element_size = 2;
-    uint32_t size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT *
-                          num_cores_width * num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
+    uint32_t size_bytes = element_size * num_elements;
     uint32_t page_size_bytes = tt::constants::TILE_HW * element_size;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
 
-    bool sharded = true;
-    ShardSpecBuffer shard_spec() const {
-        return ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>(
-                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
-            {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
-             (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {1 * num_cores_height * num_tiles_per_core_height * num_cores_height,
-             num_tiles_per_core_width * num_cores_width});
-    }
+    BufferShardingArgs sharding_args;
 };
 
 // Inspired heavily from test_sharded_l1_buffer.cpp
@@ -83,17 +71,8 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
     for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
         log_debug(tt::LogTest, "Running loop: {}", loop_idx);
 
-        auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout,
-                                                .shard_parameters = test_config.shard_spec()})
-                                          : CreateBuffer(tt::tt_metal::BufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout});
+        auto buffer = Buffer::create(
+            device, test_config.size_bytes, test_config.page_size_bytes, BufferType::L1, test_config.sharding_args);
 
         if (loop_idx > 1) {
             buffers_vec.push_back(buffer);
@@ -150,22 +129,25 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
 Program create_simple_datamovement_program(
     const Buffer& input, const Buffer& output, const Buffer& l1_buffer, bool rt_arg_per_core_vec = false) {
     Program program = Program();  // Verify Program constructor can be used.
-    IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
+    std::vector<uint32_t> compile_time_args;
+    TensorAccessorArgs(input).append_to(compile_time_args);
+    TensorAccessorArgs(output).append_to(compile_time_args);
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    const uint32_t input_bank_id = 0;
-    const uint32_t output_bank_id = 0;
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
-        l1_buffer.address(), input.address(), input_bank_id, output.address(), output_bank_id, l1_buffer.size()};
+        l1_buffer.address(), input.address(), output.address(), input.num_pages()};
 
     // Very minimal testing/usage of other SetRuntimeArgs API that TTNN uses for ops here, j
     // just to see it go through the light-metal capture + replay flow.
@@ -183,7 +165,6 @@ Program create_simple_datamovement_program(
 // Copied from test_EnqueueTrace.cpp
 Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_input_buffer = nullptr) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -197,7 +178,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,
@@ -216,15 +197,12 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
-    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
-    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
-    *writer_runtime_args = {&output, (uint32_t)0, output.num_pages()};
+    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
+    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
 
-    *reader_runtime_args = {&input, (uint32_t)0, input.num_pages()};
-
-    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
-    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
+    SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                                 .set_page_size(tt::CBIndex::c_16, 2048);
@@ -255,21 +233,45 @@ using LightMetalBasicTest = SingleDeviceLightMetalFixture;
 TEST_F(LightMetalBasicTest, CreateBufferInterleavedEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
-    test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
-    test_config.sharded = false;
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
 TEST_F(LightMetalBasicTest, CreateBufferHeightShardEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
+    test_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+            {2 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {4, 2}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
 TEST_F(LightMetalBasicTest, CreateBufferWidthShardEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
-    test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
+    test_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+            {2 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {2, 4}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
+}
+
+TEST_F(LightMetalBasicTest, CreateBufferNdShardEnqueueWriteRead) {
+    CreateDeviceAndBeginCapture(4096);
+    L1Config test_config;
+    test_config.sharding_args = BufferShardingArgs(BufferDistributionSpec(
+        Shape({2, 2, 2}),
+        Shape({1, 1, 1}),
+        CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+        ShardOrientation::ROW_MAJOR));
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
@@ -296,12 +298,13 @@ TEST_F(LightMetalBasicTest, CreateBufferAndDeallocate) {
 }
 
 void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_core_vec) {
-    uint32_t size_bytes = 64;  // 16 elements.
+    uint32_t size_bytes = 32 * 32 * 2;
+    uint32_t page_size = 32 * 32 * 2;
 
     // For extra coverage, use Buffer::create (now support for light metal capture/replay)
-    auto input = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto output = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto l1_buffer = Buffer::create(device, size_bytes, size_bytes, BufferType::L1);
+    auto input = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto output = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto l1_buffer = Buffer::create(device, size_bytes, page_size, BufferType::L1);
 
     log_debug(
         tt::LogTest,
@@ -410,7 +413,8 @@ TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCBDeallocEarly) {
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, DISABLED_SingleProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
@@ -432,26 +436,27 @@ TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
     EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
     EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
     // This will verify that outputs matches between capture + replay.
-    LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
 
     // Write junk to output buffer to help make sure trace run from standalone binary works.
     write_junk_to_buffer(command_queue, *output);
 
     // Now enable Metal Trace and run program again for capture.
-    uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
-    EndTraceCapture(device_, command_queue.id(), tid);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
     // Verify trace output during replay matches expected output from original capture.
-    LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
     // Done
     Finish(command_queue);
-    ReleaseTrace(device_, tid);
+    // ReleaseTrace(device_, tid);
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, DISABLED_TwoProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
@@ -477,24 +482,24 @@ TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
     EnqueueProgram(command_queue, op0, /*blocking=*/true);
     EnqueueProgram(command_queue, op1, /*blocking=*/true);
     // This will verify that outputs matches between capture + replay.
-    LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
     Finish(command_queue);
 
     // Write junk to output buffer to help make sure trace run from standalone binary works.
     write_junk_to_buffer(command_queue, *output);
 
     // Now enable Metal Trace and run program again for capture.
-    uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
     EnqueueProgram(command_queue, op0, false);
     EnqueueProgram(command_queue, op1, false);
-    EndTraceCapture(device_, command_queue.id(), tid);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
     // Verify trace output during replay matches expected output from original capture.
-    LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
     // Done
     Finish(command_queue);
-    ReleaseTrace(device_, tid);
+    // ReleaseTrace(device_, tid);
 }
 
 }  // namespace

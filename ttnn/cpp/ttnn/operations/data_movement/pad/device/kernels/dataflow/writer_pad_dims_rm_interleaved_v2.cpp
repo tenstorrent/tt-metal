@@ -11,16 +11,11 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(5);
+    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const uint32_t stick_size_bytes = W_size_bytes;
-
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t size = get_compile_time_arg_val(4);
-
-    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_pow2>(dst_addr, size);
+    const auto s = TensorAccessor(dst_args, dst_addr, stick_size_bytes);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {

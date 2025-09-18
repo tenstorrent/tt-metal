@@ -21,7 +21,6 @@ BufferType from_flatbuffer(flatbuffer::BufferType type) {
 TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout) {
     switch (layout) {
         case flatbuffer::TensorMemoryLayout::Interleaved: return TensorMemoryLayout::INTERLEAVED;
-        case flatbuffer::TensorMemoryLayout::SingleBank: return TensorMemoryLayout::SINGLE_BANK;
         case flatbuffer::TensorMemoryLayout::HeightSharded: return TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return TensorMemoryLayout::BLOCK_SHARDED;
@@ -87,7 +86,7 @@ CircularBufferConfig from_flatbuffer(
     return config;
 }
 
-// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_from_flatbuffer.cpp
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp
 
 ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation) {
     switch (orientation) {
@@ -126,6 +125,25 @@ std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer
         from_flatbuffer(fb_shard_spec->tensor_shard_spec()),
         {fb_shard_spec->page_shape_h(), fb_shard_spec->page_shape_w()},
         {fb_shard_spec->tensor2d_shape_in_pages_h(), fb_shard_spec->tensor2d_shape_in_pages_w()}};
+}
+
+std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDistributionSpec* fb_dist_spec) {
+    if (!fb_dist_spec) {
+        return std::nullopt;
+    }
+
+    std::vector<CoreCoord> cores;
+    cores.reserve(fb_dist_spec->cores()->size());
+    for (auto entry : *fb_dist_spec->cores()) {
+        cores.push_back(CoreCoord(entry->x(), entry->y()));
+    }
+
+    return BufferDistributionSpec(
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->tensor_shape_in_pages()->cbegin(), fb_dist_spec->tensor_shape_in_pages()->cend())),
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->shard_shape_in_pages()->cbegin(), fb_dist_spec->shard_shape_in_pages()->cend())),
+        std::move(cores));
 }
 
 }  // namespace tt::tt_metal

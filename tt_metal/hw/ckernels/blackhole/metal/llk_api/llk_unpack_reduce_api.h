@@ -10,11 +10,7 @@
  * LLK UNPACK REDUCE
  *************************************************************************/
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en = false,
-    StochRndType stoch_rnd_mode = StochRndType::None>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_reduce_hw_configure(
     const llk_unpack_reduce_params_t* unpack_reduce_params, const float const_mult) {
     constexpr bool within_face_16x16_transpose = (ReduceDim::REDUCE_ROW == dim);
@@ -43,11 +39,7 @@ inline void llk_unpack_reduce_hw_configure(
         unpA_num_faces);
 }
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en = false,
-    StochRndType stoch_rnd_mode = StochRndType::None>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
     const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
     llk_unpack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_reduce_params, mult);

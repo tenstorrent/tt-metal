@@ -11,8 +11,8 @@ import ttnn._ttnn
 import ttnn.operations
 import ttnn.operations.matmul
 import ttnn.operations.reduction
-from models.helper_funcs import Linear as tt_Linear
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
+from models.common.helper_funcs import Linear as tt_Linear
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -298,7 +298,6 @@ def eltwise_gelu(
 def eltwise_rsqrt(
     x,
     *args,
-    fast_and_approx,
     device,
     dtype,
     layout,
@@ -309,7 +308,7 @@ def eltwise_rsqrt(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
     if t0.layout == ttnn.TILE_LAYOUT:
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
     else:
         # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
         # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
@@ -317,7 +316,7 @@ def eltwise_rsqrt(
         t0 = t0.cpu().pad_to_tile(0)
         t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
-        t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+        t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
         t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
 
     return tt2torch_tensor(t1)
@@ -368,7 +367,6 @@ def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.mean(t0, [2, 3], memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
-    output = output[:, :, 0, 0]
 
     return output
 
@@ -1254,7 +1252,6 @@ def arange(
 def prod(
     x,
     *args,
-    all_dimensions,
     dim,
     keepdim,
     device,
@@ -1264,12 +1261,11 @@ def prod(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.prod(t0, all_dimensions, dim, keepdim=keepdim, memory_config=output_mem_config)
+    t0 = ttnn.from_torch(x, device=device, layout=layout[0], memory_config=input_mem_config[0], dtype=dtype[0])
+    t1 = ttnn.prod(t0, dim, keepdim=keepdim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
-
     return output_tensor
 
 
@@ -1547,8 +1543,7 @@ def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     t1 = ttnn.sum(t0, 2, memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1558,8 +1553,7 @@ def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1569,8 +1563,7 @@ def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1580,8 +1573,7 @@ def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1591,8 +1583,7 @@ def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1]
+    return output
 
 
 @setup_host_and_device
@@ -1602,8 +1593,7 @@ def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1613,8 +1603,7 @@ def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :]
+    return output
 
 
 @setup_host_and_device
@@ -1624,8 +1613,7 @@ def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1]
+    return output
 
 
 @setup_host_and_device
@@ -1635,8 +1623,7 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     output = tt2torch_tensor(t1)
 
-    # Slice out the 0 values from reduction
-    return output[..., :1, :1]
+    return output
 
 
 @setup_host_and_device
@@ -1647,10 +1634,6 @@ def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 
     output = tt2torch_tensor(t1)
 
-    if dim == 2:
-        output = output[:, :, :1, :]
-    elif dim == 3:
-        output = output[:, :, :, :1]
     return output
 
 
@@ -2135,7 +2118,6 @@ eltwise_max = make_binary_op(ttnn.maximum)
 matmul = make_binary_op_ttnn(ttnn.matmul)
 outer = make_binary_op(ttnn.outer)
 
-eltwise_scatter = make_binary_op(ttnn.scatter)
 eltwise_nextafter = make_binary_op_ttnn(ttnn.nextafter)
 
 

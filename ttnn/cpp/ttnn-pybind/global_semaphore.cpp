@@ -4,15 +4,19 @@
 
 #include "global_semaphore.hpp"
 
-#include <tt-metalium/global_semaphore.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include <cstdint>
+#include <memory>
+
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
+
+#include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::global_semaphore {
 
 void py_module_types(py::module& module) {
-    py::class_<GlobalSemaphore, std::shared_ptr<GlobalSemaphore>>(module, "global_sempahore");
+    py::class_<GlobalSemaphore, std::shared_ptr<GlobalSemaphore>>(module, "global_semaphore");
 }
 
 void py_module(py::module& module) {

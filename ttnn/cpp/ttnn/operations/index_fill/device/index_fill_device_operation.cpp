@@ -19,14 +19,14 @@ void IndexFillOperation::validate(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
-    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
-    TT_FATAL(dim < input.get_logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
-    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
+    TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
+    TT_FATAL(dim < input.logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
+    TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
 }
 void IndexFillOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -39,8 +39,8 @@ void IndexFillOperation::validate_on_program_cache_hit(
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return TensorSpec(
-        tensor_args.input.get_logical_shape(),
-        tensor_args.input.get_tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
+        tensor_args.input.logical_shape(),
+        tensor_args.input.tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

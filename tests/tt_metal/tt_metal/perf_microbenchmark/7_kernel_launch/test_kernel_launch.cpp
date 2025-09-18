@@ -21,17 +21,18 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include <tt-metalium/distributed.hpp>
 
 using std::vector;
 using namespace tt;
@@ -55,7 +56,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -94,7 +95,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
@@ -142,7 +143,7 @@ int main(int argc, char** argv) {
                         tt_metal::CircularBufferConfig(
                             cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
                             .set_page_size(cb_index, single_tile_size);
-                    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_config);
+                    tt_metal::CreateCircularBuffer(program, core, cb_config);
                 }
             }
 
@@ -171,7 +172,7 @@ int main(int argc, char** argv) {
                     .compile_args = writer_compile_args});
 
             vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
-            auto compute_kernel = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"
@@ -184,8 +185,8 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = i * num_cores_c + j;
 
-                    std::array<uint32_t, 255> reader_runtime_args;
-                    std::array<uint32_t, 255> writer_runtime_args;
+                    std::array<uint32_t, 255> reader_runtime_args{};
+                    std::array<uint32_t, 255> writer_runtime_args{};
                     for (uint32_t k = 0; k < 255; ++k) {
                         reader_runtime_args[k] = core_index + k;
                         writer_runtime_args[k] = core_index + k;
@@ -200,20 +201,22 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
-            Finish(device->command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
             auto t_end = std::chrono::steady_clock::now();
             elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
             log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us[i]);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
@@ -238,10 +241,15 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_kernel_launch");
-    log_info("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
-    log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_kernel_launch");
+    log_info(
+        tt::LogTest,
+        "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}",
+        num_cores_r,
+        num_cores_c,
+        num_core_groups);
+    log_info(tt::LogTest, "CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

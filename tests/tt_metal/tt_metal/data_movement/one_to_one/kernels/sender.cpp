@@ -7,36 +7,36 @@
 
 // L1 to L1 send
 void kernel_main() {
-    uint32_t src_addr = get_compile_time_arg_val(0);
-    uint32_t dst_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t test_id = get_compile_time_arg_val(5);
+    // Compile-time arguments
+    constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
+    constexpr uint32_t bytes_per_transaction = get_compile_time_arg_val(2);
+    constexpr uint32_t test_id = get_compile_time_arg_val(3);
+    constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
+    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(5);
 
-    uint32_t semaphore = get_semaphore(get_arg_val<uint32_t>(0));
-    uint32_t receiver_x_coord = get_arg_val<uint32_t>(1);
-    uint32_t receiver_y_coord = get_arg_val<uint32_t>(2);
+    // Runtime arguments
+    uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
+    uint32_t receiver_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
 
-    uint64_t sem_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, semaphore);
-
-    constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
-
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
-    DeviceTimestampedData("Test id", test_id);
+    uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, l1_local_addr);
 
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, dst_addr);
-
-            noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
-
-            src_addr += transaction_size_bytes;
-            dst_addr += transaction_size_bytes;
+            // Cycle through virtual channels 0 to (num_virtual_channels - 1)
+            uint32_t current_virtual_channel = i % num_virtual_channels;
+            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
         }
         noc_async_write_barrier();
     }
-    noc_semaphore_inc(sem_addr, 1);
+
+    DeviceTimestampedData("Test id", test_id);
+
+    DeviceTimestampedData("NoC Index", noc_index);
+
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+
+    DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }

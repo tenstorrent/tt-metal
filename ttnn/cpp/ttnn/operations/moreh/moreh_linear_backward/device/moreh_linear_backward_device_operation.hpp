@@ -83,7 +83,7 @@ struct MorehBiasAddBackwardOperation {
         const std::optional<Tensor>& bias,
         const std::optional<Tensor>& bias_grad,
         const std::optional<MemoryConfig>& bias_grad_memory_config,
-        const DeviceComputeKernelConfig compute_kernel_config);
+        DeviceComputeKernelConfig compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_linear_backward
 

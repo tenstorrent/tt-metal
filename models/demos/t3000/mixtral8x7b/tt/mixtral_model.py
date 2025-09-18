@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
-from models.common.rmsnorm import RMSNorm
-from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
 import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
+from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 
 
 class TtTransformer(LightweightModule):
@@ -21,9 +23,12 @@ class TtTransformer(LightweightModule):
         self.rotary_on_host = rotary_on_host
         assert self.vocab_size > 0
 
+        self.tt_ccl = TT_CCL(self.mesh_device)
+
         self.layers = [
             TtTransformerBlock(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 args=args,
                 dtype=dtype,
@@ -38,6 +43,7 @@ class TtTransformer(LightweightModule):
             layer_num=None,
             weight_dtype=ttnn.bfloat16,
             weight_key="norm",
+            tt_ccl=self.tt_ccl,
         )
 
         self.state_dict = state_dict

@@ -7,7 +7,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
@@ -132,7 +132,7 @@ def test_bert_large_ff2_matmul_test(
     run_bert_large_ff2_matmul_test(device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config)
 
 
-def test_bert_large_ff2_matmul_with_program_cache(device, use_program_cache):
+def test_bert_large_ff2_matmul_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

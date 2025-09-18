@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Callable
-import ttnn
+from typing import Callable, Optional
+
 from loguru import logger
+
+import ttnn
 
 
 def load_or_compute_and_cache(
@@ -32,7 +34,7 @@ def load_or_compute_and_cache(
     tensor = None
     if cache_path:
         try:
-            tensor = ttnn.load_tensor(cache_path)
+            tensor = ttnn.load_tensor(cache_path, device=device)
             logger.info(f"Loaded tensor from cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to load tensor from cache: {cache_path}. Error: {e}")

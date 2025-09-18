@@ -17,12 +17,12 @@ from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.reference.model import DecoderLayer
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose
 from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)
-def test_grok_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
     """
     b: batch
     s: sequence length

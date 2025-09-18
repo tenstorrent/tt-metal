@@ -11,7 +11,7 @@ namespace ttnn::operations::expand {
 struct ExpandOperation {
     static Tensor invoke(
         const ttnn::Tensor& input,
-        const tt::stl::Span<const int32_t> shape_vector,
+        tt::stl::Span<const int32_t> shape_vector,
         const std::optional<MemoryConfig>& memory_config,
         const QueueId& queue_id = DefaultQueueId);
 };

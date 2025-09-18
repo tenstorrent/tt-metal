@@ -16,15 +16,18 @@ class ResetUtil:
         self.arch = arch
         self.command = os.getenv("TT_SMI_RESET_COMMAND")
         self.args = []
-        if arch not in ["grayskull", "wormhole_b0", "blackhole"]:
+        if arch not in ["wormhole_b0", "blackhole"]:
             raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
         if self.command is not None:
+            command_parts = self.command.split()
+            self.command = command_parts[0]
+            self.args = command_parts[1:]
             return
 
         self.smi_options = [
             "tt-smi",
             "tt-smi-metal",
-            "/home/software/syseng/gs/tt-smi" if arch == "grayskull" else "/home/software/syseng/wh/tt-smi",
+            "/home/software/syseng/wh/tt-smi",
         ]
         for smi_option in self.smi_options:
             executable = shutil.which(smi_option)
@@ -34,8 +37,6 @@ class ResetUtil:
                 # Default device 0, if needed use TT_SMI_RESET_COMMAND override.
                 if smi_option == "tt-smi-metal":
                     args = ["-r", "0"]
-                elif arch == "grayskull":
-                    args = GRAYSKULL_ARGS
                 elif arch == "wormhole_b0":
                     smi_process = subprocess.run([executable, "-v"], capture_output=True, text=True)
                     smi_version = smi_process.stdout.strip()
@@ -62,7 +63,7 @@ class ResetUtil:
                     break
 
         if self.command is None:
-            raise Exception(f"SWEEPS: Unable to location tt-smi executable")
+            raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
         print(f"SWEEPS: tt-smi util initialized with command: {self.command}, args: {self.args}")
 
     def reset(self):

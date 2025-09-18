@@ -6,6 +6,7 @@
 
 #include "fold_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
@@ -21,17 +22,13 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     auto dilation = operation_attributes.dilation;
     auto padding = operation_attributes.padding;
     auto stride = operation_attributes.stride;
-    auto output_shape = output.get_logical_shape();
-    auto output_shape_rank = output.get_logical_shape().rank();
+    auto output_shape = output.logical_shape();
+    auto output_shape_rank = output.logical_shape().rank();
 
-    uint32_t kernel_size_product = 1;
     std::vector<uint32_t> ls;
-    uint32_t L = 1;
     for (uint32_t i = 0; i < 2; ++i) {
         uint32_t l = (((output_size[i] + 2 * padding[i] - dilation[i] * (kernel_size[i] - 1) - 1) / stride[i]) + 1);
-        L *= l;
         ls.push_back(l);
-        kernel_size_product *= kernel_size[i];
     }
     uint32_t N = output_shape_rank == 4 ? output_shape[0] : 1;
     uint32_t C = output_shape_rank == 4 ? output_shape[1] : output_shape[0];
@@ -54,7 +51,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     Program program{};
     IDevice* device = input.device();
 
-    uint32_t num_units = output.get_logical_volume() / output.get_logical_shape()[-1];
+    uint32_t num_units = output.logical_volume() / output.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -65,11 +62,11 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t unit_size = input.element_size();
-    uint32_t input_cb_page_size = unit_size * input.get_logical_shape()[-1];
-    uint32_t output_cb_page_size = unit_size * output.get_logical_shape()[-1];
+    uint32_t input_cb_page_size = unit_size * input.logical_shape()[-1];
+    uint32_t output_cb_page_size = unit_size * output.logical_shape()[-1];
 
     uint32_t aligned_input_cb_page_size = round_up_to_mul32(input_cb_page_size);
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
@@ -80,20 +77,20 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(aligned_input_cb_page_size * 2, {{input_cb_index, data_format}})
             .set_page_size(input_cb_index, aligned_input_cb_page_size);
-    auto input_cb = CreateCircularBuffer(program, all_cores, input_cb_config);
+    CreateCircularBuffer(program, all_cores, input_cb_config);
 
     CircularBufferConfig output_cb_config =
         CircularBufferConfig(aligned_output_cb_page_size * 2, {{output_cb_index, data_format}})
             .set_page_size(output_cb_index, aligned_output_cb_page_size);
-    auto output_cb = CreateCircularBuffer(program, all_cores, output_cb_config);
+    CreateCircularBuffer(program, all_cores, output_cb_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels defines
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
-    switch (input.get_dtype()) {
+    switch (input.dtype()) {
         case DataType::BFLOAT16: reader_defines["DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: reader_defines["DTYPE_FLOAT32"] = "1"; break;
         default: break;
@@ -102,19 +99,16 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    bool input_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(input_is_dram),
+    std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(input_cb_index),
         static_cast<uint32_t>(output_cb_index),
     };
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(output_is_dram),
         static_cast<uint32_t>(output_cb_index),
     };
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
@@ -127,9 +121,6 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_addr = input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
-
     uint32_t start_id = 0;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     uint32_t g1_numcores = core_group_1.num_cores();

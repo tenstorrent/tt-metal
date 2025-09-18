@@ -8,49 +8,7 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-
-constexpr uint32_t FACE_HEIGHT = 16;
-constexpr uint32_t FACE_WIDTH = 16;
-constexpr uint32_t TILE_HEIGHT = 32;
-constexpr uint32_t TILE_WIDTH = 32;
-constexpr uint32_t TARGET_INDEXES_ELEMENTS_NUMBER = 32;
-
-// calculate page and offset for target indexes
-std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
-    uint32_t n = tiled_row / tiled_H;
-    uint32_t h = (tiled_row % tiled_H) * 32;
-
-    uint32_t page = n;
-    uint32_t offset = h * sizeof(uint32_t);
-    return {page, offset};
-}
-
-uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
-    // Get local coordinates within the tile
-    uint32_t local_row = h % TILE_HEIGHT;
-    uint32_t local_col = w % TILE_WIDTH;
-
-    // Determine the index offset based on which quadrant we're in
-    uint32_t offset = 0;
-
-    // If we're in the right half (columns beyond FACE_WIDTH)
-    if (local_col >= FACE_WIDTH) {
-        local_col -= FACE_WIDTH;
-        offset += FACE_HEIGHT * FACE_WIDTH;  // Right face offset
-    }
-
-    // If we're in the bottom half (rows beyond FACE_WIDTH)
-    if (local_row >= FACE_WIDTH) {
-        local_row -= FACE_WIDTH;
-        offset += FACE_HEIGHT * TILE_WIDTH;  // Bottom face offset
-    }
-
-    // Final index within the tile
-    uint32_t index = offset + local_row * FACE_WIDTH + local_col;
-    return index;
-}
+#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -118,13 +76,10 @@ void kernel_main() {
     cb_push_back(cb_scaler_idx, onetile);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGen</* is_dram */ true> target_indexes_address_generator = {
-        .bank_base_address = target_address, .page_size = target_indexes_page_size};
+    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row

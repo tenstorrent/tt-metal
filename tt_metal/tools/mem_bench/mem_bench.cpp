@@ -4,7 +4,6 @@
 
 #include <benchmark/benchmark.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -23,7 +22,6 @@
 #include "device_utils.hpp"
 #include "host_utils.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "vector_aligned.hpp"
 #include "work_thread.hpp"
@@ -31,6 +29,9 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::tools::mem_bench;
+
+// Global variable to store user-specified device ID
+std::optional<int> g_user_device_id;
 
 // Read L1 counters (cycles, bytes rd, bytes wr) and increment test_results
 void read_inc_data_from_cores(const Context& ctx, IDevice* device, const CoreRange& cores, TestResult& test_results) {
@@ -75,7 +76,8 @@ void report_device_bw(benchmark::State& state, const TestResult& test_results) {
 // Benchmark various memcpy_to_device transfer sizes.
 // Reports host bw.
 TestResult mem_bench_page_sizing(benchmark::State& state) {
-    constexpr uint32_t k_DeviceId = 0;
+    auto device_ids = get_device_ids_for_single_device(g_user_device_id);
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
     TestResult results;
     Context ctx{
         {},
@@ -89,8 +91,8 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(k_DeviceId, 0);
-    auto hugepage_size = get_hugepage_size(k_DeviceId);
+    auto hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
     bool cached = state.range(2);
 
     for (auto _ : state) {
@@ -110,7 +112,8 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
 // Reports host bw.
 TestResult mem_bench_copy_multithread(benchmark::State& state) {
     static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
-    constexpr uint32_t k_DeviceId = 0;
+    auto device_ids = get_device_ids_for_single_device(g_user_device_id);
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
     TestResult results;
     Context ctx{
         {},
@@ -123,8 +126,8 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
         0,               // Iterations is managed by the benchmark framework
     };
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(0, 0);
-    const auto hugepage_size = get_hugepage_size(0);
+    auto hugepage = get_hugepage(device_id, 0);
+    const auto hugepage_size = get_hugepage_size(device_id);
     const auto bytes_per_thread = ((ctx.total_size / ctx.threads) + (MEMCPY_ALIGNMENT)-1) & -(MEMCPY_ALIGNMENT);
     const auto last_thread_bytes = ctx.total_size - (bytes_per_thread * (ctx.threads - 1));
 
@@ -157,8 +160,10 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
 // Reports host bw and device bw.
 TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     TestResult results;
-    auto devices = tt::tt_metal::detail::CreateDevices(get_mmio_device_ids(1, -1));
-    IDevice* device = (*(devices.begin())).second;
+    auto device_ids = get_device_ids_for_single_device(g_user_device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
@@ -226,8 +231,10 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 // Reports host bw and device bw.
 TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) {
     TestResult results;
-    auto devices = tt::tt_metal::detail::CreateDevices(get_mmio_device_ids(1, -1));
-    IDevice* device = (*(devices.begin())).second;
+    auto device_ids = get_device_ids_for_single_device(g_user_device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
@@ -286,7 +293,6 @@ TestResult mem_bench_multi_mmio_devices(
     TestResult results;
 
     // One thread to wait for program on each device
-    int num_threads = devices.size();
 
     for (auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
@@ -294,7 +300,6 @@ TestResult mem_bench_multi_mmio_devices(
         for (auto [device_id, device] : devices) {
             programs[device_id] = CreateProgram();
             Program& pgm = programs[device_id];
-            auto device_hugepage = get_hugepage(device_id, 0);
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,
@@ -302,7 +307,6 @@ TestResult mem_bench_multi_mmio_devices(
                      .value()});
         }
 
-        double host_copy_time = 0;
         execute_work_synced_start(
             1,
             [devices, &programs](int /*thread_idx*/) {
@@ -337,7 +341,8 @@ TestResult mem_bench_multi_mmio_devices(
 // Multi MMIO devices reading on the same NUMA node.
 TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& state) {
     // Node 0
-    auto devices = tt::tt_metal::detail::CreateDevices(get_mmio_device_ids(get_number_of_mmio_devices(), 0));
+    auto device_ids = get_device_ids_for_multi_device_same_node(g_user_device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
 
     Context ctx{
         devices,
@@ -358,7 +363,8 @@ TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& stat
 
 // Multi MMIO devices reading on different NUMA nodes.
 TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State& state) {
-    auto devices = tt::tt_metal::detail::CreateDevices(get_mmio_device_ids_unique_nodes(get_number_of_mmio_devices()));
+    auto device_ids = get_device_ids_for_multi_device_different_nodes(g_user_device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
 
     Context ctx{
         devices,
@@ -381,8 +387,10 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
 // First half of hugepage will be written to by host
 // Second half will be written to by device
 TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
-    auto devices = tt::tt_metal::detail::CreateDevices(get_mmio_device_ids(1, -1));
-    IDevice* device = (*(devices.begin())).second;
+    auto device_ids = get_device_ids_for_single_device(g_user_device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
+    IDevice* device = devices[device_id];
     Context ctx{
         devices,
         state.range(0),  // Total size
@@ -398,7 +406,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
-    // Don't need to seperate device results
+    // Don't need to separate device results
     // Readers will have 0 bytes written
     // Writers will have 0 bytes read. Will not mix.
     TestResult results;
@@ -531,6 +539,7 @@ void print_help() {
     ::benchmark::PrintDefaultHelp();
     std::cout << "          [--help] Shows this help message\n";
     std::cout << "          [--full] Run all tests\n";
+    std::cout << "          [--device-id=<id>] Use specific device ID instead of auto-selection\n";
     std::cout << "\nCounters\n";
     std::cout << "          bytes_per_second: Aggregate Host copy to hugepage bandwidth. 0 if not measured.\n";
     std::cout << "          dev_bw: Average single device core PCIe r/w bandwidth. 0 if not measured.\n";
@@ -547,6 +556,21 @@ bool has_flag(const std::vector<std::string>& input_args, const std::string& fla
     return false;
 }
 
+std::optional<int> get_device_id_from_args(const std::vector<std::string>& input_args) {
+    for (const auto& arg : input_args) {
+        if (arg.starts_with("--device-id=")) {
+            std::string device_id_str = arg.substr(12);  // Skip "--device-id="
+            try {
+                return std::stoi(device_id_str);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid device ID: " << device_id_str << std::endl;
+                return std::nullopt;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 int main(int argc, char* argv[]) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (has_flag(input_args, "--help")) {
@@ -554,11 +578,17 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Parse device ID if specified
+    g_user_device_id = get_device_id_from_args(input_args);
+    if (g_user_device_id.has_value()) {
+        std::cout << "Using device ID: " << g_user_device_id.value() << std::endl;
+    }
+
     // Force TT_METAL options
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
     setenv("TT_METAL_CLEAR_L1", "1", true);
     // May be overridden by the user
-    setenv("TT_METAL_LOGGER_LEVEL", "FATAL", false);
+    setenv("TT_LOGGER_LEVEL", "FATAL", false);
 
     char arg0_default[] = "benchmark";
     char* args_default = arg0_default;

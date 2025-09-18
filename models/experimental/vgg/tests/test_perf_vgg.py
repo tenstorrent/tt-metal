@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 
 from models.experimental.vgg.tt.vgg import *
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     Profiler,
@@ -91,7 +91,6 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 )
 def test_perf_bare_metal(
     device,
-    use_program_cache,
     imagenet_sample_input,
     expected_inference_time,
     expected_compile_time,
@@ -111,7 +110,6 @@ def test_perf_bare_metal(
 )
 def test_perf_virtual_machine(
     device,
-    use_program_cache,
     imagenet_sample_input,
     expected_inference_time,
     expected_compile_time,

@@ -11,7 +11,7 @@ from models.experimental.yolov3.reference.models.common import DetectMultiBacken
 from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import check_img_size
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     profiler,
     disable_persistent_kernel_cache,
@@ -21,7 +21,7 @@ from models.perf.perf_utils import prep_perf_report
 BATCH_SIZE = 1
 
 
-def test_perf(device, use_program_cache, model_location_generator):
+def test_perf(device, model_location_generator):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"

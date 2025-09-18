@@ -2,19 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 from typing import List
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+import torch
+
+import ttnn
+from models.demos.t3000.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtFalconMLP:
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -26,6 +27,7 @@ class TtFalconMLP:
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.hidden_size = hidden_size
         self.model_config = model_config
 
@@ -117,21 +119,18 @@ class TtFalconMLP:
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=self.model_config["DEFAULT_MEMCFG"])
 
-        hidden_states = ttnn.get_device_tensors(
-            hidden_states
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
-
-        hidden_states = ttnn.get_device_tensors(
-            ttnn.reduce_scatter(
-                ttnn.aggregate_as_tensor(hidden_states),
-                dim=3,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,  # only unidirectional supported for now
-                memory_config=self.model_config["DEFAULT_MEMCFG"],
-            )
+        hidden_states = ttnn.experimental.reduce_scatter_minimal_async(
+            hidden_states,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=1,
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
-
-        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
 
         hidden_states = ttnn.interleaved_to_sharded(
             hidden_states, self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
@@ -193,21 +192,15 @@ class TtFalconMLP:
         if should_deallocate_ln_tensors:
             x.deallocate(True)
 
-        hidden_states = ttnn.get_device_tensors(
-            self.output
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
-
-        hidden_states = ttnn.get_device_tensors(
-            ttnn.reduce_scatter(
-                ttnn.aggregate_as_tensor(hidden_states),
-                dim=3,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,  # only one link supported for now
-                memory_config=self.model_config["DEFAULT_MEMCFG"],
-            )
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            self.output,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=1,
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
-
-        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
-
-        # return TT Tensor
-        return hidden_states

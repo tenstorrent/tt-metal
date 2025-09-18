@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from transformers import FalconForCausalLM
-from models.utility_functions import tt_tensors_to_torch_tensors
+
+import ttnn
+from models.common.utility_functions import tt_tensors_to_torch_tensors
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh_device):
@@ -304,6 +305,6 @@ def get_num_devices(device):
         raise ValueError(f"Unrecognized device type {type(device)}")
 
 
-def dump_device_profiler(device):
+def read_device_profiler(device):
     # device is either a ttnn.MeshDevice or a ttnn.Device
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)

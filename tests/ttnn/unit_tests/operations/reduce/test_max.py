@@ -19,7 +19,7 @@ def test_max(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
-    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -42,7 +42,7 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size1, batch_size2, h, w), -100, 100, dtype=torch.bfloat16)
-    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -62,7 +62,7 @@ def test_max_2d(device, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((h, w), -100, 100, dtype=torch.bfloat16)
-    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -88,7 +88,7 @@ def test_max_global(device, batch_size, h, w):
 
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor[0, 0, 0]
+    output_tensor = output_tensor
 
     assert_with_pcc(torch_output_tensor, output_tensor)
 

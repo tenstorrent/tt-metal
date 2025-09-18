@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -29,6 +29,9 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
 
+    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
@@ -39,16 +42,12 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
-    const InterleavedAddrGenFast<is_dram> joint_out_writer = {
-        .bank_base_address = joint_out_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
 
     const auto output_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);
@@ -58,11 +57,11 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
