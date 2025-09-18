@@ -413,25 +413,21 @@ class ttnn_yolov7:
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["6"],
-            enable_split_reader=True,
         )
         self.conv8 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["7"],
-            enable_split_reader=True,
         )
         self.conv9 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["8"],
-            enable_split_reader=True,
         )
         self.conv10 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["9"],
-            enable_split_reader=True,
         )
 
         self.conv11 = Matmul(
