@@ -77,7 +77,10 @@ tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_
 }
 
 tt::tt_metal::Tensor sample(
-    const tt::tt_metal::Tensor& t, float temperature, uint32_t seed, std::optional<tt::tt_metal::Tensor> argmax_mask) {
+    const tt::tt_metal::Tensor& t,
+    float temperature,
+    uint32_t seed,
+    std::optional<tt::tt_metal::Tensor> logits_padding_mask) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ttnn::Tensor out = t;
@@ -100,11 +103,12 @@ tt::tt_metal::Tensor sample(
         out = ttnn::add(out, rand);
     }
 
-    if (argmax_mask.has_value()) {
-        out = ttnn::subtract(out, argmax_mask.value());
+    if (logits_padding_mask.has_value()) {
+        // subtract a large number from the logits where the padding mask is set
+        out = ttnn::subtract(out, logits_padding_mask.value());
     }
 
-    return ttnn::argmax(ttnn::DefaultQueueId, ttnn::untilize(out), 3, true, std::nullopt, true);
+    return ttnn::argmax(ttnn::untilize(out), 3, true, std::nullopt, true);
 }
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {

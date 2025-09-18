@@ -177,9 +177,9 @@ void generate(
     auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
         vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
 
-    auto mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+    auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
-    auto argmax_mask = ttnn::concat(ttnn::DefaultQueueId, mask_vector, 3);
+    auto logits_padding_mask = ttnn::concat(ttnn::DefaultQueueId, logits_padding_mask_vector, 3);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -206,7 +206,7 @@ void generate(
         // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
         next_token_tensor = ttml::ttnn_fixed::sample(
-            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), argmax_mask);
+            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
