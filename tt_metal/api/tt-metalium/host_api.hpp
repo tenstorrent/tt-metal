@@ -778,21 +778,6 @@ void EnqueueWriteSubBuffer(
 
 // clang-format off
 /**
- * Writes a program to the device and launches it
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                               | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|------------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                     |                                    | Yes      |
- * | program      | The program that will be executed on the device that cq is bound to    | Program &                          |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                               |                                    | Yes      |
- */
-// clang-format on
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
-
-// clang-format off
-/**
  * Blocks until all previously dispatched commands on the device have completed
  *
  * Return value: void
