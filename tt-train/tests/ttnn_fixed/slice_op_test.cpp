@@ -39,9 +39,7 @@ TEST_F(SliceOpTest, Slice_BROKEN) {
     ttnn::SmallVector<uint32_t> end_index = {N, C, H, 5U};
 
     // Expected output: shape {1, 1, 1, 4}, values from a(0,0,H-1,1) to a(0,0,H-1,4)
-    xt::xarray<float> b = {{{
-
-        {a(0, 0, H - 1, 1), a(0, 0, H - 1, 2), a(0, 0, H - 1, 3), a(0, 0, H - 1, 4)}}}};
+    xt::xarray<float> b = {{{{a(0, 0, H - 1, 1), a(0, 0, H - 1, 2), a(0, 0, H - 1, 3), a(0, 0, H - 1, 4)}}}};
 
     auto tensor_a = ttml::core::from_xtensor(a, device);
     auto tensor_b = ttnn::slice(tensor_a, start_index, end_index, step);

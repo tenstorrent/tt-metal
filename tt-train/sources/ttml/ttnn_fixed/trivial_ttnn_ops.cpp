@@ -84,16 +84,18 @@ tt::tt_metal::Tensor sample(
 
     if (temperature > 0.0F) {
         auto rand = ttnn::rand(
-            ttnn::DefaultQueueId,             // queue ID
-            out.logical_shape(),              // tensor shape
-            *device,                          // MeshDevice
-            out.dtype(),                      // tensor datatype
-            out.layout(),                     // tensor layout
-            ttnn::types::DRAM_MEMORY_CONFIG,  // tensor memory config
-            0.00001F,                         // minimum value
-            0.99F,                            // maximum value
-            seed);                            // seed
+            /* queue_id */ ttnn::DefaultQueueId,
+            /* size */ out.logical_shape(),
+            /* device */ *device,
+            /* dtype */ out.dtype(),
+            /* layout */ out.layout(),
+            /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
+            /* from */ 0.00001F,
+            /* to */ 0.99F,
+            /* seed */ seed);
 
+        // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
+        // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
         out = ttnn::mul_sfpu(out, 1.0F / temperature);
         out = ttnn::add(out, rand);
