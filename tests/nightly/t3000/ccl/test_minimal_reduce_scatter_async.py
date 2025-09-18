@@ -559,7 +559,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     buffer_type,
     enable_trace,
     num_iters,
-    ones_tensor,
     rs_topology,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
@@ -601,7 +600,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
     )
 
