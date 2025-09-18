@@ -149,7 +149,7 @@ uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
     return get_buffer(device_id).get_device_io_addr();
 }
 
-std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
+std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         return std::nullopt;
@@ -167,7 +167,7 @@ std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chi
     }
 
     // Return NOC address and the MMIO device ID where it's usable from
-    return std::make_pair(noc_addr_opt.value(), mmio_device_id);
+    return PinnedMemory::NocAddr{noc_addr_opt.value(), mmio_device_id};
 }
 
 std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
@@ -254,9 +254,7 @@ const void* PinnedMemory::get_host_ptr() const { return pImpl->get_host_ptr(); }
 
 uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const { return pImpl->get_device_addr(device_id); }
 
-std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemory::get_noc_addr(chip_id_t device_id) const {
-    return pImpl->get_noc_addr(device_id);
-}
+std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(chip_id_t device_id) const { return pImpl->get_noc_addr(device_id); }
 
 size_t PinnedMemory::get_buffer_size() const { return pImpl->get_buffer_size(); }
 
