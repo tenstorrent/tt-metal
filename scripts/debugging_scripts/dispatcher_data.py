@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
@@ -139,6 +139,8 @@ class DispatcherData:
                 get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
             }
             self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
+
+        log_check(launch_msg_rd_ptr < self._launch_msg_buffer_num_entries, f"On core {location} Launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.")
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1 + self._launch_msg_buffer_num_entries) % self._launch_msg_buffer_num_entries
 
