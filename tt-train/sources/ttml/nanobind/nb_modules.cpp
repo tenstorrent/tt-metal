@@ -95,6 +95,7 @@ void py_module(nb::module_& m) {
         auto py_gpt2 =
             static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(m.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+        py_gpt2.def("__call__", &models::gpt2::Transformer::operator());
         py_gpt2.def_static(
             "create", [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); });
     }
@@ -145,8 +146,9 @@ void py_module(nb::module_& m) {
             nb::arg("low_freq_factor") = 0.0F,
             nb::arg("original_context_length") = 0U);
 
-        auto py_llama = static_cast<nb::class_<models::llama::LlamaConfig>>(m.attr("Llama"));
+        auto py_llama = static_cast<nb::class_<models::llama::Llama>>(m.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
+        py_llama.def("__call__", &models::llama::Llama::operator());
         py_llama.def_static(
             "create", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
     }
@@ -165,6 +167,7 @@ void py_module(nb::module_& m) {
 
         auto py_mlp = static_cast<nb::class_<MultiLayerPerceptron, ModuleBase>>(m.attr("MultiLayerPerceptron"));
         py_mlp.def(nb::init<const MultiLayerPerceptronParameters&>());
+        py_mlp.def("__call__", &modules::MultiLayerPerceptron::operator());
         py_mlp.def_static("create", [](const modules::MultiLayerPerceptronParameters& config) {
             return models::mlp::create(config);
         });
