@@ -9,6 +9,7 @@
 #include <random>
 
 #include "core/distributed/ccl_resources.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/mesh_device.hpp"
 #include "core/tt_profiler.hpp"
 #include "graph.hpp"

@@ -1,6 +1,13 @@
 #pragma once
 
+#include "autograd/tensor.hpp"
 #include "llama.hpp"
+#include "models/common/transformer_common.hpp"
+#include "models/llama.hpp"
+#include "modules/distributed/linear.hpp"
+#include "modules/distributed/llama_block.hpp"
+#include "modules/llama_block.hpp"
+#include "ops/rope_op.hpp"
 
 namespace ttml::models::distributed::pipeline_parallel_llama {
 

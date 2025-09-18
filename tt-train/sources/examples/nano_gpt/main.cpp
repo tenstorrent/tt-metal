@@ -6,8 +6,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <ttnn/distributed/create_socket.hpp>
-#include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
@@ -15,6 +13,7 @@
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -22,6 +21,7 @@
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
+#include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
@@ -88,6 +88,8 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
 }
 
 using ttml::autograd::TensorPtr;
+using SocketManager = ttml::core::distributed::SocketManager;
+using SocketType = ttml::core::distributed::SocketType;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
 // tokens, targets, masks
@@ -394,7 +396,7 @@ struct TrainingConfig {
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
     SocketType socket_type = SocketType::MPI;
-    std::optional<ttml::models::distributed::PipelineParallelConfig> pipeline_parallel_config;
+    std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -956,7 +958,7 @@ int main(int argc, char **argv) {
     bool needs_to_call_loss = true;
     if (is_pipeline_parallel) {
         auto rank = ttml::autograd::ctx().get_distributed_context()->rank();
-        if (rank.get() != config.num_workers - 1U) {
+        if (rank.get() != config.num_mh_workers - 1U) {
             needs_to_call_loss = false;
         }
     }

@@ -1,5 +1,13 @@
 #include "pipeline_parallel_llama.hpp"
 
+#include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "modules/embedding_module.hpp"
+#include "modules/rms_norm_module.hpp"
+#include "ops/distributed/pipeline_parallel_comm_ops.hpp"
+#include "ops/rope_op.hpp"
+#include "ops/unary_ops.hpp"
+
 namespace ttml::models::distributed::pipeline_parallel_llama {
 
 namespace {
@@ -25,14 +33,11 @@ void initialize_weights_tensor_parallel(PipelineParallelLlama& model, bool is_te
 
 }  // namespace
 
-void PipelineParallelLlama::verify() const {
+void PipelineParallelConfig::verify() const {
     auto total_blocks = std::accumulate(
-        pipeline_parallel_config.blocks_per_rank.begin(),
-        pipeline_parallel_config.blocks_per_rank.end(),
-        0,
-        [](int sum, const auto& pair) { return sum + pair.second; });
-    if (pipeline_parallel_config.num_blocks != total_blocks) {
-        throw std::runtime_error("Number of blocks must match number of blocks per rank");
+        blocks_per_rank.begin(), blocks_per_rank.end(), 0, [](int sum, const auto& pair) { return sum + pair.second; });
+    if (num_blocks != total_blocks) {
+        throw std::runtime_error("Number of blocks must match number of blocks per rank.");
     }
 }
 
@@ -48,7 +53,7 @@ PipelineParallelLlama::PipelineParallelLlama(
     const LlamaConfig& config, const PipelineParallelConfig& pipeline_parallel_config, bool is_tensor_parallel) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
-    uint32_t embedding_dim = config.embedding_dim;
+    this->embedding_dim = config.embedding_dim;
     uint32_t num_heads = config.num_heads;
     uint32_t num_groups = config.num_groups;
     float dropout_prob = config.dropout_prob;
@@ -121,7 +126,7 @@ PipelineParallelLlama::PipelineParallelLlama(
             blocks.push_back(std::make_shared<ttml::modules::distributed::DistributedLlamaBlock>(
                 embedding_dim, num_heads, num_groups, rope_params, dropout_prob));
         } else {
-            blocks.push_back(std::make_shared<ttml::modules::distributed::LlamaBlock>(
+            blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
                 embedding_dim, num_heads, num_groups, rope_params, dropout_prob));
         }
     }
@@ -157,23 +162,24 @@ PipelineParallelLlama::PipelineParallelLlama(
 }
 
 bool PipelineParallelLlama::is_first_rank() const {
-    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-    auto rank = distributed_ctx.get_rank();
-    return rank.get() == 0U;
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    return static_cast<unsigned>(rank) == 0U;
 }
 
 bool PipelineParallelLlama::is_last_rank() const {
-    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-    auto rank = distributed_ctx.get_rank();
-    return rank.get() == distributed_ctx.get_num_ranks() - 1U;
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    int size = *distributed_ctx->size();
+    return static_cast<unsigned>(rank) == static_cast<unsigned>(size - 1);
 }
 
 uint32_t PipelineParallelLlama::get_blocks_to_skip() const {
-    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-    auto our_rank = distributed_ctx.get_rank();
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int our_rank = *distributed_ctx->rank();
     auto blocks_to_skip = 0U;
-    for (const auto& [rank, blocks] : pipeline_parallel_config.blocks_per_rank) {
-        if (rank.get() < our_rank.get()) {
+    for (const auto& [rank_key, blocks] : pipeline_parallel_config.blocks_per_rank) {
+        if (static_cast<int>(rank_key) < our_rank) {
             blocks_to_skip += blocks;
         }
     }
@@ -181,9 +187,9 @@ uint32_t PipelineParallelLlama::get_blocks_to_skip() const {
 }
 
 uint32_t PipelineParallelLlama::get_blocks_to_load() const {
-    auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-    auto our_rank = distributed_ctx.get_rank();
-    return pipeline_parallel_config.blocks_per_rank.at(our_rank.get());
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int our_rank = *distributed_ctx->rank();
+    return pipeline_parallel_config.blocks_per_rank.at(static_cast<uint32_t>(our_rank));
 }
 
 autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
@@ -191,20 +197,17 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
     if (is_first_rank()) {
         out = (*tok_emb)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-        auto rank = distributed_ctx.get_rank();
-        auto recv_rank = core::distributed::Rank(rank.get() - 1U);
+        auto distributed_ctx = autograd::ctx().get_distributed_context();
+        int rank = *distributed_ctx->rank();
+        auto recv_rank = core::distributed::Rank(rank - 1);
 
         auto batch_size = out->get_value().logical_shape()[0];
         auto seq_len = out->get_value().logical_shape()[-1];
 
-        auto recv_tensor = ttnn::empty(
-            {batch_size, 1U, seq_len, embedding_dim},
-            ttnn::DataType::BFLOAT16,
-            ttnn::Layout::TILE,
-            &autograd::ctx().get_device());
+        auto recv_tensor = ttml::core::empty(
+            ttnn::Shape{batch_size, 1U, seq_len, embedding_dim}, &autograd::ctx().get_device(), ttnn::MemoryConfig{});
         out = autograd::create_tensor(recv_tensor);
-        out = ops::distributed::intermesh_recv(out, recv_rank);
+        out = ttml::ops::distributed::intermesh_recv(out, recv_rank);
     }
 
     for (auto& block : blocks) {
@@ -219,10 +222,10 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
         out = (*ln_fc)(out);
         out = (*fc)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_ctx();
-        auto rank = distributed_ctx.get_rank();
-        auto send_rank = core::distributed::Rank(rank.get() + 1U);
-        out = ops::distributed::intermesh_send(out, send_rank);
+        auto distributed_ctx = autograd::ctx().get_distributed_context();
+        int rank = *distributed_ctx->rank();
+        auto send_rank = core::distributed::Rank(rank + 1);
+        out = ttml::ops::distributed::intermesh_send(out, send_rank);
     }
 
     return out;

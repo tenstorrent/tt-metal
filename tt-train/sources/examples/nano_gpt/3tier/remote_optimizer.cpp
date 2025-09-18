@@ -8,7 +8,7 @@
 #include "ttnn/distributed/create_socket.hpp"
 
 RemoteOptimizer::RemoteOptimizer(
-    ttml::serialization::NamedParameters parameters, int aggregator_rank, SocketType socket_type) :
+    ttml::serialization::NamedParameters parameters, int aggregator_rank, ttnn::distributed::SocketType socket_type) :
     ttml::optimizers::OptimizerBase(std::move(parameters)), m_socket_manager(socket_type) {
     m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
@@ -68,7 +68,7 @@ void RemoteOptimizer::send_gradients() {
 void RemoteOptimizer::receive_weights() {
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         auto tensor = tensor_ptr->get_value();
-        m_socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
+        tensor = m_socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
         tensor_ptr->set_value(tensor);
     }
 }
