@@ -195,7 +195,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               const testLabel = extractTestLabelBackward(lines, i);
               const textBlock = block.join('\n');
               const fileBase = path.basename(p);
-              const finalLabel = testLabel ? `${fileBase}: ${testLabel}` : `${fileBase}: no label found`;
+              const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`;
               collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel });
               foundInFile++;
               i = j;
@@ -218,8 +218,8 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
  * Try to extract a test identifier from the nearby log lines or path.
  */
 function extractTestLabelBackward(lines, errIdx) {
-  const runExact = /^\s*\[\s*RUN\s*\]/;     // case-sensitive
-  const failedTests = /^\s*FAILED\s+tests/; // case-sensitive
+  const runExact = /^\s*\[\s*RUN\s*\]\s*(.+)$/; // capture gtest name after [ RUN ]
+  const failedTests = /^\s*FAILED\s+tests\//;      // lines starting with FAILED tests/
   const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
   const testsPathStart = /^\s*tests\//;       // must start with tests/
 
@@ -229,14 +229,43 @@ function extractTestLabelBackward(lines, errIdx) {
     const line = raw
       .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
       .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
-    if (runExact.test(line) || failedTests.test(line)) return line.trim();
+    // gtest: return the part after [ RUN ]
+    const mRun = line.match(runExact);
+    if (mRun) return mRun[1].trim();
+    // pytest FAILED header: extract tests/...py::test_name (without params)
+    if (failedTests.test(line)) {
+      const mF = line.match(/^\s*FAILED\s+((tests\/[^\s]+\.py))::([^\s\[]+)/);
+      if (mF) return `${mF[1]}::${mF[3]}`;
+      // fallback to any tests path at start
+      const mFs = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
+      if (mFs) return mFs[1];
+      return line.trim();
+    }
     if (failedOnly.test(line)) {
       // return first non-empty line below
       let j = i + 1;
       while (j < lines.length && lines[j].trim() === '') j++;
-      if (j < lines.length) return lines[j].trim();
+      if (j < lines.length) {
+        const candRaw = lines[j];
+        const cand = candRaw
+          .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
+          .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
+        const mPy = cand.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
+        if (mPy) return `${mPy[1]}::${mPy[3]}`;
+        const mStart = cand.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
+        if (mStart) return mStart[1];
+        const mRun2 = cand.match(runExact);
+        if (mRun2) return mRun2[1].trim();
+        return cand.trim();
+      }
     }
-    if (testsPathStart.test(line)) return line.trim();
+    if (testsPathStart.test(line)) {
+      const m = line.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
+      if (m) return `${m[1]}::${m[3]}`;
+      const m2 = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
+      if (m2) return m2[1];
+      return line.trim();
+    }
   }
   return undefined;
 }
