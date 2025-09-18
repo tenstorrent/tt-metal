@@ -2,31 +2,40 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# standard
 import argparse
-import sys
-import os
-import pathlib
-import enlighten
-import importlib
-import datetime as dt
-from multiprocessing import Process
-from faster_fifo import Queue
-from queue import Empty
 import builtins
+from contextlib import contextmanager
+from dataclasses import dataclass
+import datetime as dt
+import importlib
+from multiprocessing import Process
+import os
+from pathlib import Path
+import subprocess
+import sys
+from queue import Empty
+from typing import Optional
+
+# third party
+from elasticsearch import Elasticsearch, NotFoundError
+import enlighten
+from faster_fifo import Queue
+
+# tt
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from framework.device_fixtures import default_device
+from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from framework.serialize import deserialize, deserialize_vector_structured
-import subprocess
-from dataclasses import dataclass
-from typing import Optional
 from framework.result_destination import ResultDestinationFactory
+from framework.serialize import deserialize, deserialize_vector_structured
 from tracy.process_ops_logs import get_device_data_generate_report
 from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
-from framework.device_fixtures import default_device
-from time import sleep
 
 
 @dataclass
@@ -52,6 +61,7 @@ class SweepsConfig:
     summary: bool = False
     run_contents: str = None
     arch_name: Optional[str] = None
+    debug: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -72,6 +82,7 @@ def create_config_from_args(args) -> SweepsConfig:
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
         summary=args.summary,
+        debug=args.debug,
     )
 
     if args.vector_source == "elastic" or args.result_dest == "elastic":
@@ -92,6 +103,18 @@ def create_config_from_args(args) -> SweepsConfig:
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
     arch_env = os.getenv("ARCH_NAME") or os.getenv("IRD_ARCH_NAME")
+    if not arch_env:
+        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    arch_env = arch_env.strip()
+    if arch_env not in allowed_arch:
+        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    config.arch_name = arch_env
+
+    # Validate and set ARCH_NAME
+    allowed_arch = {"blackhole", "wormhole_b0"}
+    arch_env = os.getenv("ARCH_NAME")
     if not arch_env:
         logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
         exit(1)
@@ -146,14 +169,36 @@ def validate_arguments(args, parser):
 
 
 def get_all_modules():
-    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    sweeps_path = Path(__file__).parent / "sweeps"
     for file in sorted(sweeps_path.glob("**/*.py")):
-        sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+        sweep_name = str(Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
         yield sweep_name
 
 
-def get_timeout():
-    timeout = 30
+DEFAULT_TIMEOUT = 30
+TIMEOUT_KEY = "TIMEOUT"
+SWEEPS_SUBDIR_NAME = "sweeps"
+PY_SUFFIX = ".py"
+
+
+def get_timeout(test_module_name):
+    """We need to grab the test's timeout without loading the test module"""
+
+    sweep_root_path = Path(__file__).resolve().parent
+    test_source_name = test_module_name.replace(".", "/") + PY_SUFFIX
+    test_path = sweep_root_path / SWEEPS_SUBDIR_NAME / test_source_name
+
+    if not (test_path.exists() and test_path.is_file()):
+        return DEFAULT_TIMEOUT
+
+    timeout = DEFAULT_TIMEOUT
+    with test_path.open("rt") as fh:
+        for line in fh:
+            if TIMEOUT_KEY in line:
+                try:
+                    timeout = int(line.split("=")[-1].strip())
+                except:
+                    break
     return timeout
 
 
@@ -181,11 +226,10 @@ def get_devices(test_module):
 
 
 def gather_single_test_perf(device, test_passed):
-    if device.get_num_devices() > 1:
+    if device is None or device.get_num_devices() > 1:
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
-    # ttnn.ReadDeviceProfiler(device)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -280,50 +324,45 @@ def get_github_pipeline_id() -> Optional[int]:
         return None
 
 
-def run(module_name, input_queue, output_queue, config: SweepsConfig):
-    test_module = importlib.import_module("sweeps." + module_name)
-    device_generator = get_devices(test_module)
+@contextmanager
+def device_context(test_module, output_queue):
     try:
-        device, device_name = next(device_generator)
-        logger.info(f"Opened device configuration, {device_name}.")
+        yield from get_devices(test_module)
     except AssertionError as e:
         output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+    finally:
         return
 
-    try:
-        try:
-            while True:
-                test_vector = input_queue.get(block=True, timeout=5)
-                test_vector = deserialize_vector_structured(test_vector)
-                try:
-                    results = test_module.run(**test_vector, device=device)
-                    if type(results) == list:
-                        status, message = results[0]
-                        e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
-                    else:
-                        status, message = results
-                        e2e_perf = None
-                except Exception as e:
-                    status, message = False, str(e)
-                    e2e_perf = None
-                if config.measure_device_perf:
-                    perf_result = gather_single_test_perf(device, status)
-                    message = get_updated_message(message, perf_result)
-                    output_queue.put([status, message, e2e_perf, perf_result])
+
+def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+    test_module = importlib.import_module("sweeps." + test_module_name)
+    with device_context(test_module, output_queue) as (device, device_name):
+        while True:
+            try:
+                test_vector = input_queue.get(block=True, timeout=1)
+            except Empty:
+                logger.info("Test suite complete")
+                return
+            test_vector = deserialize_vector_structured(test_vector)
+            try:
+                results = test_module.run(**test_vector, device=device)
+                if type(results) == list:
+                    status, message = results[0]
+                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
                 else:
-                    output_queue.put([status, message, e2e_perf, None])
-        except Empty as e:
-            # Queue timeout - normal completion when no more test vectors
-            pass
-    finally:
-        # Always close the device when exiting the run function
-        try:
-            # Run teardown in mesh_device_fixture
-            next(device_generator)
-        except StopIteration:
-            logger.info(f"Closed device configuration, {device_name}.")
-        except Exception as e:
-            logger.warning(f"Error during device cleanup: {e}")
+                    status, message = results
+                    e2e_perf = None
+            except Exception as e:
+                if config.debug:
+                    logger.exception(e)
+                status, message = False, str(e)
+                e2e_perf = None
+            if config.measure_device_perf:
+                perf_result = gather_single_test_perf(device, status)
+                message = get_updated_message(message, perf_result)
+                output_queue.put([status, message, e2e_perf, perf_result])
+            else:
+                output_queue.put([status, message, e2e_perf, None])
 
 
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
@@ -332,7 +371,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     input_queue = Queue()
     output_queue = Queue()
     p = None
-    timeout = get_timeout()
+    timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
     child_mode = not config.dry_run and not config.vector_id
@@ -353,9 +392,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
-
-        validity = deserialize(test_vector["validity"])
         result["start_time_ts"] = dt.datetime.now()
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
+
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
@@ -366,70 +405,84 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if config.measure_perf:
-                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
-                    # Ensure a worker process is running if we're in child mode
+                need_retry = True
+                max_retries = 10
+                while need_retry == True:
+                    need_retry = False
+                    if config.measure_perf:
+                        # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                        # Ensure a worker process is running if we're in child mode
+                        if child_mode and (p is None or not p.is_alive()):
+                            p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                            p.start()
+                        input_queue.put(test_vector)
+                        if p is None:
+                            logger.info(
+                                "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            )
+                            run(module_name, input_queue, output_queue, config)
+                        output_queue.get(block=True, timeout=timeout)
                     if child_mode and (p is None or not p.is_alive()):
                         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                         p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
-                            "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                         )
                         run(module_name, input_queue, output_queue, config)
-                    output_queue.get(block=True, timeout=timeout)
-                if child_mode and (p is None or not p.is_alive()):
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                input_queue.put(test_vector)
-                if p is None:
-                    logger.info(
-                        "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
-                    )
-                    run(module_name, input_queue, output_queue, config)
-                response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = (
-                    response[0],
-                    response[1],
-                    response[2],
-                    response[3],
-                )
-                # Set base result message
-                result["message"] = message
 
-                # Determine test status
-                if status:
-                    # Test passed - check device perf requirements
-                    if config.measure_device_perf:
-                        if device_perf is None:
-                            result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                    response = output_queue.get(block=True, timeout=timeout)
+                    status, message, e2e_perf, device_perf = (
+                        response[0],
+                        response[1],
+                        response[2],
+                        response[3],
+                    )
+                    if not status:
+                        if "control_plane.cpp" in message:
+                            reset_util.reset()
+                            if max_retries > 0:
+                                need_retry = True
+                                max_retries = max_retries - 1
+                                logger.info("retrying test after control plane error")
+                            else:
+                                logger.info("giving up on retrying on control plane error")
+                    # Set base result message
+                    result["message"] = message
+
+                    # Determine test status
+                    if status:
+                        # Test passed - check device perf requirements
+                        if config.measure_device_perf:
+                            if device_perf is None:
+                                result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                            else:
+                                result["status"] = TestStatus.PASS
+                                result["device_perf"] = device_perf
                         else:
                             result["status"] = TestStatus.PASS
-                            result["device_perf"] = device_perf
                     else:
-                        result["status"] = TestStatus.PASS
-                else:
-                    # Test failed - categorize the failure
-                    result["exception"] = message
+                        # Test failed - categorize the failure
+                        result["exception"] = message
 
-                    # Log device exceptions
-                    if "DEVICE EXCEPTION" in message:
-                        logger.error(
-                            f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
-                        )
-                        logger.info("Device error detected. The suite will be aborted after this test.")
+                        # Log device exceptions
+                        if "DEVICE EXCEPTION" in message:
+                            logger.error(
+                                f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
+                            )
+                            logger.info("Device error detected. The suite will be aborted after this test.")
 
-                    # Set failure status based on error type
-                    if "Out of Memory: Not enough space to allocate" in message:
-                        result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                    elif "Watcher" in message:
-                        result["status"] = TestStatus.FAIL_WATCHER
-                    else:
-                        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                        # Set failure status based on error type
+                        if "Out of Memory: Not enough space to allocate" in message:
+                            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                        elif "Watcher" in message:
+                            result["status"] = TestStatus.FAIL_WATCHER
+                        else:
+                            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
-                # Set performance metrics if available
-                result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
+                    # Set performance metrics if available
+                    result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -441,7 +494,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         p.join()
                     p = None
                     reset_util.reset()
-                    sleep(5)
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -450,8 +502,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 result["host"] = get_hostname()
                 result["user"] = get_username()
-                suite_pbar.update()
-                results.append(result)
 
                 # Check if we should skip remaining tests in the suite
                 if config.skip_on_timeout:
@@ -476,6 +526,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
                     # Continue to the next test vector without breaking
 
         # Add the original test vector data to the result
@@ -631,7 +683,7 @@ def run_sweeps(
                         if test_status == "failure":
                             final_status = "failure"
                     except Exception as e:
-                        logger.error(f"Failed to export results for {module_name}, suite {suite}: {e}")
+                        logger.exception(f"Failed to export results for {module_name}, suite {suite}: {e}")
                         final_status = "failure"
                         # continue with other suites
 
@@ -836,6 +888,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Log a detailed execution or dry-run summary at the end of the run.",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        required=False,
+        help="Run tests on main process and log test exceptions",
     )
 
     args = parser.parse_args(sys.argv[1:])
