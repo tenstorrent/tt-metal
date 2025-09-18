@@ -49,8 +49,9 @@ double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
 
 /**
  * Test DeiT Self Attention inference
+ * @param model_path Path to the DeiT model file
  */
-void test_deit_self_attention_inference() {
+void test_deit_self_attention_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
     
     // Initialize device
@@ -60,10 +61,9 @@ void test_deit_self_attention_inference() {
                                                     /*num_command_queues=*/2,
                                                     /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     
-    // Setup base address and model path
+    // Setup base address
     int layer_index = 0;  // Default to layer 0
     std::string base_address = "model.encoder.layer." + std::to_string(layer_index) + ".attention.attention.";
-    std::string model_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/model/deit_traced_model.pt";
     
     // Load state dict and model (inlined from load_deit_state_dict_and_model)
     std::unordered_map<std::string, torch::Tensor> state_dict;
@@ -190,8 +190,20 @@ void test_deit_self_attention_inference() {
 int main(int argc, char** argv) {
     std::cout << "Starting DeiT Self Attention test..." << std::endl;
     
+    // Default model path
+    std::string model_path = "../deit_model/deit_encoder_model.pt";
+    
+    // Parse command line arguments
+    if (argc > 1) {
+        model_path = argv[1];
+        std::cout << "Using model path from command line: " << model_path << std::endl;
+    } else {
+        std::cout << "Using default model path: " << model_path << std::endl;
+        std::cout << "Usage: " << argv[0] << " [model_path]" << std::endl;
+    }
+    
     try {
-        test_deit_self_attention_inference();
+        test_deit_self_attention_inference(model_path);
     } catch (const std::exception& e) {
         std::cerr << "Error during test execution: " << e.what() << std::endl;
         return 1;

@@ -48,8 +48,9 @@ double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
 
 /**
  * Test DeiT Layer inference
+ * @param model_path Path to the DeiT model file
  */
-void test_deit_layer_inference() {
+void test_deit_layer_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
     
     // Initialize device
@@ -59,10 +60,9 @@ void test_deit_layer_inference() {
                                                     /*num_command_queues=*/2,
                                                     /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     
-    // Setup base address and model path
+    // Setup base address
     int layer_index = 0;  // Default to layer 0
     std::string base_address = "model.encoder.layer." + std::to_string(layer_index) + ".";
-    std::string model_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/model/deit_traced_model.pt";
     
     // Load state dict and model
     std::unordered_map<std::string, torch::Tensor> state_dict;
@@ -189,8 +189,18 @@ void test_deit_layer_inference() {
 int main(int argc, char** argv) {
     std::cout << "Starting DeiT Layer test..." << std::endl;
     
+    // Default model path (relative path)
+    std::string model_path = "../deit_model/deit_traced_model.pt";
+    
+    // Check if model path is provided as command line argument
+    if (argc > 1) {
+        model_path = argv[1];
+    }
+    
+    std::cout << "Using model path: " << model_path << std::endl;
+    
     try {
-        test_deit_layer_inference();
+        test_deit_layer_inference(model_path);
     } catch (const std::exception& e) {
         std::cerr << "Error during test execution: " << e.what() << std::endl;
         return 1;
