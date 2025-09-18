@@ -91,7 +91,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on:
-      - ${{ ((inputs.runner == 'N150' && 'tt-ubuntu-2204-n150-stable') || (inputs.runner == 'N300' && 'tt-ubuntu-2204-n300-stable')) }}
+      - tt-ubuntu-2204-${{ inputs.runner-label }}-viommu-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
