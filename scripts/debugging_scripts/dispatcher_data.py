@@ -35,7 +35,9 @@ class DispatcherCoreData:
     kernel_config_base: int = triage_field("Base", hex_serializer)
     kernel_text_offset: int = triage_field("Offset", hex_serializer)
     watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
-    watcher_previous_kernel_id: int = combined_field("previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":"))
+    watcher_previous_kernel_id: int = combined_field(
+        "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
+    )
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
     kernel_path: str | None = combined_field()
@@ -140,9 +142,14 @@ class DispatcherData:
             }
             self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
-        log_check(launch_msg_rd_ptr < self._launch_msg_buffer_num_entries, f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.")
+        log_check(
+            launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
+            f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+        )
 
-        previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1 + self._launch_msg_buffer_num_entries) % self._launch_msg_buffer_num_entries
+        previous_launch_msg_rd_ptr = (
+            launch_msg_rd_ptr - 1 + self._launch_msg_buffer_num_entries
+        ) % self._launch_msg_buffer_num_entries
 
         kernel_config_base = -1
         kernel_text_offset = -1
@@ -159,11 +166,10 @@ class DispatcherData:
                 fw_elf,
                 f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
                 loc_mem_reader,
-                )[0][0]
+            )[0][0]
         except:
             pass
         try:
-
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = mem_access(
                 fw_elf,
