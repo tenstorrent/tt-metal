@@ -77,22 +77,22 @@ tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_
 }
 
 tt::tt_metal::Tensor sample(
-    const tt::tt_metal::Tensor& t, float temperature, std::optional<tt::tt_metal::Tensor> argmax_mask) {
+    const tt::tt_metal::Tensor& t, float temperature, uint32_t seed, std::optional<tt::tt_metal::Tensor> argmax_mask) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ttnn::Tensor out = t;
 
     if (temperature > 0.0F) {
         auto rand = ttnn::rand(
-            ttnn::DefaultQueueId,                      // queue ID
-            out.logical_shape(),                       // tensor shape
-            *device,                                   // MeshDevice
-            out.dtype(),                               // tensor datatype
-            out.layout(),                              // tensor layout
-            ttnn::types::DRAM_MEMORY_CONFIG,           // tensor memory config
-            0.00001F,                                  // minimum value
-            0.99F,                                     // maximum value
-            ttml::autograd::ctx().get_generator()());  // seed
+            ttnn::DefaultQueueId,             // queue ID
+            out.logical_shape(),              // tensor shape
+            *device,                          // MeshDevice
+            out.dtype(),                      // tensor datatype
+            out.layout(),                     // tensor layout
+            ttnn::types::DRAM_MEMORY_CONFIG,  // tensor memory config
+            0.00001F,                         // minimum value
+            0.99F,                            // maximum value
+            seed);                            // seed
 
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
         out = ttnn::mul_sfpu(out, 1.0F / (temperature > 0.0F ? temperature : 1.0F));

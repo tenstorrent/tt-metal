@@ -205,7 +205,8 @@ void generate(
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
-        next_token_tensor = ttml::ttnn_fixed::sample(output->get_value(), temperature, argmax_mask);
+        next_token_tensor = ttml::ttnn_fixed::sample(
+            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), argmax_mask);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
