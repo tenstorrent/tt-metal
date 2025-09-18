@@ -91,6 +91,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Mistral-7B        | T3K         | 98        | 100       | 67.82         | 53.93     |
 | Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
+| Phi-4             | N300        | 99        | 100       | 20.48         | 146.96    |
 
 ##  Long-context (64K Tokens)
 
