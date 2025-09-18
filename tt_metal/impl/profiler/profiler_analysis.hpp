@@ -12,7 +12,6 @@
 
 #include <common/TracyTTDeviceData.hpp>
 #include "assert.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt {
 
@@ -63,7 +62,6 @@ struct AnalysisResults {
     }
 
     void addMetaDataForRuntimeId(uint64_t runtime_id, const RuntimeIdMetaData& meta_data) {
-        // log_info(tt::LogMetal, "runtime_id: {}, num_fw_cores: {}", runtime_id, meta_data.num_fw_cores);
         runtime_id_to_meta_data.emplace(runtime_id, meta_data);
     }
 
@@ -96,7 +94,6 @@ struct DurationAnalysisResults : public AnalysisResults {
     };
 
     std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const override {
-        // TT_ASSERT(results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end());
         std::string results;
         if (results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end()) {
             if (results_config.display_start_and_end_timestamps) {
@@ -115,16 +112,6 @@ struct DurationAnalysisResults : public AnalysisResults {
     void addResultsForRuntimeId(uint64_t runtime_id, const SingleResult& result) {
         results_per_runtime_id.emplace(runtime_id, result);
         runtime_ids.insert(runtime_id);
-
-        // TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
-        // TT_ASSERT(result.start_marker.op_name == result.end_marker.op_name);
-
-        // Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        // tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
-        // runtime_id_to_meta_data[runtime_id] = {
-        //     .device_id = result.start_marker.chip_id,
-        //     .device_arch = cluster_desc->get_arch(result.start_marker.chip_id),
-        //     .op_name = result.start_marker.op_name};
     }
 
 private:
