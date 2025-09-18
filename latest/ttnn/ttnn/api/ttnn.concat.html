@@ -166,7 +166,6 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>groups</strong> (<em>int</em><em>, </em><em>optional</em>) – When <cite>groups</cite> is set to a value greater than 1, the inputs are split into N <cite>groups</cite> partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to <cite>1</cite>. Currently, groups &gt; <cite>1</cite> is only supported for two height sharded input tensors.</p></li>
 </ul>

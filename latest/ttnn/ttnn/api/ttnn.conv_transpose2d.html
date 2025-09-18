@@ -193,7 +193,6 @@ Where:</p>
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – configuration for compute kernel. Default: None</p></li>
 <li><p><strong>mirror_kernel</strong> (<em>bool</em>) – Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em>) – the queue id to use for the operation. Default: <cite>0</cite>.</p></li>
 <li><p><strong>return_output_dim</strong> (<em>bool</em>) – If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,</p></li>
 <li><p><strong>return_weights_and_bias</strong> (<em>bool</em>) – If true, the op also returns the preprocessed weight and bias on device .</p></li>
 </ul>
