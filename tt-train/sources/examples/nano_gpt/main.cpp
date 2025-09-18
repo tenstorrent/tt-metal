@@ -6,8 +6,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <numeric>
-#include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
@@ -36,7 +34,7 @@
 #include "utils.hpp"
 
 namespace {
-constexpr auto gpt2_tokenizer_file_name = "/tokenizer.json";
+constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
 }
 
 /* WANDB BLocks this signal.
@@ -100,11 +98,6 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-constexpr uint32_t SamplingBatchSize = 32U;
-
-void sample() {
-}
-
 template <typename Tokenizer>
 void generate(
     Model &model,
@@ -161,8 +154,6 @@ void generate(
     fmt::print("{}", prompt);
 
     // Sampling setup
-
-    auto repeats = ttnn::Shape({1U, 1U, SamplingBatchSize, 1U});
     uint32_t prompt_tokens_padded_size = 0U;
     uint32_t next_token_id = 0U;
 
@@ -214,7 +205,7 @@ void generate(
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
-        next_token_tensor = ttml::ttnn_fixed::sample(output->get_value(), argmax_mask, temperature);
+        next_token_tensor = ttml::ttnn_fixed::sample(output->get_value(), temperature, argmax_mask);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)

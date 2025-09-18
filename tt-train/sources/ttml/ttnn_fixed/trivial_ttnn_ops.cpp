@@ -76,26 +76,34 @@ tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-tt::tt_metal::Tensor sample(const tt::tt_metal::Tensor& t, const tt::tt_metal::Tensor& argmax_mask, float temperature) {
+tt::tt_metal::Tensor sample(
+    const tt::tt_metal::Tensor& t, float temperature, std::optional<tt::tt_metal::Tensor> argmax_mask) {
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto rand = ttnn::rand(
-        ttnn::DefaultQueueId,
-        t.logical_shape(),
-        *device,
-        t.dtype(),
-        t.layout(),
-        ttnn::types::DRAM_MEMORY_CONFIG,
-        0.00001F,
-        0.99F,
-        ttml::autograd::ctx().get_generator()());
+    ttnn::Tensor out = t;
 
-    rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
-    auto out = ttnn::mul_sfpu(t, 1.0F / (temperature > 0.0F ? temperature : 1.0F));
-    out = ttnn::add(out, rand);
+    if (temperature > 0.0F) {
+        auto rand = ttnn::rand(
+            ttnn::DefaultQueueId,
+            out.logical_shape(),
+            *device,
+            out.dtype(),
+            out.layout(),
+            ttnn::types::DRAM_MEMORY_CONFIG,
+            0.00001F,
+            0.99F,
+            ttml::autograd::ctx().get_generator()());
 
-    return ttnn::argmax(
-        ttnn::DefaultQueueId, ttnn::untilize(ttnn::subtract(out, argmax_mask)), 3, true, std::nullopt, true);
+        rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        out = ttnn::mul_sfpu(out, 1.0F / (temperature > 0.0F ? temperature : 1.0F));
+        out = ttnn::add(out, rand);
+    }
+
+    if (argmax_mask.has_value()) {
+        out = ttnn::subtract(out, argmax_mask.value());
+    }
+
+    return ttnn::argmax(ttnn::DefaultQueueId, ttnn::untilize(out), 3, true, std::nullopt, true);
 }
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {
