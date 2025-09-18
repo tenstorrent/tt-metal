@@ -158,10 +158,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         profiler_state_manager->smallest_host_time.at(device_id) = hostStartTime;
     }
 
-    constexpr uint32_t briscIndex = 0;
     uint64_t addr = profiler_msg_addr +
                     dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(dev_msgs::profiler_msg_t::Field::buffer) +
-                    briscIndex * dev_msgs_factory.size_of<dev_msgs::profiler_msg_buffer_t>() +
                     kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t);
 
     std::vector<std::uint32_t> sync_times = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
