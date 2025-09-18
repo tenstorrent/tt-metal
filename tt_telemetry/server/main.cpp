@@ -22,8 +22,8 @@
 #include <telemetry/ethernet/chip_identifier.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
-#include <telemetry/mock_telemetry_provider.hpp>
-#include <telemetry/telemetry_provider.hpp>
+#include <telemetry/mock_telemetry_collector.hpp>
+#include <telemetry/telemetry_collector.hpp>
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
 
@@ -248,12 +248,12 @@ int main(int argc, char* argv[]) {
     if (use_mock_telemetry) {
         // Mock telemetry
         log_info(tt::LogAlways, "Using mock telemetry data");
-        MockTelemetryProvider mock_telemetry(subscribers);
+        MockTelemetryCollector mock_telemetry(subscribers);
         mock_telemetry.run();
     } else {
         // Real telemetry
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_provider(telemetry_enabled, subscribers, aggregate_endpoints);
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints);
     }
 
     // Run until finished

@@ -65,7 +65,7 @@ target_sources(
     tt_telemetry_server
     PRIVATE
         server/main.cpp
-        telemetry/telemetry_provider.cpp
+        telemetry/telemetry_collector.cpp
         telemetry/metric.cpp
         server/web_server.cpp
         server/collection_endpoint.cpp

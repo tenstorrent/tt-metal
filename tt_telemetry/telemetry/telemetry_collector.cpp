@@ -19,7 +19,7 @@
 #include <server/collection_clients.hpp>
 #include <utils/simple_concurrent_queue.hpp>
 
-#include <telemetry/telemetry_provider.hpp>
+#include <telemetry/telemetry_collector.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
@@ -28,7 +28,7 @@
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
 static std::mutex mtx_;
-static std::queue<TelemetrySnapshot *> available_buffers_;
+static std::queue<TelemetrySnapshot*> available_buffers_;
 
 static std::atomic<bool> stopped_{false};
 
@@ -77,22 +77,19 @@ static void return_buffer_to_pool(TelemetrySnapshot* buffer) {
 }
 
 static std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot* buffer) {
-    return std::shared_ptr<TelemetrySnapshot>(
-        buffer,
-        [](TelemetrySnapshot *buffer) {
-            // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
-            // thread-safe reference counting, allowing a buffer to be passed to multiple
-            // consumers.
-            log_debug(tt::LogAlways, "TelemetryCollector: Returned buffer");
-            return_buffer_to_pool(buffer);
-        }
-    );
+    return std::shared_ptr<TelemetrySnapshot>(buffer, [](TelemetrySnapshot* buffer) {
+        // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
+        // thread-safe reference counting, allowing a buffer to be passed to multiple
+        // consumers.
+        log_debug(tt::LogAlways, "TelemetryCollector: Returned buffer");
+        return_buffer_to_pool(buffer);
+    });
 }
 
 static std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
     std::lock_guard<std::mutex> lock(mtx_);
 
-    TelemetrySnapshot *buffer;
+    TelemetrySnapshot* buffer;
     if (!available_buffers_.empty()) {
         // Get a free buffer
         buffer = available_buffers_.front();
@@ -111,15 +108,15 @@ static std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
     return create_new_handoff_buffer(buffer);
 }
 
-static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
+static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     // Cluster-wide path is: hostname + metric path
-    std::vector<std::string> path_components{static_cast<const char *>(hostname_)};
+    std::vector<std::string> path_components{static_cast<const char*>(hostname_)};
     auto local_path = metric.telemetry_path();
     path_components.insert(path_components.end(), local_path.begin(), local_path.end());
 
     // Join with '/'
     std::string path;
-    for (auto it = path_components.begin(); it != path_components.end(); ) {
+    for (auto it = path_components.begin(); it != path_components.end();) {
         path += *it;
         ++it;
         if (it != path_components.end()) {
@@ -146,7 +143,8 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     }
 
     std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
-    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_of_update_cycle - start_of_update_cycle).count();
+    auto duration_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end_of_update_cycle - start_of_update_cycle).count();
     log_info(tt::LogAlways, "Telemetry readout took {} ms", duration_ms);
 }
 
@@ -177,7 +175,7 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
     snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
 
-    for (auto &subscriber: subscribers) {
+    for (auto& subscriber : subscribers) {
         subscriber->on_telemetry_ready(snapshot);
     }
 }
