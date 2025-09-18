@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 import ttnn
-from loguru import logger
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterator, MutableMapping
@@ -215,6 +214,9 @@ def _mesh_placements_from_mapping(
     placements = [ttnn.PlacementReplicate()] * mesh_rank
 
     for k, v in mapping.items():
+        if k is None:
+            assert False, "success"
+            continue
         assert k < mesh_rank
         placements[k] = ttnn.PlacementShard(v)
 
