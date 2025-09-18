@@ -22,10 +22,18 @@ class TtnnC2fCIB:
         self.conv_pt = conv_pt
         self.shortcut = shortcut
 
-        self.cv1 = Conv(
+        parameters.cv1.conv.out_channels //= 2
+        self.cv1_a = Conv(
             device,
             parameters.cv1,
-            self.conv_pt[f"{path}.cv1"],
+            self.conv_pt[f"{path}.cv1_a"],
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+        )
+        self.cv1_b = Conv(
+            device,
+            parameters.cv1,
+            self.conv_pt[f"{path}.cv1_b"],
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
         )
@@ -52,11 +60,11 @@ class TtnnC2fCIB:
     def __call__(self, input_tensor):
         if use_signpost:
             signpost(header="TtnnC2fCIB Start")
-        cv1 = self.cv1(input_tensor)
-        if cv1.is_sharded():
-            cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
-        x1 = cv1[:, :, :, : cv1.shape[-1] // 2]
-        x2 = cv1[:, :, :, cv1.shape[-1] // 2 : cv1.shape[-1]]
+
+        x1 = self.cv1_a(input_tensor)
+        x2 = self.cv1_b(input_tensor)
+        x1 = ttnn.to_memory_config(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x2 = ttnn.to_memory_config(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         y = [x1, x2]
 
