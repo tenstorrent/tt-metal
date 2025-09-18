@@ -607,6 +607,34 @@ INSTANTIATE_TEST_SUITE_P(
                                },
                        },
                        CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{1, 2, 32, 32},
+                           .layout = Layout::TILE,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {0, 1})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+                               },
+                       },
+                       CopyParams{
+                           .tensor_shape = tt::tt_metal::Shape{2, 64, 128},
+                           .layout = Layout::ROW_MAJOR,
+                           .dtype = DataType::BFLOAT16,
+                           .buffer_type = BufferType::L1,
+
+                           .input_shard_spec =
+                               NdShardSpec{
+                                   .shard_shape = tt::tt_metal::Shape{32, 32},
+                                   .grid = CoreRangeSet(CoreRange({0, 0}, {7, 7})),
+                                   .orientation = ShardOrientation::ROW_MAJOR,
+                                   .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+                               },
+                       },
+                       CopyParams{
                            .tensor_shape = tt::tt_metal::Shape{18, 128, 64},
                            .layout = Layout::TILE,
                            .dtype = DataType::UINT8,
