@@ -247,8 +247,20 @@ inline void calculate_cosh() {
     }
 }
 
+// sinh = (exp(x) - exp(-x)) / 2
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_sinh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE>
-void init_cosh() {
+void init_hyperbolic_trig() {
     _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
 }
 
