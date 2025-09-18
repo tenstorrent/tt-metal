@@ -412,8 +412,13 @@ def test_ttnn_obb_simple():
     print("🔥 Testing TTNN OBB Model (Simple)...")
     
     try:
-        # Initialize TTNN device
-        device = ttnn.open_device(device_id=0)
+        # Initialize TTNN device with proper configuration
+        device = ttnn.open_device(
+            device_id=0, 
+            l1_small_size=YOLOV11_L1_SMALL_SIZE, 
+            trace_region_size=23887872, 
+            num_command_queues=2
+        )
         print("✅ TTNN device opened successfully")
         
         # Load PyTorch OBB model
@@ -421,9 +426,16 @@ def test_ttnn_obb_simple():
         torch_model.eval()
         print("✅ PyTorch OBB model loaded")
         
-        # Create test input
+        # Create test input using proper TTNN input tensor creation
         batch_size, channels, height, width = 1, 3, 640, 640
-        torch_input = torch.randn(batch_size, channels, height, width)
+        torch_input, ttnn_input = create_yolov11_input_tensors(
+            device,
+            batch=batch_size,
+            input_channels=channels,
+            input_height=height,
+            input_width=width,
+            is_sub_module=False,
+        )
         print(f"📥 Input shape: {torch_input.shape}")
         
         # Create TTNN model parameters and model (needs input tensor)
@@ -435,9 +447,6 @@ def test_ttnn_obb_simple():
         with torch.no_grad():
             torch_output = torch_model(torch_input)
         print(f"📤 PyTorch output shape: {torch_output.shape}")
-        
-        # Convert input to TTNN format
-        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         
         # Run TTNN inference
         ttnn_output = ttnn_model(ttnn_input)
@@ -484,8 +493,13 @@ def test_ttnn_obb_with_real_images():
     print("🔥 Testing TTNN OBB Model with Real Images...")
     
     try:
-        # Initialize TTNN device
-        device = ttnn.open_device(device_id=0)
+        # Initialize TTNN device with proper configuration
+        device = ttnn.open_device(
+            device_id=0, 
+            l1_small_size=YOLOV11_L1_SMALL_SIZE, 
+            trace_region_size=23887872, 
+            num_command_queues=2
+        )
         print("✅ TTNN device opened successfully")
         
         # Load PyTorch OBB model
@@ -493,11 +507,13 @@ def test_ttnn_obb_with_real_images():
         torch_model.eval()
         print("✅ PyTorch OBB model loaded")
         
-        # Create dummy input tensor for model parameter initialization
-        dummy_input = torch.randn(1, 3, 640, 640)
+        # Create dummy input tensor for model parameter initialization using proper TTNN function
+        dummy_torch_input, dummy_ttnn_input = create_yolov11_input_tensors(
+            device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=False
+        )
         
         # Create TTNN model parameters and model
-        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, dummy_input, device=device)
+        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, dummy_torch_input, device=device)
         ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
         print("✅ TTNN OBB model loaded")
         
@@ -527,8 +543,32 @@ def test_ttnn_obb_with_real_images():
                 torch_output = torch_model(input_tensor)
             print(f"📤 PyTorch output shape: {torch_output.shape}")
             
-            # Convert input to TTNN format
-            ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            # Convert input to TTNN format using proper memory configuration
+            from models.demos.yolov11m.tt.common import get_mesh_mappers
+            inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
+            
+            n, c, h, w = input_tensor.shape
+            
+            # Pad channels from 3 to 16 for TTNN
+            if c == 3:
+                padded_input = torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, 13), value=0)  # Pad channels
+                c = 16
+            else:
+                padded_input = input_tensor
+            
+            input_mem_config = ttnn.create_sharded_memory_config(
+                [n, c, h, w],
+                ttnn.CoreGrid(x=8, y=8),
+                ttnn.ShardStrategy.HEIGHT,
+            )
+            ttnn_input = ttnn.from_torch(
+                padded_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_mem_config,
+                mesh_mapper=inputs_mesh_mapper,
+            )
             
             # Run TTNN inference
             ttnn_output = ttnn_model(ttnn_input)
