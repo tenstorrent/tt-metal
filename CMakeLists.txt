@@ -274,6 +274,7 @@ add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
+add_subdirectory(models)
 
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
