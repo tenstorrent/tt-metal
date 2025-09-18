@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 // CT (compile-time) args:
@@ -25,9 +24,5 @@ void kernel_main() {
     uint32_t exp_lo = (uint32_t)(expected_noc & 0xffffffffull);
     uint32_t exp_hi = (uint32_t)(expected_noc >> 32);
 
-    DPRINT << "[RX] wait sem=0x" << HEX() << sem_addr << " noc=0x" << exp_hi << "_" << exp_lo << DEC()
-           << " expect=" << expected_value << " core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ")\n";
-
     noc_semaphore_wait(sem_ptr, expected_value);
-    DPRINT << "[RX] done; sem >= " << expected_value << "\n";
 }

@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
 
@@ -20,19 +19,14 @@ void kernel_main() {
 
     const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/PAGE_SIZE);
 
-    DPRINT << "[RD] start, src_base=0x" << HEX() << src_base << " num_pages=" << DEC() << NUM_PAGES
-           << " page_size=" << PAGE_SIZE << "\n";
-
     for (uint32_t i = 0; i < NUM_PAGES; ++i) {
         cb_reserve_back(CB_ID, 1);
         uint32_t l1_dst = get_write_ptr(CB_ID);
 
         uint64_t src_noc = src_acc.get_noc_addr(i);
-        DPRINT << "[RD] page " << i << " noc=0x" << HEX() << (uint32_t)(src_noc & 0xffffffffu) << "\n";
         noc_async_read(src_noc, l1_dst, PAGE_SIZE);
         noc_async_read_barrier();
 
         cb_push_back(CB_ID, 1);
-        DPRINT << "[RD] pushed page " << i << " into CB\n";
     }
 }
