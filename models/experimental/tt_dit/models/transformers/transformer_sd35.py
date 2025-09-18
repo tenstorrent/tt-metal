@@ -23,7 +23,6 @@ class SD35TransformerBlock:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        init=False,
         padding_config=None,
     ):
         assert not use_dual_attention, "Expecting not dual attention"
@@ -44,7 +43,6 @@ class SD35TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_norm = DistributedLayerNorm(
             dim,
@@ -54,7 +52,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         # TODO: Shuffle norm linear weights to match tensor parallelism
@@ -65,7 +62,6 @@ class SD35TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -75,7 +71,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.attn = SD35JointAttention(
@@ -87,7 +82,6 @@ class SD35TransformerBlock:
             context_pre_only=context_pre_only,
             eps=1e-6,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
@@ -101,7 +95,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.ff = ParallelFeedForward(
@@ -111,7 +104,6 @@ class SD35TransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.norm2_context = None
@@ -126,7 +118,6 @@ class SD35TransformerBlock:
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
-                init=init,
             )
             self.ff_context = ParallelFeedForward(
                 dim=dim,
@@ -135,7 +126,6 @@ class SD35TransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -411,7 +401,6 @@ class SD35Transformer2DModel:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        init=False,
         padding_config=None,
     ):
         self.sample_size = sample_size
@@ -444,14 +433,12 @@ class SD35Transformer2DModel:
             mesh_device=mesh_device,
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             sp_mesh_axis=parallel_config.sequence_parallel.mesh_axis,
-            init=init,
         )
 
         self.time_text_embed = SD35CombinedTimestepTextProjEmbeddings(
             embedding_dim=self.inner_dim,
             pooled_projection_dim=pooled_projection_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.context_embedder = ColParallelLinear(
@@ -460,7 +447,6 @@ class SD35Transformer2DModel:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Transformer blocks
@@ -476,18 +462,15 @@ class SD35Transformer2DModel:
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
-                init=init,
             )
             self.transformer_blocks.append(block)
 
         # Output normalization and projection
-        self.norm_out_linear = Linear(self.inner_dim, 2 * self.inner_dim, mesh_device=mesh_device, init=init)
+        self.norm_out_linear = Linear(self.inner_dim, 2 * self.inner_dim, mesh_device=mesh_device)
         self.norm_out_norm = LayerNorm(
-            self.inner_dim, norm_elementwise_affine=False, norm_eps=1e-6, mesh_device=mesh_device, init=init
+            self.inner_dim, norm_elementwise_affine=False, norm_eps=1e-6, mesh_device=mesh_device
         )
-        self.proj_out = Linear(
-            self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device, init=init
-        )
+        self.proj_out = Linear(self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device)
 
         self.hifi_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),

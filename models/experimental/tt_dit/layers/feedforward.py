@@ -20,7 +20,6 @@ class FeedForward:
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
-        init=False,
     ):
         if inner_dim is None:
             inner_dim = int(dim * mult)
@@ -32,8 +31,8 @@ class FeedForward:
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn, init=init)
-        self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device, init=init)
+        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
+        self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
     def to_cached_state_dict(self, path_prefix):
         ff1_cache = self.ff1.to_cached_state_dict(path_prefix + "ff1.")
@@ -77,7 +76,6 @@ class ParallelFeedForward:
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
-        init=False,
     ):
         if inner_dim is None:
             inner_dim = int(dim * mult)
@@ -103,7 +101,6 @@ class ParallelFeedForward:
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
         self.ff2 = RowParallelLinear(
             inner_dim,
@@ -113,7 +110,6 @@ class ParallelFeedForward:
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
     def to_cached_state_dict(self, path_prefix):

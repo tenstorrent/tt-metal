@@ -9,9 +9,7 @@ from ..utils.tensor import bf16_tensor
 
 
 class RMSNorm:
-    def __init__(
-        self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None, init=False
-    ):
+    def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
@@ -19,10 +17,6 @@ class RMSNorm:
         self.use_bias = bias
         self.weight = None
         self.bias = None
-        if norm_elementwise_affine and init:
-            self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
-            if bias:
-                self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
     def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
@@ -67,7 +61,6 @@ class LayerNorm:
         norm_elementwise_affine=True,
         bias=True,
         mesh_device=None,
-        init=False,
         use_row_major_workaround=False,  # Issue #20789
     ):
         self.embedding_dim = embedding_dim
@@ -79,7 +72,7 @@ class LayerNorm:
         self.weight = None
         self.bias = None
         # When using the row-major workaround, ensure that dummy weight/bias are created
-        if norm_elementwise_affine and init or use_row_major_workaround:
+        if use_row_major_workaround:
             if use_row_major_workaround:
                 self.weight = bf16_tensor(
                     torch.ones(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -169,7 +162,6 @@ class DistributedLayerNorm:
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
-        init=False,
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -182,7 +174,7 @@ class DistributedLayerNorm:
         self.bias = None
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        if init or not (norm_elementwise_affine and bias):
+        if not (norm_elementwise_affine and bias):
             if not (norm_elementwise_affine and bias):
                 pass  # TODO: make logging less noisy
                 # logger.debug(
