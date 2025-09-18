@@ -85,6 +85,27 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_but_fused_so_no_mop(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const bool transpose_of_faces = 0 /*not used*/) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
+    std::uint32_t address_b = base_address_b + offset_address_b;
+
+    WAYPOINT("UABW");
+    _llk_unpack_AB_but_fused_so_no_mop_<BType>(address_a, address_b, transpose_of_faces > 0);
+    WAYPOINT("UABD");
+}
+
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA,
