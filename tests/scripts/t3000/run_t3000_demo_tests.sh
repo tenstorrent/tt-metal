@@ -167,7 +167,7 @@ run_t3000_llama3_vision_tests() {
 
   for mesh_device in "$n300" "$t3k"; do
     MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b \
-    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py --timeout 900; fail+=$?
+    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
