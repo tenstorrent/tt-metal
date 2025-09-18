@@ -699,7 +699,8 @@ void MetalContext::assert_cores(chip_id_t device_id) {
         for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::BRISC;
+            // Assert all cores except ERISC0, which is running base firmware.
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         }
     }
@@ -886,7 +887,8 @@ void MetalContext::initialize_firmware(
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
             if (not is_idle_eth) {
-                reset_val &= ~tt::umd::RiscType::BRISC;
+                // On idle eth, don't assert ERISC0, which is running base firmware.
+                reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -1229,7 +1231,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val &= tt::umd::RiscType::ERISC1;
+            reset_val |= tt::umd::RiscType::ERISC1;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
