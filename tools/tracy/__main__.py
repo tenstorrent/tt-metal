@@ -286,7 +286,7 @@ def main():
                 tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
                 traces_dir = PROFILER_WASM_TRACES_DIR
                 # Use timestamp, optional name_append, and a short form of the tested command for uniqueness
-                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                timestamp = datetime.datetime.now().strftime("_%Y_%m_%d_%H_%M_%S")
                 name_part = f"_{options.name_append}" if options.name_append else ""
                 # Short form of the command being tested (first arg, basename, no extension)
                 cmd_short = ""
@@ -295,8 +295,8 @@ def main():
                     cmd_short = os.path.splitext(cmd_base)[0]
                     # Sanitize for filename
                     cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
-                    cmd_short = f"_{cmd_short}"
-                tracy_dst = traces_dir / f"trace_{timestamp}{cmd_short}{name_part}.tracy"
+                    cmd_short = f"{cmd_short}"
+                tracy_dst = traces_dir / f"{cmd_short}{name_part}{timestamp}.tracy"
                 logger.info(f"Copying {tracy_src} to {tracy_dst}")
                 try:
                     copyfile(tracy_src, tracy_dst)
