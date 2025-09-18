@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -133,15 +134,44 @@ class Transformer(LightweightModule):
         )
 
         # self.attn_mask = attn_mask
-        attn_mask_torch = torch.full([1, 32, args.max_seq_len, args.max_seq_len], -1e9, dtype=torch.float32)
-        for i in range(args.max_seq_len):
-            attn_mask_torch[..., i, max(0, i - 512) : min(args.max_seq_len, i + 512 + 1)] = 0
-        self.tt_attn_mask = ttnn.from_torch(
-            attn_mask_torch,
+        # attn_mask_torch = torch.full([1, 32, args.max_seq_len, args.max_seq_len], -1e9, dtype=torch.float32)
+        # for i in range(args.max_seq_len):
+        #     attn_mask_torch[..., i, max(0, i - 512) : min(args.max_seq_len, i + 512 + 1)] = 0
+        # self.tt_attn_mask = ttnn.from_torch(
+        #     attn_mask_torch,
+        #     device=self.mesh_device,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+        # )
+        self.max_seq_len = args.max_seq_len
+        self.attn_mask_pre_rot = torch.concat(
+            [
+                torch.zeros([1, 1, 32, args.sliding_window], dtype=torch.bfloat16),
+                torch.full([1, 1, 32, args.max_seq_len], -1e9, dtype=torch.bfloat16),
+            ],
+            dim=-1,
+        )
+        self.attn_mask_pre_rot_ttnn = ttnn.from_torch(
+            self.attn_mask_pre_rot,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=2),
+        )
+        a = [
+            [1 if i == c else 0 for i in range(self.attn_mask_pre_rot.shape[-1])]
+            for c in range(self.attn_mask_pre_rot.shape[-1] - 1)
+        ]
+        self.attn_mask_rot_mat = torch.tensor(
+            [[0] * (self.attn_mask_pre_rot.shape[-1] - 1) + [1]] + a, dtype=torch.bfloat16
+        )
+        self.attn_mask_rot_mat_ttnn = ttnn.from_torch(
+            self.attn_mask_rot_mat.transpose(0, 1),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
@@ -264,29 +294,29 @@ class Transformer(LightweightModule):
                 ),
             )
 
-        attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
+        # attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
 
-        attention_mask = [
-            create_sliding_window_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-            create_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-        ]
-        return tokens, current_pos_tt, rope_idxs, page_table, attention_mask
+        # attention_mask = [
+        #     create_sliding_window_causal_mask(
+        #         tokens,
+        #         attn_mask,
+        #         current_pos,
+        #         self.args,
+        #         self.paged_attention_config,
+        #         device=self.mesh_device,
+        #         mode="decode",
+        #     ),
+        #     create_causal_mask(
+        #         tokens,
+        #         attn_mask,
+        #         current_pos,
+        #         self.args,
+        #         self.paged_attention_config,
+        #         device=self.mesh_device,
+        #         mode="decode",
+        #     ),
+        # ]
+        return tokens, current_pos_tt, rope_idxs, page_table  # , attention_mask
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -399,12 +429,14 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        logger.info(f"Begin ttnn_decode_forward...")
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = (
             self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") is not None else None
         )
         x_embed = self._transform_decode_inputs_device(x)
-
+        attn_mask = ttnn.matmul(self.attn_mask_pre_rot_ttnn, self.attn_mask_rot_mat_ttnn)[..., -self.max_seq_len :]
+        # attn_mask = ttnn.matmul(self.attn_mask_pre_rot_ttnn, self.attn_mask_rot_mat_ttnn)
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -477,11 +509,12 @@ class Transformer(LightweightModule):
                 x = ttnn.typecast(x, activation_dtype)
 
             if attn_mask is not None:
-                attn_mask_i = (
-                    attn_mask[0]
-                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else attn_mask[1]
-                )
+                # attn_mask_i = (
+                #     attn_mask[0]
+                #     if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
+                #     else attn_mask[1]
+                # )
+                attn_mask_i = attn_mask
             else:
                 attn_mask_i = None
             x = layer(
