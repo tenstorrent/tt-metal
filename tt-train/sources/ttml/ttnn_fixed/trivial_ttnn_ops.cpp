@@ -84,15 +84,15 @@ tt::tt_metal::Tensor sample(
 
     if (temperature > 0.0F) {
         auto rand = ttnn::rand(
-            ttnn::DefaultQueueId,
-            out.logical_shape(),
-            *device,
-            out.dtype(),
-            out.layout(),
-            ttnn::types::DRAM_MEMORY_CONFIG,
-            0.00001F,
-            0.99F,
-            ttml::autograd::ctx().get_generator()());
+            ttnn::DefaultQueueId,                      // queue ID
+            out.logical_shape(),                       // tensor shape
+            *device,                                   // MeshDevice
+            out.dtype(),                               // tensor datatype
+            out.layout(),                              // tensor layout
+            ttnn::types::DRAM_MEMORY_CONFIG,           // tensor memory config
+            0.00001F,                                  // minimum value
+            0.99F,                                     // maximum value
+            ttml::autograd::ctx().get_generator()());  // seed
 
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
         out = ttnn::mul_sfpu(out, 1.0F / (temperature > 0.0F ? temperature : 1.0F));
