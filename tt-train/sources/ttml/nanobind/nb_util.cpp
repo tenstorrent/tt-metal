@@ -140,13 +140,14 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
     TT_THROW("Unsupported type: unknown");
 }
 
-tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data, std::optional<tt::tt_metal::DataType> new_type) {
+tt::tt_metal::Tensor make_metal_tensor(
+    nb::ndarray<> data, std::optional<tt::tt_metal::DataType> new_type, bool row_major) {
     const auto data_type = data.dtype();
     TT_FATAL(!(data_type.bits % 8), "Unsupported precision: {} bits", data_type.bits);
 
     const auto rank = data.ndim();
 
-    const auto impl = [&data_type, rank, &data]<typename T>(tt::tt_metal::DataType tensor_data_type) {
+    const auto impl = [&data_type, rank, &data, row_major]<typename T>(tt::tt_metal::DataType tensor_data_type) {
         using U = std::remove_cvref_t<T>;
         const auto types_match = [](tt::tt_metal::DataType dt) {
             switch (dt) {
@@ -197,6 +198,9 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data, std::optional<tt::tt_
         if (types_match(tensor_data_type)) {
             auto tensor = tt::tt_metal::Tensor::from_span(
                 ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
+            if (row_major) {
+                return tensor.to_device(device, tensor_memory_config);
+            }
             auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);
 
             return padded_tensor.to_device(device, tensor_memory_config);
@@ -206,6 +210,9 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data, std::optional<tt::tt_
             std::vector<Type> new_data;
             new_data.assign(data_span.begin(), data_span.end());
             auto tensor = tt::tt_metal::Tensor::from_vector(new_data, tensor_spec, device);
+            if (row_major) {
+                return tensor.to_device(device, tensor_memory_config);
+            }
             auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);
 
             return padded_tensor.to_device(device, tensor_memory_config);
