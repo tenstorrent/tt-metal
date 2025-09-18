@@ -23,7 +23,7 @@ protected:
     }
 };
 
-TEST_F(SliceOpTest, SliceFailed) {
+TEST_F(SliceOpTest, Slice_BROKEN) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Use xarray of shape {1, 1, 32, 65}
