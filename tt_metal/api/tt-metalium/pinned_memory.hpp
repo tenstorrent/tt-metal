@@ -36,6 +36,11 @@ using chip_id_t = int;
  */
 class PinnedMemory {
 public:
+    struct NocAddr {
+        uint64_t addr;
+        chip_id_t device_id;
+    };
+
     ~PinnedMemory();
 
     // Move semantics
@@ -73,7 +78,7 @@ public:
      * @param device_id The device ID to get the NOC address for
      * @return Optional pair of (NOC address, MMIO chip ID) if buffer is mapped to NOC, nullopt otherwise
      */
-    std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
+    std::optional<NocAddr> get_noc_addr(chip_id_t device_id) const;
 
     /**
      * @brief Get the buffer size per device
