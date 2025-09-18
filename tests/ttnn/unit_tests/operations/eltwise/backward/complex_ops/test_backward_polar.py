@@ -15,7 +15,7 @@ from math import pi
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
 
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.unit_tests.operations.eltwise.backward.complex_ops.backward_complex_utility_funcs import (
     Complex,
     convert_to_torch_tensor,

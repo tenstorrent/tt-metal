@@ -20,7 +20,7 @@ from models.experimental.functional_common.attention_mask_functions import get_e
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,

@@ -8,7 +8,7 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 def prepare_conv_weights_func(
