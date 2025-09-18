@@ -25,9 +25,7 @@ std::shared_ptr<distributed::MeshBuffer> MakeBuffer(std::shared_ptr<distributed:
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? size : 1;
     const distributed::DeviceLocalBufferConfig device_local_config{
-        .page_size = page_tiles * tile_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
-        .bottom_up = false};
+        .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
     const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * size};
     return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 }
@@ -137,7 +135,7 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
-    // We're writing to a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     distributed::WriteShard(cq, a, a_data, device_coord);
     distributed::WriteShard(cq, b, b_data, device_coord);

@@ -34,13 +34,13 @@ There are two Data Movement cores per Tensix. For this example, we launch two id
 ```cpp
 KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+    "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
     core,
     DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default });
 
 KernelHandle void_dataflow_kernel_noc1_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+    "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
     core,
     DataMovementConfig{ .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default });
 ```

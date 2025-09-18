@@ -34,7 +34,7 @@ We create a simple compute kernel which prints from the three compute RISC-V cor
 ```cpp
 KernelHandle void_compute_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp",
+    "tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp",
     core,
     ComputeConfig{});
 ```

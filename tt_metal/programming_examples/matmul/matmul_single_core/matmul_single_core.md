@@ -103,19 +103,19 @@ We're using a special reader kernel to take in data from DRAM into L1, and a spe
 ``` cpp
 auto reader_id = tt_metal::CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
+    "tt_metal/programming_examples/matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
     core,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
 auto writer_id = tt_metal::CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
+    "tt_metal/programming_examples/matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
     core,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
 auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
+    "tt_metal/programming_examples/matmul/matmul_single_core/kernels/compute/mm.cpp",
     core,
     tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args}
 );

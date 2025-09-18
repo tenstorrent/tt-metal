@@ -24,18 +24,17 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize a MeshDevice:
     // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
-    // single object,
-    // maintaining uniform memory and runtime state across all physical devices.
-    // A UnitMesh is a 1x1 MeshDevice that allows users to interface with a single physical device.
+    // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
+    // MeshDevice that allows users to interface with a single physical device.
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
-    // Submitting work to a MeshDevice is done through a MeshCommandQueue.
-    // A MeshCommandQueue lets you enqueue uploads/downloads (buffer operations) and execute programs on the device.
+    // In Metalium, submitting operations to the device is done through a command queue. This includes
+    // uploading/downloading data to/from the device, and executing programs.
+    // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // A MeshWorkload groups one or more programs that will execute on a MeshDevice.
-    // The set of physical devices targeted by the workload is specified by a MeshCoordinateRange.
+    // A MeshWorkload is a collection of programs that are executed on a MeshDevice.
+    // The specific physical devices that the workload is executed on are determined by the MeshCoordinateRange.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A Program contains kernels that perform computations or data movement.

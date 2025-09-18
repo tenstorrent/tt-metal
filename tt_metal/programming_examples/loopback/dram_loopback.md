@@ -57,7 +57,7 @@ TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy
 TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
 auto dram_copy_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
+    "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
     core,
     DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = dram_copy_compile_time_args });
 ```

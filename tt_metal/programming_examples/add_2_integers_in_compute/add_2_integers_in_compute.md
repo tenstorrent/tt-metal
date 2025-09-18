@@ -36,7 +36,9 @@ distributed::ReplicatedBufferConfig distributed_buffer_config{
     .size = single_tile_size};
 ```
 
-We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the page_size and type of the buffer in the `DeviceLocalBufferConfig`. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an `m x n` mesh of devices. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
+We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the page_size and type of the buffer in the `DeviceLocalBufferConfig`. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
+
+Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
 
 ``` cpp
 auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
@@ -44,7 +46,7 @@ auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_confi
 auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
 ```
 
-Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. This is when we specify which device this buffer is on. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
+## Configure and Initialize Circular Buffers
 
 ``` cpp
 constexpr uint32_t num_tiles = 1;
@@ -65,13 +67,13 @@ L1 circular buffers will be used communicate data to and from the compute engine
 ``` cpp
 KernelHandle binary_reader_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
+    "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
     core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
 KernelHandle unary_writer_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
+    "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
     core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 ```
@@ -82,7 +84,7 @@ A kernel is initialized for each of these operations, with a unique RISC-V proce
 ``` cpp
 KernelHandle eltwise_binary_kernel_id = CreateKernel(
     program,
-    OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
+    "tt_metal/programming_examples/add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
     core,
     ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
 ```
