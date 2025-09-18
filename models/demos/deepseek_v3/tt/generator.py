@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -108,6 +107,12 @@ class DeepseekGenerator:
         self.single_layer = single_layer
         self._prepare_run_configs(cache_dir)
 
+        # Trace state (decode)
+        self._trace_id: int | None = None
+        self._trace_tokens: ttnn.Tensor | None = None
+        self._trace_positions: ttnn.Tensor | None = None
+        self._trace_output: ttnn.Tensor | None = None
+
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
         # if getattr(hf_config, "max_seq_len", None) is not None:
@@ -127,62 +132,66 @@ class DeepseekGenerator:
         hf_config.max_seq_len = 4096
 
     def _prepare_run_configs(self, cache_dir: str | Path | None) -> None:
-        cache_root = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
-        weights_out = cache_root / "weights"
-        weights_out.mkdir(parents=True, exist_ok=True)
-
-        if self.random_weights:
-            if self.single_layer and self.single_layer.lower() == "moe":
-                raise NotImplementedError(
-                    "Random weights with 'moe' single layer is not supported by Model1D demo yet. Use 'mlp' or disable random mode."
-                )
-            logger.info("Building random weights from HF reference model (ForCausalLM)...")
-            ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
-            # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
-            ref_model = ref_model.to(dtype=torch.bfloat16)
-            torch_state = ref_model.state_dict()
-            # Quantize MLP weights as expected by TT converters
-            torch_state = add_inv_scale_to_state_dict(
-                torch_state,
-                block_shape=self.hf_config.quantization_config["weight_block_size"],
-            )
-            stripped = _strip_model_prefix(torch_state)
-            model1d_state = {
-                k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
-                or k.startswith("lm_head.")
-            }
-        else:
-            logger.info("Loading HF weights (this may take a while)...")
-            hf_weights = load_model_weights(self.model_path)
-            logger.info("HF weights loaded")
-
-            # Split weight dicts for Model1D and LMHead
-            stripped = _strip_model_prefix(hf_weights)
-            if "lm_head.weight" not in stripped:
-                raise RuntimeError(
-                    "No HF safetensors found in model path or missing 'lm_head.weight'. "
-                    "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
-                )
-            model1d_state = {
-                k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
-                or k.startswith("lm_head.")
-            }
-
-        deepseek_cache_path = Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
+        # Resolve cache location and weight config path up-front.
         weights_type = "random" if self.random_weights else "real"
-        cache_dir = deepseek_cache_path / f"model_{self.hf_config.num_hidden_layers}_layers" / weights_type
+        cache_dir = Path(cache_dir) / f"model_{self.hf_config.num_hidden_layers}_layers" / weights_type
         tensor_cache_path = cache_dir / "ttnn_tensors_cache"
         weight_config_path = cache_dir / "weight_config.json"
-        # save this weight config to json file if it doesn't exist
-        if not weight_config_path.exists():
+
+        # Fast path: if cached weight_config exists, use it and SKIP HF load/convert entirely.
+        if weight_config_path.exists():
+            logger.info(f"Weight config found at {weight_config_path}, loading existing one (skipping HF load).")
+            with open(weight_config_path, "r") as f:
+                self.model1d_weight_config = json.load(f)
+            logger.info(f"Loaded weight config from {weight_config_path}")
+        else:
+            # Cache miss: build weights and create cache + config
+            logger.info(f"Building weights and creating cache + config at {cache_dir}")
+            if self.random_weights:
+                if self.single_layer and self.single_layer.lower() == "moe":
+                    raise NotImplementedError(
+                        "Random weights with 'moe' single layer is not supported by Model1D demo yet. Use 'mlp' or disable random mode."
+                    )
+                logger.info("Building random weights from HF reference model (ForCausalLM)...")
+                ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
+                # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
+                ref_model = ref_model.to(dtype=torch.bfloat16)
+                torch_state = ref_model.state_dict()
+                # Quantize MLP weights as expected by TT converters
+                torch_state = add_inv_scale_to_state_dict(
+                    torch_state,
+                    block_shape=self.hf_config.quantization_config["weight_block_size"],
+                )
+                stripped = _strip_model_prefix(torch_state)
+                model1d_state = {
+                    k: v
+                    for k, v in stripped.items()
+                    if k.startswith("embed_tokens.")
+                    or k.startswith("layers.")
+                    or k.startswith("norm.")
+                    or k.startswith("lm_head.")
+                }
+            else:
+                logger.info("Loading HF weights (this may take a while)...")
+                hf_weights = load_model_weights(self.model_path)
+                logger.info("HF weights loaded")
+
+                # Split weight dicts for Model1D and LMHead
+                stripped = _strip_model_prefix(hf_weights)
+                if "lm_head.weight" not in stripped:
+                    raise RuntimeError(
+                        "No HF safetensors found in model path or missing 'lm_head.weight'. "
+                        "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
+                    )
+                model1d_state = {
+                    k: v
+                    for k, v in stripped.items()
+                    if k.startswith("embed_tokens.")
+                    or k.startswith("layers.")
+                    or k.startswith("norm.")
+                    or k.startswith("lm_head.")
+                }
+
             logger.info(f"Weight config not found at {weight_config_path}, creating new one.")
             self.model1d_weight_config = Model1D.convert_weights(
                 self.hf_config, model1d_state, tensor_cache_path, self.mesh_device
@@ -190,23 +199,19 @@ class DeepseekGenerator:
             with open(weight_config_path, "w") as f:
                 json.dump(self.model1d_weight_config, f)
             logger.info(f"Saved weight config to {weight_config_path}")
-        else:
-            logger.info(f"Weight config found at {weight_config_path}, loading existing one.")
-            with open(weight_config_path, "r") as f:
-                self.model1d_weight_config = json.load(f)
-            logger.info(f"Loaded weight config from {weight_config_path}")
 
+        logger.info(f"Creating decode model config")
         model_decode_cfg = Model1D.decode_model_config(self.hf_config, self.mesh_device)
-        logger.info("Model decode config created")
+        logger.info(f"Creating state")
         model_state = Model1D.create_state(
             self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
         )
-        logger.info("States created")
+        logger.info(f"Creating shared state")
         model_shared_state = Model1D.create_shared_state(self.hf_config, self.mesh_device)
-        logger.info("Shared states created")
 
+        logger.info(f"Creating run config")
         self.model1d_run_config = create_run_config(
-            model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state
+            model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state, show_progress=True
         )
         logger.info("Run config is ready")
 
@@ -262,6 +267,154 @@ class DeepseekGenerator:
 
         return logits  # [1, 1, B, V]
 
+    def _read_logits_host(self, tt_logits: ttnn.Tensor) -> torch.Tensor:
+        """Convert device logits [1, 1, B, V] to torch [B, V]."""
+        pt_logits = ttnn.to_torch(tt_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
+        return pt_logits.squeeze(0).squeeze(0)
+
+    def _capture_decode_trace(self, init_tokens: torch.Tensor, positions: torch.Tensor) -> None:
+        """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
+        assert self._trace_id is None, "Trace already captured"
+
+        # 1) Warm-up compile run (no trace) to keep compilation out of capture
+        _ = self._decode_step(init_tokens, positions)
+
+        # 2) Allocate persistent device inputs
+        # Tokens buffer shape [1, 1, B]
+        torch_input = init_tokens.view(1, 1, -1).to(torch.int32)
+        self._trace_tokens = ttnn.from_torch(
+            torch_input,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # Positions buffer shape [B]
+        self._trace_positions = ttnn.from_torch(
+            positions.to(torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.mesh_device.shape),
+            dtype=ttnn.int32,
+        )
+
+        # 3) Capture decode graph
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        rope_tensors = self.rope.get_rot_mats(self._trace_positions)
+        self._trace_output = Model1D.forward_decode(
+            self._trace_tokens,
+            self._trace_positions,
+            {"cos_matrix": rope_tensors[0], "sin_matrix": rope_tensors[1], "trans_matrix": rope_tensors[2]},
+            self.page_table_tt,
+            self.model1d_run_config,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        self._trace_id = trace_id
+
+    # Align with tt_transformers: provide decode_forward_text and compatible helpers
+    def read_decode_output(self, tt_out: ttnn.Tensor, async_read: bool = False):
+        if not async_read:
+            return self._read_logits_host(tt_out)
+        # Async path: best-effort stub (returns host tensor, event None)
+        return self._read_logits_host(tt_out), None
+
+    def process_decode_output_host(self, to_host: torch.Tensor, is_tokens: bool = False):
+        # Our host tensors are already [B, V] logits; return as-is
+        return to_host
+
+    def decode_forward_text(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
+        sampling_params: SamplingParams | None = None,
+    ):
+        # Delegate to our decode_forward; ignore page_table/kv_cache which are not used in Model1D path
+        logits_or_tt = self.decode_forward(
+            tokens, start_pos, enable_trace=enable_trace, read_from_device=read_from_device
+        )
+        if read_from_device:
+            # If requested tokens on device (temperature==0), return tokens instead of logits
+            if sampling_params is not None and getattr(sampling_params, "temperature", 0) == 0:
+                return torch.argmax(logits_or_tt, dim=-1)
+            return logits_or_tt
+        return logits_or_tt
+
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots=None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Emulate prefill by iterating decode steps over the prompt tokens.
+
+        tokens: [B, S]
+        prompt_lens: optional [B] lengths; if None, uses full S
+        Returns logits for the last token: [B, V]
+        """
+        B, S = tokens.shape
+        positions = torch.zeros(B, dtype=torch.int32)
+        last_logits = None
+        if prompt_lens is None:
+            prompt_lens = torch.full((B,), S, dtype=torch.int32)
+
+        max_len = int(prompt_lens.max().item())
+        for step in range(max_len):
+            # Use token at 'step' for all users; if step exceeds S-1, clamp to last column
+            step_tokens = tokens[:, min(step, S - 1)]
+            last_logits = self.decode_forward(step_tokens, positions, enable_trace=False, read_from_device=True)
+            positions += 1
+        assert last_logits is not None
+        return last_logits
+
+    def decode_forward(
+        self,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        *,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
+    ) -> torch.Tensor | ttnn.Tensor:
+        """Run a single decode iteration.
+
+        - If enable_trace is True, lazily capture a trace on first call and then execute the trace.
+        - If enable_trace is False, run without trace (allocates per call).
+
+        Inputs:
+          tokens_step: torch int tensor [B]
+          positions: torch int tensor [B]
+        Returns logits as torch [B, V] if read_from_device else device tensor handle.
+        """
+        if not enable_trace:
+            logits_tt_or = self._decode_step(tokens_step, positions)
+            return self._read_logits_host(logits_tt_or) if read_from_device else logits_tt_or
+
+        # Trace path
+        if self._trace_id is None:
+            self._capture_decode_trace(tokens_step, positions)
+            # First call: return the captured run's output
+            assert self._trace_output is not None
+            return self._read_logits_host(self._trace_output) if read_from_device else self._trace_output
+
+        # Update persistent inputs and execute
+        assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
+        # Update tokens [1, 1, B]
+        torch_input = tokens_step.view(1, 1, -1).to(torch.int32)
+        ttnn.copy_host_to_device_tensor(torch_input, self._trace_tokens)
+        # Update positions [B]
+        ttnn.copy_host_to_device_tensor(positions.to(torch.int32), self._trace_positions)
+
+        ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+        assert self._trace_output is not None
+        return self._read_logits_host(self._trace_output) if read_from_device else self._trace_output
+
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         # logits: [1, 1, B, V]
         return torch.argmax(logits[0, 0], dim=-1)  # [B]
@@ -289,6 +442,8 @@ class DeepseekGenerator:
         max_new_tokens: int = 32,
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
+        enable_trace: bool = False,
+        profiler=None,
     ) -> List[List[int]]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -301,14 +456,31 @@ class DeepseekGenerator:
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded)  # [MAX_BATCH_SIZE, S]
 
-        # Prefill via repeated decode steps over prompt tokens
+        # Prefill via repeated decode steps over prompt tokens (do not trace prefill)
+        if profiler is not None:
+            # Placeholders to keep summary uniform with traced path
+            try:
+                profiler.start("compile_prefill")
+                profiler.end("compile_prefill")
+            except Exception:
+                pass
+            try:
+                profiler.start("inference_prefill")
+            except Exception:
+                pass
         B = MAX_BATCH_SIZE
         positions = torch.zeros(B, dtype=torch.int32)
         last_logits = None
         for step in range(tokens_batched.shape[1]):
             step_tokens = tokens_batched[:, step]  # [B]
-            last_logits = self._decode_step(step_tokens, positions)
+            # Always avoid tracing for the prefill emulation
+            last_logits = self.decode_forward(step_tokens, positions, enable_trace=False, read_from_device=True)
             positions += 1
+        if profiler is not None:
+            try:
+                profiler.end("inference_prefill")
+            except Exception:
+                pass
 
         assert last_logits is not None
         # First sampled token after prompt
@@ -321,9 +493,30 @@ class DeepseekGenerator:
 
         generations: List[List[int]] = [[] for _ in range(len(prompts))]
         logger.info("Generating: ")
+        if profiler is not None:
+            try:
+                profiler.start("inference_decode")
+            except Exception:
+                pass
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
-            logits = self._decode_step(next_tokens, positions)
+            if profiler is not None:
+                try:
+                    if enable_trace and gen_idx == 0:
+                        profiler.start("compile_decode")
+                    else:
+                        profiler.start(f"inference_decode_time_{gen_idx + 1}")
+                except Exception:
+                    pass
+            logits = self.decode_forward(next_tokens, positions, enable_trace=enable_trace, read_from_device=True)
+            if profiler is not None:
+                try:
+                    if enable_trace and gen_idx == 0:
+                        profiler.end("compile_decode")
+                    else:
+                        profiler.end(f"inference_decode_time_{gen_idx + 1}")
+                except Exception:
+                    pass
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -337,6 +530,11 @@ class DeepseekGenerator:
                 print(self.tokenizer.decode(int(next_tokens[i].item()), skip_special_tokens=True), end="", flush=True)
 
         print("\n", flush=True)
+        if profiler is not None:
+            try:
+                profiler.end("inference_decode")
+            except Exception:
+                pass
         logger.info("Done generating tokens")
         return generations
 
