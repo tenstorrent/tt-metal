@@ -6,6 +6,9 @@
 
 #include <cstring>
 
+#include <random>
+#include <chrono>
+
 #include <tt_stl/aligned_allocator.hpp>
 #include "assert.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -456,13 +459,16 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
 template <bool hugepage_write>
 template <bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_host(
-    bool flush_prefetch, uint64_t data_sizeB, bool is_event, const void* data) {
+    bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data) {
     uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
     auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
         write_cmd->write_linear_host.is_event = is_event;
+        // This padding value is checked on the host side for event commands.
+        write_cmd->write_linear_host.pad1 = pad1;
+        write_cmd->write_linear_host.pad2 = DeviceCommand::random_padding_value();
         write_cmd->write_linear_host.length =
             sizeof(CQDispatchCmd) +
             data_sizeB;  // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
@@ -977,6 +983,18 @@ void DeviceCommand<hugepage_write>::memcpy(void* __restrict dst, const void* __r
     }
 }
 
+static uint32_t random_padding_value_cached = []() {
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<uint32_t> dist(1u, 0xFFFFFFFFu);
+    return dist(gen);
+}();
+
+template <bool hugepage_write>
+uint32_t DeviceCommand<hugepage_write>::random_padding_value() {
+    return random_padding_value_cached;
+}
+
 // clang-format off
 template class DeviceCommand<true>;
 template class DeviceCommand<false>;
@@ -993,10 +1011,10 @@ template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePack
 template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
 template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
 
-template void DeviceCommand<true>::add_dispatch_write_host<false>(bool, uint64_t, bool, const void*);
-template void DeviceCommand<true>::add_dispatch_write_host<true>(bool, uint64_t, bool, const void*);
-template void DeviceCommand<false>::add_dispatch_write_host<false>(bool, uint64_t, bool, const void*);
-template void DeviceCommand<false>::add_dispatch_write_host<true>(bool, uint64_t, bool, const void*);
+template void DeviceCommand<true>::add_dispatch_write_host<false>(bool, uint64_t, bool, uint16_t, const void*);
+template void DeviceCommand<true>::add_dispatch_write_host<true>(bool, uint64_t, bool, uint16_t, const void*);
+template void DeviceCommand<false>::add_dispatch_write_host<false>(bool, uint64_t, bool, uint16_t, const void*);
+template void DeviceCommand<false>::add_dispatch_write_host<true>(bool, uint64_t, bool, uint16_t, const void*);
 
 template void DeviceCommand<true>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
