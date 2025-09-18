@@ -33,7 +33,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
+    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     if (not can_deallocate(input_tensor)) {
         // TODO: Should this throw error?
@@ -47,16 +47,12 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
         DeallocateBuffer(*input_tensor.buffer());
     }
 
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_tensor.dtype(),
-                PageConfig(input_tensor.layout()),
-                output_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+    if (mem_config) {
+        output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
+    auto output_mem_config = output_tensor.memory_config();
 
     // get_parallelization_strategy
     bool move_within_same_mem_space = input_mem_config.buffer_type() == output_mem_config.buffer_type();
@@ -124,11 +120,8 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 static inline Tensor move_sharded(
     QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
-    TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
-    TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
     if (not can_deallocate(input_tensor)) {
         TT_FATAL(
             false,
@@ -137,10 +130,9 @@ static inline Tensor move_sharded(
         // TODO: Should this throw error?
         return {input_tensor};
     }
+
     auto shard_spec = input_tensor.shard_spec().value();
     auto shard_grid = shard_spec.grid;
-    auto input_dtype = input_tensor.dtype();
-    auto input_layout = input_tensor.layout();
     // Special handling for Mesh vs single device. Needs to be consolidated after full
     // migration
 
@@ -149,18 +141,15 @@ static inline Tensor move_sharded(
     } else {
         DeallocateBuffer(*input_tensor.buffer());
     }
-    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto shard_mem_config = output_mem_config.with_shard_spec(shard_spec);
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_dtype,
-                PageConfig(input_layout),
-                shard_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+
+    auto output_tensor_spec = input_tensor.tensor_spec();
+    if (mem_config) {
+        TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
+        auto output_mem_config = mem_config->with_shard_spec(shard_spec);
+        output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         log_debug(
             tt::LogOp,
@@ -170,7 +159,8 @@ static inline Tensor move_sharded(
     }
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
     return operation::run(
-               MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor})
+               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
+               {input_tensor, output_tensor})
         .at(0);
 }
 
