@@ -179,18 +179,18 @@ class TransformerBlock(Module):
             if "bias" in linear_state:
                 linear_state["bias"] = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim).squeeze()
 
-        state["norm1_linear"] = state.get("norm1", {}).pop("linear", {})
-        state["norm1_norm"] = state.get("norm1", {}).pop("norm", {})
-        state["norm1_context_linear"] = state.get("norm1_context", {}).pop("linear", {})
-        state["norm1_context_norm"] = state.get("norm1_context", {}).pop("norm", {})
+        state["norm1_linear"] = state.get("norm1", {}).pop("linear")
+        state["norm1_norm"] = state.get("norm1", {}).pop("norm")
+        state["norm1_context_linear"] = state.get("norm1_context", {}).pop("linear")
+        state["norm1_context_norm"] = state.get("norm1_context", {}).pop("norm")
 
         state["ff"] = {
-            "ff1": state.get("ff", {}).get("net", {}).get("0", {}).pop("proj", {}),
-            "ff2": state.get("ff", {}).get("net", {}).pop("2", {}),
+            "ff1": state.get("ff", {}).get("net", {}).get("0", {}).pop("proj"),
+            "ff2": state.get("ff", {}).get("net", {}).pop("2"),
         }
         state["ff_context"] = {
-            "ff1": state.get("ff_context", {}).get("net", {}).get("0", {}).pop("proj", {}),
-            "ff2": state.get("ff_context", {}).get("net", {}).pop("2", {}),
+            "ff1": state.get("ff_context", {}).get("net", {}).get("0", {}).pop("proj"),
+            "ff2": state.get("ff_context", {}).get("net", {}).pop("2"),
         }
 
         if "norm1_linear" in state:

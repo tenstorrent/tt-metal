@@ -129,7 +129,7 @@ class Attention(Module):
             )
 
         if "to_out" in state:
-            state["to_out"] = pad_dense_out(state.pop("to_out")["0"])
+            state["to_out"] = pad_dense_out(state.get("to_out", {}).pop("0"))
 
         if "to_add_out" in state:
             state["to_add_out"] = pad_dense_out(state.pop("to_add_out"))

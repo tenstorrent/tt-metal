@@ -203,7 +203,7 @@ def _flatten_state_dict(nested: Mapping[str, Any], *, prefix: str = "") -> dict[
         child_key = f"{prefix}.{k}" if prefix else k
         if isinstance(v, Mapping):
             state_dict.update(_flatten_state_dict(v, prefix=child_key))
-        else:
+        elif v is not None:
             state_dict[child_key] = v
 
     return state_dict
