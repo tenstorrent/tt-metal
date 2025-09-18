@@ -4,7 +4,7 @@
 
 import torch
 
-from models.tt_transformers.tt.model_config import HfAttentionWrapper
+from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 
 
 def _extract_dtype_from_state_dict(model):
@@ -29,8 +29,11 @@ def get_ref_model_dype(ref_model, model_name):
     try:
         models_to_check = []
         if isinstance(ref_model, HfAttentionWrapper):
-            # HfAttentionWrapper is a wrapper around a HuggingFace model
-            models_to_check = [ref_model.model, ref_model.attention, ref_model.decoder]
+            models_to_check.append(ref_model.attention)
+        elif isinstance(ref_model, HfDecoderWrapper):
+            models_to_check.append(ref_model.decoder)
+        elif isinstance(ref_model, HfModelWrapper):
+            models_to_check.append(ref_model.model)
         else:
             models_to_check = [ref_model]
 
@@ -50,8 +53,6 @@ def get_ref_model_dype(ref_model, model_name):
         if "mistral-7b" in model_name_lower:
             return torch.bfloat16
         if "llama" in model_name_lower:
-            return torch.bfloat16
-        if "phi-3-mini" in model_name_lower:
             return torch.bfloat16
 
     return default_dype

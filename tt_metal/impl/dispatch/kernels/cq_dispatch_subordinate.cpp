@@ -55,6 +55,12 @@ static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
 
+extern "C" {
+// These variables are used by triage to help report dispatcher state.
+volatile uint32_t last_wait_count = 0;
+volatile uint32_t last_wait_stream = 0;
+}
+
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
@@ -137,6 +143,8 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+    last_wait_count = wait_count;
+    last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {

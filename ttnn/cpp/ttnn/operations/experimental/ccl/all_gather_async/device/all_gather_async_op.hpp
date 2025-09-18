@@ -19,6 +19,7 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -69,9 +70,9 @@ struct AllGatherAsync {
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
@@ -209,6 +210,24 @@ Tensor all_gather_async(
     bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+
+// same as above but for vector of mesh
+std::vector<Tensor> all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t dim,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
+    bool use_optimal_ccl_for_llama = false,
+    const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);

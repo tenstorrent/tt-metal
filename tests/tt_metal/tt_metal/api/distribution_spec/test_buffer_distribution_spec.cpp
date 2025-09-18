@@ -132,9 +132,9 @@ INSTANTIATE_TEST_SUITE_P(
             },
             MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}, {0, 2}, {1, 2}, {2, 2}, {3, 2}, {0, 3}, {1, 3}, {2, 3}, {3, 3}},
-                .num_cores = 16,
-                .num_dev_pages = 10 * 16,  // Shard shape is 10 pages
-                .aligned_size = 2048 * 160,
+                .num_cores = 6,
+                .num_dev_pages = 10 * 6,  // Shard shape is 10 pages
+                .aligned_size = 2048 * 60,
                 .aligned_size_per_bank = 2048 * 10,
             },
         },
@@ -152,9 +152,9 @@ INSTANTIATE_TEST_SUITE_P(
             },
             MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}, {2, 2}, {2, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}},
-                .num_cores = 16,
-                .num_dev_pages = 384 * 16,  // Shard shape is 384 pages
-                .aligned_size = 256 * 6144,
+                .num_cores = 4,
+                .num_dev_pages = 384 * 4,  // Shard shape is 384 pages
+                .aligned_size = 256 * 1536,
                 .aligned_size_per_bank = 256 * 384,
             },
         },
