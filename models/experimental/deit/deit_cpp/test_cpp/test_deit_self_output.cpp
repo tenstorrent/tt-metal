@@ -153,8 +153,6 @@ void test_deit_self_output_inference(const std::string& model_path) {
         std::cout << "Test FAILED! PCC: " << pcc << " (threshold: " << pcc_threshold << ")" << std::endl;
     }
 
-    // Device cleanup is handled automatically by MeshDevice
-    device->close();
 }
 
 } // anonymous namespace
@@ -163,7 +161,7 @@ int main(int argc, char** argv) {
     std::cout << "Starting DeiT Self Output test..." << std::endl;
     
     // Default model path (relative path)
-    std::string model_path = "../deit_model/deit_encoder_model.pt";
+    std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
     
     // Check if model path is provided as command line argument
     if (argc > 1) {

@@ -49,7 +49,7 @@ public:
         std::unordered_map<std::string, torch::Tensor>& state_dict,
         const std::string& base_address,
         std::shared_ptr<ttnn::MeshDevice> device,
-        bool add_pooling_layer = true,
+        bool add_pooling_layer = false,
         bool use_mask_token = false
     );
 

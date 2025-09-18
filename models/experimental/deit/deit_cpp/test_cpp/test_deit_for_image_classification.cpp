@@ -66,25 +66,13 @@ load_deit_image_classification_model(const std::string& model_path) {
         
         std::cout << "Successfully loaded model from: " << model_path << std::endl;
         
-        // Load model parameters to state_dict
-        std::vector<std::string> required_params = {
-            "classifier.weight", "classifier.bias"
-        };
-        
-        // Use named_parameters() method to get parameters
+        // Load all model parameters to state_dict
         auto named_params = model.named_parameters();
-        std::unordered_map<std::string, at::Tensor> param_map;
         for (const auto& pair : named_params) {
-            param_map[pair.name] = pair.value;
-        }
-
-        for (const auto& required : required_params) {
-            if (param_map.find(required) != param_map.end()) {
-                state_dict[required] = param_map[required];
-            }
+            state_dict[pair.name] = pair.value;
         }
         
-        std::cout << "Loaded " << state_dict.size() << " image classification parameters" << std::endl;
+        std::cout << "Loaded " << state_dict.size() << " parameters from model" << std::endl;
         
     } catch (const std::exception& e) {
         std::cerr << "Failed to load model from " << model_path << ": " << e.what() << std::endl;
@@ -115,7 +103,7 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     auto [state_dict, model] = load_deit_image_classification_model(model_path);
     
     // Use a sample image path for testing (you can replace this with any valid image file)
-    std::string test_image_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/model/input_image.jpg";
+    std::string test_image_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
     
     torch::Tensor pixel_values = helper_funcs::load_and_preprocess_image(test_image_path);
     
@@ -198,8 +186,6 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
         std::cout << "FAILED: PCC (" << pcc << ") is below threshold (" << pcc_threshold << ")" << std::endl;
     }
 
-    // Device cleanup
-    device->close();
 }
 
 } // anonymous namespace
@@ -209,7 +195,7 @@ int main(int argc, char** argv) {
         std::cout << "Starting DeiT for Image Classification test..." << std::endl;
         
         // Default model path (relative path)
-        std::string model_path = "../deit_model/deit_classifier_model.pt";
+        std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_classifier_model.pt";
         
         // Check if model path is provided as command line argument
         if (argc > 1) {
