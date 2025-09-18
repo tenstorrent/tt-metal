@@ -319,7 +319,8 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool>(),
+            bool,
+            std::optional<bool>>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -339,7 +340,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("full_inner_dim") = false,
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = false,
-        py::arg("enable_activation_reuse") = false);
+        py::arg("enable_activation_reuse") = false,
+        py::arg("force_split_reader") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -470,6 +472,17 @@ void py_bind_conv2d(py::module& module) {
         Enables reusing data between consecutive image rows.
         It can be enabled for height sharding only and boosts image2column performance,
         so its meant to be used for reader-bound convolutions.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("force_split_reader", &Conv2dConfig::force_split_reader, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        This uses both the reader & writer cores to carry out the activation reader operation.
+        This is useful when the input tensor is large, and the activation reader is a bottleneck.
+        This is only supported for Height Sharded Conv2D.
+        Setting this overrides the split reader heuristic.
 
         ===============================================================
     )doc");
