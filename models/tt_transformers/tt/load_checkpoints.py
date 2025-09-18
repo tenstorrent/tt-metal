@@ -288,8 +288,8 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
                 kv_size = n_kv_heads * head_dim
 
                 q_tensor = tensor[:q_size]
-                k_tensor = tensor[q_size:q_size + kv_size]
-                v_tensor = tensor[q_size + kv_size:q_size + 2 * kv_size]
+                k_tensor = tensor[q_size : q_size + kv_size]
+                v_tensor = tensor[q_size + kv_size : q_size + 2 * kv_size]
             else:
                 # Default case: equal split for Q, K, V
                 q_tensor, k_tensor, v_tensor = torch.split(tensor, tensor.shape[0] // 3, dim=0)
