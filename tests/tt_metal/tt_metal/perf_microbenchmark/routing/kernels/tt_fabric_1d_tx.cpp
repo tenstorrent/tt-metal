@@ -89,6 +89,7 @@ inline void setup_header_routing_2d(
                 dst_dev_id,
                 dst_mesh_id,
                 ew_dim);
+            // fabric_set_unicast_route(dst_dev_id, (LowLatencyMeshPacketHeader*)packet_header);
         }
     }
 }
