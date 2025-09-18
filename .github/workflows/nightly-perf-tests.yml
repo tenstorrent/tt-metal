@@ -1,0 +1,18 @@
+name: 🌙 Nightly Performance Tests
+
+on:
+  schedule:
+    # Run every night at 3AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  nightly-performance-tests:
+    name: "🚀 Nightly Performance Tests"
+    uses: ./.github/workflows/run-perf-tests.yml
+    secrets: inherit
