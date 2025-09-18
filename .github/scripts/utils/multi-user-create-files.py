@@ -25,7 +25,6 @@ def multi_user_containers(num_containers, image):
             'volumes': [
                 "/home/ubuntu/actions-runner/_work/tt-metal/tt-metal:/app/tt-metal:rw",
                 f"/home/ubuntu/.cache/tt-metal-cache-{i}:/app/.cache:rw",
-                "/dev/hugepages-1G:/dev/hugepages-1G",
             ],
             'entrypoint': ["./.github/scripts/utils/multi-user-configure-container.sh"],
             'user': f"{user_id}:{group_id}",
