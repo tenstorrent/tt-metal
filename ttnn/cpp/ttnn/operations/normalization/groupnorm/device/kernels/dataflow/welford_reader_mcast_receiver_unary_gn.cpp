@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
 
 void kernel_main() {
     // clang-format off
@@ -82,8 +83,10 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(16);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(17);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(18);
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(19);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(20);
 
-    // 19 and 20 are used in welford version but unused in this version
     constexpr auto src0_args = TensorAccessorArgs<21>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
@@ -104,23 +107,15 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
-    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;  // E[x] partial reduce
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;        // E[x]^2 partial reduce
-    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;  // E[x]^2 global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // input cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
-    const DataFormat out_data_format = get_dataformat(cb_out0);
 
-    volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
 
@@ -149,12 +144,11 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    const uint32_t num_reads_of_input = 3;
-    if constexpr (block_h % num_out_blocks != 0) {
+    const uint32_t num_reads_of_input = 2;
+    if constexpr(block_h % num_out_blocks != 0) {
         extra_out_block = true;
-	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
-        num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        out_block_h_last = residual % out_block_h_normal;
+        num_out_blocks_padded++;
+        out_block_h_last = block_h % num_out_blocks;
         out_block_hw_last = out_block_h_last * block_w;
     }
 
@@ -167,11 +161,10 @@ void kernel_main() {
 
         // Start Group Loop:
         for (uint32_t i = 0; i < num_groups; ++i) {
-            //The following loop is for the 3 passes of input tensor required for GroupNorm
-            //First Pass: Calculates average value
-            //Second Pass: Calculates the Variance value
-            //Third Pass: Calculates final value
-            //Definition: num_read_of_input = 3
+            // The following loop is for the 2 passes of input tensor required for GroupNorm
+            // First Pass: Calculates average and variance value
+            // Second Pass: Calculates final value
+            // Definition: num_read_of_input = 2
             for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                 uint32_t out_block_start_id_offset = 0;
                 for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -201,27 +194,8 @@ void kernel_main() {
                         }
                     }
                     cb_push_back(cb_in0, out_block_hw_normal);
-
 #endif
-                    if (cur_read_iteration == 0 || cur_read_iteration == 1) {
-                        //Section for wating for local reduce to be pushed to a cb_ex_partial
-                        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                        if (cur_read_iteration == 0) {
-                            //Wait for local avg calculation
-                            cb_wait_front(cb_ex_partial, 1);
-                        } else {
-                            //Wait for local variance calculation
-                            cb_wait_front(cb_ex2_partial, 1);
-                        }
-                        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-
-                        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                        if (cur_read_iteration == 0) {
-                            cb_pop_front(cb_ex_partial, 1);
-                        } else {
-                            cb_pop_front(cb_ex2_partial, 1);
-                        }
-                    } else if (cur_read_iteration == 2) {
+                    if (cur_read_iteration == 1) {
                         const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 
                         // add or copy with previous output results
@@ -248,17 +222,32 @@ void kernel_main() {
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 }
 
-                if (cur_read_iteration == 0 || cur_read_iteration == 1) {
-                    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                    uint32_t cb_mcast_receive;
-                    if (cur_read_iteration == 0) {
-                        cb_mcast_receive = cb_ex_global;
-                    } else if (cur_read_iteration == 1) {
-                        cb_mcast_receive = cb_ex2_global;
-                    }
-                    cb_reserve_back(cb_mcast_receive, 1);
+                if (cur_read_iteration == 0) {
+                    cb_reserve_back(cb_ex_global, 2);
+                    cb_wait_front(cb_ex_partial, 2);
+
+                    // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+                    auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
+                    auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
+
+                    auto local_result = combine_welford_stats<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+
+                    // Write this to cb_ex_global
+                    auto p_global_means = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_ex_global));
+                    auto p_global_vars = p_global_means + TILE_WIDTH * TILE_HEIGHT;
+                    p_global_means[0] = local_result.mean;
+                    p_global_vars[0] = local_result.variance;
+
+                    // Signal to sender that our partial data is ready
+                    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+
+                    // Wait for sender to signal that it has sent the global data
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_mcast_receive, 1);
+                    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+
+                    cb_pop_front(cb_ex_partial, 2);
+                    cb_push_back(cb_ex_global, 2);
+
                 }
             }
 
