@@ -38,6 +38,8 @@ class TtUnet:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             conv_args=conv_args["encoder1"][0],
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         self.enc1_2 = Conv(
             [1, 1, 1, 1],
@@ -53,7 +55,14 @@ class TtUnet:
             [1, 1, 1, 1], parameters["encoder2"][1], act_block_h=64, auto_shard=True, conv_args=conv_args["encoder2"][3]
         )
 
-        self.enc3_1 = Conv([1, 1, 1, 1], parameters["encoder3"][0], auto_shard=True, conv_args=conv_args["encoder3"][0])
+        self.enc3_1 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder3"][0],
+            auto_shard=True,
+            conv_args=conv_args["encoder3"][0],
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
         self.enc3_2 = Conv(
             [1, 1, 1, 1],
             parameters["encoder3"][1],
@@ -71,8 +80,16 @@ class TtUnet:
             enable_weights_double_buffer=True,
             reshard=True,
             conv_args=conv_args["encoder4"][0],
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
         )
-        self.enc4_2 = Conv([1, 1, 1, 1], parameters["encoder4"][1], conv_args=conv_args["encoder4"][3])
+        self.enc4_2 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder4"][1],
+            conv_args=conv_args["encoder4"][3],
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
 
         self.bottleneck_1 = Conv(
             [1, 1, 1, 1],
@@ -270,7 +287,7 @@ class TtUnet:
         ttnn.deallocate(pool_in)
         # pool_4_out_h, pool_4_out_w = int(enc4.shape[1] / 2), int(enc4.shape[2] / 2)
         # pool_4 = ttnn.reshape(pool_4, (1, pool_4_out_h, pool_4_out_w, enc4.shape[3]))
-        enc4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
+        # enc4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
 
         bottleneck = self.bottleneck_1(device, pool_4)
         ttnn.deallocate(pool_4)
@@ -320,17 +337,33 @@ class TtUnet:
         ttnn.deallocate(dec2)
         dec1 = ttnn.to_layout(dec1, ttnn.ROW_MAJOR_LAYOUT)
 
-        enc1 = ttnn.to_memory_config(enc1, ttnn.L1_MEMORY_CONFIG)
-        if dec1.is_sharded:
-            dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
+        enc1 = ttnn.sharded_to_interleaved(enc1, ttnn.L1_MEMORY_CONFIG)
+        # if dec1.is_sharded:
+        #     dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
 
+        memory_config = ttnn.create_sharded_memory_config(
+            [4800, 32],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        out_memory_config = ttnn.create_sharded_memory_config(
+            [4800, 64],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        enc1 = ttnn.interleaved_to_sharded(enc1, memory_config)
         dec1 = ttnn.concat(
             [dec1, enc1],
             dim=3,
+            memory_config=out_memory_config,
         )
         ttnn.deallocate(enc1)
 
         dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        if dec1.is_sharded:
+            dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
         dec1 = self.dec1_1(device, dec1)
         # if dec1.is_sharded:
         #     dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
