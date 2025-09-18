@@ -75,11 +75,7 @@ class TTMLConfig:
 
 
 def train_ttml_linear_regression(
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    n_features: int,
-    cfg: TTMLConfig,
-    verbose: bool = True,
+    x_train: np.ndarray, y_train: np.ndarray, n_features: int, cfg: TTMLConfig, verbose: bool = True
 ):
     """
     Trains TTML linear regression (2D -> 1D generalizes via n_features).
@@ -108,9 +104,6 @@ def train_ttml_linear_regression(
 
             tt_x = _ttml.autograd.Tensor.from_numpy(x_batch)
             tt_y = _ttml.autograd.Tensor.from_numpy(y_batch)
-            print("numpy: ", y_batch.reshape(bsz))
-            print("ttml: ", tt_y.to_numpy().reshape(bsz))
-            return
             opt.zero_grad()
             tt_pred = model(tt_x)
             tt_loss = loss_fn(tt_pred, tt_y, _ttml.ops.ReduceType.MEAN)

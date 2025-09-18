@@ -105,25 +105,11 @@ nb::ndarray<nb::numpy> make_numpy_tensor(const tt::tt_metal::Tensor& t) {
             numpy_data, cpu_tensor_shape_rank, numpy_shape.data(), owner, numpy_strides.data(), nb::dtype<T>());
     };
 
-    const auto ensure_row_major = [&impl]<typename T>(const tt::tt_metal::Tensor& t) {
-        if (t.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
-            tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(t.logical_shape().rank(), 0));
-            int logical_rank = t.logical_shape().rank();
-            for (int index = -1; index >= -logical_rank; --index) {
-                output_tensor_end[index] = t.logical_shape()[index] - 1;
-            }
-
-            return impl.template operator()<T>(
-                ttnn::untilize_with_unpadding(ttnn::DefaultQueueId, t, output_tensor_end, std::nullopt));
-        }
-        return impl.template operator()<T>(t);
-    };
-
     switch (t.tensor_spec().data_type()) {
-        case tt::tt_metal::DataType::INT32: return ensure_row_major.template operator()<int32_t>(t);
-        case tt::tt_metal::DataType::UINT32: return ensure_row_major.template operator()<uint32_t>(t);
-        case tt::tt_metal::DataType::FLOAT32: return ensure_row_major.template operator()<float>(t);
-        case tt::tt_metal::DataType::BFLOAT16: return ensure_row_major.template operator()<bfloat16>(t);
+        case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t>(t);
+        case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t>(t);
+        case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float>(t);
+        case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16>(t);
         case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
         case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
         case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
