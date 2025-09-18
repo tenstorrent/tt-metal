@@ -80,7 +80,6 @@ void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_ten
 }
 
 Tensor accumulation_invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
@@ -114,7 +113,6 @@ Tensor accumulation_invoke(
     int32_t accumulation_axis;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(
-        queue_id,
         wip_tensor,
         accumulation_axis,
         dtype,

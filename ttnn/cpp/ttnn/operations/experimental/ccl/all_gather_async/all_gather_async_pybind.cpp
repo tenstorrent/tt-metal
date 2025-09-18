@@ -175,7 +175,6 @@ void py_bind_all_gather_async(pybind11::module& module) {
         module,
         ttnn::experimental::all_gather_async,
         R"doc(
-
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
