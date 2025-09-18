@@ -207,7 +207,6 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
     if (this->ring_id.has_value()) {
         // Use explicitly provided ring_id
         ring_id = this->ring_id.value();
-        auto mesh_device = input_tensors[0].device();
     } else {
         // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
         auto mesh_device = input_tensors[0].device();
