@@ -56,14 +56,12 @@ struct SoftmaxDeviceOperation {
 };
 
 Tensor softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     int8_t dim = -1,
     tt::tt_metal::MemoryConfig output_mem_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = false);
 Tensor scale_mask_softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
@@ -72,14 +70,12 @@ Tensor scale_mask_softmax(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = false);
 Tensor softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     int8_t dim = -1,
     SoftmaxProgramConfig program_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = false);
 Tensor scale_mask_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
@@ -88,7 +84,6 @@ Tensor scale_mask_softmax_in_place(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = false);
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,

@@ -238,6 +238,4 @@ SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
-DefaultQueueId = ttnn._ttnn.device.DefaultQueueId
-
 __all__ = []
