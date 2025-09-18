@@ -13,15 +13,7 @@
 #include "fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "eth_chan_noc_mapping.h"
-
-// TODO: get these from compile args
-#define HOST_BUFFER_SLOTS 2
-#define ETH_BUFFER_SLOTS 4
-#define LOCAL_ROUTER_SLOTS 4
-#define NUM_ROUTERS 16
-
-// Need to populate this from compile args
-static constexpr uint8_t my_channel_id = 1;  // should alread by defined in fabric_erisc_router_ct_args.hpp
+#include "debug/dprint.h"
 
 namespace tt::tt_fabric {
 
@@ -125,8 +117,8 @@ private:
     FORCE_INLINE bool has_new_packet() const {
         invalidate_l1_cache();
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(from_remote_write_counter_addr_) -
-                   local_read_counter_.counter <
-               NUM_BUFFER_SLOTS;
+                   local_read_counter_.counter >
+               0;
     }
 
     FORCE_INLINE size_t get_next_packet() const {
@@ -184,8 +176,8 @@ private:
     FORCE_INLINE bool has_new_packet() const {
         invalidate_l1_cache();
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(from_remote_write_counter_addr_) -
-                   local_read_counter_.counter <
-               NUM_BUFFER_SLOTS;
+                   local_read_counter_.counter >
+               0;
     }
 
     FORCE_INLINE size_t get_next_packet() const {
@@ -290,8 +282,8 @@ private:
         invalidate_l1_cache();
         uint32_t remote_write_counter_addr = get_group_addr(group_index, from_remote_write_counters_base_addr_);
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_write_counter_addr) -
-                   local_read_counters_[group_index].counter <
-               NUM_SLOTS_PER_GROUP;
+                   local_read_counters_[group_index].counter >
+               0;
     }
 
     FORCE_INLINE void advance_group_index() {
@@ -507,6 +499,8 @@ public:
 
     FSMManager() = default;
 
+    FORCE_INLINE void init() { active_fsm_type_ = ActiveFSMType::NONE; }
+
     bool is_any_fsm_active() const { return active_fsm_type_ != ActiveFSMType::NONE; }
 
 private:
@@ -517,13 +511,20 @@ private:
 class FabricControlChannel {
 public:
     void init() {
-        // fsm_context.active = true;
-        //  TODO: Initialize inbound and outbound interfaces with proper addresses
-        //  host_inbound_interface.init(...);
-        //  eth_inbound_interface.init(...);
-        //  local_inbound_interface.init(...);
-        //  eth_outbound_interface.init(...);
-        //  local_outbound_interface.init(...);
+        clear_flow_control_counters();
+
+        fsm_manager_.init();
+
+        host_inbound_interface_.init();
+        eth_inbound_interface_.init();
+        local_inbound_interface_.init();
+
+        eth_outbound_interface_.init();
+        local_outbound_interface_.init();
+    }
+
+    void local_handshake() {
+        // local handshake with all local routers to ensure that the inbound and outbound interfaces are ready
     }
 
     void run_control_channel_step() {
@@ -531,7 +532,6 @@ public:
         host_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
             return this->process_control_packet_from_host(packet_header);
         });
-
         eth_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
             return this->process_control_packet_from_eth(packet_header);
         });
@@ -555,15 +555,36 @@ private:
     FSMManager fsm_manager_;
 
     // Buffer consumer interfaces
-    HostBufferConsumerInterface<HOST_BUFFER_SLOTS> host_inbound_interface_;
-    EthBufferConsumerInterface<ETH_BUFFER_SLOTS> eth_inbound_interface_;
-    LocalBufferConsumerInterface<NUM_ROUTERS, LOCAL_ROUTER_SLOTS> local_inbound_interface_;
+    HostBufferConsumerInterface<control_channel_num_host_buffer_slots> host_inbound_interface_;
+    EthBufferConsumerInterface<control_channel_num_eth_buffer_slots> eth_inbound_interface_;
+    LocalBufferConsumerInterface<control_channel_max_num_eth_cores, control_channel_num_local_buffer_slots>
+        local_inbound_interface_;
 
     // Buffer producer interfaces
-    EthProducerInterface<ETH_BUFFER_SLOTS> eth_outbound_interface_;
-    LocalProducerInterface<NUM_ROUTERS, LOCAL_ROUTER_SLOTS> local_outbound_interface_;
+    EthProducerInterface<control_channel_num_eth_buffer_slots> eth_outbound_interface_;
+    LocalProducerInterface<control_channel_max_num_eth_cores, control_channel_num_local_buffer_slots>
+        local_outbound_interface_;
 
     // TODO: may potentially need an address for local staging of the outbound packets
+
+    FORCE_INLINE void clear_flow_control_counters() {
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_host_buffer_remote_write_counter_address) = 0;
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_host_buffer_remote_read_counter_address) = 0;
+
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_eth_buffer_remote_write_counter_address) = 0;
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_eth_buffer_remote_read_counter_address) = 0;
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_eth_buffer_local_write_counter_address) = 0;
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_eth_buffer_local_read_counter_address) = 0;
+
+        auto* control_channel_local_buffer_remote_write_counter_base_ptr =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_local_buffer_remote_write_counter_base_address);
+        auto* control_channel_local_buffer_remote_read_counter_base_ptr =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_local_buffer_remote_read_counter_base_address);
+        for (size_t i = 0; i < control_channel_max_num_eth_cores; i++) {
+            control_channel_local_buffer_remote_write_counter_base_ptr[i] = 0;
+            control_channel_local_buffer_remote_read_counter_base_ptr[i] = 0;
+        }
+    }
 
     FORCE_INLINE void forward_control_packet_via_eth_interface(ControlPacketHeader* packet_header) {
         if (!eth_outbound_interface_.remote_has_space_for_packet()) {
@@ -606,7 +627,7 @@ private:
         } else if (dst_chip_id != routing_table->my_device_id) {
             // intra-mesh routing
             downstream_channel_id = routing_table->intra_mesh_table.dest_entry[dst_chip_id];
-        } else if (dst_channel_id != my_channel_id) {
+        } else if (dst_channel_id != MY_ETH_CHANNEL) {
             // local routing
             downstream_channel_id = dst_channel_id;
         } else {
@@ -616,7 +637,7 @@ private:
         if (is_local_packet) {
             process_local_control_packet(packet_header);
         } else {
-            if (downstream_channel_id == my_channel_id) {
+            if (downstream_channel_id == MY_ETH_CHANNEL) {
                 forward_control_packet_via_eth_interface(packet_header);
             } else {
                 ASSERT(downstream_channel_id != INVALID_DIRECTION);
