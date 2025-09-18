@@ -36,6 +36,7 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         return NonExpert.prefill_model_config(hf_config, mesh_device)
 
@@ -44,6 +45,7 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         return NonExpert.decode_model_config(hf_config, mesh_device)
 
@@ -52,8 +54,8 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
         ccl: CCL1D,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return NonExpert.create_state(hf_config, mesh_device, ccl)
 
@@ -62,6 +64,7 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {}
 
