@@ -147,9 +147,7 @@ class DispatcherData:
             f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
         )
 
-        previous_launch_msg_rd_ptr = (
-            launch_msg_rd_ptr - 1
-        ) % self._launch_msg_buffer_num_entries
+        previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
 
         kernel_config_base = -1
         kernel_text_offset = -1
