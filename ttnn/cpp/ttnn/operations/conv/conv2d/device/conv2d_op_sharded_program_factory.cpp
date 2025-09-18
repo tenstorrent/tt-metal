@@ -238,7 +238,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const uint32_t num_cores_x = parallelization_config.grid_size.x;
     const uint32_t num_cores_y = parallelization_config.grid_size.y;
-    // log_info(tt::LogOp, "Conv2D parallelization grid size: {} x {}", num_cores_x, num_cores_y);
     const uint32_t total_num_cores = all_cores.num_cores();
 
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -1193,7 +1192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             std::vector<uint32_t> receiver_args;
             if (block_sharded) {
                 if (transpose_mcast) {
-                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.x};
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
                 } else {
