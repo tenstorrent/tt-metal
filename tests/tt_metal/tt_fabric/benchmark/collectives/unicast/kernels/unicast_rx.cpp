@@ -19,10 +19,5 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
-    const uint64_t expected_noc = safe_get_noc_addr(my_x[0], my_y[0], sem_addr);
-
-    uint32_t exp_lo = (uint32_t)(expected_noc & 0xffffffffull);
-    uint32_t exp_hi = (uint32_t)(expected_noc >> 32);
-
     noc_semaphore_wait(sem_ptr, expected_value);
 }
