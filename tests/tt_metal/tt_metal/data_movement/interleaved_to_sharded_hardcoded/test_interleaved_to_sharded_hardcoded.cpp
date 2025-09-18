@@ -34,9 +34,13 @@ namespace test1_writer_sharded_dram_row_major {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
@@ -69,7 +73,8 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -83,9 +88,13 @@ namespace test2_writer_sharded_dram_tile {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto writer_kernel = CreateKernel(
@@ -118,7 +127,8 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -132,9 +142,13 @@ namespace test3_interleaved_reader_tile_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -166,7 +180,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -180,9 +196,13 @@ namespace test4_interleaved_reader_tile_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -215,7 +235,8 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -229,9 +250,13 @@ namespace test5_interleaved_reader_row_major_dram {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -264,7 +289,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -278,9 +305,13 @@ namespace test6_interleaved_reader_row_major_l1 {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const TestConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     auto reader_kernel = CreateKernel(
@@ -313,7 +344,9 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    detail::LaunchProgram(device, program);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
@@ -326,7 +359,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
 //=================================================================
 
 // Test 1: Writer Sharded DRAM Row Major
-TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -372,7 +405,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
 }
 
 // Test 2: Writer Sharded DRAM Tile
-TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -419,7 +452,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
 }
 
 // Test 3: Interleaved Reader Tile (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -460,7 +493,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
 }
 
 // Test 4: Interleaved Reader Tile (L1)
-TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -501,7 +534,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
 }
 
 // Test 5: Interleaved Reader Row Major (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -544,7 +577,7 @@ TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
 }
 
 // Test 6: Interleaved Reader Row Major (L1)
-TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
+TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
