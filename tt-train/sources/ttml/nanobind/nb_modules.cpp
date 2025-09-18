@@ -91,6 +91,7 @@ void py_module(nb::module_& m) {
             nb::arg("weight_tying") = models::gpt2::WeightTyingType::Disabled,
             nb::arg("positional_embedding_type") = models::gpt2::PositionalEmbeddingType::Trainable,
             nb::arg("use_composite_layernorm") = false);
+
         auto py_gpt2 =
             static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(m.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
