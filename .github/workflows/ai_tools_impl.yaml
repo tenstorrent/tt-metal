@@ -84,6 +84,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.AY_KEY }}
           github_token: ${{ secrets.AI_GH_TOKEN }}
+          custom_instructions: "Be direct and technical. No emojis, compliments, or flowery language."
           trigger_phrase: "@tt-ai"
           allowed_tools: |
            - Bash(./build_metal.sh --debug -c --without-distributed)
