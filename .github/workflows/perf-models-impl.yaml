@@ -72,6 +72,8 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
+      - name: Fix Git dubious ownership
+        run: git config --global --add safe.directory ${{ github.workspace }}
       - name: Run falcon7b model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
