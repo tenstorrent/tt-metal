@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -11,8 +10,8 @@ from torch import nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
-from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
+from models.tt_transformers.tt.common import RopeScaling, get_rot_transformation_mat
+from models.utility_functions import nearest_32
 from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 
@@ -25,7 +24,7 @@ class RotaryEmbedding(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.base = base
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer("inv_freq", self.apply_scaling(inv_freq), persistent=False)
 
         # Build here to make `torch.jit.trace` work.
         self._set_cos_sin_cache(
@@ -34,6 +33,9 @@ class RotaryEmbedding(nn.Module):
             dtype=torch.get_default_dtype(),
         )
         self.max_seq_len_cached = None
+
+    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
+        return freqs
 
     @staticmethod
     def permute_to_meta_format(cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -60,6 +62,9 @@ class RotaryEmbedding(nn.Module):
         sin = emb.sin()
         self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
+        # cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
+        # sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
+
         cos, sin = self.permute_to_meta_format(cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
         self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
@@ -77,35 +82,35 @@ class RotaryEmbedding(nn.Module):
         )
 
 
-class ScaledRotaryEmbedding(RotaryEmbedding, ABC):
-    def __init__(
-        self,
-        dim: int,
-        max_position_embeddings: int,
-        base: float,
-        factor: float,
-        device: Optional[Any] = None,
-    ) -> None:
-        self.scaling_factor = factor
-        super().__init__(dim, max_position_embeddings, base, device)
+# class ScaledRotaryEmbedding(RotaryEmbedding, ABC):
+#     def __init__(
+#         self,
+#         dim: int,
+#         max_position_embeddings: int,
+#         base: float,
+#         factor: float,
+#         device: Optional[Any] = None,
+#     ) -> None:
+#         self.scaling_factor = factor
+#         super().__init__(dim, max_position_embeddings, base, device)
 
-    @abstractmethod
-    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
-        pass
+#     @abstractmethod
+#     def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
+#         pass
 
-    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
-        self.max_seq_len_cached = seq_len
-        freqs = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
-        t = torch.arange(seq_len * 2.0)
-        freqs = self.apply_scaling(freqs)
-        freqs = torch.outer(t, freqs).float()
-        cos = torch.cos(freqs)
-        sin = torch.sin(freqs)
-        self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
+# def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
+#     self.max_seq_len_cached = seq_len
+#     freqs = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
+#     t = torch.arange(seq_len * 2.0)
+#     freqs = self.apply_scaling(freqs)
+#     freqs = torch.outer(t, freqs).float()
+#     cos = torch.cos(freqs)
+#     sin = torch.sin(freqs)
+#     self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
-        cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
-        self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
-        self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
+#     cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
+#     self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
+#     self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
 
 
 # Copied from DeepseekV3YarnRotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L262
@@ -200,17 +205,18 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
 
 
-class LinearScaledRotaryEmbedding(ScaledRotaryEmbedding):
+class LinearScaledRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self, dim: int, max_position_embeddings: int, base: float, factor: float, device: Optional[Any] = None
     ) -> None:
-        super().__init__(dim, max_position_embeddings, base, factor, device)
+        self.scaling_factor = factor
+        super().__init__(dim, max_position_embeddings, base, device)
 
     def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
         return freqs / self.scaling_factor
 
 
-class LlamaRotaryEmbedding(ScaledRotaryEmbedding):
+class LlamaRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
         dim: int,
@@ -248,7 +254,7 @@ class LlamaRotaryEmbedding(ScaledRotaryEmbedding):
         return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-class Phi3RotaryEmbedding(ScaledRotaryEmbedding):
+class Phi3RotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
         dim: int,
@@ -300,7 +306,7 @@ def rotary_embedding_factory(
     base: float,
     rope_scaling: Optional[RopeScaling] = None,
     device: Optional[Any] = None,
-) -> Union[RotaryEmbedding, ScaledRotaryEmbedding]:
+) -> Union[RotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
@@ -411,7 +417,10 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
         )
-
+        # self.cos_matrix_ttnn = self.cos_matrix
+        # self.sin_matrix_ttnn = self.sin_matrix
+        # self.cos_matrix = self.cos_matrix_torch
+        # self.sin_matrix = self.sin_matrix_torch
         self.batch_grid = (
             ttnn.CoreGrid(y=4, x=8)
             if ttnn.get_arch_name() == "blackhole"
@@ -500,6 +509,8 @@ class RotarySetup(LightweightModule):
     def get_rot_mats(
         self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
     ) -> List[ttnn.Tensor]:
+        # position = ttnn.to_torch(position_idxs, mesh_composer=ttnn.ConcatMesh2dToTensor(self.device, dims=[1, 0], mesh_shape=(1,8)))[0][0].item()
+        # return [self.cos_matrix[:, :, position, :], self.sin_matrix[:, :, position, :]]
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it

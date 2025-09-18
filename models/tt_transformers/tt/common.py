@@ -6,7 +6,7 @@ import math
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from llama_models.llama3.api.datatypes import ImageMedia
@@ -458,6 +458,9 @@ def copy_host_to_device(
         for i in range(len(host_tensors)):
             if shard_specs and shard_specs[i] is not None:
                 on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+            elif isinstance(host_tensors[i], list):
+                # Handle list of tensors
+                on_device = [ttnn.to_device(v, device=mesh_device) for v in host_tensors[i]]
             else:
                 on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
@@ -745,3 +748,218 @@ def hf_multimodal_encode(messages, processor):
             mask=None,
         ),
     )
+
+
+# FIXME: Mask Attention is adapted for Gemma.
+def causal_mask_function(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+    """
+    This creates a basic lower-diagonal causal mask.
+    """
+    return kv_idx <= q_idx
+
+
+def prepare_padding_mask(
+    attention_mask: Optional[torch.Tensor], kv_length: int, kv_offset: int, _slice: bool = True
+) -> Optional[torch.Tensor]:
+    local_padding_mask = attention_mask
+    if attention_mask is not None:
+        if (padding_length := kv_length + kv_offset - attention_mask.shape[-1]) > 0:
+            local_padding_mask = torch.nn.functional.pad(attention_mask, (0, padding_length))
+    return local_padding_mask
+
+
+def _vmap_for_bhqkv(mask_function: Callable, bh_indices: bool = True) -> Callable:
+    dimensions = [(None, None, None, 0), (None, None, 0, None)]
+    if bh_indices:
+        dimensions.extend([(None, 0, None, None), (0, None, None, None)])
+
+    for dims in dimensions:
+        mask_function = torch.vmap(mask_function, in_dims=dims, out_dims=0)
+    return mask_function
+
+
+def and_masks(*mask_functions: list[Callable]) -> Callable:
+    """Returns a mask function that is the intersection of provided mask functions"""
+    if not all(callable(arg) for arg in mask_functions):
+        raise RuntimeError(f"All inputs should be callable mask_functions: {mask_functions}")
+
+    def and_mask(batch_idx, head_idx, q_idx, kv_idx):
+        result = q_idx.new_ones((), dtype=torch.bool)
+        for mask in mask_functions:
+            result = result & mask(batch_idx, head_idx, q_idx, kv_idx)
+        return result
+
+    return and_mask
+
+
+def padding_mask_function(padding_mask: torch.Tensor) -> Callable:
+    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+        # Note that here the mask should ALWAYS be at least of the max `kv_index` size in the dimension 1. This is because
+        # we cannot pad it here in the mask_function as we don't know the final size, and we cannot try/except, as it is not
+        # vectorizable on accelerator devices
+        return padding_mask[batch_idx, kv_idx]
+
+    return inner_mask
+
+
+def sdpa_mask_recent_torch(
+    batch_size: int,
+    cache_position: torch.Tensor,
+    kv_length: int,
+    kv_offset: int,
+    mask_function: Callable[[int, int, int, int], bool],
+    attention_mask: torch.Tensor = None,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    q_length = cache_position.shape[0]
+
+    padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
+
+    kv_arange = torch.arange(kv_length)
+    kv_arange += kv_offset
+
+    if padding_mask is not None:
+        mask_function = and_masks(mask_function, padding_mask_function(padding_mask))
+    batch_arange = torch.arange(batch_size)
+    head_arange = torch.arange(1)
+
+    from torch._dynamo._trace_wrapped_higher_order_op import TransformGetItemToIndex
+
+    with TransformGetItemToIndex():
+        causal_mask = _vmap_for_bhqkv(mask_function)(batch_arange, head_arange, cache_position, kv_arange)
+
+    return causal_mask
+
+
+def _preprocess_mask_arguments(
+    attention_mask,
+    cache_position,
+    max_seq_len,
+):
+    if attention_mask is not None and attention_mask.ndim == 2:
+        attention_mask = attention_mask.to(device=cache_position.device, dtype=torch.bool)
+    kv_length = max_seq_len
+    kv_offset = 0
+    return False, attention_mask, kv_length, kv_offset
+
+
+def convert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
+    if mask.dtype != torch.bool:
+        raise ValueError(f"Expected bool tensor, got {mask.dtype}")
+
+    return torch.where(mask, torch.tensor(0.0, dtype=torch.float32), torch.finfo(torch.float32).min)
+
+
+def create_causal_mask(
+    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+):
+    if PagedAttentionConfig is not None:
+        if mode == "prefill":
+            max_seq_len = cache_position[-1].item() + 1
+        else:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    else:
+        max_seq_len = args.max_seq_len
+
+    early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
+        attention_mask, cache_position, max_seq_len
+    )
+    dtype = input_embeds.dtype
+    mask_factory_function = causal_mask_function
+
+    causal_mask = sdpa_mask_recent_torch(
+        batch_size=1,
+        cache_position=cache_position,
+        kv_length=kv_length,
+        kv_offset=kv_offset,
+        mask_function=mask_factory_function,
+        attention_mask=attention_mask,
+        dtype=dtype,
+    )
+    causal_mask = convert_attn_mask(causal_mask)
+    if mode == "decode":
+        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+
+    causal_mask = ttnn.as_tensor(
+        causal_mask,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+    )
+
+    return causal_mask
+
+
+def sliding_window_overlay(sliding_window: int) -> Callable:
+    """
+    This is an overlay depicting a sliding window pattern. Add it on top of a causal mask for a proper sliding
+    window mask.
+    """
+
+    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+        return kv_idx > q_idx - sliding_window
+
+    return inner_mask
+
+
+def sliding_window_causal_mask_function(sliding_window: int) -> Callable:
+    """
+    This return the mask_function function to create a sliding window mask.
+    """
+    return and_masks(sliding_window_overlay(sliding_window), causal_mask_function)
+
+
+def create_sliding_window_causal_mask(
+    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+):
+    n_local_kv_heads = args.n_kv_heads // args.num_devices
+    if PagedAttentionConfig is not None:
+        if mode == "prefill":
+            max_seq_len = cache_position[-1].item() + 1
+        else:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    else:
+        max_seq_len = args.max_seq_len
+
+    attention_mask = attention_mask.repeat_interleave(1, 0)
+    early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
+        attention_mask, cache_position, max_seq_len
+    )
+    sliding_window = args.sliding_window
+
+    dtype = input_embeds.dtype
+    mask_factory_function = sliding_window_causal_mask_function(sliding_window)
+    mask_interface = sdpa_mask_recent_torch
+
+    # Allow slight deviations from sliding causal mask
+    # mask_factory_function = and_masks(mask_factory_function, and_mask_function)
+    allow_is_causal_skip = False
+
+    # We now create the mask
+    causal_mask = mask_interface(
+        batch_size=1,
+        cache_position=cache_position,
+        kv_length=kv_length,
+        kv_offset=kv_offset,
+        mask_function=mask_factory_function,
+        attention_mask=attention_mask,
+        dtype=dtype,
+    )
+    causal_mask = convert_attn_mask(causal_mask)
+
+    if mode == "decode":
+        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+
+    causal_mask = ttnn.as_tensor(
+        causal_mask,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+    )
+    return causal_mask
