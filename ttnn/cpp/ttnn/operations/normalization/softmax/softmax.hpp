@@ -25,7 +25,7 @@ struct ExecuteSoftmax {
         int dim,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        bool numeric_stable = false);
+        bool numeric_stable = true);
 };
 
 /**
@@ -48,7 +48,7 @@ struct ExecuteScaleMaskSoftmax {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         bool is_causal_mask = false,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        bool numeric_stable = false);
+        bool numeric_stable = true);
 };
 
 /**
@@ -65,7 +65,7 @@ struct ExecuteSoftmaxInPlace {
         int dim = -1,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        bool numeric_stable = false);
+        bool numeric_stable = true);
 };
 
 /**
