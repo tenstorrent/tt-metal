@@ -3,13 +3,61 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "height_sharded_reader_common.hpp"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
+
+// Function definitions copied from block sharded reader
+// (reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp)
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);         // Input filter window height
+constexpr uint32_t weight_size_w_global = get_compile_time_arg_val(8);  // Input filter window width
+
+template <int window_height, int window_width>
+FORCE_INLINE void read_dilated_channels(
+    uint32_t& l1_write_addr_act,
+    const uint32_t act_l1_read_addr,
+    const uint32_t reader_channel_idx,
+    const uint32_t conv_act_c_bytes,
+    const uint32_t stride_h_bytes,
+    const uint32_t stride_w_bytes) {
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
+#pragma GCC unroll weight_size_h
+    for (uint32_t outer = 0; outer < window_height; outer++) {
+        uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
+#pragma GCC unroll weight_size_w_global
+        for (uint32_t inner = 0; inner < window_width; inner++) {
+            // Read the partial depth.
+            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
+            // Increment by full depth to go to the next pixel
+            l1_write_addr_act += conv_act_c_bytes;
+            act_l1_read_addr_row_offset += stride_w_bytes;
+        }
+        // Go to the next row
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
+
+FORCE_INLINE
+void read_channels(
+    uint32_t& l1_write_addr_act,
+    const uint32_t act_l1_read_addr,
+    const uint32_t reader_channel_idx,
+    const uint32_t conv_act_c_read_bytes,
+    const uint32_t coalesced_read_bytes,
+    const uint32_t stride_h_bytes) {
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
+#pragma GCC unroll weight_size_h
+    for (uint32_t inner = 0; inner < weight_size_h; inner++) {
+        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
+        l1_write_addr_act += coalesced_read_bytes;
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -31,7 +79,28 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
     constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
 
-    constexpr auto s_weight_args = TensorAccessorArgs<18>();
+#ifdef SPLIT_READER
+    // Use existing args that factory already passes but are currently ignored
+    constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(6);  // num_blocks_act_w
+    constexpr bool sliced_inner_dim = window_outer > 1;             // Derived like block sharded reader
+
+    // Additional args - will need factory integration for block sharded + split reader
+    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(18);  // This is what factory passes
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
+    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+// Weight tensor args come after the 9 split reader args (18 + 9 = 27)
+#endif
+    // Without split reader, weight tensor args start at 35
+    constexpr auto s_weight_args = TensorAccessorArgs<35>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
@@ -50,6 +119,32 @@ void kernel_main() {
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
+    const bool is_sender_core = get_arg_val<uint32_t>(i++) == 1;
+
+#ifdef SPLIT_READER
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
+    // Initial setup for second reader (starting from second reader's data)
+    uint32_t start_reader_idx = (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1;
+    uint32_t reader_idx = start_reader_idx;
+
+#if ENABLE_DEBUG
+    DPRINT << "WRITER SENDER: Split reader initialized, start_reader_idx=" << start_reader_idx << ENDL();
+#endif
+
+    constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
+    constexpr uint32_t coalesced_read_bytes =
+        ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+
+    const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+
+    if constexpr (needs_act_block_zero_out) {
+        // Zero out tiles if needed - implementation TBD
+    }
+#endif
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -89,6 +184,8 @@ void kernel_main() {
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
+    DPRINT << "LOOP 1: " << out_num_blocks_h << " LOOP 2: " << out_num_blocks_w
+           << " LOOP 3.1: " << weight_block_height_num_outer << " LOOP 3.2: " << num_blocks_weight_h << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
@@ -97,7 +194,100 @@ void kernel_main() {
 
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
+#ifdef SPLIT_READER
+                    if (weight_tile_h_outer_i < num_blocks_weight_h) {
+                        // Read activation data using block sharded pattern (for second reader)
+                        uint32_t reader_offset = act_l1_read_addr;
+                        for (uint32_t outer = 0; outer < window_outer; outer++) {
+                            reader_idx = start_reader_idx;
+
+#if ENABLE_DEBUG
+                            DPRINT << "WRITER SENDER: Before cb_reserve_back (split reader), tiles="
+                                   << act_block_num_tiles_split_last << ENDL();
+#endif
+                            cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+#if ENABLE_DEBUG
+                            DPRINT << "WRITER SENDER: After cb_reserve_back (split reader), tiles="
+                                   << act_block_num_tiles_split_last << ENDL();
+#endif
+                            if (is_sender_core) {
+                                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+
+                                if constexpr (sliced_inner_dim) {
+                                    read_sticks<
+                                        dilation_w,
+                                        coalesced_read_bytes,
+                                        conv_act_c_read_bytes,
+                                        act_block_w_extra_align_bytes,
+                                        stride_w_bytes,
+                                        weight_size_w,
+                                        stride_w>(
+                                        packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                                } else {
+                                    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                                    while (num_elems--) {
+                                        reader_idx++;
+                                        uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                                        uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+                                        for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                                            if constexpr (dilation_w == 1) {
+                                                read_channels(
+                                                    l1_write_addr_act,
+                                                    act_l1_read_addr,
+                                                    ind,
+                                                    conv_act_c_read_bytes,
+                                                    coalesced_read_bytes,
+                                                    stride_h_bytes);
+                                                if constexpr (act_block_w_extra_align_bytes) {
+                                                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                                                }
+                                            } else {
+                                                read_dilated_channels<weight_size_h, weight_size_w_global>(
+                                                    l1_write_addr_act,
+                                                    act_l1_read_addr,
+                                                    ind,
+                                                    conv_act_c_read_bytes,
+                                                    stride_h_bytes,
+                                                    stride_w_bytes);
+                                            }
+                                        }
+                                    }
+                                    reader_idx++;
+                                }
+#if ENABLE_DEBUG
+                                DPRINT << "WRITER SENDER: Before noc_async_read_barrier (split reader)" << ENDL();
+#endif
+                                noc_async_read_barrier();
+#if ENABLE_DEBUG
+                                DPRINT << "WRITER SENDER: After noc_async_read_barrier (split reader)" << ENDL();
+#endif
+                            }
+#if ENABLE_DEBUG
+                            DPRINT << "WRITER SENDER: Before cb_push_back (split reader), tiles="
+                                   << act_block_num_tiles_split_last << ENDL();
+#endif
+                            cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+#if ENABLE_DEBUG
+                            DPRINT << "WRITER SENDER: After cb_push_back (split reader), tiles="
+                                   << act_block_num_tiles_split_last << ENDL();
+#endif
+                            reader_offset += window_outer_offset;
+                        }
+
+                        // Update reader index for next iteration (split reader increment)
+                        start_reader_idx =
+                            reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+                    }
+#endif
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: Before cb_reserve_back (weights), tiles=" << weight_block_num_tiles
+                           << ENDL();
+#endif
                     cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: After cb_reserve_back (weights), tiles=" << weight_block_num_tiles
+                           << ENDL();
+#endif
                     uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
 
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
@@ -114,13 +304,25 @@ void kernel_main() {
                         }
                         tile_id += weight_stride_h;
                     }
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: Before noc_async_read_barrier" << ENDL();
+#endif
                     noc_async_read_barrier();
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: After noc_async_read_barrier" << ENDL();
+#endif
 
 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
                     // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: Before noc_semaphore_wait" << ENDL();
+#endif
                     noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: After noc_semaphore_wait" << ENDL();
+#endif
                     noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 
                     // Now we have the block in the CB address, we can mcast to dests!
@@ -153,13 +355,26 @@ void kernel_main() {
                         weights_mcast_receiver_semaphore_noc_addr,
                         weights_mcast_num_cores);
 #endif
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: Before cb_push_back (weights), tiles=" << weight_block_num_tiles
+                           << ENDL();
+#endif
                     cb_push_back(cb_id_weight, weight_block_num_tiles);
+#if ENABLE_DEBUG
+                    DPRINT << "WRITER SENDER: After cb_push_back (weights), tiles=" << weight_block_num_tiles << ENDL();
+#endif
                 }  // for weight_block_height_num_outer
             }
 
 #ifdef FUSE_BIAS
             if (load_bias) {
+#if ENABLE_DEBUG
+                DPRINT << "WRITER SENDER: Before cb_reserve_back (bias), tiles=" << bias_ntiles << ENDL();
+#endif
                 cb_reserve_back(bias_cb_id, bias_ntiles);
+#if ENABLE_DEBUG
+                DPRINT << "WRITER SENDER: After cb_reserve_back (bias), tiles=" << bias_ntiles << ENDL();
+#endif
                 uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
 
                 // mcast args
@@ -207,7 +422,13 @@ void kernel_main() {
                     weights_mcast_num_cores);
 #endif
 
+#if ENABLE_DEBUG
+                DPRINT << "WRITER SENDER: Before cb_push_back (bias), tiles=" << bias_ntiles << ENDL();
+#endif
                 cb_push_back(bias_cb_id, bias_ntiles);
+#if ENABLE_DEBUG
+                DPRINT << "WRITER SENDER: After cb_push_back (bias), tiles=" << bias_ntiles << ENDL();
+#endif
                 load_bias = false;
             }
 #endif
