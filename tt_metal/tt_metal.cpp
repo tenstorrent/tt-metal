@@ -56,7 +56,6 @@
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 
-namespace tt {
 
 namespace tt_metal {
 enum class FabricConfig : uint32_t;
