@@ -180,6 +180,7 @@ public:
     void set_num_iters_between_teardown_checks(size_t new_val);
     void set_wait_for_fabric_endpoint_ready(bool wait_for_ready);
     void set_fabric_endpoint_channel_num_buffers(size_t num_buffers);
+    void set_fabric_endpoint_status_address(size_t address);
 
     size_t get_memory_map_end_address() const;
 
@@ -227,6 +228,7 @@ private:
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
     mutable bool wait_for_fabric_endpoint_ready_ = false;
     mutable size_t fabric_endpoint_channel_num_buffers_ = 0;
+    mutable size_t fabric_endpoint_status_address_ = 0;
 
     // memory regions
     MemoryRegion status_region_{};

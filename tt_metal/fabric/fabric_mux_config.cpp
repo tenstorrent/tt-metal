@@ -177,6 +177,7 @@ FabricMuxConfig::FabricMuxConfig(
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
     const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
+    TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -190,7 +191,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         flow_control_region_.get_address(),
         full_size_channels_region_.get_address(),
         local_fabric_router_status_region_.get_address(),
-        fabric_router_config.edm_status_address,
+        fabric_endpoint_status_address_,
         fabric_endpoint_channel_num_buffers_,
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
@@ -212,6 +213,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     } else {
         fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
     }
+    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
@@ -226,6 +228,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     // For relay mux, always use fabric router config
     fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
     wait_for_fabric_endpoint_ready_ = true;
+    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
@@ -326,6 +329,8 @@ void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
 void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) {
     fabric_endpoint_channel_num_buffers_ = num_buffers;
 }
+
+void FabricMuxConfig::set_fabric_endpoint_status_address(size_t address) { fabric_endpoint_status_address_ = address; }
 
 size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
 
