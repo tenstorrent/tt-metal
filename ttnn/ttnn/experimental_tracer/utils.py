@@ -77,6 +77,8 @@ class LazyParams:
         if self.fake:
             const_meta = self.meta[const_name]
             shape = const_meta["shape"]
+            if len(shape) == 0:
+                shape = (1,)
             dtype = getattr(torch, const_meta["dtype"].split(".")[1])
             min_max = const_meta["min_max"]
             if self.empty:
