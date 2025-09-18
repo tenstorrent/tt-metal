@@ -1,143 +1,128 @@
 #!/usr/bin/env python3
-import os, sys, time, json, signal, subprocess, select, codecs
+import os, sys, time, json, signal, subprocess, select, codecs, json
+import pytest
+
+OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
+from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
 
 
 def kill_all(proc, grace_period=100):
-    print("killing all")
-    print(f"proc: {proc}, pid: {proc.pid}, returncode: {proc.returncode}")
-    try:
-        pgid = os.getpgid(proc.pid)
-        print("pgid:", pgid)
-    except Exception:
-        print("Exception no pgid")
-        pgid = None
-    try:
-        if pgid is not None:
-            print("calling os.killpg SIGTERM")
-            os.killpg(pgid, signal.SIGTERM)
-        else:
-            print("calling proc.terminate()")
-            proc.terminate()
-    except ProcessLookupError:
-        print("ProcessLookupError on terminate")
+    proc.terminate()  # sends SIGTERM ('kill <pid>')
 
     t0 = time.time()
     while proc.poll() is None and time.time() - t0 < grace_period:
-        print("waiting for process to terminate... 1 second")
         time.sleep(1)
 
     if proc.poll() is None:
-        try:
-            if pgid is not None:
-                print("unsuccessful termination, sending SIGKILL")
-                os.killpg(pgid, signal.SIGKILL)
-            else:
-                print("unsuccessful termination, sending kill")
-                proc.kill()
-
-        except ProcessLookupError:
-            pass
+        proc.kill()  # sends SIGKILL ('kill -9 <pid>')
     else:
-        print("process terminated gracefully")
+        pass
+        # print("process terminated successfully", flush=True)
 
 
-def main():
-    idle_timeout_sec = 500
-    json_out = "sdxl_watchdog_report.json"
-
-    # argv = [
-    #     "python",
-    #     "models/experimental/stable_diffusion_xl_base/tests/fake_script.py",
-    # ]
+def test_main():
+    hang_timeout = 180  # seconds
 
     argv = [
         "pytest",
         "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
-        "--num-prompts=2",
+        "--num-prompts=64",
         "-k",
         "device_vae and device_encoders and with_trace",
     ]
 
-    # --- pokretanje procesa ---
     env = os.environ.copy()
+    env["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] = "7,7"
     env["PYTHONUNBUFFERED"] = "1"
-    env["TT_MM_THROTTLE_PERF"] = "5"
+    env["TT_MM_THROTTLE_PERF"] = "0"
 
-    # start_new_session=True == setsid(), lakše za čisto grupno gašenje
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
-        start_new_session=True,
         env=env,
     )
 
-    import psutil
+    def handle_sigterm(signum, frame):
+        """
+        This handler ensures that if this script is killed all child processes
+        (such as pytest) are also terminated cleanly.
+        """
+        kill_all(proc)
+        sys.exit(1)
 
-    parent = psutil.Process(proc.pid)
-    children = parent.children(recursive=True)
+    signal.signal(signal.SIGTERM, handle_sigterm)  # signal sent by 'kill <pid>'
+    signal.signal(signal.SIGINT, handle_sigterm)  # signal sent by Ctrl+C in the terminal
 
     start_ts = time.time()
     last_activity = time.time()
-    hang = False
-    reason = None
-    print("hrere")
+    hang_detected = False
 
     decoder = codecs.getincrementaldecoder("utf-8")()
 
-    try:
-        while True:
-            print()
-            if proc.poll() is not None:
-                print("process ended, proc poll None")
+    while True:
+        if proc.poll() is not None:
+            break
+        r, _, _ = select.select([proc.stdout], [], [], 1)
+        if r:
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if chunk:
+                last_activity = time.time()
+                text = decoder.decode(chunk)
+
+                sys.stdout.write(text)
+                sys.stdout.flush()
+        else:
+            # print("total_wait_for now: ", time.time() - last_activity, "sec", flush=True)
+            if time.time() - last_activity > hang_timeout:
+                hang_detected = True
+                # print("Hang detected, calling kill_all...", flush=True)
+                kill_all(proc)
                 break
 
-            r, _, _ = select.select([proc.stdout], [], [], 1)
-            print("Subprocesses:", children, flush=True)
-            print("r:", r)
-            if r:
-                chunk = os.read(proc.stdout.fileno(), 65536)
-                print("chunk:", chunk)
-                if chunk:
-                    last_activity = time.time()
-                    text = decoder.decode(chunk)
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        # print("Flushing tail from decoder:", repr(tail), flush=True)
+        sys.stdout.write(tail)
+        sys.stdout.flush()
 
-                    print("upisujem chunk")
-                    sys.stdout.write(text), sys.stdout.flush()
-            else:
-                print("u else smo: total_wait_for now: ", time.time() - last_activity, "sec", flush=True)
-                if time.time() - last_activity > idle_timeout_sec:
-                    hang = True
-                    reason = f"idle_{idle_timeout_sec}_seconds__no_logs"
-                    kill_all(proc)
-                    break
-    finally:
-        try:
-            if proc.poll() is None:
-                kill_all(proc)
-        except Exception as e:
-            print(f"[catch_hang_2] Exception while killing process: {e}")
-        # isprazni decoder ako je ostalo nedekodiranih bajtova
-        tail = decoder.decode(b"", final=True)
-        if tail:
-            sys.stdout.write(tail)
-            sys.stdout.flush()
+    if proc.returncode != 0:
+        pytest.fail(f"Inner pytest failed with exit code {proc.returncode}")
 
     end_ts = time.time()
     report = {
-        "hang_detected": hang,
-        "reason": reason,
+        "hang_detected": hang_detected,
         "exit_code": proc.returncode,
         "duration_sec": round(end_ts - start_ts, 3),
         "cmd_argv": argv,
-        "idle_timeout_sec": idle_timeout_sec,
+        "hang_timeout": hang_timeout,
     }
 
-    print(report)
-    with open(json_out, "w", encoding="utf-8") as jf:
-        json.dump(report, jf, ensure_ascii=False, indent=2)
+    # print("wraper report: \n:", json.dumps(report, indent=4))
 
+    if hang_detected:
+        data = {
+            "model": "sdxl",
+            "metadata": {
+                "device": get_device_name(),
+                "model_name": "sdxl",
+            },
+            "benchmarks_summary": [
+                {
+                    "device": get_device_name(),
+                    "model": "sdxl",
+                    "stability_check": 2,
+                }
+            ],
+        }
+    else:
+        with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "r") as f:
+            data = json.load(f)
 
-if __name__ == "__main__":
-    main()
+        data["benchmarks_summary"][0]["stability_check"] = 3
+
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:
+        json.dump(data, f, indent=4)
+
+    print(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
