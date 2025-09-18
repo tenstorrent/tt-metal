@@ -360,7 +360,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["e2e_perf"] = None
-            invalid_vectors_count += 1
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
@@ -657,7 +656,6 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
-                logger.info(f"Total invalid vectors (skipped): {total_invalid_vectors}")
                 # Status breakdown across all executed tests
                 if status_counts:
                     logger.info("\n=== TEST STATUS COUNTS ===")
