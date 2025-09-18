@@ -135,3 +135,8 @@ ttnn/ttnn/runtime
 ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
+context_for_claude/UNPACR_NOP_Nop.md
+context_for_claude/UNPACR_NOP_OverlayClear.md
+context_for_claude/UNPACR_NOP_SETDVALID.md
+context_for_claude/UNPACR_NOP_SETREG.md
+context_for_claude/UNPACR_NOP_ZEROSRC.md

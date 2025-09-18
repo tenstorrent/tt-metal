@@ -115,6 +115,7 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
             - mapping: A list of lists of shape (num_meta_layers, num_mesh_rows), where
             each element is an int (layer index) or -1 for padding positions.
         """
+        PADDING_LAYER_INDEX = -1
         if end_layer_idx is None:
             end_layer_idx = start_layer_idx
             start_layer_idx = 0

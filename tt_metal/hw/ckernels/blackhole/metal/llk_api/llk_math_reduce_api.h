@@ -49,3 +49,23 @@ inline void llk_math_reduce_init(
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>(
         within_face_16x16_transpose);
 }
+
+// **NEW: Fused version that doesn't clear data valid flags**
+template <
+    PoolType type,
+    ReduceDim dim,
+    bool is_fp32_dest_acc_en,
+    int num_fidelity_phases = 0,
+    bool is_int_fpu_en = false,
+    bool enforce_fp32_accumulation = false>
+inline void llk_math_reduce_fused(const uint dst_index, const uint num_faces = 4) {
+    // For fused operations, set clear_dvalid = false since data valid flags were never set
+    _llk_math_reduce_<
+        type,
+        dim,
+        is_fp32_dest_acc_en,
+        num_fidelity_phases,
+        is_int_fpu_en,
+        enforce_fp32_accumulation,
+        false>(dst_index, false, num_faces);
+}
