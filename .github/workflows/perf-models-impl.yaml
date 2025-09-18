@@ -40,20 +40,19 @@ jobs:
       DOCKER_IMAGE: ${{ inputs.docker-image }}
       DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       DOCKER_OPTS: |
-        -v /mnt/MLPerf:/mnt/MLPerf:ro
-        -v ${{ github.workspace }}:${{ github.workspace }} \
-        -w ${{ github.workspace }} \
-        --user 0 \
-        -v "$RUNNER_TEMP/pip-cache:/pip-cache"
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v ${{ github.workspace }}:${{ github.workspace }}
+            -w ${{ github.workspace }}
+            --user 0
+            -v "$RUNNER_TEMP/pip-cache:/pip-cache"
 
-        -e TT_METAL_HOME=${{ github.workspace }}
-        -e ARCH_NAME=${{ matrix.test-info.arch }}
-        -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-        -e GTEST_OUTPUT=xml:generated/test_reports/
-        -e GITHUB_ACTIONS=true
-        -e LOGURU_LEVEL=INFO
-
-        -e PIP_CACHE_DIR=/pip-cache
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix['test-info'].arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+            -e LOGURU_LEVEL=INFO
+            -e PIP_CACHE_DIR=/pip-cache
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
