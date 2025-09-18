@@ -9,11 +9,10 @@ namespace tt_metal {
 
 Tensor create_device_tensor_from_host_data(
     const TensorSpec& tensor_spec,
-    IDevice* device,
+    const HostBuffer& host_buffer,
+    ttnn::distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     float pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::function<HostBuffer(DataType)> get_host_buffer);
-
+    const ttnn::distributed::TensorToMesh* mesh_mapper);
 }
 }  // namespace tt
