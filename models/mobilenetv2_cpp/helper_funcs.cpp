@@ -361,7 +361,7 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
                                 }
                             }
                         } else {
-                            TT_THROW("Unsurport InvertedResidual Children Module {}", MODULE_NAME(*invert_seq_itor));
+                            TT_THROW("Unsupported InvertedResidual Children Module {}", MODULE_NAME(*invert_seq_itor));
                         }
                         ++invert_seq_itor;
                     }while(invert_seq_itor != invert_module_list.end());

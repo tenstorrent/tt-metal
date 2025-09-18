@@ -185,7 +185,7 @@ TtInvertedResidual::TtInvertedResidual(
             /*groups=*/1,
             /*dilation=*/1,
             /*act_block_h=*/false,
-            /*block_shard=*/(id == 6 && (11 < id && id <= 16)) ? false : block_shard,
+            /*block_shard=*/false,
             /*deallocate_activation=*/false,
             /*output_layout=*/ttnn::Layout::TILE,
             /*width_shard=*/false,
