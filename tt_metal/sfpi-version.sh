@@ -1,10 +1,10 @@
 # set SFPI release version information
 
-sfpi_version=6.21.0
+sfpi_version=6.21.0-gcc-15
 sfpi_url=https://github.com/tenstorrent/sfpi/releases/download
 
 # convert md5 file into these variables
 # sed 's/^\([0-9a-f]*\) \*sfpi_[-.0-9a-zA-Z]*_\([a-z0-9_A-Z]*\)\.\([a-z]*\)$/sfpi_\2_\3_md5=\1/'
-sfpi_x86_64_txz_md5=ea758c1a5e553b88689286499e1d3fa4
-sfpi_x86_64_deb_md5=5e6ffbb5c720719510019e0ebce44c54
-sfpi_x86_64_rpm_md5=575d1157c04f58e47c9c743203e2781a
+sfpi_x86_64_txz_md5=d0e6c5ff6d9ecb4f420601485c5cdb50
+sfpi_x86_64_deb_md5=896c4f2053c184145a07dc9cf2559a62
+sfpi_x86_64_rpm_md5=bd288676ed67fb0969cd129346e06449
