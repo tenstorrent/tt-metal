@@ -14,14 +14,10 @@ from models.experimental.deit.tt.deit_for_image_classification import deit_for_i
 def test_gs_demo(hf_cat_image_sample_input, device):
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained(
-        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True
-    )
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     inputs = image_processor(images=image, return_tensors="pt")
 
-    torch_model = DeiTForImageClassification.from_pretrained(
-        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True
-    )
+    torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
     torch_model.eval()
 
     tt_inputs = torch_to_tt_tensor_tile(

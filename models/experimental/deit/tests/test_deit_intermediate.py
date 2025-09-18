@@ -22,7 +22,7 @@ from models.utility_functions import (
 
 def test_deit_intermediate_inference(device, pcc=0.99):
     # setup pytorch model
-    model = DeiTModel.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1",local_files_only=True)
+    model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
