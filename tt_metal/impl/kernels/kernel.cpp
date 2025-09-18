@@ -242,6 +242,11 @@ void KernelImpl::process_named_compile_time_args(
 }
 
 bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
+    // If kernel source is a binary path, check if the binary actually exists
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return std::filesystem::exists(this->kernel_src_.path_);
+    }
+
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -608,10 +613,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-    // Skip assertion for pre-compiled binaries
-    if (this->kernel_src_.source_type_ != KernelSource::BINARY_PATH) {
         TT_ASSERT(this->binaries_exist_on_disk(device));
-    }
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -650,10 +652,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-    // Skip assertion for pre-compiled binaries
-    if (this->kernel_src_.source_type_ != KernelSource::BINARY_PATH) {
         TT_ASSERT(this->binaries_exist_on_disk(device));
-    }
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
