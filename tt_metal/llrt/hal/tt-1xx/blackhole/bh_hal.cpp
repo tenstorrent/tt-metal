@@ -20,7 +20,7 @@
 
 namespace {
 
-// Wrap enum definitions in anonymouse namespace so as to not clash with other archs.
+// Wrap enum definitions in anonymous namespace so as to not clash with other archs.
 #include "core_config.h"  // MaxProcessorsPerCoreType
 
 }  // namespace
