@@ -102,6 +102,7 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
+        fixed_seed_bool=True,
     )
 
     clip = CLIPEncoder()
@@ -126,22 +127,7 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
-    average_inference_time = (
-        profiler.get("encode_prompts")
-        + profiler.get("prepare_latents")
-        + profiler.get("prepare_input_tensors")
-        + profiler.get("image_gen")
-    )
-    sum_times = [
-        i + j + k + l
-        for i, j, k, l in zip(
-            profiler.times["encode_prompts"],
-            profiler.times["prepare_latents"],
-            profiler.times["prepare_input_tensors"],
-            profiler.times["image_gen"],
-        )
-    ]
-    min_inference_time, max_inference_time = min(sum_times), max(sum_times)
+    avg_gen_end_to_end = profiler.get("end_to_end_generation")
 
     data = {
         "model": "sdxl",
@@ -161,25 +147,25 @@ def test_accuracy_sdxl(
             {
                 "model": "sdxl",
                 "device": get_device_name(),
-                "avg_gen_time": average_inference_time,
+                "avg_gen_time": avg_gen_end_to_end,
                 "target_checks": {
                     "functional": {
                         "avg_gen_time": targets["perf"]["functional"],
-                        "avg_gen_time_check": 3 if targets["perf"]["functional"] >= average_inference_time else 2,
+                        "avg_gen_time_check": 3 if targets["perf"]["functional"] >= avg_gen_end_to_end else 2,
                     },
                     "complete": {
                         "avg_gen_time": targets["perf"]["complete"],
-                        "avg_gen_time_check": 3 if targets["perf"]["complete"] >= average_inference_time else 2,
+                        "avg_gen_time_check": 3 if targets["perf"]["complete"] >= avg_gen_end_to_end else 2,
                     },
                     "target": {
                         "avg_gen_time": targets["perf"]["target"],
-                        "avg_gen_time_check": 3 if targets["perf"]["target"] >= average_inference_time else 2,
+                        "avg_gen_time_check": 3 if targets["perf"]["target"] >= avg_gen_end_to_end else 2,
                     },
                 },
                 "average_denoising_time": profiler.get("denoising_loop"),
                 "average_vae_time": profiler.get("vae_decode"),
-                "min_inference_time": min_inference_time,
-                "max_inference_time": max_inference_time,
+                "min_gen_time": min(profiler.times["end_to_end_generation"]),
+                "max_gen_time": max(profiler.times["end_to_end_generation"]),
                 "average_encoding_time": profiler.get("encode_prompts"),
             }
         ],

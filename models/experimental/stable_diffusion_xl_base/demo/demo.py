@@ -31,6 +31,7 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    fixed_seed_bool,
 ):
     batch_size = ttnn_device.get_num_devices()
 
@@ -98,6 +99,7 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
+        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
@@ -121,6 +123,8 @@ def run_demo_inference(
             negative_prompt_embeds_torch,
             pooled_prompt_embeds_torch,
             negative_pooled_prompt_embeds_torch,
+            start_latent_seed=0,
+            fixed_seed_bool=fixed_seed_bool,
         )
 
         tt_sdxl.prepare_input_tensors(
@@ -145,6 +149,8 @@ def run_demo_inference(
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
 
+        profiler.end("end_to_end_generation")
+
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break
@@ -162,6 +168,10 @@ def run_demo_inference(
 
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+)
+@pytest.mark.parametrize(
+    "fixed_seed_bool",
+    (False,),
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -214,6 +224,7 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    fixed_seed_bool,
 ):
     return run_demo_inference(
         mesh_device,
@@ -226,4 +237,5 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        fixed_seed_bool,
     )
