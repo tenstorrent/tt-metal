@@ -31,15 +31,15 @@ jobs:
       version: 22.04
       build-wheel: true
       build-umd-tests: true
-  # build-artifact-profiler:
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   permissions:
-  #     packages: write
-  #   secrets: inherit
-  #   with:
-  #     version: 22.04
-  #     build-wheel: true
-  #     tracy: true
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+      tracy: true
   get-image-tags:
     runs-on: ubuntu-latest
     outputs:
@@ -72,7 +72,7 @@ jobs:
   build-images:
     needs:
       - build-artifact
-      # - build-artifact-profiler
+      - build-artifact-profiler
       - get-image-tags
     permissions:
       packages: write
@@ -83,50 +83,50 @@ jobs:
         # <url_to_script_on_main.sh> | sh -c or something like that which will download
         # the images and run them.
         image-config:
-          # - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-          #   test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-          #   hw-topology: wh_6u
-          #   build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          #   techdebt-install-ttt-reqs: true
-          # - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-          #   test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
-          #   hw-topology: wh_6u
-          #   build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-          #   techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: wh_6u
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
+            hw-topology: wh_6u
+            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          # - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-          #   test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
-          #   hw-topology: blackhole
-          #   build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-          # - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-          #   dockerfile: dockerfile/upstream_test_images/Dockerfile
-          #   test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-          #   hw-topology: blackhole_llmbox
-          #   build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          #   techdebt-install-ttt-reqs: true
-          # - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          #   dockerfile: dockerfile/upstream_test_images/Dockerfile
-          #   test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-          #   hw-topology: blackhole_deskbox
-          #   build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          #   techdebt-install-ttt-reqs: true
-          # - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
-          #   dockerfile: dockerfile/upstream_test_images/Dockerfile
-          #   test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-          #   hw-topology: blackhole_rackbox
-          #   build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          #   wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          #   techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
+            hw-topology: blackhole
+            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_llmbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_deskbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_rackbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - uses: actions/checkout@v4
@@ -178,76 +178,76 @@ jobs:
           context: ${{ github.workspace }}
           build-args: |
             TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
-  # test-wh-6u-image:
-  #   needs:
-  #     - get-image-tags
-  #     - build-images
-  #   runs-on:
-  #     - arch-wormhole_b0
-  #     - topology-6u
-  #     - in-service
-  #     - pipeline-functional
-  #   steps:
-  #     # TODO -likely need to put this into a script which can be parameterized on the build number
-  #     # and whether to only pull
-  #     - name: Pull image
-  #       timeout-minutes: 10
-  #       run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-  #     - name: Run image
-  #       timeout-minutes: 45
-  #       env:
-  #         SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-  #         LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-  #       run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-  #     - name: Run profiler image
-  #       timeout-minutes: 10
-  #       run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-  # test-bh-multicard-image:
-  #   needs:
-  #     - get-image-tags
-  #     - build-images
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       bh-config:
-  #         - runner-label: BH-LLMBox
-  #           image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-  #         # - runner-label: BH-DeskBox
-  #         #   image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-  #         # - runner-label: BH-RackBox
-  #         #   image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
-  #   runs-on:
-  #     - ${{ matrix.bh-config.runner-label }}
-  #     - in-service
-  #     - cloud-virtual-machine
-  #   steps:
-  #     - name: Run image
-  #       timeout-minutes: 30
-  #       env:
-  #         LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-  #       run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
-  # test-bh-multicard-image-ignore-status:
-  #   needs:
-  #     - get-image-tags
-  #     - build-images
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       bh-config:
-  #         - runner-label: BH-DeskBox
-  #           image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-  #         - runner-label: BH-RackBox
-  #           image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
-  #   runs-on:
-  #     - ${{ matrix.bh-config.runner-label }}
-  #     - in-service
-  #     - cloud-virtual-machine
-  #   steps:
-  #     - name: Run image
-  #       timeout-minutes: 30
-  #       env:
-  #         LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-  #       run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+  test-wh-6u-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - arch-wormhole_b0
+      - topology-6u
+      - in-service
+      - pipeline-functional
+    steps:
+      # TODO -likely need to put this into a script which can be parameterized on the build number
+      # and whether to only pull
+      - name: Pull image
+        timeout-minutes: 10
+        run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+      - name: Run image
+        timeout-minutes: 45
+        env:
+          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+      - name: Run profiler image
+        timeout-minutes: 10
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-multicard-image:
+    needs:
+      - get-image-tags
+      - build-images
+    strategy:
+      fail-fast: false
+      matrix:
+        bh-config:
+          - runner-label: BH-LLMBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          # - runner-label: BH-DeskBox
+          #   image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          # - runner-label: BH-RackBox
+          #   image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+    runs-on:
+      - ${{ matrix.bh-config.runner-label }}
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+  test-bh-multicard-image-ignore-status:
+    needs:
+      - get-image-tags
+      - build-images
+    strategy:
+      fail-fast: false
+      matrix:
+        bh-config:
+          - runner-label: BH-DeskBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          - runner-label: BH-RackBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+    runs-on:
+      - ${{ matrix.bh-config.runner-label }}
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -275,44 +275,44 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-  # push-latest:
-  #   # This joyously long condition allows us to do a couple of things we want:
-  #   # - Forcefully publish a latest image if the user requested such,
-  #   #   regardless of the statuses of the test jobs Recall that jobs which depend
-  #   #   on other upstreams which fail will never get to run even if their
-  #   #   conditions are met, unless we use things like !cancelled()
-  #   # - On main branch, don't publish an image unless the tests pass. We want to keep
-  #   #   this functionality on main, unless of course someone dispatches this workflow
-  #   #   with the tag-as-latest option which will force publish the image.
-  #   if: >-
-  #     ${{
-  #       !cancelled() && (
-  #         (github.ref == 'refs/heads/main' && !contains(join(needs.*.result, ','), 'failure')) ||
-  #         inputs.tag-as-latest
-  #       )
-  #     }}
-  #   needs:
-  #     - get-image-tags
-  #     - test-wh-6u-image
-  #     - test-bh-image
-  #     - test-bh-multicard-image
-  #   permissions:
-  #     packages: write
-  #     contents: read
-  #   strategy:
-  #     matrix:
-  #       image-config:
-  #         - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-  #         - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: ./.github/actions/push-latest-image-to-ghcr
-  #       with:
-  #         docker-image-tag: ${{ matrix.image-config.image-tag }}
-  #         github-token: ${{ secrets.GITHUB_TOKEN }}
+  push-latest:
+    # This joyously long condition allows us to do a couple of things we want:
+    # - Forcefully publish a latest image if the user requested such,
+    #   regardless of the statuses of the test jobs Recall that jobs which depend
+    #   on other upstreams which fail will never get to run even if their
+    #   conditions are met, unless we use things like !cancelled()
+    # - On main branch, don't publish an image unless the tests pass. We want to keep
+    #   this functionality on main, unless of course someone dispatches this workflow
+    #   with the tag-as-latest option which will force publish the image.
+    if: >-
+      ${{
+        !cancelled() && (
+          (github.ref == 'refs/heads/main' && !contains(join(needs.*.result, ','), 'failure')) ||
+          inputs.tag-as-latest
+        )
+      }}
+    needs:
+      - get-image-tags
+      - test-wh-6u-image
+      - test-bh-image
+      - test-bh-multicard-image
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      matrix:
+        image-config:
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ matrix.image-config.image-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
