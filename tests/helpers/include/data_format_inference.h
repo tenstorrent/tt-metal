@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <type_traits>
 #include <utility>
 
@@ -239,7 +240,7 @@ constexpr std::array<FormatConfig, N> build_data_formats(std::index_sequence<Is.
  *
  * @tparam INPUT    The input data format for all pipeline runs.
  * @tparam OUTPUT   The output data format for the final pipeline run.
- * @tparam FP32_ACC Whether FP32 accumulation is enabled.
+ * @tparam FP32_ACC Whether FP32 accumulation is     enabled.
  * @tparam N        The number of pipeline runs (iterations), determines array length.
  *
  * @return A constexpr std::array of FormatConfig objects of length N.
