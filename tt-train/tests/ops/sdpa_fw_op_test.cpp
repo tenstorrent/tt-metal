@@ -12,7 +12,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <iostream>
 #include <stdexcept>
 #include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>

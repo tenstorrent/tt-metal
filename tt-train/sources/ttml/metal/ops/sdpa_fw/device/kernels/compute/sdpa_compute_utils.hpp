@@ -26,8 +26,12 @@ constexpr uint32_t onetile = 1U;
 //   masked ones.
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
-template <uint32_t register_idx = 0>
-void apply_mask_on_reg(uint32_t cb_attn_mask, uint32_t scaler_bits, uint32_t minus_one_bits, uint32_t custom_inf_bits) {
+void apply_mask_on_reg(
+    uint32_t register_idx,
+    uint32_t cb_attn_mask,
+    uint32_t scaler_bits,
+    uint32_t minus_one_bits,
+    uint32_t custom_inf_bits) {
     /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
@@ -55,10 +59,14 @@ void apply_mask_on_reg(uint32_t cb_attn_mask, uint32_t scaler_bits, uint32_t min
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_qk_result, uint32_t cb_identity_scaler>
-void update_cur_row_max_value(uint32_t cb_cur_max, uint32_t cb_prev_max, bool do_eltwise_max = false) {
+template <PoolType pool_type, ReduceDim reduce_dim>
+void update_cur_row_max_value(
+    uint32_t cb_qk_result,
+    uint32_t cb_identity_scaler,
+    uint32_t cb_cur_max,
+    uint32_t cb_prev_max,
+    bool do_eltwise_max = false) {
     cb_wait_front(cb_qk_result, onetile);
-    cb_reserve_back(cb_cur_max, onetile);
 
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1U;
@@ -79,6 +87,7 @@ void update_cur_row_max_value(uint32_t cb_cur_max, uint32_t cb_prev_max, bool do
     }
     tile_regs_commit();
 
+    cb_reserve_back(cb_cur_max, onetile);
     tile_regs_wait();
     pack_reconfig_data_format(cb_cur_max);
     pack_tile(reduce_dst_idx, cb_cur_max);
@@ -88,8 +97,7 @@ void update_cur_row_max_value(uint32_t cb_cur_max, uint32_t cb_prev_max, bool do
 
 /* We process data by one tile, because we read only one row of K
  * Maybe we can read two rows of K and V and then process data by subblocks*/
-template <uint32_t cb_qk_result>
-void apply_exp_inplace_and_find_exp_sum(uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
+void apply_exp_inplace_and_find_exp_sum(uint32_t cb_qk_result, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
     cb_wait_front(cb_qk_result, onetile);
     cb_wait_front(cb_cur_max, onetile);
 
@@ -97,7 +105,9 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_cur_max, uint32_t cb_cur_exp
     sub_bcast_cols_init_short(cb_qk_result, cb_cur_max);
     tile_regs_acquire();
     sub_tiles_bcast_cols(cb_qk_result, cb_cur_max, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
-    exp_tile<false>(exp_dst_idx);
+
+    exp_tile_init</* approx */ false>();
+    exp_tile</* approx */ false>(exp_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -121,8 +131,8 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_cur_max, uint32_t cb_cur_exp
     cb_push_back(cb_cur_exp_sum, onetile);
 }
 
-template <uint32_t Wt, uint32_t block_size>
-void matmul_qk_by_v(uint32_t cb_qk_result, uint32_t cb_value, uint32_t cb_cur_mm_out) {
+void matmul_qk_by_v(
+    uint32_t Wt, uint32_t block_size, uint32_t cb_qk_result, uint32_t cb_value, uint32_t cb_cur_mm_out) {
     cb_wait_front(cb_qk_result, onetile);
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
@@ -168,8 +178,8 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    exp_tile_init<false>();
-    exp_tile<false>(exp_max_diff_dst_idx);
+    exp_tile_init</* approx */ false>();
+    exp_tile</* approx */ false>(exp_max_diff_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -211,8 +221,8 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 
 #ifndef FP32_DEST_ACC_EN
 /*This uses L1 accumulation to accumulate onto cb_cur_mm_out*/
-template <uint32_t Wt, uint32_t block_size>
-void update_cur_mm_out(uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
+void update_cur_mm_out(
+    uint32_t Wt, uint32_t block_size, uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
     cb_wait_front(cb_prev_mm_out, Wt);
     cb_wait_front(cb_cur_mm_out, Wt);
     cb_wait_front(cb_exp_max_diff, onetile);
@@ -242,9 +252,13 @@ void update_cur_mm_out(uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t
 
 #else
 
-template <uint32_t Wt>
 void update_cur_mm_out(
-    uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff, uint32_t cb_mm_result_holder) {
+    uint32_t Wt,
+    uint32_t block_size,
+    uint32_t cb_prev_mm_out,
+    uint32_t cb_cur_mm_out,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_mm_result_holder) {
     cb_wait_front(cb_prev_mm_out, Wt);
     cb_wait_front(cb_cur_mm_out, Wt);
     cb_wait_front(cb_exp_max_diff, onetile);
@@ -274,14 +288,17 @@ void update_cur_mm_out(
     cb_pop_front(cb_cur_mm_out, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
     pack_reconfig_data_format(cb_cur_mm_out);
-    for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
+    for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         copy_tile_init(cb_mm_result_holder);
-        copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx, /* register idx */ 0);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx + block_idx, /* register idx */ block_idx);
+        }
         tile_regs_commit();
-
         tile_regs_wait();
-        pack_tile(0, cb_cur_mm_out);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            pack_tile(/*dst_reg_idx*/ block_idx, cb_cur_mm_out);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_cur_mm_out, Wt);

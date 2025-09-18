@@ -106,7 +106,7 @@ void MAIN {
              * function assumes that dest_reg is in acquired state via *acquire_dst* call
              * function transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
              */
-            apply_mask_on_reg<matmul_accum_reg>(cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
 #endif
             tile_regs_commit();
             tile_regs_wait();
@@ -129,14 +129,18 @@ void MAIN {
              * else:
              *  cur_max = max(qk, dim=-1)
              */
-            update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_result, cb_reduction_scaler>(
-                alias_cb_cur_max, alias_cb_prev_max, /* if it first reduction in a row*/ h > 0);
+            update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+                cb_qk_result,
+                cb_reduction_scaler,
+                alias_cb_cur_max,
+                alias_cb_prev_max,
+                /* if it first reduction in a row*/ h > 0);
 
             /* apply exp on qk_result inplace and */
-            apply_exp_inplace_and_find_exp_sum<cb_qk_result>(alias_cb_cur_max, alias_cb_cur_sum_exp);
+            apply_exp_inplace_and_find_exp_sum(cb_qk_result, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
             /* wait on exp(qk_result) and multiply it by V row*/
-            matmul_qk_by_v<qWt, block_size>(cb_qk_result, cb_value, alias_cb_cur_mm_out);
+            matmul_qk_by_v(qWt, block_size, cb_qk_result, cb_value, alias_cb_cur_mm_out);
             cb_pop_front(cb_qk_result, onetile);  // pop exp(qk_result) to make space for next row
             cb_pop_front(cb_value, qWt);
 
@@ -156,9 +160,10 @@ void MAIN {
 
                 // update previous matmul output with exp_max_diff and add it to current matmul output
 #ifndef FP32_DEST_ACC_EN
-                update_cur_mm_out<qWt, block_size>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+                update_cur_mm_out(qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
 #else
-                update_cur_mm_out<qWt>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
+                update_cur_mm_out(
+                    qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
 #endif
                 cb_pop_front(cb_exp_max_diff, onetile);
                 cb_pop_front(alias_cb_prev_mm_out, qWt);
@@ -178,7 +183,7 @@ void MAIN {
 
 #ifdef RETURN_INTERMEDIATES
         // pack recip exp sum into intermediates buffer
-        // [Improve]:i need to pack max value per head to intermediates also
+        // TODO(vmelnykov): we need to pack max value per head to intermediates also
         pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
 #endif
 

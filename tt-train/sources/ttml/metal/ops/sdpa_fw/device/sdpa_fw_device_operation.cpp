@@ -70,7 +70,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 
-    // TODO[improve]: add check for mask tensor
+    // TODO[improve](vmelnykov): add check for mask tensor
 
     auto query_shape = query.logical_shape();
     auto key_shape = key.logical_shape();
@@ -126,7 +126,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             query_shape);
     }
 
-    // TODO: #28205 - Implement dropout support in SDPA forward operation
+    // TODO(vmelnykov): #28205 - Implement dropout support in SDPA forward operation
     // Currently dropout is not implemented
     TT_FATAL(
         args.dropout_probability == 0.0F,
@@ -172,7 +172,6 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
     }
 
     if (args.return_intermediates) {
-        // TODO: add intermediate spec when I'll know what exactly I want to return
         if (tensor_args.preallocated_intermediate.has_value()) {
             output_specs.push_back(tensor_args.preallocated_intermediate->tensor_spec());
         } else {

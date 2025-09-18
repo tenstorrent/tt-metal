@@ -23,7 +23,7 @@ void read_head(
     cb_reserve_back(cb_id, num_of_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
     for (uint32_t tile_idx = 0; tile_idx < num_of_tiles; ++tile_idx) {
-        // TODO[improve]: this method is deprecated
+        // TODO[improve](vmelnykov): this method is deprecated
         // need to use noc_async_read_page FORCE_INLINE void noc_async_read_page(...)
         noc_async_read_tile(start_idx + tile_idx, address_generator, l1_write_addr);
         l1_write_addr += tile_bytes;

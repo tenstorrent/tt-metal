@@ -201,7 +201,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    /* TODO[improve]: think about how to split work around kernels more efficiently
+    /* TODO[improve](vmelnykov): think about how to split work around kernels more efficiently
      * For example, if we have 8 cores and 4 rows with two heads each (total 8 heads),
      * we can use 4 cores to process 4 rows in parallel (one head per core) and then use the other 4 cores to process
      * the same 4 rows in parallel (the second head per core) This way we can utilize all 8 cores and reduce the overall
@@ -338,7 +338,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kUseAttnMaskDefKey] = "1";
     }
 
-    // TODO: #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
+    // TODO(vmelnykov): #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
     // Currently, this define is only used to support L1 accumulation when fp32_dest_acc_en = false.
     // It should be removed once L1 accumulation is properly fixed for fp32_dest_acc_en = true.
     if (args.fp32_dest_acc_en) {
