@@ -97,8 +97,11 @@ void kernel_main() {
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr (num_blocks > 1) {
             *reduce_sender_semaphore_addr_ptr = VALID;
+            // Wait for receivers to signal readiness
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+            // Let the receivers proceed
             noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
         }
 
@@ -135,6 +138,8 @@ void kernel_main() {
                     noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
                     noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
                 }
+
+                // DO WELFORD COMBINE WITH CORES IN COLUMN
 
                 uint32_t curr_block_index = block_index_stride;
                 cb_reserve_back(cb_external, num_blocks_second_stage - 1);

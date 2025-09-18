@@ -39,8 +39,6 @@ void MAIN {
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
                                    // In that case, skip reduce for padding tiles.
 
-    // Number of tile rows per allgather worker
-    // TODO RM: Rename this for clarity
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
@@ -52,12 +50,9 @@ void MAIN {
         num_blocks_reduce = num_blocks_first_stage;
     }
 
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
+    // Skip 1/sqrt(Var[x] + eps) for first stage of two-stage reduce,
+    // since it will be computed in the second stage
+    const bool skip_sqrt = !(is_allgather_worker && use_two_stage_reduce && !is_second_stage_reader);
 
     constexpr uint32_t scaler0 = 0;
 
@@ -143,7 +138,7 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_x, w + index_h_offset, dst0);
-            welford_tile<in_dst, mean_dst, var_dst, true, false>(w * tile_width, block_w, 0, 0);
+            welford_tile<in_dst, mean_dst, var_dst, true, 0>(w * tile_width, block_w, 0, {});
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -185,10 +180,8 @@ void MAIN {
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
 
-    cb_wait_front(cb_xmm, num_tiles_per_block);
-
-    // Compute 1/[sqrt(Var + eps)]
-    if constexpr (is_allgather_worker && enable_sqrt) {
+    if (!skip_sqrt) {
+        // Compute 1/[sqrt(Var + eps)]
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             // 1/[sqrt(Var + eps)],
             cb_wait_front(cb_ex2, 1);

@@ -1061,6 +1061,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)reduce_second_stage_semaphore_id};
 
+    if (use_welford) {
+        // The size, in bytes, of the copy we need to do to pack partial data
+        // into the combine buffer. Since Welford's stores the valid tile data
+        // at every other element, we need to copy over 2 times the tile height
+        // worth of data at a time.
+        const auto cb_datum_size_bytes = cb_data_format == tt::DataFormat::Float32 ? 4 : /*Float16_b*/ 2;
+        reader_mcast_receiver_compile_time_args.push_back(2 * tt::constants::TILE_HEIGHT * cb_datum_size_bytes);
+    }
+
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
