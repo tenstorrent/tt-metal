@@ -1196,7 +1196,12 @@ TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric1DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
+TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false);
+}
 
 // 1 mesh all-to-all
 TEST_F(Fabric2DFixture, TestSetUnicastRoute) {
