@@ -125,6 +125,8 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_w.cpp"
+              << std::endl;
     // Compute kernels
     CreateComputeKernel(
         program,
@@ -259,6 +261,8 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_w_large.cpp"
+              << std::endl;
     // Compute kernels
     CreateComputeKernel(
         program,
@@ -394,6 +398,8 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_h.cpp"
+              << std::endl;
     // Compute kernel
     CreateComputeKernel(
         program,
@@ -530,6 +536,8 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_h_large.cpp"
+              << std::endl;
     // Compute kernel
     CreateComputeKernel(
         program,
@@ -672,6 +680,8 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     }
 
     // Comput kernel
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_c_large.cpp"
+              << std::endl;
     CreateComputeKernel(
         program,
         std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/moreh_softmax_c_large.cpp",
@@ -892,10 +902,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     // if wtpc >= Ht then tpc should be a multiple of Ht
 
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    std::cout << "softmax_defines[EXP_APPROX]: " << softmax_defines["EXP_APPROX"] << std::endl;
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     std::string softmax_kernel_path =
         use_large_kernel ? std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_large_tensor.cpp"
                          : std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax.cpp";
+    std::cout << "softmax_kernel_path: " << softmax_kernel_path << std::endl;
     auto softmax_kernels_id = CreateKernel(
         program,
         softmax_kernel_path,
@@ -1439,7 +1451,10 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         softmax_defines["NUMERIC_STABLE"] = "1";
     }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    std::cout << "softmax_defines[EXP_APPROX]: " << softmax_defines["EXP_APPROX"] << std::endl;
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    std::cout << "softmax_kernel_path: " << std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp"
+              << std::endl;
     CreateKernel(
         program,
         std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp",

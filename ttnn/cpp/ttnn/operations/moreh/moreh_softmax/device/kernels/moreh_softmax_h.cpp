@@ -101,6 +101,7 @@ void MAIN {
 
             exp_tile_init();
             exp_tile(dst0);
+            // for dim 0, no flags set. Hence defaults to exp 21f version
 
             if (h == Ht - 1) {
                 copy_tile_init_with_dt(cb_mask);
