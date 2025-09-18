@@ -262,14 +262,18 @@ void MAIN {
 
                 if (last_c_block) {
                     cb_reserve_back(idx_tmp_cb_id, 1);
+                    tensix_sync();
                     PACK(
                         (llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(idx_tmp_cb_id)));
+                    tensix_sync();
                     pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
                     cb_push_back(idx_tmp_cb_id, 1);
                     cb_wait_front(idx_tmp_cb_id, 1);
                     cb_pop_front(idx_tmp_cb_id, 1);
+                    tensix_sync();
                     PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
                         out_cb_id, num_out_sticks, output_faces)));
+                    tensix_sync();
                     PACK(DPRINT << "PACKED TILE" << ENDL());
                     PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
 
