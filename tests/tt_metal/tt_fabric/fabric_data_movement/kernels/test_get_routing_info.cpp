@@ -46,7 +46,7 @@ void kernel_main() {
 
         if (src_mesh_id == dst_mesh_id) {
 #ifdef FABRIC_2D
-            routing_success = get_routing_info<2>(dst_fabric_dev_id, route_buffer);
+            routing_success = get_routing_info<2, true>(dst_fabric_dev_id, route_buffer);
             for (uint32_t i = 0; i < 32; i++) {
                 packet_header->route_buffer[i] = 0;
             }
@@ -63,7 +63,7 @@ void kernel_main() {
             uint8_t distance_in_hops = (dst_fabric_dev_id > src_fabric_dev_id)
                                            ? (dst_fabric_dev_id - src_fabric_dev_id)
                                            : (src_fabric_dev_id - dst_fabric_dev_id);
-            routing_success = get_routing_info<1>(dst_fabric_dev_id, route_buffer);
+            routing_success = get_routing_info<1, true>(dst_fabric_dev_id, route_buffer);
             if (distance_in_hops != 0) {
                 // For 1D fabric, use LowLatencyPacketHeader with distance in hops
                 packet_header->to_chip_unicast(distance_in_hops);
