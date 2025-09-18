@@ -10,7 +10,6 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <ttnn/common/queue_id.hpp>
 #include <ttnn/distributed/types.hpp>
 
 namespace ttnn::operations::debug {
@@ -22,7 +21,6 @@ namespace ttnn::operations::debug {
 void apply_device_delay(
     ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
-    ttnn::QueueId queue_id = ttnn::DefaultQueueId,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::debug

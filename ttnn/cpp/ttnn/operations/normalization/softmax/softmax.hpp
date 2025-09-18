@@ -20,7 +20,6 @@ namespace ttnn::operations::normalization {
  */
 struct ExecuteSoftmax {
     static Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int dim,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -41,7 +40,6 @@ struct ExecuteSoftmax {
  */
 struct ExecuteScaleMaskSoftmax {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,
@@ -60,7 +58,6 @@ struct ExecuteScaleMaskSoftmax {
  */
 struct ExecuteSoftmaxInPlace {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int dim = -1,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
@@ -82,7 +79,6 @@ struct ExecuteSoftmaxInPlace {
  */
 struct ExecuteScaleMaskSoftmaxInPlace {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,
@@ -108,7 +104,6 @@ struct ExecuteScaleMaskSoftmaxInPlace {
  */
 struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,

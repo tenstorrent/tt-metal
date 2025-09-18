@@ -7,8 +7,6 @@
 #include <utility>
 #include <variant>
 
-#include "ttnn/common/queue_id.hpp"
-
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/where_device_operation.hpp"
@@ -25,7 +23,6 @@ namespace ternary_utils {
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 
 Tensor where_impl(
-    QueueId queue_id,
     const Tensor& predicate,
     const auto& value_true,
     const auto& value_false,
@@ -35,7 +32,6 @@ Tensor where_impl(
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(
-            queue_id,
             condition,
             value,
             dtype,
@@ -48,9 +44,8 @@ Tensor where_impl(
     };
 
     return ttnn::add(
-        queue_id,
-        get_multiplied(ttnn::gtz(queue_id, predicate, memory_config), value_true),
-        get_multiplied(ttnn::lez(queue_id, predicate, memory_config), value_false),
+        get_multiplied(ttnn::gtz(predicate, memory_config), value_true),
+        get_multiplied(ttnn::lez(predicate, memory_config), value_false),
         dtype,
         memory_config,
         output,
@@ -74,7 +69,6 @@ inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
 }  // namespace ternary_utils
 
 Tensor WhereOperation::invoke(
-    QueueId queue_id,
     const Tensor& predicate,
     const std::variant<float, Tensor>& value_true,
     const std::variant<float, Tensor>& value_false,
@@ -98,7 +92,7 @@ Tensor WhereOperation::invoke(
             const auto& t_false = std::get<Tensor>(value_false);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true, t_false);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+                condition = ttnn::typecast(predicate, t_true.dtype());
             }
 
             // Check if shapes are broadcast-compatible for TTT using broadcast detection
@@ -111,7 +105,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     condition,
                     t_true,
                     t_false,
@@ -124,7 +117,7 @@ Tensor WhereOperation::invoke(
             const auto& t_true = std::get<Tensor>(value_true);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+                condition = ttnn::typecast(predicate, t_true.dtype());
             }
 
             // Check if shapes are broadcast-compatible for TTS using broadcast detection
@@ -137,7 +130,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     condition,
                     t_true,
                     scalar_false,
@@ -150,7 +142,7 @@ Tensor WhereOperation::invoke(
             const auto& t_false = std::get<Tensor>(value_false);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_false);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
+                condition = ttnn::typecast(predicate, t_false.dtype());
             }
             auto broadcast_type =
                 ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
@@ -161,7 +153,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_false.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     condition,
                     scalar_true,
                     t_false,
@@ -177,7 +168,6 @@ Tensor WhereOperation::invoke(
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
 
             return ttnn::operations::unary::Unary_chain::invoke(
-                queue_id,
                 predicate,
                 {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
                 memory_config,
@@ -189,7 +179,7 @@ Tensor WhereOperation::invoke(
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(
-                queue_id, condition, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
+                condition, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
         },
         value_true,
         value_false);
