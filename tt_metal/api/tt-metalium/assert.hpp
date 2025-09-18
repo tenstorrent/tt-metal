@@ -165,7 +165,10 @@ void tt_assert(
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)
 #endif
 #else
-#define TT_ASSERT(condition, ...)
+#define TT_ASSERT(condition, ...) \
+    do {                          \
+        (void)(condition);        \
+    } while (0)  // this was done to avoid the compiler flagging unused variables when building Release
 #endif
 
 #ifndef TT_THROW

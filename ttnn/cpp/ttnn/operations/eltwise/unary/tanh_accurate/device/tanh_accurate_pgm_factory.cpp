@@ -138,7 +138,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     }
 
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
-    if (ops_chain[0].op_type == UnaryOpType::TANHSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
         path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
     }
 

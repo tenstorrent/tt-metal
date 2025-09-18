@@ -38,7 +38,7 @@ RUN pip3 install $(ls -1 *.whl)
 # for 6U
 RUN bash -c 'if [ "$TECHDEBT_INSTALL_TTT_REQS" = "true" ]; then pip3 install -r models/tt_transformers/requirements.txt; fi'
 
-RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
+RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
 ENTRYPOINT ["$TEST_COMMAND"]
 CMD ["$HW_TOPOLOGY"]

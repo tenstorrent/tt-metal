@@ -151,9 +151,6 @@ constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::
 constexpr auto cbrt = ttnn::register_operation<
     "ttnn::cbrt",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
-constexpr auto cosh = ttnn::register_operation<
-    "ttnn::cosh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
@@ -163,9 +160,6 @@ constexpr auto lgamma = ttnn::register_operation<
 constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
-constexpr auto sinh = ttnn::register_operation<
-    "ttnn::sinh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
@@ -180,9 +174,6 @@ constexpr auto normalize_hw = ttnn::register_operation<
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
-constexpr auto selu = ttnn::register_operation<
-    "ttnn::selu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();

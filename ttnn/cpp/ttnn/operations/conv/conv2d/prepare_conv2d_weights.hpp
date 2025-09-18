@@ -29,6 +29,11 @@ bool is_valid_device_conv_weights(
 bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
+// Converts convolution weights to interleaved MM layout [1, 1, KhKwCi, Co] and tilizes
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_interleaved_mm_layout(
+    const Tensor& conv_weight_tensor, std::optional<DataType> output_dtype = std::nullopt);
+
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
@@ -57,6 +62,7 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     const Tensor& conv_weight_tensor,
     uint32_t in1_block_h,
     uint32_t in1_block_w,
+    bool enable_activation_reuse = false,
     std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
@@ -123,10 +129,12 @@ struct Conv2dWeightsBiasPrepConfig {
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
+        bool interlaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
         bool full_inner_dim_ = false,
+        bool enable_activation_reuse_ = false,
         std::array<uint32_t, 2> kernel_size_ = {1, 1},
         std::array<uint32_t, 2> stride_ = {1, 1},
         std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0}) :
@@ -143,9 +151,11 @@ struct Conv2dWeightsBiasPrepConfig {
         parameters_on_device(parameters_on_device_),
         enable_kernel_stride_folding(enable_kernel_stride_folding_),
         full_inner_dim(full_inner_dim_),
+        enable_activation_reuse(enable_activation_reuse_),
         kernel_size(kernel_size_),
         stride(stride_),
-        padding_n4(padding_n4_) {}
+        padding_n4(padding_n4_),
+        interleaved_mm_conv(interlaved_mm_conv) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -160,12 +170,16 @@ struct Conv2dWeightsBiasPrepConfig {
     const bool has_bias;
     const bool parameters_on_device;
 
-    // Kernel stride folding parameters
     const bool enable_kernel_stride_folding;
     const bool full_inner_dim;
+    const bool enable_activation_reuse;
+
+    // Kernel stride folding parameters
     const std::array<uint32_t, 2> kernel_size;
     const std::array<uint32_t, 2> stride;
     const std::array<uint32_t, 4> padding_n4;
+    // This conv will go through auto shard codepath for matmul based convs
+    const bool interleaved_mm_conv;
 };
 
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(

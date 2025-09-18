@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -102,6 +103,8 @@ public:
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
+        const auto reliability_mode = fabric_setup.fabric_reliability_mode.value_or(
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -124,12 +127,13 @@ public:
             new_fabric_config = it->second;
         }
 
-        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_) {
+        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
+            reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
-            open_devices_internal(new_fabric_config, fabric_tensix_config);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
             routing_type_ = routing_type;
@@ -171,6 +175,7 @@ public:
         mesh_workload_.reset();
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+        current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         are_devices_open_ = false;
     }
 
@@ -365,6 +370,36 @@ public:
 
         return results;
     }
+
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const {
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
+        auto device = mesh_device_->get_device(device_coord);
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            std::vector<uint32_t> core_data = cluster.read_core(device->id(), virtual_core, address, size_bytes);
+            results.emplace(logical_core, core_data);
+        }
+        return results;
+    }
+
+    void write_buffer_to_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        const std::vector<uint8_t>& data) const {
+        auto device = mesh_device_->get_device(device_coord);
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            cluster.write_core(data.data(), data.size(), tt_cxy_pair(device->id(), virtual_core), address);
+        }
+    }
+
 
     void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
@@ -1283,6 +1318,8 @@ private:
     std::vector<FabricNodeId> global_available_node_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
     tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
+    tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1324,15 +1361,17 @@ private:
     }
 
     void open_devices_internal(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricTensixConfig fabric_tensix_config) {
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricReliabilityMode reliability_mode) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, std::nullopt, fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        local_host_rank_ = control_plane_ptr_->get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
@@ -1369,6 +1408,7 @@ private:
 
         current_fabric_config_ = fabric_config;
         current_fabric_tensix_config_ = fabric_tensix_config;
+        current_fabric_reliability_mode_ = reliability_mode;
         are_devices_open_ = true;
     }
 
@@ -1449,8 +1489,13 @@ private:
         }
 
         bool has_ns = false, has_ew = false;
-        bool opp_ns = (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0);
-        bool opp_ew = (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0);
+        bool opp_ns =
+            (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0 &&
+             hops.at(RoutingDirection::N) > 0 && hops.at(RoutingDirection::S) > 0);
+        bool opp_ew =
+            (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0 &&
+             hops.at(RoutingDirection::E) > 0 && hops.at(RoutingDirection::W) > 0);
+
         if (opp_ns || opp_ew) {
             TT_THROW("Unicast cannot have opposing directions in the same dimension");
         }

@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.demos.yolov9c.tt.model_preprocessing import get_mesh_mappers
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_yolov9c_inference(
@@ -74,7 +74,6 @@ def run_yolov9c_inference(
         ),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_e2e_performant(
     model_location_generator,
     device,

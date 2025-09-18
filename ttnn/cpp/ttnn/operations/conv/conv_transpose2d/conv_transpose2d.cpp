@@ -40,7 +40,7 @@ Result conv_transpose2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     const std::optional<const DataType>& dtype,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
@@ -208,6 +208,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -226,6 +227,7 @@ Result conv_transpose2d(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
+            mm_conv && auto_shard,
             bias_tensor.has_value());
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);
@@ -290,8 +292,10 @@ Result conv_transpose2d(
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
-        conv_config.full_inner_dim,
-        conv_config.enable_split_reader);
+        false,  // full_inner_dim
+        false,  // enable_activation_reuse
+        false,  // config_tensors_in_dram
+        conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
@@ -325,7 +329,7 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     const std::optional<const DataType>& dtype,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
@@ -348,7 +352,7 @@ Result ConvTranpose2dOperation::invoke(
         dilation,
         groups,
         dtype,
-        std::move(bias_tensor),
+        bias_tensor,
         conv_config_,
         compute_config_,
         memory_config,

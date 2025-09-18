@@ -183,7 +183,9 @@ def test_large_layer_norm_with_weight(device, h, w):
 
 
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
-def test_large_layer_norm_with_bias(device, h, w):
+@pytest.mark.parametrize("legacy_reduction", [True, False])
+@pytest.mark.parametrize("legacy_rsqrt", [True, False])
+def test_large_layer_norm_with_bias(device, h, w, legacy_reduction, legacy_rsqrt):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -194,6 +196,14 @@ def test_large_layer_norm_with_bias(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
+    config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=legacy_reduction, legacy_rsqrt=legacy_rsqrt)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
     output_tensor = ttnn.layer_norm(input_tensor, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)

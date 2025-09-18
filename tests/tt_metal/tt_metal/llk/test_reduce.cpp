@@ -39,7 +39,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -275,7 +275,7 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
 }
 
 void run_single_core_reduce_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReduceConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
