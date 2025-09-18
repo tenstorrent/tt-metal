@@ -204,8 +204,6 @@ tt::tt_metal::Tensor make_metal_tensor(nb::ndarray<> data) {
     const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
 
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
-
     const auto impl = [&]<typename T>(tt::tt_metal::DataType tensor_data_type) {
         TT_FATAL(
             data_type.bits == (sizeof(T) * 8),

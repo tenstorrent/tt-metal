@@ -26,7 +26,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ---------------------------------------------------------------------------
 # Import TTML (adjust path if needed)
 # ---------------------------------------------------------------------------
-sys.path.append(f'{os.environ["HOME"]}/tt-metal/tt-train/build/sources/ttml')
+sys.path.append(f"build/sources/ttml")
 import _ttml  # noqa: E402
 
 
@@ -190,7 +190,7 @@ def main():
     parser.add_argument("--n-features", type=int, default=2, help="Number of features")
     parser.add_argument("--noise", type=float, default=1.0, help="Noise level for make_regression")
     parser.add_argument("--batch-size", type=int, default=32, help="TTML train batch size")
-    parser.add_argument("--epochs", type=int, default=10, help="TTML training epochs")
+    parser.add_argument("--epochs", type=int, default=8, help="TTML training epochs")
     parser.add_argument("--test-size", type=int, default=128, help="Hold-out test size")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--verbose", action="store_true", help="Print per-step losses")
@@ -219,11 +219,12 @@ def main():
     ttml_eval = evaluate(split.y_test, y_pred_ttml)
 
     # TTML params
-    ttml_w = model.get_weight_numpy().reshape(-1).astype(np.float32)  # shape: [n_features] (no bias)
-    try:
-        ttml_b = float(model.get_bias_numpy().reshape(()))  # optional if available
-    except Exception:
-        ttml_b = 0.0
+    params = model.parameters()
+    print(params.keys())
+    ttml_w = (
+        params["linear/weight"].to_numpy(_ttml.autograd.DataType.FLOAT32).reshape(-1)
+    )  # shape: [n_features] (no bias)
+    ttml_b = params["linear/bias"].to_numpy(_ttml.autograd.DataType.FLOAT32).item()
 
     # sklearn baseline
     sk = fit_sklearn_baseline(split.x_train, split.y_train, split.x_test, split.y_test)
@@ -231,7 +232,7 @@ def main():
     # Report
     print("\n=== TTML Linear Regression ===")
     print(f"Coefficients: {ttml_w}")
-    print(f"Intercept (if available): {ttml_b:.6f}")
+    print(f"Intercept: {ttml_b:.6f}")
     print(f"Test MSE: {ttml_eval.mse:.6f}")
     print(f"Test R²:  {ttml_eval.r2:.6f}")
 
