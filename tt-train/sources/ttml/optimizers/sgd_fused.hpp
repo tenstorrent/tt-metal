@@ -11,6 +11,7 @@ namespace ttml::optimizers {
 
 struct SGDFusedConfig {
     float lr{1e-3F};
+    float momentum{0.9F};
 };
 
 class SGDFused : public OptimizerBase {

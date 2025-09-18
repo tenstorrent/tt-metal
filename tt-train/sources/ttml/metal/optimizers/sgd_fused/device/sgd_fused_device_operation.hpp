@@ -35,7 +35,10 @@ struct SGDFusedDeviceOperation {
         const ttnn::Tensor& param_in,
         const ttnn::Tensor& grad,
         float lr,
-        const std::optional<ttnn::Tensor>& param_out = std::nullopt);
+        float momentum,
+        const std::optional<ttnn::Tensor>& param_out = std::nullopt,
+        const std::optional<ttnn::Tensor>& momentum_in = std::nullopt,
+        const std::optional<ttnn::Tensor>& momentum_out = std::nullopt);
 };
 
 }  // namespace ttml::metal::optimizers::sgd_fused::device
