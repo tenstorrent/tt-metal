@@ -28,7 +28,7 @@ def accuracy_check_fid(score, num_prompts, mode):
         range_tuple = (
             get_approx(targets["accuracy"]["fid_valid_range_5000"])
             if num_prompts == 5000
-            else targets["accuracy"]["fid_approx_range_100"]
+            else get_approx(targets["accuracy"]["fid_valid_range_100"])
         )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "fid")
@@ -53,7 +53,7 @@ def accuracy_check_clip(score, num_prompts, mode):
         range_tuple = (
             get_approx(targets["accuracy"]["clip_valid_range_5000"])
             if num_prompts == 5000
-            else targets["accuracy"]["clip_approx_range_100"]
+            else get_approx(targets["accuracy"]["clip_valid_range_100"])
         )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "clip")
