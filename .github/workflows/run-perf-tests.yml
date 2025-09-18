@@ -1,0 +1,105 @@
+name: 🚀 Run Performance Tests
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: "🔍 Detect changes"
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+    outputs:
+      wormhole: ${{ steps.filter.outputs.wormhole }}
+      blackhole: ${{ steps.filter.outputs.blackhole }}
+      performance: ${{ steps.filter.outputs.performance }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 200
+
+      - name: Detect which directories changed
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+              wormhole:
+                - 'tt_llk_wormhole_b0/**'
+              blackhole:
+                - 'tt_llk_blackhole/**'
+              performance:
+                - '**/*perf**'
+                - '**/*profiler**'
+
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    needs: detect-changes
+    secrets: inherit
+
+  setup-and-test-wormhole:
+    name: "🌀 Performance tests (Wormhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: [build-images, detect-changes]
+    if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
+            needs.detect-changes.outputs.performance == 'true' ||
+            github.event_name == 'workflow_dispatch' ||
+            github.event_name == 'workflow_call' }}
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 1
+      pytest_markers: "perf"
+
+  setup-and-test-blackhole:
+    name: "🕳️ Performance tests (Blackhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: [build-images, detect-changes]
+    if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
+            needs.detect-changes.outputs.performance == 'true' ||
+            github.event_name == 'workflow_dispatch' ||
+            github.event_name == 'workflow_call' }}
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 1
+      pytest_markers: "perf"
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: |
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'workflow_call' ||
+        (github.event_name == 'pull_request' &&
+         contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+      )
+    needs:
+      - build-images
+      - setup-and-test-wormhole
+      - setup-and-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the required jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole
