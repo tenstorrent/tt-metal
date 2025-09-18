@@ -205,7 +205,7 @@ tests/ttnn/unit_tests/operations/data_movement/ @sjameelTT @ntarafdar @nardoTT @
 /tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT @jbbieniekTT @mgajewskiTT @nmauriceTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/ @stevendae @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/ @stevendae @bbradelTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
