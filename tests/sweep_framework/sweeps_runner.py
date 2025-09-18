@@ -329,6 +329,7 @@ def run(module_name, input_queue, output_queue, config: SweepsConfig):
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
     # runs a single suite in a test vector
     results = []
+    invalid_vectors_count = 0
     input_queue = Queue()
     output_queue = Queue()
     p = None
@@ -360,6 +361,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["e2e_perf"] = None
+            invalid_vectors_count += 1
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
@@ -500,7 +502,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         p.join()
 
     suite_pbar.close()
-    return results
+    return results, invalid_vectors_count
 
 
 def run_sweeps(
@@ -602,8 +604,10 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
-
+                results, invalid_vectors_count = execute_suite(
+                    test_vectors, pbar_manager, suite, module_name, header_info, config
+                )
+                total_invalid_vectors += invalid_vectors_count
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
@@ -656,6 +660,7 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+                logger.info(f"Total invalid vectors (skipped): {total_invalid_vectors}")
                 # Status breakdown across all executed tests
                 if status_counts:
                     logger.info("\n=== TEST STATUS COUNTS ===")
