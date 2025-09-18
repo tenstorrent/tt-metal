@@ -160,19 +160,30 @@ def prepare_device(mesh_device, use_cfg_parallel):
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, use_cfg_parallel",
     [
-        {
-            "l1_small_size": SDXL_L1_SMALL_SIZE,
-            "trace_region_size": SDXL_TRACE_REGION_SIZE,
-            "fabric_config": SDXL_FABRIC_CONFIG,
-        }
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "fabric_config": SDXL_FABRIC_CONFIG,
+            },
+            True,
+        ),
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            },
+            False,
+        ),
     ],
-    indirect=True,
+    indirect=["device_params"],
+    ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
     "prompt",
-    (["An astronaut riding a green horse"],),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
@@ -210,15 +221,8 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     ids=("with_trace", "no_trace"),
 )
-@pytest.mark.parametrize(
-    "use_cfg_parallel",
-    [
-        (True),
-        (False),
-    ],
-    ids=("use_cfg_parallel", "no_cfg_parallel"),
-)
 def test_demo(
+    validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
     prompt,
