@@ -80,8 +80,8 @@ def calculate_initialization_parameters(
         )
         btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
@@ -150,6 +150,7 @@ class OFT:
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)
 
+        integral_image = ttnn.to_memory_config(integral_image, ttnn.L1_MEMORY_CONFIG)
         top_left = ttnn.grid_sample(
             integral_image, self.bbox_corners[0], use_precomputed_grid=self.use_precomputed_grid
         )
@@ -162,6 +163,11 @@ class OFT:
         btm_left = ttnn.grid_sample(
             integral_image, self.bbox_corners[3], use_precomputed_grid=self.use_precomputed_grid
         )
+        # investigate if grid_sample can output directly to TILE_LAYOUT
+        top_left = ttnn.to_layout(top_left, ttnn.TILE_LAYOUT)
+        btm_right = ttnn.to_layout(btm_right, ttnn.TILE_LAYOUT)
+        top_right = ttnn.to_layout(top_right, ttnn.TILE_LAYOUT)
+        btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
 
         vox_feats = ttnn.subtract(top_left, top_right)
         vox_feats = ttnn.add(vox_feats, btm_right)
