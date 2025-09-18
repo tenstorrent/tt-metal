@@ -7,15 +7,19 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/operations/core/core.hpp>
+#include <fmt/format.h>
 
 using namespace tt::tt_metal;
+
+#define py_log(...) \
+    std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
 
 namespace {
 
 // Host buffer does not have an API to get the original number of elements,
 // but in context of the conversion from python it is possible to use
 // the type ID and the set of expected types.
-std::optional<DataType> map_hostbuffer_type_to_datatype(const HostBuffer& buffer) {
+DataType map_hostbuffer_type_to_datatype(const HostBuffer& buffer) {
     const auto& type_info = *buffer.type_info();
 
     if (type_info == typeid(bfloat16)) {
@@ -31,17 +35,14 @@ std::optional<DataType> map_hostbuffer_type_to_datatype(const HostBuffer& buffer
     } else if (type_info == typeid(int32_t)) {
         return DataType::INT32;
     } else {
-        return std::nullopt;
+        TT_THROW("Unsupported type in HostBuffer: {}", buffer.type_info()->name());
     }
 }
 
 std::size_t get_element_count(const HostBuffer& buffer) {
     auto data_type = map_hostbuffer_type_to_datatype(buffer);
-    TT_FATAL(data_type.has_value(), "Unsupported type in HostBuffer: {}", buffer.type_info()->name());
-
     auto byte_span = buffer.view_bytes();
-
-    switch (*data_type) {
+    switch (data_type) {
         case DataType::BFLOAT16: return byte_span.size() / sizeof(bfloat16);
         case DataType::FLOAT32: return byte_span.size() / sizeof(float);
         case DataType::UINT32: return byte_span.size() / sizeof(uint32_t);
@@ -62,29 +63,36 @@ struct TensorPreparedConversion {
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_host_data(
-    const void* host_data_ptr,
-    const Shape& py_data_shape,
-    const TensorLayout& tensor_layout,
+    const HostBuffer& host_data,
+    const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
-        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
-            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
+        !tensor_spec.tensor_layout().get_memory_config().is_sharded() ||
+            tensor_spec.tensor_layout().get_memory_config().shard_spec().has_value() ||
+            tensor_spec.tensor_layout().get_memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    tt::stl::Span<T> pydata_span(const_cast<T*>(static_cast<const T*>(host_data_ptr)), py_data_shape.volume());
+    TT_FATAL(
+        *host_data.type_info() == typeid(T),
+        "Mismatch between the host buffer data type and the target tensor data: host buffer is {} and the target is {}",
+        host_data.type_info()->name(),
+        typeid(T).name());
+
+    tt::stl::Span<T> pydata_span(
+        const_cast<T*>(reinterpret_cast<const T*>(host_data.view_bytes().data())),
+        tensor_spec.logical_shape().volume());
 
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
         return ttnn::distributed::create_distributed_tensor(
             pydata_span,
-            py_data_shape,
-            pydata_pin,
-            tensor_layout,
+            tensor_spec.logical_shape(),
+            host_data.pin(),
+            tensor_spec.layout(),
             *mesh_mapper,
             device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
             cq_id,
@@ -92,13 +100,12 @@ Tensor create_typed_tt_tensor_from_host_data(
     }
 
     // Otherwise, create a single tt tensor from the pydata.
-    const TensorSpec tensor_spec(py_data_shape, tensor_layout);
     if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
                                        tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
                                        tensor_spec.data_type() == convert_to_data_type<T>();
         pydata_borrowable) {
         auto output =
-            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
+            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), host_data.pin(), tensor_spec.tile());
         if (device != nullptr) {
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
@@ -110,19 +117,16 @@ Tensor create_typed_tt_tensor_from_host_data(
 }
 
 Tensor create_tt_tensor_from_host_data(
-    const void* host_data_ptr,
-    const Shape& py_data_shape,
-    const TensorLayout& tensor_layout,
+    const HostBuffer& host_data,
+    const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
-        return create_typed_tt_tensor_from_host_data<T>(
-            host_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
+        return create_typed_tt_tensor_from_host_data<T>(host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper);
     };
-    switch (tensor_layout.get_data_type()) {
+    switch (tensor_spec.tensor_layout().get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
         case DataType::INT32: return create_concrete.operator()<int32_t>();
@@ -134,15 +138,15 @@ Tensor create_tt_tensor_from_host_data(
             return create_concrete.operator()<float>();
         }
         case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
+            TT_THROW("Unsupported DataType: {}", tensor_spec.tensor_layout().get_data_type());
         }
     }
 
-    TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
+    TT_THROW("Unsupported DataType: {}", tensor_spec.tensor_layout().get_data_type());
 }
 
 Tensor convert_host_buffer_to_tt_tensor_on_device(
-    const HostBuffer& host_buffer,
+    const HostBuffer& host_data,
     const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
@@ -152,14 +156,14 @@ Tensor convert_host_buffer_to_tt_tensor_on_device(
     ZoneScoped;
 
     auto output = create_tt_tensor_from_host_data(
-        reinterpret_cast<const void*>(host_buffer.view_bytes().data()),
-        tensor_spec.logical_shape(),
-        TensorLayout(
-            strategy.construct_with_data_type,
-            PageConfig(strategy.construct_with_layout, tensor_spec.tile()),
-            tensor_spec.memory_config()),
+        host_data,
+        TensorSpec(
+            tensor_spec.logical_shape(),
+            TensorLayout(
+                strategy.construct_with_data_type,
+                PageConfig(strategy.construct_with_layout, tensor_spec.tile()),
+                tensor_spec.memory_config())),
         device,
-        host_buffer.pin(),
         cq_id,
         pad_value,
         mesh_mapper);
@@ -198,15 +202,7 @@ Tensor convert_host_buffer_to_tt_tensor_on_host(
             tensor_spec.layout());
     }
 
-    auto output = create_tt_tensor_from_host_data(
-        reinterpret_cast<const void*>(host_data.view_bytes().data()),
-        tensor_spec.logical_shape(),
-        tensor_spec.tensor_layout(),
-        device,
-        host_data.pin(),
-        cq_id,
-        pad_value,
-        mesh_mapper);
+    auto output = create_tt_tensor_from_host_data(host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper);
 
     return tt::tt_metal::set_tensor_id(output);
 }
@@ -314,6 +310,8 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
     auto strategy = prepare_tensor_conversion(host_data, tensor_spec, device != nullptr);
     Tensor output;
 
+    py_log("entry");
+
     TT_FATAL(
         get_element_count(host_data) == tensor_spec.logical_shape().volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
@@ -321,9 +319,11 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
         tensor_spec.logical_shape().volume());
 
     if (strategy) {
+        py_log("has strategy");
         output = convert_host_buffer_to_tt_tensor_on_device(
             host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper, strategy.value());
     } else {
+        py_log("no strategy");
         output =
             convert_host_buffer_to_tt_tensor_on_host(host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper);
     }
