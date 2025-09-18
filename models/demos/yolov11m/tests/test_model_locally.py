@@ -421,15 +421,15 @@ def test_ttnn_obb_simple():
         torch_model.eval()
         print("✅ PyTorch OBB model loaded")
         
-        # Create TTNN model parameters and model
-        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, device=device)
-        ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
-        print("✅ TTNN OBB model loaded")
-        
         # Create test input
         batch_size, channels, height, width = 1, 3, 640, 640
         torch_input = torch.randn(batch_size, channels, height, width)
         print(f"📥 Input shape: {torch_input.shape}")
+        
+        # Create TTNN model parameters and model (needs input tensor)
+        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
+        ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
+        print("✅ TTNN OBB model loaded")
         
         # Run PyTorch inference
         with torch.no_grad():
@@ -493,8 +493,11 @@ def test_ttnn_obb_with_real_images():
         torch_model.eval()
         print("✅ PyTorch OBB model loaded")
         
+        # Create dummy input tensor for model parameter initialization
+        dummy_input = torch.randn(1, 3, 640, 640)
+        
         # Create TTNN model parameters and model
-        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, device=device)
+        ttnn_model_parameters = create_yolov11_model_parameters(torch_model, dummy_input, device=device)
         ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
         print("✅ TTNN OBB model loaded")
         
