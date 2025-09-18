@@ -92,7 +92,7 @@ struct BandwidthResultSummary {
     std::vector<uint32_t> num_devices;
     uint32_t packet_size;
     std::vector<uint64_t> cycles_vector;
-    std::vector<double> bandwidth_vector_gb_s;
+    std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
     std::vector<double> statistics_vector; // Stores the calculated statistics for each test
 };
@@ -122,8 +122,8 @@ struct ComparisonResult {
     uint32_t num_links{};
     uint32_t packet_size{};
     uint32_t num_iterations{};
-    double current_bandwidth_gb_s{};
-    double golden_bandwidth_gb_s{};
+    double current_bandwidth_GB_s{};
+    double golden_bandwidth_GB_s{};
     double difference_percent{};
     bool within_tolerance{};
     std::string status;
@@ -1049,7 +1049,7 @@ private:
                 .packet_size = packet_size_first_pattern,
                 // Push in results for the first iteration
                 .cycles_vector = {max_cycles},
-                .bandwidth_vector_gb_s = {bandwidth_gb_s},
+                .bandwidth_vector_GB_s = {bandwidth_GB_s},
                 .packets_per_second_vector = {packets_per_second},
             });
         }
@@ -1058,7 +1058,7 @@ private:
         else {
             BandwidthResultSummary& test_result = bandwidth_results_summary_.back();
             test_result.cycles_vector.push_back(max_cycles);
-            test_result.bandwidth_vector_gb_s.push_back(bandwidth_gb_s);
+            test_result.bandwidth_vector_GB_s.push_back(bandwidth_GB_s);
             test_result.packets_per_second_vector.push_back(packets_per_second);
             test_result.num_iterations++;
         }
@@ -1116,12 +1116,12 @@ private:
         for (auto& result : bandwidth_results_summary_) {
             // Case 1: Test was only run for 1 iteration
             if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_gb_s[0]);
+                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
             }
             // Case 2: Test was run for multiple iterations
             else {
                 sum = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_gb_s) {
+                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
                     sum += bandwidth_gb_s;
                 }
                 mean = sum / result.num_iterations;
@@ -1137,12 +1137,12 @@ private:
         for (auto& result : bandwidth_results_summary_) {
             // Case 1: Test was only run for 1 iteration
             if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_gb_s[0]);
+                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
             }
             // Case 2: Test was run for multiple iterations
             else {
                 min = std::numeric_limits<double>::max();
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_gb_s) {
+                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
                     min = std::min(min, bandwidth_gb_s);
                 }
                 result.statistics_vector.push_back(min);
@@ -1157,12 +1157,12 @@ private:
         for (auto& result : bandwidth_results_summary_) {
             // Case 1: Test was only run for 1 iteration
             if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_gb_s[0]);
+                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
             }
             // Case 2: Test was run for multiple iterations
             else {
                 max = std::numeric_limits<double>::min();
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_gb_s) {
+                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
                     max = std::max(max, bandwidth_gb_s);
                 }
                 result.statistics_vector.push_back(max);
@@ -1187,13 +1187,13 @@ private:
             else {
                 // First, calculate bandwidth mean
                 sum = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_gb_s) {
+                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
                     sum += bandwidth_gb_s;
                 }
                 mean = sum / result.num_iterations;
                 // Next, calculate variance
                 variance = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_gb_s) {
+                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
                     variance += std::pow(bandwidth_gb_s - mean, 2);
                 }
                 variance /= result.num_iterations;
@@ -1396,7 +1396,7 @@ private:
             entry.num_iterations = std::stoul(tokens[7]);
             entry.cycles = std::stoull(tokens[8]);
             entry.packets_per_second = std::stod(tokens[9]);
-            entry.bandwidth_gb_s = std::stod(tokens[10]);
+            entry.bandwidth_GB_s = std::stod(tokens[10]);
             // Skip min, max, std dev
             entry.tolerance_percent = std::stod(tokens[14]);
 
@@ -1492,12 +1492,12 @@ private:
             // TODO: Handle case where there's no golden entry for this test (will that happen?)
             // Compare the test result with the golden entry
             double acceptable_tolerance = golden_result.tolerance_percent;
-            double difference_percent = ((test_result_avg_bandwidth - golden_result.bandwidth_gb_s) / golden_result.bandwidth_gb_s) * 100.0;
+            double difference_percent = ((test_result_avg_bandwidth - golden_result.bandwidth_GB_s) / golden_result.bandwidth_GB_s) * 100.0;
             bool within_tolerance = std::abs(difference_percent) <= acceptable_tolerance;
 
             // else {
             // double test_tolerance = 1.0;  // Default tolerance for no golden
-            //     comp_result.golden_bandwidth_gb_s = 0.0;
+            //     comp_result.golden_bandwidth_GB_s = 0.0;
             //     comp_result.difference_percent = 0.0;
             //     comp_result.within_tolerance = false;
             //     comp_result.status = "NO_GOLDEN";
@@ -1512,8 +1512,8 @@ private:
             comp_result.num_links = test_result.num_links;
             comp_result.packet_size = test_result.packet_size;
             comp_result.num_iterations = test_result.num_iterations;
-            comp_result.current_bandwidth_gb_s = test_result_avg_bandwidth;
-            comp_result.golden_bandwidth_gb_s = golden_result.bandwidth_gb_s;
+            comp_result.current_bandwidth_GB_s = test_result_avg_bandwidth;
+            comp_result.golden_bandwidth_GB_s = golden_result.bandwidth_GB_s;
             comp_result.difference_percent = difference_percent;
             comp_result.within_tolerance = within_tolerance;
             comp_result.status = within_tolerance ? "PASS" : "FAIL";
@@ -1576,8 +1576,8 @@ private:
         for (const auto& result : comparison_results_) {
             diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
                      << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size << "," << result.num_iterations << ","
-                     << std::fixed << std::setprecision(6) << result.current_bandwidth_gb_s << ","
-                     << result.golden_bandwidth_gb_s << "," << std::setprecision(2) << result.difference_percent << ","
+                     << std::fixed << std::setprecision(6) << result.current_bandwidth_GB_s << ","
+                     << result.golden_bandwidth_GB_s << "," << std::setprecision(2) << result.difference_percent << ","
                      << result.status << "\n";
         }
         diff_csv_stream.close();
