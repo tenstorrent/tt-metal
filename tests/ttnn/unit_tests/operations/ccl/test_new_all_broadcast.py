@@ -228,6 +228,7 @@ def run_all_broadcast_impl(
     mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 # Enumerate the post-commit cases explicitly

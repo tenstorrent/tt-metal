@@ -107,6 +107,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], torch_return_tensor[idx_start0:idx_end0, :, :, :])
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @pytest.mark.parametrize(

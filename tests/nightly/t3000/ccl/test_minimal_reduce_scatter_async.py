@@ -232,6 +232,7 @@ def run_reduce_scatter_impl(
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
