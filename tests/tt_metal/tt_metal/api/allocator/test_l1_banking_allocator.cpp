@@ -22,16 +22,18 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 
+using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {
 
-uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
+uint64_t get_alloc_limit(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    auto device = mesh_device->get_devices()[0];
     const metal_SocDescriptor& soc_desc =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     auto dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
     auto storage_core_bank_size =
-        tt::get_storage_core_bank_size(device->id(), device->num_hw_cqs(), dispatch_core_config);
-    const uint32_t allocator_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
+        tt::get_storage_core_bank_size(device->id(), mesh_device->num_hw_cqs(), dispatch_core_config);
+    const uint32_t allocator_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
     const uint32_t interleaved_l1_bank_size = storage_core_bank_size.has_value()
                                                   ? storage_core_bank_size.value()
                                                   : (soc_desc.worker_l1_size - l1_unreserved_base);
@@ -49,13 +51,13 @@ uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
 
 namespace tt::tt_metal {
 
-TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
+TEST_F(MeshDeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
     size_t total_size_bytes = 0;
 
-    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->device_);
+    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->devices_[0]);
 
-    std::vector<std::shared_ptr<Buffer>> buffers;
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
     int alloc_size_idx = 0;
     uint32_t total_buffer_size = 0;
     while (total_size_bytes < alloc_limit) {
@@ -64,24 +66,23 @@ TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
         if (total_buffer_size + buffer_size >= alloc_limit) {
             break;
         }
-        auto buffer =
-            tt::tt_metal::Buffer::create(this->device_, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
+        distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
+        distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+        std::shared_ptr<distributed::MeshBuffer> buffer =
+            distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get());
         buffers.emplace_back(std::move(buffer));
         total_buffer_size += buffer_size;
-        EXPECT_EQ(buffers.back()->address(), this->device_->l1_size_per_core() - total_buffer_size);
+        EXPECT_EQ(buffers.back()->address(), this->devices_[0]->l1_size_per_core() - total_buffer_size);
     }
     buffers.clear();
 }
 
-TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
-    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->device_);
-    tt::tt_metal::InterleavedBufferConfig l1_config{
-        .device = this->device_,
-        .size = alloc_limit + 64,
-        .page_size = alloc_limit + 64,
-        .buffer_type = tt::tt_metal::BufferType::L1};
-
-    EXPECT_ANY_THROW(auto buffer = tt::tt_metal::CreateBuffer(l1_config););
+TEST_F(MeshDeviceSingleCardBufferFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
+    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->devices_[0]);
+    distributed::DeviceLocalBufferConfig local_config{.page_size = alloc_limit + 64, .buffer_type = BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = alloc_limit + 64};
+    EXPECT_ANY_THROW(
+        auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get()));
 }
 
 }  // namespace tt::tt_metal
