@@ -206,7 +206,8 @@ class TtnnOBB:
         z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)
         
-        # Process class predictions - keep shape [batch, 15, N] for concat
+        # Process class predictions - transpose to [batch, 15, N] for concat
+        yb = ttnn.permute(yb, (0, 2, 1))  # [batch, H*W, 15] -> [batch, 15, H*W]
         yb = ttnn.sigmoid(yb)
         
         # Process angle predictions - reshape and concat to get [batch, 1, N]
