@@ -59,7 +59,7 @@ TtDeiTModel::TtDeiTModel(
         
         // Initialize pooler if needed
         if (add_pooling_layer) {
-            std::string pooler_address = base_address.empty() ? "pooler" : base_address + ".pooler";
+            std::string pooler_address = base_address.empty() ? "pooler" : base_address + "pooler.";
             pooler_ = std::make_unique<TtDeiTPooler>(
                 config,
                 device,
