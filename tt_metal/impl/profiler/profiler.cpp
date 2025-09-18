@@ -2013,18 +2013,6 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
             *this->thread_pool);
     }
 
-    // for (auto& [runtime_id, durations] :
-    // dynamic_cast<DurationAnalysisResults&>(*analysis_results).results_per_runtime_id) {
-    //     const DurationAnalysisResults::SingleResult& result = durations;
-    //     log_info(
-    //         tt::LogMetal,
-    //         "Runtime ID: {}, Start: {}, End: {}, Duration: {}",
-    //         runtime_id,
-    //         result.start_timestamp,
-    //         result.end_timestamp,
-    //         result.duration);
-    // }
-
     pushTracyDeviceResults(device_markers_vec);
 
     this->thread_pool->wait();
