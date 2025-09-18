@@ -82,7 +82,12 @@ inline void setup_header_routing_2d(
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
         } else {
-            fabric_set_unicast_route(dst_dev_id, (LowLatencyMeshPacketHeader*)packet_header);
+            fabric_set_unicast_route(
+                (LowLatencyMeshPacketHeader*)packet_header,
+                my_dev_id,
+                dst_dev_id,
+                dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+                ew_dim);
         }
     }
 }

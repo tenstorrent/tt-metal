@@ -231,48 +231,28 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-// Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
-    tt_l1_ptr routing_path_t<2, true>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
-    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
-
-    packet_header->routing_fields.hop_index = 0;
-    packet_header->routing_fields.branch_east_offset = 0;
-    packet_header->routing_fields.branch_west_offset = 0;
-
-    const auto& compressed_route = routing_info->paths[dst_dev_id];
-    uint8_t ns_hops = compressed_route.get_ns_hops();
-    uint8_t ew_hops = compressed_route.get_ew_hops();
-    uint8_t ew_direction = compressed_route.get_ew_direction();
-    uint8_t turn_point = compressed_route.get_turn_point();
-
-    if (ns_hops > 0 && ew_hops > 0) {
-        if (ew_direction) {
-            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
-        } else {
-            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
-        }
-    }
-
-    return ok;
-}
-
-// Overload: For 1D LowLatencyPacketHeader
+// 2D is always target_as_dev == true && compressed == true
 // 1D need to choose between target_as_dev true/false and compressed true/false
-template <bool compressed = true, bool target_as_dev = true>
-bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
-    if constexpr (compressed) {
-        if constexpr (target_as_dev) {
-            return decode_route_to_buffer_by_dev(target_num, (uint8_t*)&packet_header->routing_fields.value);
+template <uint8_t dim, bool compressed = true, bool target_as_dev = true>
+bool get_routing_info(uint16_t target_num, volatile uint8_t* out_route_buffer) {
+    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
+    tt_l1_ptr routing_path_t<dim, compressed>* routing_info;
+    if constexpr (dim == 1) {
+        if constexpr (compressed) {
+            if constexpr (target_as_dev) {
+                return decode_route_to_buffer_by_dev(target_num, out_route_buffer);
+            } else {
+                return decode_route_to_buffer_by_hops(target_num, out_route_buffer);
+            }
         } else {
-            return decode_route_to_buffer_by_hops(target_num, (uint8_t*)&packet_header->routing_fields.value);
+            static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
+            routing_info =
+                reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+            return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
         }
     } else {
-        static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
-        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-        return routing_info->decode_route_to_buffer(target_num, (uint8_t*)&packet_header->routing_fields.value);
+        routing_info = reinterpret_cast<tt_l1_ptr routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+        return routing_info->decode_route_to_buffer(target_num, out_route_buffer);
     }
 }
 
