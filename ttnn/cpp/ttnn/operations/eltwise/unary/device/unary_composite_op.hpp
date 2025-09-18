@@ -17,7 +17,6 @@ enum class UnaryCompositeOpType {
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,
-    SINH,
     SWISH,
     VAR_HW,
     STD_HW,
@@ -40,7 +39,6 @@ Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _swish(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -93,11 +91,6 @@ struct OpHandler<UnaryCompositeOpType::MULTIGAMMALN> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
         return _multigammaln(t1, mem_cfg);
     }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::SINH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _sinh(t1, mem_cfg); }
 };
 
 template <>
