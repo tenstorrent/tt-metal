@@ -208,8 +208,6 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
         // Use explicitly provided ring_id
         ring_id = this->ring_id.value();
         auto mesh_device = input_tensors[0].device();
-        IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-        log_debug(tt::LogOp, "Using provided ring_id: {} for device_id: {}", ring_id, target_device->id());
     } else {
         // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
         auto mesh_device = input_tensors[0].device();
