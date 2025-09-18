@@ -40,8 +40,8 @@ enum class PerfTelemetryRecorderType : uint8_t {
 struct LowResolutionBandwidthTelemetry {
     RiscTimestamp timestamp_start;
     RiscTimestamp timestamp_end;
-    uint32_t num_words_sent;
-    uint32_t num_packets_sent;
+    uint64_t num_words_sent;
+    uint64_t num_packets_sent;
 };
 
 /**
@@ -167,20 +167,18 @@ FORCE_INLINE void write_perf_recording_window_results(
 template <>
 FORCE_INLINE void write_perf_recording_window_results<LowResolutionBandwidthTelemetry, L1PerfTelemetrySingleBuffer>(
     LowResolutionBandwidthTelemetry& perf_telemetry_collector, L1PerfTelemetrySingleBuffer& buffer) {
-    volatile tt_l1_ptr auto* buffer_ptr = buffer.get_ptr();
-    auto num_words_sent_l1_copy = buffer_ptr[4];
-    auto num_packets_sent_l1_copy = buffer_ptr[5];
-    uint64_t total_cycles = (static_cast<uint64_t>(buffer_ptr[1]) << 32) | buffer_ptr[0];
+    volatile tt_l1_ptr auto* buffer_ptr =
+        reinterpret_cast<volatile tt_l1_ptr LowResolutionBandwidthTelemetry*>(buffer.get_ptr());
+    uint64_t total_cycles = buffer_ptr->timestamp_start.full;
     auto added_cycles =
         total_cycles + (perf_telemetry_collector.timestamp_end.full - perf_telemetry_collector.timestamp_start.full);
 
     // For the time being, this telemetry mode records elapsed elapsed (busy) cycles, not start/end, because
     // we want to exclude large idle times from the bandwidth calculation
-    buffer_ptr[0] = added_cycles & 0xFFFFFFFF;
-    buffer_ptr[1] = added_cycles >> 32;
+    buffer_ptr->timestamp_start.full = added_cycles;
     // Skip end timstamp
-    buffer_ptr[4] = num_words_sent_l1_copy + perf_telemetry_collector.num_words_sent;
-    buffer_ptr[5] = num_packets_sent_l1_copy + perf_telemetry_collector.num_packets_sent;
+    buffer_ptr->num_words_sent = buffer_ptr->num_words_sent + perf_telemetry_collector.num_words_sent;
+    buffer_ptr->num_packets_sent = buffer_ptr->num_packets_sent + perf_telemetry_collector.num_packets_sent;
 }
 
 /**
