@@ -84,7 +84,6 @@ tt::tt_metal::Tensor sample(
 
     if (temperature > 0.0F) {
         auto rand = ttnn::rand(
-            /* queue_id */ ttnn::DefaultQueueId,
             /* size */ out.logical_shape(),
             /* device */ *device,
             /* dtype */ out.dtype(),

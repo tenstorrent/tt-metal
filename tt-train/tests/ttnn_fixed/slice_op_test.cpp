@@ -5,9 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
-#include <iostream>
-#include <ttnn/operations/data_movement/slice/slice.hpp>
-#include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -32,8 +29,7 @@ TEST_F(SliceOpTest, Slice_BROKEN) {
     xt::xarray<float> a = xt::arange<float>(0, N * C * H * W).reshape(shape);
 
     // Example: slice out the last row, columns 1 to 5
-    uint32_t H_out = H;
-    uint32_t W_out = W;
+
     ttnn::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
     ttnn::SmallVector<uint32_t> start_index = {0U, 0U, H - 1, 1U};
     ttnn::SmallVector<uint32_t> end_index = {N, C, H, 5U};
