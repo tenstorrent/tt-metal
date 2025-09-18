@@ -334,14 +334,13 @@ void generate(
             top_k,
             top_p);
 
-        // Append the new token
+        // Add the new token to the prompt
         prompt_tokens.push_back(next_token_id);
-
-        // Decode and print
-        fmt::print("{}", tokenizer.decode({next_token_id}));
-
-        // Reset the autograd graph if needed
-        ttml::autograd::ctx().reset_graph();
+        
+        // Decode and print the new token
+        std::string new_token_text = tokenizer.decode({next_token_id});
+        fmt::print("{}", new_token_text);
+        std::cout.flush();
     }
 
     fmt::print("\n*******************\n");
