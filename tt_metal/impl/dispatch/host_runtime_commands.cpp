@@ -190,15 +190,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    std::vector<uint32_t>& src,
-    bool blocking) {
-    // TODO(agrebenisan): Move to deprecated
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
-}
-
 void EnqueueReadBuffer(
     CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
@@ -224,22 +215,6 @@ void EnqueueReadSubBuffer(
     detail::ValidateBufferRegion(buffer, region);
 
     cq.enqueue_read_buffer(buffer, dst, region, blocking);
-}
-
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
-    Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::WriteToBuffer(
-            buffer_obj, tt::stl::Span<const uint8_t>((const uint8_t*)std::get<const void*>(src), buffer_obj.size()));
-    }
-    BufferRegion region(0, buffer_obj.size());
-    EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
 
 void EnqueueWriteSubBuffer(
