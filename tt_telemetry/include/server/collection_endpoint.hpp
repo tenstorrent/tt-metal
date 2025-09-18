@@ -11,9 +11,9 @@
 #include <telemetry/telemetry_subscriber.hpp>
 
 /*
- * server/websocket_server.hpp
+ * server/collection_endpoint.hpp
  *
- * WebSocket server for broadcasting telemetry data using websocketpp.
+ * Collection endpoint server for broadcasting telemetry data using websocketpp.
  */
 
 std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_collection_endpoint(

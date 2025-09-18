@@ -16,7 +16,7 @@
 #include <boost/functional/hash.hpp>
 
 #include <tt-logger/tt-logger.hpp>
-#include <server/websocket_clients.hpp>
+#include <server/collection_clients.hpp>
 #include <utils/simple_concurrent_queue.hpp>
 
 #include <telemetry/telemetry_provider.hpp>
@@ -182,8 +182,7 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     }
 }
 
-static void send_delta(
-    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers, std::shared_ptr<TelemetrySnapshot> snapshot) {
+static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         if (!bool_metrics_[i]->changed_since_transmission()) {
             continue;
@@ -223,41 +222,56 @@ static void send_delta(
     if (snapshot->metric_unit_full_label_by_code.empty()) {
         snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
     }
-
-    for (auto &subscriber: subscribers) {
-        subscriber->on_telemetry_ready(snapshot);
-    }
 }
 
 static void telemetry_thread(
+    bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints) {
     try {
-        std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-        std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-        log_info(tt::LogAlways, "Created cluster and HAL");
+        std::unique_ptr<tt::umd::Cluster> cluster;
+        std::unique_ptr<tt::tt_metal::Hal> hal;
 
-        create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-        create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-        log_info(tt::LogAlways, "Initialized metrics");
+        if (telemetry_enabled) {
+            cluster = std::make_unique<tt::umd::Cluster>();
+            hal = create_hal(cluster);
+            log_info(tt::LogAlways, "Created cluster and HAL");
 
-        // Create WebSocket clients to connect to aggregate endpoints (if any specified)
-        WebSocketClients websocket_clients(aggregate_endpoints, on_snapshot_received);
-        log_info(tt::LogAlways, "WebSocket clients created successfully");
+            create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            log_info(tt::LogAlways, "Initialized metrics");
+        }
+
+        // Create collection clients to connect to aggregate endpoints (if any specified)
+        CollectionClients collection_clients(aggregate_endpoints, on_snapshot_received);
+        log_info(tt::LogAlways, "Collection clients created successfully");
 
         // Get initial telemetry reading
-        update(cluster);
-        send_initial_snapshot(subscribers);
-        log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
+        if (telemetry_enabled) {
+            update(cluster);
+            send_initial_snapshot(subscribers);
+            log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
+        }
 
         // Main telemetry monitoring loop
         while (!stopped_.load()) {
             try {
                 std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-                update(cluster);
+
+                if (telemetry_enabled) {
+                    // Collect local telemetry
+                    update(cluster);
+                }
+
+                // Aggregate from remotes and produce delta snapshot
                 std::shared_ptr<TelemetrySnapshot> delta_snapshot = get_writeable_buffer();
                 aggregate_remote_telemetry(*delta_snapshot);
-                send_delta(subscribers, delta_snapshot);
+                update_delta_snapshot_with_local_telemetry(delta_snapshot);
+
+                // Send to subscribers
+                for (auto& subscriber : subscribers) {
+                    subscriber->on_telemetry_ready(delta_snapshot);
+                }
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
             } catch (...) {
@@ -275,12 +289,13 @@ static void telemetry_thread(
 }
 
 void run_telemetry_provider(
+    bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
     // Run telemetry thread
-    auto t = std::async(std::launch::async, telemetry_thread, subscribers, aggregate_endpoints);
+    auto t = std::async(std::launch::async, telemetry_thread, telemetry_enabled, subscribers, aggregate_endpoints);
     t.wait();
 }

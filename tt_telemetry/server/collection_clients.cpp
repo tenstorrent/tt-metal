@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <server/websocket_clients.hpp>
+#include <server/collection_clients.hpp>
 
 using json = nlohmann::json;
 

@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * server/websocket_clients.hpp
+ * server/collection_clients.hpp
  *
- * WebSocket clients manager that connects to multiple endpoints and handles
+ * Collection clients manager that connects to multiple endpoints and handles
  * automatic reconnection with callback-based telemetry data reception.
  */
 
@@ -56,7 +56,7 @@ typedef websocketpp::connection_hdl connection_hdl;
 class CollectionClients {
 public:
     /**
-     * Create and start WebSocket clients for the given endpoints.
+     * Create and start collection clients for the given endpoints.
      *
      * @param endpoints Vector of WebSocket URIs to connect to (e.g., "ws://localhost:8081")
      * @param callback Function to call when telemetry data is received from any endpoint

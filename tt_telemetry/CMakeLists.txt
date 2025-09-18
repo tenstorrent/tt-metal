@@ -68,8 +68,8 @@ target_sources(
         telemetry/telemetry_provider.cpp
         telemetry/metric.cpp
         server/web_server.cpp
-        server/websocket_server.cpp
-        server/websocket_clients.cpp
+        server/collection_endpoint.cpp
+        server/collection_clients.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp
         telemetry/ethernet/ethernet_helpers.cpp

@@ -25,7 +25,7 @@
 #include <telemetry/mock_telemetry_provider.hpp>
 #include <telemetry/telemetry_provider.hpp>
 #include <server/web_server.hpp>
-#include <server/websocket_server.hpp>
+#include <server/collection_endpoint.hpp>
 
 /**************************************************************************************************
  Utility Functions
@@ -168,14 +168,20 @@ int main(int argc, char* argv[]) {
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
         "p,port", "Port for the web server", cxxopts::value<int>()->default_value("8080"))(
-        "ws-port", "Port for the WebSocket server", cxxopts::value<int>()->default_value("8081"))(
+        "collector-port",
+        "Port for collection endpoint when in collector mode (default). Aggregators connect to this.",
+        cxxopts::value<int>()->default_value("8081"))(
         "aggregate-from",
         "Comma-separated list of WebSocket endpoints to aggregate telemetry from (e.g., "
-        "ws://server1:8081,ws://server2:8081)",
+        "ws://server1:8081,ws://server2:8081). Enables aggregator mode, disabling the collection endpoint.",
         cxxopts::value<std::string>())(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
-        cxxopts::value<std::string>())("h,help", "Print usage");
+        cxxopts::value<std::string>())("h,help", "Print usage")(
+        "disable-telemetry",
+        "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
+        "telemetry.",
+        cxxopts::value<bool>()->default_value("false"));
 
     auto result = options.parse(argc, argv);
 
@@ -187,11 +193,22 @@ int main(int argc, char* argv[]) {
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
-    int ws_port = result["ws-port"].as<int>();
+    int collector_port = result["collector-port"].as<int>();
     std::string metal_src_dir = "";
     if (result.count("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
     }
+    bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
+
+    // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
+    // (connect to collectors and aggregate) mode?
+    bool aggregator_mode = result.count("aggregate-from");
+    if (!aggregator_mode && !telemetry_enabled) {
+        log_error(tt::LogAlways, "Local telemetry collection can only be disabled when in aggregator mode");
+        return 1;
+    }
+    log_info(tt::LogAlways, "Application mode: {}", aggregator_mode ? "AGGREGATOR" : "COLLECTOR");
+    log_info(tt::LogAlways, "Telemetry collection: {}", telemetry_enabled ? "ENABLED" : "DISABLED");
 
     // Parse aggregate-from endpoints
     std::vector<std::string> aggregate_endpoints;
@@ -210,16 +227,24 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
     std::tie(web_server, web_server_subscriber) = run_web_server(port, metal_src_dir);
 
-    // WebSocket server (optional)
-    std::future<bool> websocket_server;
-    std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
+    // Subscribers are internal components that receive telemetry updates (and will export in some
+    // other format)
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers = {web_server_subscriber};
 
-    // WebSocket server is always enabled
-    log_info(tt::LogAlways, "Starting WebSocket server on port {}", ws_port);
-    std::tie(websocket_server, websocket_subscriber) = run_web_socket_server(ws_port, metal_src_dir);
-    subscribers.push_back(websocket_subscriber);
+    // Collector endpoint (only in collector mode, not in aggregator mode)
+    std::future<bool> websocket_server;
+    std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
+    if (!aggregator_mode) {
+        log_info(tt::LogAlways, "Starting collection endpoint on port {}", collector_port);
+        std::tie(websocket_server, websocket_subscriber) = run_collection_endpoint(collector_port, metal_src_dir);
+        subscribers.push_back(websocket_subscriber);
+    } else {
+        std::promise<bool> promise;  // create promise that immediately resolves to true
+        promise.set_value(true);
+        websocket_server = promise.get_future();
+    }
 
+    // Telemetry collection
     if (use_mock_telemetry) {
         // Mock telemetry
         log_info(tt::LogAlways, "Using mock telemetry data");
@@ -228,12 +253,12 @@ int main(int argc, char* argv[]) {
     } else {
         // Real telemetry
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_provider(subscribers, aggregate_endpoints);
+        run_telemetry_provider(telemetry_enabled, subscribers, aggregate_endpoints);
     }
 
     // Run until finished
     bool web_server_succeeded = web_server.get();
-    bool websocket_succeeded = websocket_succeeded = websocket_server.get();
+    bool websocket_succeeded = websocket_server.get();
 
     if (!web_server_succeeded || !websocket_succeeded) {
         return 1;

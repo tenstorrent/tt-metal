@@ -16,5 +16,6 @@
 #include <telemetry/telemetry_subscriber.hpp>
 
 void run_telemetry_provider(
+    bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints = {});

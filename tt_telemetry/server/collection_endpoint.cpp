@@ -21,7 +21,7 @@
 #include <tt-metalium/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
-#include <server/websocket_server.hpp>
+#include <server/collection_endpoint.hpp>
 
 using json = nlohmann::json;
 
