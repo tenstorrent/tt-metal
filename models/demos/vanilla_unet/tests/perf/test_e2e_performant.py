@@ -111,6 +111,7 @@ def test_e2e_performant(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_dp(
     mesh_device,
     device_batch_size,

@@ -20,6 +20,7 @@
 #include "fabric_edm_types.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include "hostdevcommon/fabric_common.h"
 
@@ -289,11 +290,9 @@ struct EdmChannelWorkerInterface {
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-            this->cached_worker_semaphore_address,
-            inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
-            0xf,
-            WORKER_HANDSHAKE_NOC);
+            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {

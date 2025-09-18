@@ -132,6 +132,10 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
+        if (test_config.benchmark_mode) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
@@ -149,6 +153,7 @@ int main(int argc, char** argv) {
 
             // Set benchmark mode and line sync for this test group
             test_context.set_benchmark_mode(test_config.benchmark_mode);
+            test_context.set_telemetry_enabled(test_config.benchmark_mode);
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.name);
@@ -175,11 +180,16 @@ int main(int argc, char** argv) {
                 test_context.wait_for_programs();
                 log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
+                test_context.process_telemetry_data(built_test);
+
                 test_context.validate_results();
                 log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
 
                 if (test_context.get_benchmark_mode()) {
                     test_context.profile_results(built_test);
+                }
+                if (test_context.get_telemetry_enabled()) {
+                    test_context.clear_telemetry();
                 }
                 // Synchronize across all hosts after running the current test variant
                 fixture->barrier();
@@ -189,6 +199,8 @@ int main(int argc, char** argv) {
     }
 
     test_context.close_devices();
+
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {
