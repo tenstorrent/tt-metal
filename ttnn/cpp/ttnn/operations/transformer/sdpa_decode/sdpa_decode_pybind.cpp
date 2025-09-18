@@ -33,7 +33,6 @@ void py_bind_sdpa_decode(py::module& module) {
             attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
@@ -66,10 +65,8 @@ void py_bind_sdpa_decode(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -95,9 +92,7 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     using PagedOperationType = decltype(ttnn::transformer::paged_scaled_dot_product_attention_decode);
     ttnn::bind_registered_operation(
@@ -117,10 +112,8 @@ void py_bind_sdpa_decode(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -146,9 +139,7 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
     ttnn::bind_registered_operation(
@@ -168,10 +159,8 @@ void py_bind_sdpa_decode(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     head_dim_v,
@@ -197,9 +186,7 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     using PagedMLAOperationType = decltype(ttnn::transformer::paged_flash_multi_latent_attention_decode);
     ttnn::bind_registered_operation(
@@ -219,10 +206,8 @@ void py_bind_sdpa_decode(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     head_dim_v,
@@ -248,8 +233,6 @@ void py_bind_sdpa_decode(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 }
 }  // namespace ttnn::operations::transformer

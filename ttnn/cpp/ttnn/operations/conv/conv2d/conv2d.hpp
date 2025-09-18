@@ -33,7 +33,6 @@ using ResultWithOptions = std::variant<
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
 Result conv2d_L1(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -54,7 +53,6 @@ Result conv2d_L1(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
 Result conv2d_DRAM(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -77,7 +75,6 @@ Result conv2d_DRAM(
         .slice_type = Conv2dSliceConfig::SliceType::WIDTH, .num_slices = 0});
 
 ResultWithOptions conv2d(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -102,7 +99,6 @@ ResultWithOptions conv2d(
 
 struct Conv2dOperation {
     static ResultWithOptions invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,

@@ -12,7 +12,6 @@ namespace copy {
 
 struct Typecast {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -20,7 +19,6 @@ struct Typecast {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,

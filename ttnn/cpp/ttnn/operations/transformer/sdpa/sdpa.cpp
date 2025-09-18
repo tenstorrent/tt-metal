@@ -10,14 +10,12 @@
 #include "device/joint_sdpa_op.hpp"
 #include "device/ring_joint_sdpa_op.hpp"
 #include "device/ring_distributed_sdpa_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -45,13 +43,11 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
                    .use_mla = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {attn_mask},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -79,13 +75,11 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
                    .use_mla = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -112,14 +106,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
             .compute_kernel_config = kernel_config_val},
         {input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v},
         {},
-        {},
-        queue_id);
+        {});
 
     return {results.at(0), results.at(1)};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -202,14 +194,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
             ccl_core_grid_offset},
         input_tensors,
         {},
-        {},
-        queue_id);
+        {});
 
     return {results.at(0), results.at(1), results.at(2)};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -238,13 +228,11 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {attn_mask},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
 ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -273,13 +261,11 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
 ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -307,33 +293,8 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
                    .compute_kernel_config = kernel_config_val},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {},
-               {},
-               queue_id)
+               {})
         .at(0);
-}
-
-ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    uint32_t ring_size,
-    std::optional<uint32_t>
-        ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        ring_size,
-        ring_id,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::transformer

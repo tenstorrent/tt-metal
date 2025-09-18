@@ -8,7 +8,6 @@
 namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,               // mm0 used
     const ttnn::Tensor& weight_tensor,              // mm1 used
     ttnn::Tensor& intermediate_packet_buffer,       // rs2

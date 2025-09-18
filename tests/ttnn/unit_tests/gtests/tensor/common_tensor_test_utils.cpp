@@ -31,7 +31,7 @@ void test_tensor_on_device(
     tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
 
-    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId io_cq = ttnn::QueueId(0);
 
     const auto input_buf_size = layout.compute_packed_buffer_size_bytes(input_shape);
 
