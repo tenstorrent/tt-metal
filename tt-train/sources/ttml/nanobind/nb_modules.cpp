@@ -171,8 +171,6 @@ void py_module(nb::module_& m) {
     }
 
     m.def("create_linear_regression_model", &models::linear_regression::create);
-    m.def("load_gpt2_model_from_safetensors", &models::gpt2::load_model_from_safetensors);
-    m.def("load_gpt2_model_from_safetensors", &models::gpt2::load_model_from_safetensors);
 }
 
 }  // namespace ttml::modules
